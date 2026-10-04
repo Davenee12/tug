@@ -24,6 +24,7 @@ const EMPTY_STATUS: DeviceStatus = {
   device: null,
   connection: "noDevice",
   battery: null,
+  charging: null,
   services: { notifications: false, media: false, battery: false, messages: false },
   lastError: null,
   messagesError: null,

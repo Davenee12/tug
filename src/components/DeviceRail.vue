@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, Smartphone } from "lucide-vue-next";
+import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, Smartphone, Zap } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import NowPlayingCard from "./NowPlayingCard.vue";
 import ToggleRow from "./ToggleRow.vue";
@@ -83,6 +83,7 @@ const dnd = computed({
               <span class="text-on-dark-soft/50">·</span>
               <component :is="batteryIcon" :size="15" :class="s.battery < 15 ? 'text-error' : ''" />
               <span class="font-mono text-[12px]">{{ s.battery }}%</span>
+              <Zap v-if="s.charging" :size="13" class="-ml-1 fill-accent-amber text-accent-amber" aria-label="Charging" />
             </template>
           </div>
         </div>
