@@ -69,6 +69,9 @@ const history: PhoneNotification[] = setup
       n("com.apple.MobileSMS", "Messages", "Bank", "Your code is 482913. Don't share it with anyone.", 60 * 50, { live: false }),
     ];
 
+// Mirrors the backend's reconnect sweep: anything no longer on the phone is cleared.
+for (const x of history) if (!x.live && x.removedAt == null) x.removedAt = x.receivedAt + min;
+
 const status: DeviceStatus = setup
   ? {
       radio: "on",
@@ -140,7 +143,13 @@ mockIPC(
         setTimeout(() => void emit("discovered-devices", discovered), 400);
         return null;
       case "perform_action":
-        return Promise.reject("Mock: no iPhone attached");
+        // Like the iPhone: a negative action (Clear/Decline) removes the notification.
+        if (!a.positive) {
+          const target = history.find((x) => x.id === a.id);
+          if (target) target.removedAt = Date.now();
+          setTimeout(() => void emit("notification-removed", a.id), 150);
+        }
+        return null;
       default:
         return null;
     }

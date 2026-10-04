@@ -126,6 +126,25 @@ export const useTugStore = defineStore("tug", () => {
     void attempt(() => api.setSetting("ui.seen", JSON.stringify(seen.value)));
   }
 
+  /** Clear every notification in a row that's still on the phone and clearable. */
+  async function clearItems(items: PhoneNotification[]) {
+    const clearable = items.filter((n) => n.live && n.removedAt == null && n.flags.negativeAction);
+    for (const n of clearable) {
+      try {
+        await api.performAction(n.id, false);
+      } catch (e) {
+        notify("error", errorMessage(e));
+        return;
+      }
+    }
+  }
+
+  /** Display name for a bundle id, from the history tug has seen. */
+  function appNameFor(appId: string): string {
+    const n = notifications.value.find((x) => x.appId === appId);
+    return n ? appLabel(n) : appLabel({ appId, appName: null });
+  }
+
   function openThread(key: string) {
     selectedThread.value = key;
     view.value = "messages";
@@ -246,6 +265,8 @@ export const useTugStore = defineStore("tug", () => {
     newCount,
     markSeen,
     openThread,
+    clearItems,
+    appNameFor,
     performAction: (id: number, positive: boolean) => attempt(() => api.performAction(id, positive)),
     media: (command: MediaCommand) => attempt(() => api.mediaCommand(command)),
     startDiscovery: () => attempt(api.startDiscovery),
