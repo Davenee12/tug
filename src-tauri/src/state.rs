@@ -89,6 +89,8 @@ pub struct DeviceStatus {
     pub device: Option<PairedDevice>,
     pub connection: ConnectionState,
     pub battery: Option<u8>,
+    /// Inferred from the level rising (true) or falling (false); unknown until it moves.
+    pub charging: Option<bool>,
     pub services: Services,
     pub last_error: Option<String>,
     /// Why message access isn't available, when the user can fix it (e.g. consent).
@@ -125,6 +127,26 @@ pub struct PairingRequest {
 pub struct AppName {
     pub app_id: String,
     pub app_name: String,
+}
+
+/// Charging isn't in the iPhone's Battery Service (level only), so infer it from
+/// the direction the level moves.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct BatteryTrend {
+    last: Option<u8>,
+    charging: Option<bool>,
+}
+
+impl BatteryTrend {
+    pub fn observe(&mut self, level: u8) -> Option<bool> {
+        match self.last {
+            Some(prev) if level > prev => self.charging = Some(true),
+            Some(prev) if level < prev => self.charging = Some(false),
+            _ => {}
+        }
+        self.last = Some(level);
+        self.charging
+    }
 }
 
 pub struct Shared {
@@ -208,5 +230,21 @@ impl Shared {
 
     pub fn take_pairing_confirm(&self) -> Option<SyncSender<bool>> {
         lock(&self.pairing_confirm).take()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BatteryTrend;
+
+    #[test]
+    fn infers_charging_from_level_direction() {
+        let mut t = BatteryTrend::default();
+        assert_eq!(t.observe(50), None, "unknown until the level moves");
+        assert_eq!(t.observe(50), None);
+        assert_eq!(t.observe(51), Some(true));
+        assert_eq!(t.observe(51), Some(true), "holds while level is flat");
+        assert_eq!(t.observe(100), Some(true), "full on the charger stays charging");
+        assert_eq!(t.observe(99), Some(false));
     }
 }

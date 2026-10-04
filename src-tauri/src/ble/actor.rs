@@ -21,7 +21,7 @@ use windows::Devices::Bluetooth::GenericAttributeProfile::{
     GattServiceProviderAdvertisementStatusChangedEventArgs, GattServiceProviderAdvertisingParameters, GattSession,
 };
 use windows::Devices::Bluetooth::{
-    BluetoothAdapter, BluetoothConnectionStatus, BluetoothDevice, BluetoothError, BluetoothLEDevice,
+    BluetoothAdapter, BluetoothCacheMode, BluetoothConnectionStatus, BluetoothDevice, BluetoothError, BluetoothLEDevice,
 };
 use windows::Devices::Enumeration::{
     DeviceInformation, DeviceInformationCustomPairing, DeviceInformationKind, DeviceInformationUpdate,
@@ -37,8 +37,8 @@ use super::{Command, Reply};
 use crate::ams::{self, NowPlaying};
 use crate::ancs::{self, Category, EventFlags, EventId, Response};
 use crate::state::{
-    events, keys, AdvertisingState, AppName, ConnectionState, DiscoveredDevice, PairedDevice, PairingRequest,
-    RadioState, Services, Shared, Transport,
+    events, keys, AdvertisingState, AppName, BatteryTrend, ConnectionState, DiscoveredDevice, PairedDevice,
+    PairingRequest, RadioState, Services, Shared, Transport,
 };
 use crate::store::NewNotification;
 
@@ -166,6 +166,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         advertise_retry_in: None,
         carried_name: None,
         cccd_check_in: CCCD_CHECK_SECS,
+        battery_trend: BatteryTrend::default(),
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -199,6 +200,7 @@ struct Actor {
     carried_name: Option<String>,
     /// Seconds until the ANCS subscription is verified on the iPhone again.
     cccd_check_in: u32,
+    battery_trend: BatteryTrend,
 }
 
 fn now_ms() -> i64 {
@@ -318,7 +320,12 @@ impl Actor {
             }
             Event::Battery { gen, data } if Some(gen) == current => {
                 if let Some(&level) = data.first() {
-                    self.shared.update_status(|s| s.battery = Some(level.min(100)));
+                    let level = level.min(100);
+                    let charging = self.battery_trend.observe(level);
+                    self.shared.update_status(|s| {
+                        s.battery = Some(level);
+                        s.charging = charging;
+                    });
                 }
             }
             Event::Connection { gen, connected } if Some(gen) == current => self.on_connection(connected),
@@ -762,12 +769,14 @@ impl Actor {
     // ---------------------------------------------------------------- link lifecycle
 
     fn drop_link(&mut self) {
+        self.battery_trend = BatteryTrend::default();
         if let Some(link) = self.link.take() {
             let _ = link.device.Close();
         }
         self.shared.set_live_session(None);
         self.shared.update_status(|s| {
             s.battery = None;
+            s.charging = None;
             s.services = Services {
                 messages: s.services.messages,
                 ..Services::default()
@@ -877,7 +886,8 @@ impl Actor {
             }
             return;
         }
-        // Services and notification UIDs don't survive a disconnect.
+        // Services, notification UIDs and the battery trend don't survive a disconnect.
+        self.battery_trend = BatteryTrend::default();
         link.ancs = None;
         link.media = None;
         link._battery = None;
@@ -887,6 +897,7 @@ impl Actor {
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
             s.battery = None;
+            s.charging = None;
             s.services = Services {
                 messages: s.services.messages,
                 ..Services::default()
@@ -1046,6 +1057,20 @@ impl Actor {
         let svc = winrt::service(device, winrt::sig_uuid(BATTERY_SERVICE))
             .await?
             .ok_or(BleError::NotFound("Battery service"))?;
+        if let Ok(all) = async {
+            svc.GetCharacteristicsWithCacheModeAsync(BluetoothCacheMode::Uncached)?
+                .await?
+                .Characteristics()
+        }
+        .await
+        {
+            let uuids: Vec<String> = all
+                .into_iter()
+                .filter_map(|c| c.Uuid().ok())
+                .map(|u| format!("{u:?}"))
+                .collect();
+            log::info!("battery service characteristics: {uuids:?}");
+        }
         let level = winrt::characteristic(&svc, winrt::sig_uuid(BATTERY_LEVEL), "battery level").await?;
         let initial = winrt::read(&level).await?;
         let _ = self.tx.send(Event::Battery { gen, data: initial });
@@ -1114,6 +1139,41 @@ impl Actor {
         // Only probe between requests so the probe can't interleave with a real response.
         if idle {
             self.probe_ancs_authorization(&control_point).await;
+        }
+        self.retry_optional_services().await;
+    }
+
+    /// Media and battery are optional at connect time; if they failed (e.g. Windows
+    /// still held them for a previous process), keep trying while linked.
+    async fn retry_optional_services(&mut self) {
+        let Some(link) = self.link.as_ref().filter(|l| l.connected) else {
+            return;
+        };
+        let (device, gen) = (link.device.clone(), link.gen);
+        let (need_media, need_battery) = (link.media.is_none(), link._battery.is_none());
+        if need_media {
+            match self.setup_media(&device, gen).await {
+                Ok(m) => {
+                    log::info!("media service connected on retry");
+                    if let Some(l) = self.link.as_mut() {
+                        l.media = Some(m);
+                    }
+                    self.shared.update_status(|s| s.services.media = true);
+                }
+                Err(e) => log::debug!("media retry: {e}"),
+            }
+        }
+        if need_battery {
+            match self.setup_battery(&device, gen).await {
+                Ok(b) => {
+                    log::info!("battery service connected on retry");
+                    if let Some(l) = self.link.as_mut() {
+                        l._battery = Some(b);
+                    }
+                    self.shared.update_status(|s| s.services.battery = true);
+                }
+                Err(e) => log::debug!("battery retry: {e}"),
+            }
         }
     }
 
