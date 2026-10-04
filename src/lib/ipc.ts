@@ -1,0 +1,59 @@
+// Typed wrappers over the Tauri commands in src-tauri/src/commands.rs.
+
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type {
+  AppName,
+  DeviceStatus,
+  DiscoveredDevice,
+  MediaCommand,
+  NowPlaying,
+  PairingRequest,
+  PhoneNotification,
+} from "../types/protocol";
+
+export const api = {
+  getStatus: () => invoke<DeviceStatus>("get_status"),
+  getNowPlaying: () => invoke<NowPlaying>("get_now_playing"),
+  listNotifications: (limit: number, beforeId?: number) =>
+    invoke<PhoneNotification[]>("list_notifications", { limit, beforeId: beforeId ?? null }),
+  searchNotifications: (query: string, limit: number) =>
+    invoke<PhoneNotification[]>("search_notifications", { query, limit }),
+  clearHistory: () => invoke<void>("clear_history"),
+  performAction: (id: number, positive: boolean) => invoke<void>("perform_action", { id, positive }),
+  mediaCommand: (command: MediaCommand) => invoke<void>("media_command", { command }),
+  startDiscovery: () => invoke<void>("start_discovery"),
+  stopDiscovery: () => invoke<void>("stop_discovery"),
+  pairDevice: (id: string) => invoke<void>("pair_device", { id }),
+  confirmPairing: (accept: boolean) => invoke<void>("confirm_pairing", { accept }),
+  useDevice: (id: string) => invoke<void>("use_device", { id }),
+  forgetDevice: () => invoke<void>("forget_device"),
+  setAdvertising: (enabled: boolean) => invoke<void>("set_advertising", { enabled }),
+  getSettings: () => invoke<Record<string, string>>("get_settings"),
+  setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),
+};
+
+interface EventPayloads {
+  "device-status": DeviceStatus;
+  "now-playing": NowPlaying;
+  notification: PhoneNotification;
+  "notification-removed": number;
+  "app-name": AppName;
+  "discovered-devices": DiscoveredDevice[];
+  "pairing-request": PairingRequest;
+  "pairing-request-closed": null;
+}
+
+export function on<E extends keyof EventPayloads>(
+  event: E,
+  handler: (payload: EventPayloads[E]) => void,
+): Promise<UnlistenFn> {
+  return listen<EventPayloads[E]>(event, (e) => handler(e.payload));
+}
+
+/** Tauri rejects with the Rust `Err(String)`; normalise anything else. */
+export function errorMessage(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  return "Something went wrong";
+}
