@@ -82,7 +82,7 @@ mod worker {
     use super::MapCommand;
     use crate::ancs::ancs_date_to_iso;
     use crate::map::address::normalize;
-    use crate::map::session::{find_devices, MapError, MapSession};
+    use crate::map::session::{find_devices, pull_contacts, MapError, MapSession};
     use crate::messages::{IncomingMessage, Status, StoredMessage, SOURCE_IPHONE_MAP};
     use crate::state::{events, Shared};
 
@@ -91,6 +91,8 @@ mod worker {
     const RETRY_DISCONNECTED: Duration = Duration::from_secs(30);
     /// How many of the newest inbox messages to look at each poll.
     const LIST_MAX: u16 = 20;
+    const CONTACTS_RESYNC: Duration = Duration::from_secs(6 * 60 * 60);
+    const CONTACTS_RETRY: Duration = Duration::from_secs(10 * 60);
 
     fn now_ms() -> i64 {
         SystemTime::now()
@@ -102,10 +104,18 @@ mod worker {
     struct Worker {
         shared: Arc<Shared>,
         session: Option<MapSession>,
+        /// Classic device the MAP session is on; contacts come from the same phone.
+        device_id: Option<String>,
+        next_contacts_sync: Instant,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
-        let mut w = Worker { shared, session: None };
+        let mut w = Worker {
+            shared,
+            session: None,
+            device_id: None,
+            next_contacts_sync: Instant::now(),
+        };
         let mut next = Instant::now() + FIRST_SYNC_DELAY;
         loop {
             tokio::select! {
@@ -149,6 +159,7 @@ mod worker {
                     .ok_or(MapError::NoDevice)?;
                 let session = MapSession::connect(&device.id).await?;
                 log::info!("message access connected to {}", device.name);
+                self.device_id = Some(device.id.clone());
                 self.session = Some(session);
                 self.set_state(true, None);
             }
@@ -166,8 +177,47 @@ mod worker {
             self.set_state(false, shown);
         }
 
+        /// Pull the phone's contacts (PBAP) now and then, for names and new chats.
+        async fn sync_contacts_if_due(&mut self) {
+            let Some(device_id) = self.device_id.clone() else {
+                return;
+            };
+            if Instant::now() < self.next_contacts_sync {
+                return;
+            }
+            match pull_contacts(&device_id).await {
+                Ok(entries) => {
+                    let pairs: Vec<(String, String)> = entries
+                        .iter()
+                        .flat_map(|e| e.numbers.iter().map(move |n| (normalize(n), e.name.clone())))
+                        .collect();
+                    match self.shared.store.save_phonebook(&pairs) {
+                        Ok(n) => {
+                            log::info!("contacts synced: {} people, {n} numbers", entries.len());
+                            if let Ok(all) = self.shared.store.contacts() {
+                                self.shared.emit(events::CONTACTS, all);
+                            }
+                        }
+                        Err(e) => log::warn!("saving contacts failed: {e}"),
+                    }
+                    self.shared.update_status(|s| s.contacts_error = None);
+                    self.next_contacts_sync = Instant::now() + CONTACTS_RESYNC;
+                }
+                Err(e) => {
+                    log::info!("contacts sync failed: {e}");
+                    let shown = matches!(e, MapError::ContactsConsent).then(|| e.to_string());
+                    self.shared.update_status(|s| s.contacts_error = shown);
+                    self.next_contacts_sync = Instant::now() + CONTACTS_RETRY;
+                }
+            }
+        }
+
         async fn refresh(&mut self) {
-            match self.sync().await {
+            let result = self.sync().await;
+            if result.is_ok() {
+                self.sync_contacts_if_due().await;
+            }
+            match result {
                 Ok(0) => {}
                 Ok(n) => log::info!("{n} new message(s) from the iPhone"),
                 Err(MapError::NoDevice) => self.set_state(false, None),

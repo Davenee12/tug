@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { api, errorMessage, on } from "../lib/ipc";
 import { appLabel, threadKey } from "../lib/format";
+import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import type {
   Contact,
   DeviceStatus,
@@ -28,6 +29,7 @@ const EMPTY_STATUS: DeviceStatus = {
   services: { notifications: false, media: false, battery: false, messages: false },
   lastError: null,
   messagesError: null,
+  contactsError: null,
 };
 
 const EMPTY_NOW_PLAYING: NowPlaying = {
@@ -59,12 +61,15 @@ export const useTugStore = defineStore("tug", () => {
   const pairingRequest = ref<PairingRequest | null>(null);
   const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [] });
   const advertiseEnabled = ref(true);
+  const zoom = ref(1);
   const flash = ref<{ kind: "error" | "info"; text: string } | null>(null);
   let flashTimer: number | undefined;
 
   /** Middle-panel view, and the conversation open in Messages. */
   const view = ref<"feed" | "messages">("feed");
   const selectedThread = ref<string | null>(null);
+  /** A new conversation being started from the + button, before any message exists. */
+  const composeTo = ref<{ address: string; name: string } | null>(null);
 
   /** When each feed entry (conversation or app stack) was last looked at. */
   const seen = ref<Record<string, number>>({});
@@ -152,6 +157,12 @@ export const useTugStore = defineStore("tug", () => {
     return n ? appLabel(n) : appLabel({ appId, appName: null });
   }
 
+  function startConversation(address: string, name: string) {
+    composeTo.value = { address, name };
+    selectedThread.value = threadKey({ appId: "com.apple.MobileSMS", title: name });
+    view.value = "messages";
+  }
+
   function openThread(key: string) {
     selectedThread.value = key;
     view.value = "messages";
@@ -160,6 +171,8 @@ export const useTugStore = defineStore("tug", () => {
 
   async function loadSettings() {
     const raw = await api.getSettings();
+    zoom.value = Number(raw["ui.zoom"]) || 1;
+    applyZoom(zoom.value);
     seen.value = raw["ui.seen"] ? (JSON.parse(raw["ui.seen"]) as Record<string, number>) : {};
     if (raw["ui.seenSince"]) {
       seenSince.value = Number(raw["ui.seenSince"]);
@@ -175,6 +188,14 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   async function init() {
+    installZoomShortcuts(
+      () => zoom.value,
+      (z) => {
+        zoom.value = z;
+        notify("info", `Zoom ${Math.round(z * 100)}%`);
+        void attempt(() => api.setSetting("ui.zoom", String(z)));
+      },
+    );
     await Promise.all([
       on("device-status", (s) => {
         const wasConnected = status.value.connection === "connected";
@@ -280,6 +301,7 @@ export const useTugStore = defineStore("tug", () => {
     flash,
     view,
     selectedThread,
+    composeTo,
     seen,
     connected,
     visible,
@@ -293,6 +315,7 @@ export const useTugStore = defineStore("tug", () => {
     newCount,
     markSeen,
     openThread,
+    startConversation,
     clearItems,
     appNameFor,
     /** Send through the iPhone. The pending message appears via the `message` event. */

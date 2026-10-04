@@ -12,3 +12,4 @@ pub mod obex;
 pub mod service;
 #[cfg(windows)]
 pub mod session;
+pub mod vcard;

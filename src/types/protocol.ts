@@ -31,6 +31,8 @@ export interface DeviceStatus {
   lastError: string | null;
   /** Why message access isn't available, when the user can fix it. */
   messagesError: string | null;
+  /** Why the phone's contacts aren't available, when the user can fix it. */
+  contactsError: string | null;
 }
 
 export type Category =

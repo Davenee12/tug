@@ -84,6 +84,7 @@ const status: DeviceStatus = setup
       services: { notifications: false, media: false, battery: false, messages: false },
       lastError: null,
       messagesError: null,
+      contactsError: null,
     }
   : {
       radio: "on",
@@ -96,6 +97,7 @@ const status: DeviceStatus = setup
       services: { notifications: true, media: true, battery: true, messages: true },
       lastError: null,
       messagesError: null,
+      contactsError: null,
     };
 
 const nowPlaying: NowPlaying = setup
@@ -123,7 +125,13 @@ const discovered: DiscoveredDevice[] = [
 // Message access (MAP): Tay's texts, including ones read in the open chat that
 // never became notifications, plus a reply sent from tug.
 const TAY = "+13025550142";
-const contacts: Contact[] = setup ? [] : [{ address: TAY, name: "Tay" }];
+const contacts: Contact[] = setup
+  ? []
+  : [
+      { address: TAY, name: "Tay" },
+      { address: "+12145550199", name: "Daviel" },
+      { address: "+19725550111", name: "Dave Smith" },
+    ];
 let nextMsg = 1;
 const sms = (direction: "in" | "out", body: string, agoMin: number): SmsMessage => ({
   id: nextMsg++,

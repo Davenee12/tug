@@ -207,6 +207,25 @@ impl Store {
         rows.collect()
     }
 
+    /// Store names from the phone's own contacts (PBAP). These win over names
+    /// learned from notifications. Returns how many numbers were saved.
+    pub fn save_phonebook(&self, entries: &[(String, String)]) -> Result<usize> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let mut n = 0;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO contacts (address, name) VALUES (?1, ?2)
+                 ON CONFLICT (address) DO UPDATE SET name = excluded.name",
+            )?;
+            for (address, name) in entries {
+                n += stmt.execute(params![address, name])?;
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
     /// Learn names for addresses that have none yet, by finding a Messages
     /// notification with exactly the same text as an incoming message. Returns
     /// the newly learned contacts.
@@ -298,6 +317,21 @@ mod tests {
         }
         let got: Vec<i64> = s.recent_messages(2).unwrap().iter().map(|m| m.received_at).collect();
         assert_eq!(got, vec![1_001, 1_002]);
+    }
+
+    #[test]
+    fn phonebook_names_override_learned_ones() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[("+13026698133".into(), "tay 🤎".into())]).unwrap();
+        let n = s
+            .save_phonebook(&[
+                ("+13026698133".into(), "Tay Jones".into()),
+                ("+12142230313".into(), "Daviel".into()),
+            ])
+            .unwrap();
+        assert_eq!(n, 2);
+        let names: Vec<String> = s.contacts().unwrap().into_iter().map(|c| c.name).collect();
+        assert_eq!(names, vec!["Daviel", "Tay Jones"]);
     }
 
     #[test]

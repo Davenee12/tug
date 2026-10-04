@@ -95,6 +95,8 @@ pub struct DeviceStatus {
     pub last_error: Option<String>,
     /// Why message access isn't available, when the user can fix it (e.g. consent).
     pub messages_error: Option<String>,
+    /// Why the phone's contacts aren't available, when the user can fix it.
+    pub contacts_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

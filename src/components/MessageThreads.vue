@@ -1,16 +1,50 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { Info, RotateCcw, SendHorizontal } from "lucide-vue-next";
+import { Info, Plus, RotateCcw, SendHorizontal, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { clockTime, dayLabel, formatAddress, groupConversations, relativeTime, type ConversationItem } from "../lib/format";
+import {
+  clockTime,
+  dayLabel,
+  formatAddress,
+  groupConversations,
+  relativeTime,
+  threadKey,
+  type Conversation,
+  type ConversationItem,
+} from "../lib/format";
 import AppAvatar from "./AppAvatar.vue";
+import NewConversation from "./NewConversation.vue";
 
 const tug = useTugStore();
-const convs = computed(() => groupConversations(tug.visible, tug.messages, tug.contacts));
+const picking = ref(false);
+const convs = computed(() => {
+  const list = groupConversations(tug.visible, tug.messages, tug.contacts);
+  // A conversation started with + shows (empty) until its first message exists.
+  const draft = tug.composeTo;
+  if (draft) {
+    const key = threadKey({ appId: "com.apple.MobileSMS", title: draft.name });
+    if (!list.some((c) => c.key === key)) {
+      const placeholder = { kind: "message", id: "draft", at: new Date(), body: "" } as unknown as ConversationItem;
+      const empty: Conversation = {
+        key,
+        appId: "com.apple.MobileSMS",
+        appLabel: "Messages",
+        contact: draft.name,
+        address: draft.address,
+        items: [],
+        latest: placeholder,
+        notifications: [],
+      };
+      list.unshift(empty);
+    }
+  }
+  return list;
+});
 // The open conversation lives in the store so the Feed can open one directly.
 const selected = computed(() => convs.value.find((c) => c.key === tug.selectedThread) ?? convs.value[0] ?? null);
 
 function select(key: string) {
+  tug.composeTo = null;
   tug.selectedThread = key;
   tug.markSeen(key);
 }
@@ -78,17 +112,24 @@ function onKey(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div v-if="convs.length === 0" class="flex flex-1 items-center justify-center px-8">
-    <div class="max-w-sm text-center">
-      <p class="headline text-[28px]">No conversations yet</p>
-      <p class="mt-2 text-[14px] text-muted">
-        Texts from your iPhone, plus WhatsApp, Signal, Telegram and other chats, collect here as conversations.
-      </p>
-    </div>
-  </div>
-
-  <div v-else class="flex min-h-0 flex-1">
+  <div class="flex min-h-0 flex-1">
     <nav class="w-72 shrink-0 overflow-y-auto border-r border-hairline px-3 py-2">
+      <div class="flex items-center justify-between px-3 pt-1 pb-2">
+        <span class="caption-upper text-muted">Conversations</span>
+        <button
+          class="rounded-md p-1 text-ink active:bg-surface-card"
+          :aria-label="picking ? 'Cancel new message' : 'New message'"
+          :title="picking ? 'Cancel' : 'New message'"
+          @click="picking = !picking"
+        >
+          <X v-if="picking" :size="16" />
+          <Plus v-else :size="16" />
+        </button>
+      </div>
+      <NewConversation v-if="picking" @close="picking = false" />
+      <p v-if="!picking && convs.length === 0" class="px-3 py-6 text-[13px] text-muted">
+        No conversations yet. Texts from your iPhone and other chats collect here. Use + to start one.
+      </p>
       <button
         v-for="c in convs"
         :key="c.key"
@@ -101,11 +142,14 @@ function onKey(e: KeyboardEvent) {
             <span :class="['truncate text-[14px] text-ink', tug.newCount(c.key, c.notifications) ? 'font-semibold' : 'font-medium']">
               {{ c.contact }}
             </span>
-            <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">{{ relativeTime(c.latest.at) }}</span>
+            <span v-if="c.items.length" class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">
+              {{ relativeTime(c.latest.at) }}
+            </span>
           </span>
           <span class="flex items-center gap-2">
             <span class="min-w-0 flex-1 truncate text-[13px] text-muted">
-              <template v-if="outgoing(c.latest)">You: </template>{{ c.latest.body }}
+              <template v-if="!c.items.length">New message</template>
+              <template v-else-if="outgoing(c.latest)">You: </template>{{ c.latest.body }}
             </span>
             <span
               v-if="tug.newCount(c.key, c.notifications)"
