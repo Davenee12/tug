@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { Info } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { clockTime, dayLabel, groupThreads, notificationTime, relativeTime } from "../lib/format";
@@ -7,12 +7,33 @@ import AppAvatar from "./AppAvatar.vue";
 
 const tug = useTugStore();
 const threads = computed(() => groupThreads(tug.visible));
-const selectedKey = ref<string | null>(null);
-const selected = computed(() => threads.value.find((t) => t.key === selectedKey.value) ?? threads.value[0] ?? null);
+// The open conversation lives in the store so the Feed can open one directly.
+const selected = computed(() => threads.value.find((t) => t.key === tug.selectedThread) ?? threads.value[0] ?? null);
 
-watch(threads, (list) => {
-  if (selectedKey.value && !list.some((t) => t.key === selectedKey.value)) selectedKey.value = null;
-});
+function select(key: string) {
+  tug.selectedThread = key;
+  tug.markSeen(key);
+}
+
+// Opening Messages without a choice shows the newest conversation, which counts as seen.
+watch(
+  () => selected.value?.key,
+  (key) => {
+    if (key && tug.view === "messages" && tug.newCount(key, selected.value!.items)) tug.markSeen(key);
+  },
+  { immediate: true },
+);
+
+// Keep the latest message in view, like any chat.
+const scroller = ref<HTMLElement | null>(null);
+watch(
+  () => [selected.value?.key, selected.value?.items.length],
+  async () => {
+    await nextTick();
+    scroller.value?.scrollTo({ top: scroller.value.scrollHeight });
+  },
+  { immediate: true },
+);
 
 function showDay(i: number): boolean {
   const items = selected.value?.items ?? [];
@@ -37,17 +58,27 @@ function showDay(i: number): boolean {
         v-for="t in threads"
         :key="t.key"
         :class="['flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left', selected?.key === t.key ? 'bg-surface-card' : 'active:bg-surface-soft']"
-        @click="selectedKey = t.key"
+        @click="select(t.key)"
       >
-        <AppAvatar :app-id="t.appId" :label="t.appLabel" size="sm" />
+        <AppAvatar :app-id="t.appId" :label="t.contact" size="sm" />
         <span class="min-w-0 flex-1">
           <span class="flex items-baseline gap-2">
-            <span class="truncate text-[14px] font-medium text-ink">{{ t.contact }}</span>
+            <span :class="['truncate text-[14px] text-ink', tug.newCount(t.key, t.items) ? 'font-semibold' : 'font-medium']">
+              {{ t.contact }}
+            </span>
             <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">
               {{ relativeTime(notificationTime(t.latest)) }}
             </span>
           </span>
-          <span class="block truncate text-[13px] text-muted">{{ t.latest.message || t.latest.subtitle }}</span>
+          <span class="flex items-center gap-2">
+            <span class="min-w-0 flex-1 truncate text-[13px] text-muted">{{ t.latest.message || t.latest.subtitle }}</span>
+            <span
+              v-if="tug.newCount(t.key, t.items)"
+              class="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-ink px-1 text-[11px] font-semibold text-on-dark"
+            >
+              {{ tug.newCount(t.key, t.items) }}
+            </span>
+          </span>
         </span>
       </button>
     </nav>
@@ -57,7 +88,7 @@ function showDay(i: number): boolean {
         <p class="headline text-[26px] leading-tight">{{ selected.contact }}</p>
         <p class="text-[13px] text-muted">{{ selected.appLabel }} · {{ selected.items.length }} received</p>
       </header>
-      <div class="flex-1 overflow-y-auto px-8 py-6">
+      <div ref="scroller" class="flex-1 overflow-y-auto px-8 py-6">
         <template v-for="(m, i) in selected.items" :key="m.id">
           <div v-if="showDay(i)" class="caption-upper my-4 text-center text-muted-soft">
             {{ dayLabel(notificationTime(m)) }}
@@ -73,7 +104,7 @@ function showDay(i: number): boolean {
       </div>
       <footer class="flex items-center gap-2 border-t border-hairline px-8 py-3 text-[13px] text-muted">
         <Info :size="14" class="shrink-0" />
-        Incoming only for now. Replying needs Bluetooth MAP, which tug doesn't support yet, so reply on your phone.
+        Shows messages you receive. iOS doesn't share messages you send with accessories, so your replies appear here once replying from tug is built.
       </footer>
     </section>
   </div>

@@ -54,6 +54,8 @@ const history: PhoneNotification[] = setup
         positiveLabel: "Answer",
         negativeLabel: "Decline",
       }),
+      n("com.apple.MobileSMS", "Messages", "Zoe", "omw, 10 mins 🚗", 1),
+      n("com.apple.MobileSMS", "Messages", "Zoe", "did you see the photos I sent?", 4),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Are we still meeting at 5? I can grab a table if you're running late.", 2),
       n("net.whatsapp.WhatsApp", "WhatsApp", "Sam Okafor", "Sent you the slides, have a look before the call", 9),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Also bring the charger 🙏", 14),
@@ -62,6 +64,7 @@ const history: PhoneNotification[] = setup
       n("com.apple.mobilemail", "Mail", "Netlify", "Deploy succeeded for example-site", 66, { category: "email", removedAt: now - 30 * min, live: false }),
       n("net.whatsapp.WhatsApp", "WhatsApp", "Sam Okafor", "Running 5 late", 180, { live: false }),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Booked for Thursday", 60 * 26, { live: false }),
+      n("com.apple.MobileSMS", "Messages", "Zoe", "lol yes that's exactly what I meant", 60 * 25, { live: false, removedAt: now - 60 * 24 * min }),
       n("com.apple.Health", null, "Stand", "Time to stand! Stand and move for a minute.", 60 * 27, { category: "healthAndFitness", live: false }),
       n("com.apple.MobileSMS", "Messages", "Bank", "Your code is 482913. Don't share it with anyone.", 60 * 50, { live: false }),
     ];
@@ -109,7 +112,8 @@ const discovered: DiscoveredDevice[] = [
   { id: "c", name: "LE-Bose Flex", transport: "le", paired: false, connected: false, canPair: true },
 ];
 
-const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true" };
+// seenSince 0: everything still on the phone counts as new, so badges show in the preview.
+const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
 
 mockIPC(
   (cmd, args) => {
