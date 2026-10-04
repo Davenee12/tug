@@ -37,8 +37,8 @@ use super::{Command, Reply};
 use crate::ams::{self, NowPlaying};
 use crate::ancs::{self, Category, EventFlags, EventId, Response};
 use crate::state::{
-    events, keys, AdvertisingState, AppName, BatteryTrend, ConnectionState, DiscoveredDevice, PairedDevice,
-    PairingRequest, RadioState, Services, Shared, Transport,
+    events, keys, AdvertisingState, AppName, ConnectionState, DiscoveredDevice, PairedDevice, PairingRequest,
+    RadioState, Services, Shared, Transport,
 };
 use crate::store::NewNotification;
 
@@ -166,7 +166,6 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         advertise_retry_in: None,
         carried_name: None,
         cccd_check_in: CCCD_CHECK_SECS,
-        battery_trend: BatteryTrend::default(),
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -200,7 +199,6 @@ struct Actor {
     carried_name: Option<String>,
     /// Seconds until the ANCS subscription is verified on the iPhone again.
     cccd_check_in: u32,
-    battery_trend: BatteryTrend,
 }
 
 fn now_ms() -> i64 {
@@ -320,12 +318,7 @@ impl Actor {
             }
             Event::Battery { gen, data } if Some(gen) == current => {
                 if let Some(&level) = data.first() {
-                    let level = level.min(100);
-                    let charging = self.battery_trend.observe(level);
-                    self.shared.update_status(|s| {
-                        s.battery = Some(level);
-                        s.charging = charging;
-                    });
+                    self.shared.update_status(|s| s.battery = Some(level.min(100)));
                 }
             }
             Event::Connection { gen, connected } if Some(gen) == current => self.on_connection(connected),
@@ -769,14 +762,12 @@ impl Actor {
     // ---------------------------------------------------------------- link lifecycle
 
     fn drop_link(&mut self) {
-        self.battery_trend = BatteryTrend::default();
         if let Some(link) = self.link.take() {
             let _ = link.device.Close();
         }
         self.shared.set_live_session(None);
         self.shared.update_status(|s| {
             s.battery = None;
-            s.charging = None;
             s.services = Services {
                 messages: s.services.messages,
                 ..Services::default()
@@ -886,8 +877,7 @@ impl Actor {
             }
             return;
         }
-        // Services, notification UIDs and the battery trend don't survive a disconnect.
-        self.battery_trend = BatteryTrend::default();
+        // Services and notification UIDs don't survive a disconnect.
         link.ancs = None;
         link.media = None;
         link._battery = None;
@@ -897,7 +887,6 @@ impl Actor {
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
             s.battery = None;
-            s.charging = None;
             s.services = Services {
                 messages: s.services.messages,
                 ..Services::default()

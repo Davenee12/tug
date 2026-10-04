@@ -25,8 +25,6 @@ export interface DeviceStatus {
   device: PairedDevice | null;
   connection: ConnectionState;
   battery: number | null;
-  /** Inferred from the level rising/falling; null until it moves. */
-  charging: boolean | null;
   services: Services;
   lastError: string | null;
   /** Why message access isn't available, when the user can fix it. */
