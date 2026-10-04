@@ -27,8 +27,7 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis",
-      "msi"
+      "nsis"
     ],
     "icon": [
       "icons/32x32.png",
@@ -37,6 +36,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "shortDescription": "iPhone notifications and media controls on Windows, over Bluetooth LE"
+    "shortDescription": "iPhone notifications and media controls on Windows, over Bluetooth LE",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }
