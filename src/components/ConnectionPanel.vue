@@ -120,8 +120,12 @@ const advertisingLabel = computed(
             <div class="min-w-0 text-[13px] text-muted">
               <p class="text-[15px] font-medium text-ink">Connect from your iPhone</p>
               <p>
-                iOS only lets accessories connect from the phone's side. Install the free <strong class="font-medium text-body-strong">LightBlue</strong> app,
-                open it, and tap the entry named after this PC (look for the one advertising a <span class="font-mono text-[12px]">6E4C3A10…</span> service).
+                iOS only lets accessories connect from the phone's side. Install the free <strong class="font-medium text-body-strong">LightBlue</strong> app
+                and open it next to this PC. Windows usually doesn't put a name in its Bluetooth advert, so this PC most likely shows as
+                <strong class="font-medium text-body-strong">Unnamed</strong>, (sometimes as the PC's name), usually with the strongest signal (closest to 0, e.g. −45).
+                To be sure, switch <em>Visible to iPhone</em> off: the entry that disappears is this PC. Switch it back on and tap that entry.
+              </p>
+              <p class="mt-1.5">
                 Accept the pairing prompt when it appears, and switch on <strong class="font-medium text-body-strong">Share System Notifications</strong>
                 if iOS asks. Without it the phone won't share notifications with this PC.
               </p>

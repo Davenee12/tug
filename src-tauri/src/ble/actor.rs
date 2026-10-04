@@ -57,6 +57,7 @@ const PROP_IS_CONNECTED: &str = "System.Devices.Aep.IsConnected";
 const ANCS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const RETRY_CONNECTED_SECS: u32 = 2;
 const RETRY_IDLE_SECS: u32 = 10;
+const ADVERTISE_RETRY_SECS: u32 = 3;
 const PIN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
 
 enum Event {
@@ -152,6 +153,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         device_id: None,
         link: None,
         retry_in: 0,
+        advertise_retry_in: None,
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -179,6 +181,8 @@ struct Actor {
     link: Option<Link>,
     /// Seconds until the next connection attempt.
     retry_in: u32,
+    /// Seconds until advertising is retried after Windows aborted it.
+    advertise_retry_in: Option<u32>,
 }
 
 fn now_ms() -> i64 {
@@ -287,7 +291,17 @@ impl Actor {
             | Event::Battery { .. }
             | Event::Connection { .. } => {} // from a link we've since replaced
             Event::Advertising(status) => {
-                log::info!("advertising status: {status:?}");
+                let name = match status {
+                    GattServiceProviderAdvertisementStatus::Created => "created",
+                    GattServiceProviderAdvertisementStatus::Stopped => "stopped",
+                    GattServiceProviderAdvertisementStatus::Started => "started",
+                    GattServiceProviderAdvertisementStatus::Aborted => "aborted",
+                    GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData => {
+                        "started without all advertisement data"
+                    }
+                    _ => "unknown",
+                };
+                log::info!("advertising status: {name}");
                 let state = match status {
                     GattServiceProviderAdvertisementStatus::Started
                     | GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData => {
@@ -297,6 +311,18 @@ impl Actor {
                     _ => AdvertisingState::Off,
                 };
                 self.shared.update_status(|s| s.advertising = state);
+                // Windows reports Aborted briefly on every start, and for real when the
+                // radio blips or another app held the service. Retry unless it recovers.
+                match status {
+                    GattServiceProviderAdvertisementStatus::Aborted => {
+                        self.advertise_retry_in.get_or_insert(ADVERTISE_RETRY_SECS);
+                    }
+                    GattServiceProviderAdvertisementStatus::Started
+                    | GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData => {
+                        self.advertise_retry_in = None;
+                    }
+                    _ => {}
+                }
             }
             Event::Radio(state) => {
                 self.shared.update_status(|s| s.radio = state);
@@ -334,6 +360,17 @@ impl Actor {
     }
 
     async fn tick(&mut self) {
+        if let Some(secs) = self.advertise_retry_in {
+            if secs > 0 {
+                self.advertise_retry_in = Some(secs - 1);
+            } else {
+                self.advertise_retry_in = None;
+                log::info!("advertising aborted; restarting");
+                self.stop_advertising();
+                self.start_advertising().await;
+            }
+        }
+
         if self.discovered_dirty {
             self.discovered_dirty = false;
             self.emit_discovered();
@@ -462,6 +499,7 @@ impl Actor {
     }
 
     fn stop_advertising(&mut self) {
+        self.advertise_retry_in = None;
         if let Some(p) = self.provider.take() {
             let _ = p.StopAdvertising();
         }
@@ -535,10 +573,14 @@ impl Actor {
             .discovered
             .iter()
             .filter_map(|(id, d)| {
-                let name = d.info.Name().ok()?.to_string();
-                if name.is_empty() {
-                    return None;
-                }
+                let connected = bool_property(&d.info, PROP_IS_CONNECTED);
+                let name = d.info.Name().map(|n| n.to_string()).unwrap_or_default();
+                // A just-connected iPhone can appear before Windows learns its name.
+                let name = match (name.is_empty(), connected) {
+                    (false, _) => name,
+                    (true, true) => "Unnamed device".to_string(),
+                    (true, false) => return None,
+                };
                 let pairing = d.info.Pairing().ok();
                 Some(DiscoveredDevice {
                     id: id.clone(),
@@ -546,7 +588,7 @@ impl Actor {
                     transport: d.transport,
                     paired: pairing.as_ref().and_then(|p| p.IsPaired().ok()).unwrap_or(false),
                     can_pair: pairing.as_ref().and_then(|p| p.CanPair().ok()).unwrap_or(false),
-                    connected: bool_property(&d.info, PROP_IS_CONNECTED),
+                    connected,
                 })
             })
             .collect();
@@ -566,6 +608,10 @@ impl Actor {
             return;
         };
         let info = d.info.clone();
+        log::info!(
+            "pairing started: {}",
+            info.Name().map(|n| n.to_string()).unwrap_or_default()
+        );
         let shared = self.shared.clone();
         let tx = self.tx.clone();
         tokio::task::spawn_local(async move {
@@ -1069,6 +1115,7 @@ async fn pair_device(
         DevicePairingRequestedEventArgs,
     >::new(move |_, args| {
         let Some(args) = args.as_ref() else { return Ok(()) };
+        log::info!("pairing requested by Windows: kind {:?}", args.PairingKind()?);
         if args.PairingKind()? == DevicePairingKinds::ConfirmOnly {
             return args.Accept();
         }
