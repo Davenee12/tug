@@ -5,12 +5,29 @@
 //!   cargo run --example map_probe -- --show  # also print message text
 //!   cargo run --example map_probe -- --send "+15551234567" "hello from tug"
 
+/// Prints the library's log lines to stderr so protocol details show up here.
+struct StderrLog;
+impl log::Log for StderrLog {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= log::Level::Info
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            eprintln!("[{}] {}", r.level(), r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
 #[cfg(windows)]
 fn main() {
     use tug_lib::map::session::{find_devices, MapError, MapSession};
+    static LOGGER: StderrLog = StderrLog;
+    let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Info));
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let show = args.iter().any(|a| a == "--show");
+    let pbap_only = args.iter().any(|a| a == "--pbap");
     let send = args
         .iter()
         .position(|a| a == "--send")
@@ -40,6 +57,18 @@ fn main() {
             return println!("{}", MapError::NoDevice);
         };
 
+        if pbap_only {
+            println!("pulling contacts (PBAP) from {} ...", device.name);
+            match tug_lib::map::session::pull_contacts(&device.id).await {
+                Ok(entries) => println!(
+                    "contacts: {} people, {} numbers",
+                    entries.len(),
+                    entries.iter().map(|e| e.numbers.len()).sum::<usize>()
+                ),
+                Err(e) => println!("contacts failed: {e}"),
+            }
+            return;
+        }
         println!("connecting to {} ...", device.name);
         let mut session = match MapSession::connect(&device.id).await {
             Ok(s) => s,

@@ -16,6 +16,7 @@ pub const OP_SETPATH: u8 = 0x85;
 pub const RSP_CONTINUE: u8 = 0x90;
 pub const RSP_SUCCESS: u8 = 0xA0;
 pub const RSP_BAD_REQUEST: u8 = 0xC0;
+pub const RSP_UNAUTHORIZED: u8 = 0xC1;
 pub const RSP_FORBIDDEN: u8 = 0xC3;
 pub const RSP_NOT_FOUND: u8 = 0xC4;
 pub const RSP_INTERNAL_ERROR: u8 = 0xD0;

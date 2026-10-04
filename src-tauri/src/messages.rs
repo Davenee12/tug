@@ -233,9 +233,9 @@ impl Store {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "INSERT OR IGNORE INTO contacts (address, name)
-             SELECT m.address, n.title
+             SELECT m.address, trim(n.title)
              FROM messages m
-             JOIN notifications n ON n.app_id = ?1 AND n.message = m.body AND n.title <> ''
+             JOIN notifications n ON n.app_id = ?1 AND n.message = m.body AND trim(n.title) <> ''
              WHERE m.direction = 'in' AND m.body <> ''
                AND m.address NOT IN (SELECT address FROM contacts)
              GROUP BY m.address

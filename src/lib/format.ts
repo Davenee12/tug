@@ -19,10 +19,16 @@ export function appLabel(n: Pick<PhoneNotification, "appId" | "appName">): strin
   return last.charAt(0).toUpperCase() + last.slice(1);
 }
 
+/** Two initials from letters/digits only, by code point (emoji never split). */
 export function initials(label: string): string {
-  const words = label.split(/[\s-]+/).filter(Boolean);
-  const letters = words.length > 1 ? words[0][0] + words[1][0] : label.slice(0, 2);
-  return letters.toUpperCase();
+  const isAlnum = (ch: string) => /[\p{L}\p{N}]/u.test(ch);
+  const words = label.split(/[\s-]+/).filter((w) => Array.from(w).some(isAlnum));
+  const first = (w: string) => Array.from(w).find(isAlnum) ?? "";
+  const letters =
+    words.length > 1
+      ? first(words[0]) + first(words[1])
+      : Array.from(words[0] ?? label).filter(isAlnum).slice(0, 2).join("");
+  return (letters || "?").toUpperCase();
 }
 
 /** Stable warm tone per app so the feed is scannable without real app icons. */
@@ -92,9 +98,14 @@ export function isConversation(n: PhoneNotification): boolean {
   return n.appId in MESSAGING_APPS && !!n.title;
 }
 
-/** One conversation per app + sender. */
+/** Names as people see them: iOS sometimes pads notification titles ("damian "). */
+export function cleanName(name: string): string {
+  return name.trim().replace(/\s+/g, " ");
+}
+
+/** One conversation per app + sender, however the sender's name is padded or cased. */
 export function threadKey(n: Pick<PhoneNotification, "appId" | "title">): string {
-  return `${n.appId}\u0000${n.title}`;
+  return `${n.appId}\u0000${cleanName(n.title).toLowerCase()}`;
 }
 
 const byTime = (a: PhoneNotification, b: PhoneNotification) =>
@@ -114,7 +125,7 @@ export function groupThreads(notifications: PhoneNotification[]): Thread[] {
       t.items.push(n);
       if (byTime(n, t.latest) > 0) t.latest = n;
     } else {
-      threads.set(key, { key, appId: n.appId, appLabel: appLabel(n), contact: n.title, items: [n], latest: n });
+      threads.set(key, { key, appId: n.appId, appLabel: appLabel(n), contact: cleanName(n.title), items: [n], latest: n });
     }
   }
   for (const t of threads.values()) t.items.sort(byTime);
@@ -205,7 +216,7 @@ export function groupConversations(
   contacts: Contact[],
 ): Conversation[] {
   const nameFor = new Map(contacts.map((c) => [c.address, c.name]));
-  const addressFor = new Map(contacts.map((c) => [c.name, c.address]));
+  const addressFor = new Map(contacts.map((c) => [cleanName(c.name).toLowerCase(), c.address]));
   const convs = new Map<string, Conversation>();
   const get = (appId: string, label: string, contact: string): Conversation => {
     const key = threadKey({ appId, title: contact });
@@ -219,15 +230,15 @@ export function groupConversations(
   };
 
   for (const m of messages) {
-    const name = m.contactName ?? nameFor.get(m.address) ?? formatAddress(m.address);
+    const name = cleanName(m.contactName ?? nameFor.get(m.address) ?? formatAddress(m.address));
     const c = get(MESSAGES_APP, "Messages", name);
     c.address = m.address;
     c.items.push({ kind: "message", id: `m${m.id}`, at: messageTime(m), body: m.body, m });
   }
   for (const n of notifications) {
     if (!isConversation(n)) continue;
-    const c = get(n.appId, appLabel(n), n.title);
-    if (n.appId === MESSAGES_APP) c.address ??= addressFor.get(n.title) ?? null;
+    const c = get(n.appId, appLabel(n), cleanName(n.title));
+    if (n.appId === MESSAGES_APP) c.address ??= addressFor.get(cleanName(n.title).toLowerCase()) ?? null;
     c.notifications.push(n);
     const at = notificationTime(n);
     const body = n.message || n.subtitle;
