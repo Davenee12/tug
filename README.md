@@ -53,6 +53,7 @@ npm run tauri dev     # the real app, with Bluetooth
 npm run dev           # UI only in a browser, with sample data (src/lib/devMock.ts)
 npm run check         # vue-tsc + clippy -D warnings + cargo test
 npx tauri build --no-bundle   # src-tauri/target/release/tug.exe
+npx tauri build               # installer: src-tauri/target/release/bundle/nsis/tug_0.1.0_x64-setup.exe
 ```
 
 Browser preview URLs: `/` (connected, sample history), `/?setup` (first run), `/?pairing` (PIN dialog).
