@@ -1,6 +1,6 @@
 [package]
 name = "tug"
-version = "0.1.0"
+version = "0.5.0"
 description = "Bluetooth LE companion that mirrors iPhone notifications and media controls to Windows"
 authors = ["Dave James"]
 edition = "2021"
@@ -32,8 +32,11 @@ windows = { version = "0.62", features = [
   "Devices_Bluetooth",
   "Devices_Bluetooth_Advertisement",
   "Devices_Bluetooth_GenericAttributeProfile",
+  "Devices_Bluetooth_Rfcomm",
   "Devices_Enumeration",
   "Devices_Radios",
+  "Networking",
+  "Networking_Sockets",
   "Storage_Streams",
 ] }
 windows-collections = "0.3"

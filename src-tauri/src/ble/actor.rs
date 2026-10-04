@@ -21,7 +21,7 @@ use windows::Devices::Bluetooth::GenericAttributeProfile::{
     GattServiceProviderAdvertisementStatusChangedEventArgs, GattServiceProviderAdvertisingParameters, GattSession,
 };
 use windows::Devices::Bluetooth::{
-    BluetoothAdapter, BluetoothConnectionStatus, BluetoothDevice, BluetoothError, BluetoothLEDevice,
+    BluetoothAdapter, BluetoothCacheMode, BluetoothConnectionStatus, BluetoothDevice, BluetoothError, BluetoothLEDevice,
 };
 use windows::Devices::Enumeration::{
     DeviceInformation, DeviceInformationCustomPairing, DeviceInformationKind, DeviceInformationUpdate,
@@ -768,7 +768,10 @@ impl Actor {
         self.shared.set_live_session(None);
         self.shared.update_status(|s| {
             s.battery = None;
-            s.services = Services::default();
+            s.services = Services {
+                messages: s.services.messages,
+                ..Services::default()
+            };
         });
         self.shared.update_now_playing(|np| {
             let changed = *np != NowPlaying::default();
@@ -884,7 +887,10 @@ impl Actor {
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
             s.battery = None;
-            s.services = Services::default();
+            s.services = Services {
+                messages: s.services.messages,
+                ..Services::default()
+            };
         });
         self.shared.update_now_playing(|np| {
             let changed = *np != NowPlaying::default();
@@ -925,6 +931,7 @@ impl Actor {
                 notifications: true,
                 media: media.is_some(),
                 battery: battery.is_some(),
+                messages: s.services.messages,
             }
         });
         if let Some(link) = self.link.as_mut() {
@@ -1039,6 +1046,20 @@ impl Actor {
         let svc = winrt::service(device, winrt::sig_uuid(BATTERY_SERVICE))
             .await?
             .ok_or(BleError::NotFound("Battery service"))?;
+        if let Ok(all) = async {
+            svc.GetCharacteristicsWithCacheModeAsync(BluetoothCacheMode::Uncached)?
+                .await?
+                .Characteristics()
+        }
+        .await
+        {
+            let uuids: Vec<String> = all
+                .into_iter()
+                .filter_map(|c| c.Uuid().ok())
+                .map(|u| format!("{u:?}"))
+                .collect();
+            log::info!("battery service characteristics: {uuids:?}");
+        }
         let level = winrt::characteristic(&svc, winrt::sig_uuid(BATTERY_LEVEL), "battery level").await?;
         let initial = winrt::read(&level).await?;
         let _ = self.tx.send(Event::Battery { gen, data: initial });
@@ -1107,6 +1128,41 @@ impl Actor {
         // Only probe between requests so the probe can't interleave with a real response.
         if idle {
             self.probe_ancs_authorization(&control_point).await;
+        }
+        self.retry_optional_services().await;
+    }
+
+    /// Media and battery are optional at connect time; if they failed (e.g. Windows
+    /// still held them for a previous process), keep trying while linked.
+    async fn retry_optional_services(&mut self) {
+        let Some(link) = self.link.as_ref().filter(|l| l.connected) else {
+            return;
+        };
+        let (device, gen) = (link.device.clone(), link.gen);
+        let (need_media, need_battery) = (link.media.is_none(), link._battery.is_none());
+        if need_media {
+            match self.setup_media(&device, gen).await {
+                Ok(m) => {
+                    log::info!("media service connected on retry");
+                    if let Some(l) = self.link.as_mut() {
+                        l.media = Some(m);
+                    }
+                    self.shared.update_status(|s| s.services.media = true);
+                }
+                Err(e) => log::debug!("media retry: {e}"),
+            }
+        }
+        if need_battery {
+            match self.setup_battery(&device, gen).await {
+                Ok(b) => {
+                    log::info!("battery service connected on retry");
+                    if let Some(l) = self.link.as_mut() {
+                        l._battery = Some(b);
+                    }
+                    self.shared.update_status(|s| s.services.battery = true);
+                }
+                Err(e) => log::debug!("battery retry: {e}"),
+            }
         }
     }
 
@@ -1211,6 +1267,12 @@ impl Actor {
                 });
                 match stored {
                     Ok(n) => {
+                        // A new text: pull it (and anything else new) over MAP right away.
+                        if n.app_id == "com.apple.MobileSMS" {
+                            if let Some(map) = self.shared.map.get() {
+                                map.refresh();
+                            }
+                        }
                         a.rows.insert(uid, n.id);
                         if n.app_name.is_none() && !attrs.app_id.is_empty() && a.asked_apps.insert(attrs.app_id.clone())
                         {

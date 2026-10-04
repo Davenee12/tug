@@ -4,6 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppName,
+  Contact,
+  SmsMessage,
   DeviceStatus,
   DiscoveredDevice,
   MediaCommand,
@@ -31,6 +33,10 @@ export const api = {
   setAdvertising: (enabled: boolean) => invoke<void>("set_advertising", { enabled }),
   getSettings: () => invoke<Record<string, string>>("get_settings"),
   setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),
+  listMessages: (limit: number) => invoke<SmsMessage[]>("list_messages", { limit }),
+  getContacts: () => invoke<Contact[]>("get_contacts"),
+  sendMessage: (address: string, text: string) => invoke<SmsMessage>("send_message", { address, text }),
+  refreshMessages: () => invoke<void>("refresh_messages"),
 };
 
 interface EventPayloads {
@@ -42,6 +48,8 @@ interface EventPayloads {
   "discovered-devices": DiscoveredDevice[];
   "pairing-request": PairingRequest;
   "pairing-request-closed": null;
+  message: SmsMessage;
+  contacts: Contact[];
 }
 
 export function on<E extends keyof EventPayloads>(

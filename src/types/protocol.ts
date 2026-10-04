@@ -14,6 +14,8 @@ export interface Services {
   notifications: boolean;
   media: boolean;
   battery: boolean;
+  /** Bluetooth MAP session (read inbox, send replies) is up. */
+  messages: boolean;
 }
 
 export interface DeviceStatus {
@@ -25,6 +27,10 @@ export interface DeviceStatus {
   battery: number | null;
   services: Services;
   lastError: string | null;
+  /** Why message access isn't available, when the user can fix it. */
+  messagesError: string | null;
+  /** Why the phone's contacts aren't available, when the user can fix it. */
+  contactsError: string | null;
 }
 
 export type Category =
@@ -112,6 +118,27 @@ export interface PairingRequest {
 export interface AppName {
   appId: string;
   appName: string;
+}
+
+/** A conversation message from a connector (first: the iPhone over Bluetooth MAP). */
+export interface SmsMessage {
+  id: number;
+  source: string;
+  direction: "in" | "out";
+  /** Normalised phone number or email. */
+  address: string;
+  contactName: string | null;
+  body: string;
+  /** Phone-local ISO time, when the phone reported one. */
+  sentAt: string | null;
+  receivedAt: number;
+  /** Outgoing: pending → accepted (taken by the iPhone; not proof of delivery) or failed. */
+  status: "received" | "pending" | "accepted" | "failed";
+}
+
+export interface Contact {
+  address: string;
+  name: string;
 }
 
 /** UI preferences persisted in SQLite under the `ui.` prefix. */

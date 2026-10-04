@@ -2,6 +2,8 @@ mod ams;
 mod ancs;
 mod ble;
 mod commands;
+pub mod map;
+mod messages;
 mod state;
 mod store;
 
@@ -39,6 +41,7 @@ pub fn run() {
             let store = Arc::new(Store::open(&dir.join("tug.db"))?);
             let shared = Arc::new(Shared::new(app.handle().clone(), store));
             let ble = ble::start(shared.clone());
+            let _ = shared.map.set(map::service::start(shared.clone()));
             app.manage(AppState { shared, ble });
             Ok(())
         })
@@ -59,6 +62,10 @@ pub fn run() {
             commands::set_advertising,
             commands::get_settings,
             commands::set_setting,
+            commands::list_messages,
+            commands::get_contacts,
+            commands::send_message,
+            commands::refresh_messages,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

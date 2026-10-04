@@ -1,4 +1,4 @@
-import type { PhoneNotification } from "../types/protocol";
+import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 /** Bundle ids whose notifications are conversations, grouped as threads. */
 export const MESSAGING_APPS: Record<string, string> = {
@@ -158,4 +158,89 @@ export function groupFeed(notifications: PhoneNotification[]): FeedEntry[] {
     entries.push({ kind: "stack", key: stack.key, stack });
   }
   return entries.sort((a, b) => byTime(entryLatest(b), entryLatest(a)));
+}
+
+/** `+13026698133` → `(302) 669-8133`; anything else unchanged. */
+export function formatAddress(address: string): string {
+  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(address);
+  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : address;
+}
+
+const MESSAGES_APP = "com.apple.MobileSMS";
+
+export type ConversationItem =
+  | { kind: "notification"; id: string; at: Date; body: string; n: PhoneNotification }
+  | { kind: "message"; id: string; at: Date; body: string; m: SmsMessage };
+
+export interface Conversation {
+  key: string;
+  appId: string;
+  appLabel: string;
+  contact: string;
+  /** Where replies go; known once message access has seen this person. */
+  address: string | null;
+  /** Oldest first. */
+  items: ConversationItem[];
+  latest: ConversationItem;
+  /** The notification items, for new-message counts. */
+  notifications: PhoneNotification[];
+}
+
+function messageTime(m: SmsMessage): Date {
+  const d = m.sentAt ? new Date(m.sentAt) : null;
+  return d && !Number.isNaN(d.getTime()) ? d : new Date(m.receivedAt);
+}
+
+/** A notification and a MAP message are the same text if body matches within this window. */
+const SAME_MESSAGE_MS = 10 * 60 * 1000;
+
+/**
+ * Conversations for the Messages view: notifications from chat apps merged with
+ * messages from message access (MAP). Keys match `threadKey`, so opening a feed
+ * row lands on the merged conversation. A text reported by both is shown once.
+ */
+export function groupConversations(
+  notifications: PhoneNotification[],
+  messages: SmsMessage[],
+  contacts: Contact[],
+): Conversation[] {
+  const nameFor = new Map(contacts.map((c) => [c.address, c.name]));
+  const addressFor = new Map(contacts.map((c) => [c.name, c.address]));
+  const convs = new Map<string, Conversation>();
+  const get = (appId: string, label: string, contact: string): Conversation => {
+    const key = threadKey({ appId, title: contact });
+    let c = convs.get(key);
+    if (!c) {
+      const placeholder = { kind: "message", id: "", at: new Date(0), body: "" } as unknown as ConversationItem;
+      c = { key, appId, appLabel: label, contact, address: null, items: [], latest: placeholder, notifications: [] };
+      convs.set(key, c);
+    }
+    return c;
+  };
+
+  for (const m of messages) {
+    const name = m.contactName ?? nameFor.get(m.address) ?? formatAddress(m.address);
+    const c = get(MESSAGES_APP, "Messages", name);
+    c.address = m.address;
+    c.items.push({ kind: "message", id: `m${m.id}`, at: messageTime(m), body: m.body, m });
+  }
+  for (const n of notifications) {
+    if (!isConversation(n)) continue;
+    const c = get(n.appId, appLabel(n), n.title);
+    if (n.appId === MESSAGES_APP) c.address ??= addressFor.get(n.title) ?? null;
+    c.notifications.push(n);
+    const at = notificationTime(n);
+    const body = n.message || n.subtitle;
+    const duplicate = c.items.some(
+      (i) => i.kind === "message" && i.m.direction === "in" && i.body.trim() === body.trim() && Math.abs(i.at.getTime() - at.getTime()) < SAME_MESSAGE_MS,
+    );
+    if (!duplicate) c.items.push({ kind: "notification", id: `n${n.id}`, at, body, n });
+  }
+
+  const out = [...convs.values()].filter((c) => c.items.length > 0);
+  for (const c of out) {
+    c.items.sort((a, b) => a.at.getTime() - b.at.getTime());
+    c.latest = c.items[c.items.length - 1];
+  }
+  return out.sort((a, b) => b.latest.at.getTime() - a.latest.at.getTime());
 }
