@@ -58,6 +58,8 @@ const ANCS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const RETRY_CONNECTED_SECS: u32 = 2;
 const RETRY_IDLE_SECS: u32 = 10;
 const ADVERTISE_RETRY_SECS: u32 = 3;
+const CCCD_CHECK_SECS: u32 = 15;
+const NOT_SHARING: &str = "Your iPhone is connected but isn't sharing notifications with this PC. On the iPhone: Settings › Bluetooth › tap ⓘ next to this PC › turn on Share System Notifications.";
 const PIN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
 
 enum Event {
@@ -109,8 +111,8 @@ struct Ancs {
     _service: GattDeviceService,
     control_point: GattCharacteristic,
     // Held so their ValueChanged registrations stay alive.
-    _notification_source: GattCharacteristic,
-    _data_source: GattCharacteristic,
+    notification_source: GattCharacteristic,
+    data_source: GattCharacteristic,
     queue: VecDeque<Request>,
     inflight: Option<Instant>,
     reassembler: ancs::Reassembler,
@@ -159,6 +161,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         retry_in: 0,
         advertise_retry_in: None,
         carried_name: None,
+        cccd_check_in: CCCD_CHECK_SECS,
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -190,6 +193,8 @@ struct Actor {
     advertise_retry_in: Option<u32>,
     /// Name of a Classic-paired iPhone whose LE side is being paired on its behalf.
     carried_name: Option<String>,
+    /// Seconds until the ANCS subscription is verified on the iPhone again.
+    cccd_check_in: u32,
 }
 
 fn now_ms() -> i64 {
@@ -398,6 +403,13 @@ impl Actor {
                 self.stop_advertising();
                 self.start_advertising().await;
             }
+        }
+
+        if self.cccd_check_in > 0 {
+            self.cccd_check_in -= 1;
+        } else {
+            self.cccd_check_in = CCCD_CHECK_SECS;
+            self.verify_ancs_subscription().await;
         }
 
         if self.discovered_dirty {
@@ -948,11 +960,13 @@ impl Actor {
             "ANCS subscribed (session {})",
             self.shared.live_session().unwrap_or_default()
         );
+        // First authorization probe shortly after connecting, then every CCCD_CHECK_SECS.
+        self.cccd_check_in = 2;
         Ok(Ancs {
             _service: svc,
             control_point,
-            _notification_source: ns,
-            _data_source: ds,
+            notification_source: ns,
+            data_source: ds,
             queue: VecDeque::new(),
             inflight: None,
             reassembler: ancs::Reassembler::default(),
@@ -1011,6 +1025,64 @@ impl Actor {
     }
 
     // ---------------------------------------------------------------- ANCS
+
+    /// Another app on this PC (e.g. Phone Link) can turn the shared ANCS CCCDs off,
+    /// which silently stops notifications. Read them back and re-enable if needed.
+    async fn verify_ancs_subscription(&mut self) {
+        let Some(a) = self.link.as_ref().filter(|l| l.connected).and_then(|l| l.ancs.as_ref()) else {
+            return;
+        };
+        let control_point = a.control_point.clone();
+        let idle = a.inflight.is_none();
+        for (name, ch) in [
+            ("data source", a.data_source.clone()),
+            ("notification source", a.notification_source.clone()),
+        ] {
+            match winrt::notify_enabled(&ch).await {
+                Ok(true) => log::debug!("ANCS {name}: notifications on"),
+                Ok(false) => {
+                    log::warn!("ANCS {name}: notifications were off on the iPhone; re-enabling");
+                    if let Err(e) = winrt::enable_notify(&ch).await {
+                        log::warn!("ANCS {name}: re-enable failed: {e}");
+                    }
+                }
+                Err(e) => log::warn!("ANCS {name}: couldn't read subscription state: {e}"),
+            }
+        }
+        // Only probe between requests so the probe can't interleave with a real response.
+        if idle {
+            self.probe_ancs_authorization(&control_point).await;
+        }
+    }
+
+    /// Ask iOS whether it is actually sharing notifications with this PC.
+    async fn probe_ancs_authorization(&mut self, control_point: &GattCharacteristic) {
+        let shared = match winrt::write(control_point, &ancs::probe()).await {
+            Err(BleError::Protocol(Some(ancs::ERR_INVALID_PARAMETER))) | Ok(()) => true,
+            Err(BleError::Protocol(Some(ancs::ATT_WRITE_NOT_PERMITTED))) => false,
+            Err(e) => {
+                log::warn!("ANCS authorization probe failed: {e}");
+                return;
+            }
+        };
+        let before = self.shared.status().services.notifications;
+        if shared != before {
+            log::info!(
+                "ANCS authorization probe: iPhone {} notifications",
+                if shared { "is sharing" } else { "is NOT sharing" }
+            );
+        } else {
+            log::debug!("ANCS authorization probe: sharing={shared}");
+        }
+        self.shared.update_status(|s| {
+            s.services.notifications = shared;
+            if !shared {
+                s.last_error = Some(NOT_SHARING.into());
+            } else if s.last_error.as_deref() == Some(NOT_SHARING) {
+                s.last_error = None;
+            }
+        });
+    }
 
     async fn on_notification_source(&mut self, data: &[u8]) {
         let ev = match ancs::parse_notification_source(data) {

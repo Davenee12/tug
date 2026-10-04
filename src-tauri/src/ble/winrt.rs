@@ -113,12 +113,26 @@ pub async fn subscribe(ch: &GattCharacteristic, on_value: impl Fn(Vec<u8>) + Sen
             Ok(())
         }),
     )?;
+    enable_notify(ch).await
+}
+
+/// Write the CCCD on the peripheral to turn notifications on.
+pub async fn enable_notify(ch: &GattCharacteristic) -> Result<()> {
     let res = ch
         .WriteClientCharacteristicConfigurationDescriptorWithResultAsync(
             GattClientCharacteristicConfigurationDescriptorValue::Notify,
         )?
         .await?;
     check(res.Status()?, res.ProtocolError())
+}
+
+/// Whether notifications are currently enabled on the peripheral, read back
+/// from the device. The CCCD is shared by every app on this PC using the link.
+pub async fn notify_enabled(ch: &GattCharacteristic) -> Result<bool> {
+    let res = ch.ReadClientCharacteristicConfigurationDescriptorAsync()?.await?;
+    check(res.Status()?, res.ProtocolError())?;
+    Ok(res.ClientCharacteristicConfigurationDescriptor()?
+        == GattClientCharacteristicConfigurationDescriptorValue::Notify)
 }
 
 pub async fn write(ch: &GattCharacteristic, bytes: &[u8]) -> Result<()> {
