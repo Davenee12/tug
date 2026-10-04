@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Search, Settings2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { dayLabel, notificationTime } from "../lib/format";
+import { dayLabel, entryLatest, groupFeed, groupThreads, notificationTime, type FeedEntry } from "../lib/format";
+import FeedEntryRow from "./FeedEntryRow.vue";
 import MessageThreads from "./MessageThreads.vue";
 import NotificationItem from "./NotificationItem.vue";
 
@@ -10,7 +11,6 @@ defineProps<{ panelInline: boolean }>();
 const emit = defineEmits<{ openPanel: [] }>();
 
 const tug = useTugStore();
-const tab = ref<"feed" | "messages">("feed");
 const query = ref(tug.searchQuery);
 
 let debounce: number | undefined;
@@ -18,6 +18,24 @@ watch(query, (q) => {
   window.clearTimeout(debounce);
   debounce = window.setTimeout(() => void tug.search(q), 180);
 });
+
+// Searching shows every matching notification; browsing shows the compact grouped feed.
+const entryGroups = computed(() => {
+  const out: { label: string; entries: FeedEntry[] }[] = [];
+  // The feed is what's still waiting: anything cleared (here, on the phone or the
+  // watch) leaves it. History stays in Messages and search.
+  for (const e of groupFeed(tug.notifications.filter((n) => n.removedAt == null))) {
+    const label = dayLabel(notificationTime(entryLatest(e)));
+    const last = out.at(-1);
+    if (last?.label === label) last.entries.push(e);
+    else out.push({ label, entries: [e] });
+  }
+  return out;
+});
+
+const unreadMessages = computed(() =>
+  groupThreads(tug.notifications).reduce((sum, t) => sum + tug.newCount(t.key, t.items), 0),
+);
 
 const groups = computed(() => {
   const out: { label: string; items: typeof tug.visible }[] = [];
@@ -50,10 +68,18 @@ const setUp = computed(() => tug.status.device != null);
 <template>
   <div class="flex h-full min-h-0 flex-col">
     <header class="flex items-center gap-4 border-b border-hairline px-8 pt-6 pb-4">
-      <h1 class="headline text-[36px] leading-none">{{ tab === "feed" ? "Notifications" : "Messages" }}</h1>
+      <h1 class="headline text-[36px] leading-none">{{ tug.view === "feed" ? "Notifications" : "Messages" }}</h1>
       <nav class="ml-2 flex gap-1">
-        <button :class="['tab', tab === 'feed' && 'tab-active']" @click="tab = 'feed'">Feed</button>
-        <button :class="['tab', tab === 'messages' && 'tab-active']" @click="tab = 'messages'">Messages</button>
+        <button :class="['tab', tug.view === 'feed' && 'tab-active']" @click="tug.view = 'feed'">Feed</button>
+        <button :class="['tab flex items-center gap-1.5', tug.view === 'messages' && 'tab-active']" @click="tug.view = 'messages'">
+          Messages
+          <span
+            v-if="unreadMessages"
+            class="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-on-primary"
+          >
+            {{ unreadMessages }}
+          </span>
+        </button>
       </nav>
       <div class="relative ml-auto w-full max-w-72">
         <Search :size="15" class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-soft" />
@@ -85,17 +111,24 @@ const setUp = computed(() => tug.status.device != null);
       </div>
     </div>
 
-    <MessageThreads v-else-if="tab === 'messages'" />
+    <MessageThreads v-else-if="tug.view === 'messages'" />
 
     <div v-else class="min-h-0 flex-1 overflow-y-auto px-5 pb-10">
-      <div v-if="tug.visible.length === 0" class="flex h-full items-center justify-center">
+      <div
+        v-if="tug.visible.length === 0 || (!tug.searchResults && entryGroups.length === 0)"
+        class="flex h-full items-center justify-center"
+      >
         <div class="max-w-sm text-center">
-          <p class="headline text-[28px]">{{ tug.searchResults ? "Nothing matches" : "Quiet for now" }}</p>
+          <p class="headline text-[28px]">
+            {{ tug.searchResults ? "Nothing matches" : tug.notifications.length ? "You're all caught up" : "Quiet for now" }}
+          </p>
           <p class="mt-2 text-[14px] text-muted">
             {{
               tug.searchResults
                 ? "Try fewer words. Search matches the start of words in titles, messages and app names."
-                : tug.connected
+                : tug.notifications.length
+                  ? "Cleared notifications live on in Messages and search."
+                  : tug.connected
                   ? "New notifications from your iPhone will land here."
                   : "Notifications appear here once your iPhone connects."
             }}
@@ -103,12 +136,22 @@ const setUp = computed(() => tug.status.device != null);
         </div>
       </div>
 
-      <section v-for="g in groups" :key="g.label">
-        <h2 class="caption-upper sticky top-0 z-10 bg-canvas/95 px-4 pt-5 pb-2 text-muted backdrop-blur-sm">{{ g.label }}</h2>
-        <div class="divide-y divide-hairline-soft">
-          <NotificationItem v-for="n in g.items" :key="n.id" :n="n" />
-        </div>
-      </section>
+      <template v-if="tug.searchResults">
+        <section v-for="g in groups" :key="g.label">
+          <h2 class="caption-upper sticky top-0 z-10 bg-canvas/95 px-4 pt-5 pb-2 text-muted backdrop-blur-sm">{{ g.label }}</h2>
+          <div class="divide-y divide-hairline-soft">
+            <NotificationItem v-for="n in g.items" :key="n.id" :n="n" />
+          </div>
+        </section>
+      </template>
+      <div v-else class="mx-auto max-w-3xl">
+        <section v-for="g in entryGroups" :key="g.label">
+          <h2 class="caption-upper sticky top-0 z-10 bg-canvas/95 px-3 pt-5 pb-2 text-muted backdrop-blur-sm">{{ g.label }}</h2>
+          <div class="flex flex-col gap-0.5">
+            <FeedEntryRow v-for="e in g.entries" :key="e.key" :entry="e" />
+          </div>
+        </section>
+      </div>
       <div v-if="!tug.searchResults && tug.hasMore && tug.visible.length > 0" ref="sentinel" class="h-10" />
     </div>
   </div>

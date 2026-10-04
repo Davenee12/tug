@@ -54,6 +54,8 @@ const history: PhoneNotification[] = setup
         positiveLabel: "Answer",
         negativeLabel: "Decline",
       }),
+      n("com.apple.MobileSMS", "Messages", "Tay", "omw, 10 mins 🚗", 1),
+      n("com.apple.MobileSMS", "Messages", "Tay", "did you see the photos I sent?", 4),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Are we still meeting at 5? I can grab a table if you're running late.", 2),
       n("net.whatsapp.WhatsApp", "WhatsApp", "Sam Okafor", "Sent you the slides, have a look before the call", 9),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Also bring the charger 🙏", 14),
@@ -62,9 +64,13 @@ const history: PhoneNotification[] = setup
       n("com.apple.mobilemail", "Mail", "Netlify", "Deploy succeeded for topcourt-prod", 66, { category: "email", removedAt: now - 30 * min, live: false }),
       n("net.whatsapp.WhatsApp", "WhatsApp", "Sam Okafor", "Running 5 late", 180, { live: false }),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Booked for Thursday", 60 * 26, { live: false }),
+      n("com.apple.MobileSMS", "Messages", "Tay", "lol yes that's exactly what I meant", 60 * 25, { live: false, removedAt: now - 60 * 24 * min }),
       n("com.apple.Health", null, "Stand", "Time to stand! Stand and move for a minute.", 60 * 27, { category: "healthAndFitness", live: false }),
       n("com.apple.MobileSMS", "Messages", "Bank", "Your code is 482913. Don't share it with anyone.", 60 * 50, { live: false }),
     ];
+
+// Mirrors the backend's reconnect sweep: anything no longer on the phone is cleared.
+for (const x of history) if (!x.live && x.removedAt == null) x.removedAt = x.receivedAt + min;
 
 const status: DeviceStatus = setup
   ? {
@@ -109,7 +115,8 @@ const discovered: DiscoveredDevice[] = [
   { id: "c", name: "LE-Bose Flex", transport: "le", paired: false, connected: false, canPair: true },
 ];
 
-const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true" };
+// seenSince 0: everything still on the phone counts as new, so badges show in the preview.
+const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
 
 mockIPC(
   (cmd, args) => {
@@ -136,7 +143,13 @@ mockIPC(
         setTimeout(() => void emit("discovered-devices", discovered), 400);
         return null;
       case "perform_action":
-        return Promise.reject("Mock: no iPhone attached");
+        // Like the iPhone: a negative action (Clear/Decline) removes the notification.
+        if (!a.positive) {
+          const target = history.find((x) => x.id === a.id);
+          if (target) target.removedAt = Date.now();
+          setTimeout(() => void emit("notification-removed", a.id), 150);
+        }
+        return null;
       default:
         return null;
     }

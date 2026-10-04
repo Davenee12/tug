@@ -82,9 +82,23 @@ export interface Thread {
   appId: string;
   appLabel: string;
   contact: string;
+  /** Oldest first, like a chat. */
   items: PhoneNotification[];
   latest: PhoneNotification;
 }
+
+/** Notifications from chat apps that name a sender are conversations. */
+export function isConversation(n: PhoneNotification): boolean {
+  return n.appId in MESSAGING_APPS && !!n.title;
+}
+
+/** One conversation per app + sender. */
+export function threadKey(n: Pick<PhoneNotification, "appId" | "title">): string {
+  return `${n.appId}\u0000${n.title}`;
+}
+
+const byTime = (a: PhoneNotification, b: PhoneNotification) =>
+  notificationTime(a).getTime() - notificationTime(b).getTime();
 
 /**
  * Group messaging notifications into conversations by app + sender.
@@ -93,20 +107,55 @@ export interface Thread {
 export function groupThreads(notifications: PhoneNotification[]): Thread[] {
   const threads = new Map<string, Thread>();
   for (const n of notifications) {
-    if (!(n.appId in MESSAGING_APPS) || !n.title) continue;
-    const key = `${n.appId}\u0000${n.title}`;
+    if (!isConversation(n)) continue;
+    const key = threadKey(n);
     const t = threads.get(key);
     if (t) {
       t.items.push(n);
-      if (notificationTime(n) > notificationTime(t.latest)) t.latest = n;
+      if (byTime(n, t.latest) > 0) t.latest = n;
     } else {
       threads.set(key, { key, appId: n.appId, appLabel: appLabel(n), contact: n.title, items: [n], latest: n });
     }
   }
-  for (const t of threads.values()) {
-    t.items.sort((a, b) => notificationTime(a).getTime() - notificationTime(b).getTime());
+  for (const t of threads.values()) t.items.sort(byTime);
+  return [...threads.values()].sort((a, b) => byTime(b.latest, a.latest));
+}
+
+export interface AppStack {
+  key: string;
+  appId: string;
+  appLabel: string;
+  /** Newest first, like a notification stack. */
+  items: PhoneNotification[];
+  latest: PhoneNotification;
+}
+
+export type FeedEntry = { kind: "thread"; key: string; thread: Thread } | { kind: "stack"; key: string; stack: AppStack };
+
+export function entryLatest(e: FeedEntry): PhoneNotification {
+  return e.kind === "thread" ? e.thread.latest : e.stack.latest;
+}
+
+/**
+ * The compact feed: one row per conversation, one collapsible stack per other
+ * app, ordered by whichever has the newest notification.
+ */
+export function groupFeed(notifications: PhoneNotification[]): FeedEntry[] {
+  const entries: FeedEntry[] = groupThreads(notifications).map((thread) => ({ kind: "thread", key: thread.key, thread }));
+  const stacks = new Map<string, AppStack>();
+  for (const n of notifications) {
+    if (isConversation(n)) continue;
+    const s = stacks.get(n.appId);
+    if (s) {
+      s.items.push(n);
+      if (byTime(n, s.latest) > 0) s.latest = n;
+    } else {
+      stacks.set(n.appId, { key: `app\u0000${n.appId}`, appId: n.appId, appLabel: appLabel(n), items: [n], latest: n });
+    }
   }
-  return [...threads.values()].sort(
-    (a, b) => notificationTime(b.latest).getTime() - notificationTime(a.latest).getTime(),
-  );
+  for (const stack of stacks.values()) {
+    stack.items.sort((a, b) => byTime(b, a));
+    entries.push({ kind: "stack", key: stack.key, stack });
+  }
+  return entries.sort((a, b) => byTime(entryLatest(b), entryLatest(a)));
 }
