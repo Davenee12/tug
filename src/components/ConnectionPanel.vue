@@ -76,7 +76,7 @@ const advertisingLabel = computed(
     </header>
 
     <div class="flex flex-col gap-6 px-6 pt-4 pb-8">
-      <div v-if="s.lastError && s.connection !== 'connected'" class="flex gap-2.5 rounded-xl border border-error/30 bg-canvas px-4 py-3 text-[13px] text-body-strong">
+      <div v-if="s.lastError && (s.connection !== 'connected' || !s.services.notifications)" class="flex gap-2.5 rounded-xl border border-error/30 bg-canvas px-4 py-3 text-[13px] text-body-strong">
         <CircleAlert :size="16" class="mt-0.5 shrink-0 text-error" />
         <span class="selectable">{{ s.lastError }}</span>
       </div>

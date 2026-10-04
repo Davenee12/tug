@@ -206,6 +206,17 @@ pub fn get_notification_attributes(uid: u32) -> Vec<u8> {
     out
 }
 
+/// Control Point probe: attributes for a UID that never exists. An authorised
+/// consumer gets `ERR_INVALID_PARAMETER`; when iOS isn't sharing notifications
+/// with this accessory it refuses the write with ATT 0x03 (Write Not Permitted)
+/// even though the CCCD subscriptions succeeded.
+pub fn probe() -> Vec<u8> {
+    get_notification_attributes(u32::MAX)
+}
+
+/// ATT error iOS returns on Control Point writes when notification sharing is off.
+pub const ATT_WRITE_NOT_PERMITTED: u8 = 0x03;
+
 /// Control Point: Get App Attributes (display name) for a bundle id.
 pub fn get_app_attributes(app_id: &str) -> Vec<u8> {
     let mut out = vec![CMD_GET_APP_ATTRIBUTES];
@@ -465,6 +476,17 @@ mod tests {
         assert_eq!(&req[..5], &[0, 4, 3, 2, 1]);
         // AppId, Title+max, Subtitle+max, Message+max, Date, Pos, Neg
         assert_eq!(&req[5..], &[0, 1, 128, 0, 2, 128, 0, 3, 0, 8, 5, 6, 7]);
+    }
+
+    #[test]
+    fn probe_targets_a_uid_ios_never_issues() {
+        let p = probe();
+        assert_eq!(&p[..5], &[0, 0xFF, 0xFF, 0xFF, 0xFF]);
+        assert_eq!(
+            &p[5..],
+            &get_notification_attributes(0)[5..],
+            "same attribute list as a real request"
+        );
     }
 
     #[test]
