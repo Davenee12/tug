@@ -33,8 +33,11 @@ iOS only lets an accessory connect when the phone starts the connection, so the 
 through a free BLE app. After that, iOS reconnects to the PC by itself.
 
 1. Start tug. Leave **Visible to iPhone** on (left rail).
-2. On the iPhone, install **LightBlue** (free), open it, and tap the entry for this PC. It advertises
-   the tug service `6E4C3A10-9B2F-4D7A-8C1E-5A0F2B7D9C01`.
+2. On the iPhone, install **LightBlue** (free) and open it next to the PC. Windows doesn't include a
+   name in its Bluetooth LE advert, so the PC most likely appears as **Unnamed** (sometimes as the PC name),
+   usually with the strongest signal.
+   To confirm, switch *Visible to iPhone* off in tug and watch which entry disappears; switch it back on
+   and tap that entry. (Its advert lists the tug service `6E4C3A10-9B2F-4D7A-8C1E-5A0F2B7D9C01`.)
 3. Accept the pairing request on the iPhone and turn on **Share System Notifications** if iOS asks.
 4. In tug's Connection panel the iPhone appears at the top as **Connected now**. Click **Pair**,
    check the code matches the one on the phone, and confirm on both.
