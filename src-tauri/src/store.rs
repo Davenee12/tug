@@ -213,6 +213,18 @@ impl Store {
             .optional()
     }
 
+    /// After the iPhone has replayed everything still on it for `live_session`,
+    /// any open row from an earlier session was cleared while tug was away.
+    /// Marks those removed and returns their ids.
+    pub fn sweep_stale(&self, live_session: &str, at: i64) -> Result<Vec<i64>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "UPDATE notifications SET removed_at = ?2 WHERE removed_at IS NULL AND session != ?1 RETURNING id",
+        )?;
+        let rows = stmt.query_map(params![live_session, at], |r| r.get(0))?;
+        rows.collect()
+    }
+
     #[cfg(test)]
     pub fn get(&self, id: i64, live_session: Option<&str>) -> Result<Option<StoredNotification>> {
         self.conn()
@@ -413,6 +425,25 @@ mod tests {
         assert_eq!(second.message, "hi again");
         assert_eq!(s.search("again", 10, None).unwrap().len(), 1, "FTS follows updates");
         assert_eq!(s.search("hi", 10, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sweep_closes_rows_the_phone_did_not_replay() {
+        let s = Store::in_memory().unwrap();
+        let kept = attrs("x", "Jane", "still on the lock screen");
+        let gone = attrs("x", "Sam", "cleared while tug was off");
+        insert(&s, "s1", 1, EventFlags::default(), &kept);
+        let stale = insert(&s, "s1", 2, EventFlags::default(), &gone);
+        // Reconnect: iOS replays only what's still on the phone.
+        let pre = EventFlags {
+            pre_existing: true,
+            ..Default::default()
+        };
+        let replayed = insert(&s, "s2", 7, pre, &kept);
+        assert_eq!(s.sweep_stale("s2", 5_000).unwrap(), vec![stale.id]);
+        assert_eq!(s.get(replayed.id, Some("s2")).unwrap().unwrap().removed_at, None);
+        assert_eq!(s.get(stale.id, None).unwrap().unwrap().removed_at, Some(5_000));
+        assert!(s.sweep_stale("s2", 6_000).unwrap().is_empty(), "idempotent");
     }
 
     #[test]

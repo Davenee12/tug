@@ -6,7 +6,8 @@ import { appLabel, clockTime, notificationTime } from "../lib/format";
 import type { PhoneNotification } from "../types/protocol";
 import AppAvatar from "./AppAvatar.vue";
 
-const props = defineProps<{ n: PhoneNotification }>();
+// `compact`: inside an expanded app stack, where the avatar and app name are already shown.
+const props = defineProps<{ n: PhoneNotification; compact?: boolean }>();
 const tug = useTugStore();
 
 const label = computed(() => appLabel(props.n));
@@ -24,16 +25,18 @@ async function act(positive: boolean) {
 </script>
 
 <template>
-  <article :class="['flex gap-4 rounded-xl px-4 py-4 transition-colors', n.removedAt ? 'opacity-70' : '']">
-    <AppAvatar :app-id="n.appId" :label="label" />
+  <article
+    :class="['flex gap-4 rounded-xl transition-colors', compact ? 'px-3 py-2.5' : 'px-4 py-4', n.removedAt ? 'opacity-70' : '']"
+  >
+    <AppAvatar v-if="!compact" :app-id="n.appId" :label="label" />
     <div class="min-w-0 flex-1">
       <div class="flex items-baseline gap-2">
-        <span class="text-[13px] font-medium text-muted">{{ label }}</span>
+        <span v-if="!compact" class="text-[13px] font-medium text-muted">{{ label }}</span>
         <span v-if="n.flags.important" class="pill bg-surface-card px-2 py-0 text-[11px] text-ink">Important</span>
         <span v-if="n.removedAt" class="text-[12px] text-muted-soft">· cleared on iPhone</span>
         <span class="ml-auto shrink-0 font-mono text-[12px] text-muted-soft">{{ time }}</span>
       </div>
-      <p v-if="n.title" class="mt-0.5 text-[15px] font-medium text-ink">{{ n.title }}</p>
+      <p v-if="n.title" :class="['text-ink', compact ? 'text-[14px] font-medium' : 'mt-0.5 text-[15px] font-medium']">{{ n.title }}</p>
       <p v-if="n.subtitle" class="text-[14px] text-body-strong">{{ n.subtitle }}</p>
       <p
         v-if="n.message"
@@ -43,7 +46,7 @@ async function act(positive: boolean) {
         {{ n.message }}
       </p>
 
-      <div class="mt-2.5 flex items-center gap-2">
+      <div :class="['flex items-center gap-2', compact ? 'mt-1.5' : 'mt-2.5']">
         <template v-if="n.live">
           <button
             v-if="n.flags.positiveAction"

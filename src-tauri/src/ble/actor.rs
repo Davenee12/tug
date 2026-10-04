@@ -58,6 +58,8 @@ const ANCS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const RETRY_CONNECTED_SECS: u32 = 2;
 const RETRY_IDLE_SECS: u32 = 10;
 const ADVERTISE_RETRY_SECS: u32 = 3;
+/// Quiet period after the last replayed notification before sweeping stale rows.
+const REPLAY_SETTLE: Duration = Duration::from_secs(4);
 const CCCD_CHECK_SECS: u32 = 15;
 const NOT_SHARING: &str = "Your iPhone is connected but isn't sharing notifications with this PC. On the iPhone: Settings › Bluetooth › tap ⓘ next to this PC › turn on Share System Notifications.";
 const PIN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
@@ -119,6 +121,8 @@ struct Ancs {
     meta: HashMap<u32, (EventFlags, Category)>,
     rows: HashMap<u32, i64>,
     asked_apps: HashSet<String>,
+    /// Set until the post-subscribe replay has settled and stale rows are swept.
+    sweep_after: Option<Instant>,
 }
 
 struct Media {
@@ -432,6 +436,8 @@ impl Actor {
             }
             self.pump().await;
         }
+
+        self.sweep_if_settled();
 
         let ready = self.link.as_ref().is_some_and(|l| l.connected && l.ancs.is_some());
         if self.device_id.is_none() || ready || self.shared.status().radio == RadioState::Off {
@@ -973,6 +979,7 @@ impl Actor {
             meta: HashMap::new(),
             rows: HashMap::new(),
             asked_apps: HashSet::new(),
+            sweep_after: Some(Instant::now() + REPLAY_SETTLE),
         })
     }
 
@@ -1048,6 +1055,32 @@ impl Actor {
 
     // ---------------------------------------------------------------- ANCS
 
+    /// Once the iPhone has finished replaying what's still on it (no new events for
+    /// REPLAY_SETTLE and every detail fetched), close rows it didn't replay: they
+    /// were cleared while tug was disconnected.
+    fn sweep_if_settled(&mut self) {
+        let Some(link) = self.link.as_mut() else { return };
+        let (Some(a), Some(session)) = (link.ancs.as_mut(), link.session_id.as_deref()) else {
+            return;
+        };
+        let settled = a.sweep_after.is_some_and(|t| Instant::now() >= t) && a.queue.is_empty() && a.inflight.is_none();
+        if !settled {
+            return;
+        }
+        a.sweep_after = None;
+        match self.shared.store.sweep_stale(session, now_ms()) {
+            Ok(ids) => {
+                if !ids.is_empty() {
+                    log::info!("{} notification(s) were cleared while tug was away", ids.len());
+                }
+                for id in ids {
+                    self.shared.emit(events::NOTIFICATION_REMOVED, id);
+                }
+            }
+            Err(e) => log::error!("sweep_stale: {e}"),
+        }
+    }
+
     /// Another app on this PC (e.g. Phone Link) can turn the shared ANCS CCCDs off,
     /// which silently stops notifications. Read them back and re-enable if needed.
     async fn verify_ancs_subscription(&mut self) {
@@ -1117,6 +1150,9 @@ impl Actor {
         let (Some(a), Some(session)) = (link.ancs.as_mut(), link.session_id.as_deref()) else {
             return log::warn!("ANCS event before subscription finished; dropped");
         };
+        if a.sweep_after.is_some() {
+            a.sweep_after = Some(Instant::now() + REPLAY_SETTLE);
+        }
         match ev.event {
             EventId::Added | EventId::Modified => {
                 a.meta.insert(ev.uid, (ev.flags, ev.category));
