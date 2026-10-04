@@ -22,7 +22,9 @@ watch(query, (q) => {
 // Searching shows every matching notification; browsing shows the compact grouped feed.
 const entryGroups = computed(() => {
   const out: { label: string; entries: FeedEntry[] }[] = [];
-  for (const e of groupFeed(tug.notifications)) {
+  // The feed is what's still waiting: anything cleared (here, on the phone or the
+  // watch) leaves it. History stays in Messages and search.
+  for (const e of groupFeed(tug.notifications.filter((n) => n.removedAt == null))) {
     const label = dayLabel(notificationTime(entryLatest(e)));
     const last = out.at(-1);
     if (last?.label === label) last.entries.push(e);
@@ -112,14 +114,21 @@ const setUp = computed(() => tug.status.device != null);
     <MessageThreads v-else-if="tug.view === 'messages'" />
 
     <div v-else class="min-h-0 flex-1 overflow-y-auto px-5 pb-10">
-      <div v-if="tug.visible.length === 0" class="flex h-full items-center justify-center">
+      <div
+        v-if="tug.visible.length === 0 || (!tug.searchResults && entryGroups.length === 0)"
+        class="flex h-full items-center justify-center"
+      >
         <div class="max-w-sm text-center">
-          <p class="headline text-[28px]">{{ tug.searchResults ? "Nothing matches" : "Quiet for now" }}</p>
+          <p class="headline text-[28px]">
+            {{ tug.searchResults ? "Nothing matches" : tug.notifications.length ? "You're all caught up" : "Quiet for now" }}
+          </p>
           <p class="mt-2 text-[14px] text-muted">
             {{
               tug.searchResults
                 ? "Try fewer words. Search matches the start of words in titles, messages and app names."
-                : tug.connected
+                : tug.notifications.length
+                  ? "Cleared notifications live on in Messages and search."
+                  : tug.connected
                   ? "New notifications from your iPhone will land here."
                   : "Notifications appear here once your iPhone connects."
             }}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { ChevronRight } from "lucide-vue-next";
+import { ChevronRight, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { notificationTime, relativeTime, type FeedEntry } from "../lib/format";
 import AppAvatar from "./AppAvatar.vue";
@@ -24,6 +24,7 @@ const fresh = computed(() => tug.newCount(props.entry.key, items.value));
 const when = computed(() => relativeTime(notificationTime(latest.value)));
 // A ringing call needs its buttons without expanding anything.
 const ringing = computed(() => latest.value.category === "incomingCall" && latest.value.live);
+const clearable = computed(() => items.value.some((n) => n.live && n.flags.negativeAction));
 
 function open() {
   if (props.entry.kind === "thread") {
@@ -37,7 +38,13 @@ function open() {
 
 <template>
   <div :class="['rounded-xl transition-colors', expanded ? 'bg-surface-soft' : '']">
-    <button class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left active:bg-surface-soft" @click="open">
+    <div
+      role="button"
+      tabindex="0"
+      class="flex w-full cursor-default items-center gap-3 rounded-xl px-3 py-2.5 text-left active:bg-surface-soft"
+      @click="open"
+      @keydown.enter.self="open"
+    >
       <AppAvatar :app-id="appId" :label="entry.kind === 'thread' ? title : appLabel" size="sm" />
       <span class="min-w-0 flex-1">
         <span class="flex items-baseline gap-2">
@@ -55,11 +62,22 @@ function open() {
       >
         {{ fresh }}
       </span>
+      <span
+        v-if="clearable && !ringing"
+        role="button"
+        tabindex="0"
+        class="shrink-0 rounded-md p-1 text-muted-soft active:bg-surface-card"
+        :title="`Clear ${entry.kind === 'thread' ? title : appLabel} on your iPhone`"
+        @click.stop="tug.clearItems(items)"
+        @keydown.enter.stop="tug.clearItems(items)"
+      >
+        <X :size="14" />
+      </span>
       <ChevronRight
         :size="15"
         :class="['shrink-0 text-muted-soft transition-transform', entry.kind === 'stack' && expanded ? 'rotate-90' : '']"
       />
-    </button>
+    </div>
 
     <div v-if="ringing && !expanded" class="flex gap-2 px-3 pb-3 pl-14">
       <button v-if="latest.flags.positiveAction" class="btn-primary btn-sm" @click="tug.performAction(latest.id, true)">

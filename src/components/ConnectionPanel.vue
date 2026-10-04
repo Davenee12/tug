@@ -188,8 +188,12 @@ const advertisingLabel = computed(
         </p>
         <ul v-else class="flex flex-wrap gap-1.5">
           <li v-for="app in tug.settings.mutedApps" :key="app">
-            <button class="pill bg-surface-card text-ink active:bg-surface-cream-strong" :title="`Unmute ${app}`" @click="tug.toggleMuted(app)">
-              {{ app.split(".").pop() }}
+            <button
+              class="pill bg-surface-card text-ink active:bg-surface-cream-strong"
+              :title="`Unmute ${tug.appNameFor(app)}`"
+              @click="tug.toggleMuted(app)"
+            >
+              {{ tug.appNameFor(app) }}
               <X :size="12" />
             </button>
           </li>
