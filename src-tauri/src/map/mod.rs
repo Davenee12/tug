@@ -5,8 +5,10 @@
 //! with `bmessage` and `listing` as the two MAP object formats. Everything but
 //! `session` is pure and unit-tested.
 
+pub mod address;
 pub mod bmessage;
 pub mod listing;
 pub mod obex;
+pub mod service;
 #[cfg(windows)]
 pub mod session;

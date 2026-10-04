@@ -768,7 +768,10 @@ impl Actor {
         self.shared.set_live_session(None);
         self.shared.update_status(|s| {
             s.battery = None;
-            s.services = Services::default();
+            s.services = Services {
+                messages: s.services.messages,
+                ..Services::default()
+            };
         });
         self.shared.update_now_playing(|np| {
             let changed = *np != NowPlaying::default();
@@ -884,7 +887,10 @@ impl Actor {
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
             s.battery = None;
-            s.services = Services::default();
+            s.services = Services {
+                messages: s.services.messages,
+                ..Services::default()
+            };
         });
         self.shared.update_now_playing(|np| {
             let changed = *np != NowPlaying::default();
@@ -925,6 +931,7 @@ impl Actor {
                 notifications: true,
                 media: media.is_some(),
                 battery: battery.is_some(),
+                messages: s.services.messages,
             }
         });
         if let Some(link) = self.link.as_mut() {
@@ -1211,6 +1218,12 @@ impl Actor {
                 });
                 match stored {
                     Ok(n) => {
+                        // A new text: pull it (and anything else new) over MAP right away.
+                        if n.app_id == "com.apple.MobileSMS" {
+                            if let Some(map) = self.shared.map.get() {
+                                map.refresh();
+                            }
+                        }
                         a.rows.insert(uid, n.id);
                         if n.app_name.is_none() && !attrs.app_id.is_empty() && a.asked_apps.insert(attrs.app_id.clone())
                         {

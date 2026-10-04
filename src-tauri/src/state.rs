@@ -2,12 +2,13 @@
 //! Every type here is mirrored in `src/types/protocol.ts`.
 
 use std::sync::mpsc::SyncSender;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::ams::NowPlaying;
+use crate::map::service::MapHandle;
 use crate::store::Store;
 
 /// Event names emitted to the frontend.
@@ -20,6 +21,8 @@ pub mod events {
     pub const DISCOVERED_DEVICES: &str = "discovered-devices";
     pub const PAIRING_REQUEST: &str = "pairing-request";
     pub const PAIRING_REQUEST_CLOSED: &str = "pairing-request-closed";
+    pub const MESSAGE: &str = "message";
+    pub const CONTACTS: &str = "contacts";
 }
 
 /// Settings keys stored in SQLite.
@@ -73,6 +76,8 @@ pub struct Services {
     pub notifications: bool,
     pub media: bool,
     pub battery: bool,
+    /// Bluetooth MAP session (read inbox, send replies) is up.
+    pub messages: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -86,6 +91,8 @@ pub struct DeviceStatus {
     pub battery: Option<u8>,
     pub services: Services,
     pub last_error: Option<String>,
+    /// Why message access isn't available, when the user can fix it (e.g. consent).
+    pub messages_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -129,6 +136,8 @@ pub struct Shared {
     live_session: Mutex<Option<String>>,
     /// Answer channel for a PIN-confirmation prompt that is waiting on the user.
     pub pairing_confirm: Mutex<Option<SyncSender<bool>>>,
+    /// Message service, set once at startup.
+    pub map: OnceLock<MapHandle>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -144,6 +153,7 @@ impl Shared {
             now_playing: Mutex::default(),
             live_session: Mutex::default(),
             pairing_confirm: Mutex::default(),
+            map: OnceLock::new(),
         }
     }
 
