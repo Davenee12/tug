@@ -5,6 +5,7 @@ import { useTugStore } from "./stores/tug";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
 import FeedPanel from "./components/FeedPanel.vue";
+import NewConversation from "./components/NewConversation.vue";
 import PairingDialog from "./components/PairingDialog.vue";
 
 const tug = useTugStore();
@@ -19,15 +20,28 @@ const panelInline = computed(() => wide.value && tug.status.connection !== "conn
 const mq = window.matchMedia(WIDE);
 const onMq = (e: MediaQueryListEvent) => (wide.value = e.matches);
 
+// Ctrl+N: new message from anywhere.
+function onShortcut(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+    e.preventDefault();
+    tug.view = "messages";
+    tug.pickerOpen = true;
+  }
+}
+
 onMounted(async () => {
   mq.addEventListener("change", onMq);
+  window.addEventListener("keydown", onShortcut);
   try {
     await tug.init();
   } catch (e) {
     tug.notify("error", `Couldn't start tug: ${String(e)}`);
   }
 });
-onUnmounted(() => mq.removeEventListener("change", onMq));
+onUnmounted(() => {
+  mq.removeEventListener("change", onMq);
+  window.removeEventListener("keydown", onShortcut);
+});
 </script>
 
 <template>
@@ -49,6 +63,7 @@ onUnmounted(() => mq.removeEventListener("change", onMq));
     </template>
 
     <PairingDialog />
+    <NewConversation v-if="tug.pickerOpen" />
 
     <Transition enter-from-class="opacity-0 translate-y-2" leave-to-class="opacity-0 translate-y-2" enter-active-class="transition" leave-active-class="transition">
       <div
