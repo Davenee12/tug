@@ -9,6 +9,7 @@ use serde::Serialize;
 pub const SERVICE: u128 = 0x89D3502B_0F36_433A_8EF4_C502AD55F8DC;
 pub const REMOTE_COMMAND: u128 = 0x9B3C81D8_57B1_4A8A_B8DF_0E56F7CA51C2;
 pub const ENTITY_UPDATE: u128 = 0x2F7CABCE_808D_411F_9A0C_BB92BA96C102;
+pub const ENTITY_ATTRIBUTE: u128 = 0xC6B2F38C_23AB_46D8_A6AB_A3A870BBD5D7;
 
 const ENTITY_PLAYER: u8 = 0;
 const ENTITY_TRACK: u8 = 2;
@@ -82,6 +83,21 @@ pub fn registrations() -> [Vec<u8>; 2] {
     ]
 }
 
+/// Every (entity, attribute) tug shows. Entity Update only reports *changes*, so on
+/// connect each one is read through Entity Attribute (write the pair, then read)
+/// to pick up whatever is already playing.
+pub fn current_value_queries() -> [[u8; 2]; 7] {
+    [
+        [ENTITY_PLAYER, PLAYER_NAME],
+        [ENTITY_PLAYER, PLAYER_PLAYBACK_INFO],
+        [ENTITY_PLAYER, PLAYER_VOLUME],
+        [ENTITY_TRACK, TRACK_TITLE],
+        [ENTITY_TRACK, TRACK_ARTIST],
+        [ENTITY_TRACK, TRACK_ALBUM],
+        [ENTITY_TRACK, TRACK_DURATION],
+    ]
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PlaybackState {
@@ -116,10 +132,15 @@ impl NowPlaying {
         if b.len() < 3 {
             return false;
         }
-        let value = String::from_utf8_lossy(&b[3..]).into_owned();
+        self.apply_attribute(b[0], b[1], &b[3..])
+    }
+
+    /// Apply one attribute value, from an Entity Update or an Entity Attribute read.
+    pub fn apply_attribute(&mut self, entity: u8, attribute: u8, raw: &[u8]) -> bool {
+        let value = String::from_utf8_lossy(raw).into_owned();
         let text = || Some(value.clone()).filter(|s| !s.is_empty());
         let before = self.clone();
-        match (b[0], b[1]) {
+        match (entity, attribute) {
             (ENTITY_PLAYER, PLAYER_NAME) => self.player = text(),
             (ENTITY_PLAYER, PLAYER_PLAYBACK_INFO) => {
                 // "state,rate,elapsed", e.g. "1,1.0,42.317"
@@ -182,6 +203,24 @@ mod tests {
             !np.apply_entity_update(&update(2, 2, "Teardrop")),
             "same value is not a change"
         );
+    }
+
+    #[test]
+    fn applies_attribute_reads() {
+        let mut np = NowPlaying::default();
+        for [e, a] in current_value_queries() {
+            let value: &[u8] = match (e, a) {
+                (0, 1) => b"1,1.0,12.5",
+                (0, 2) => b"0.5",
+                (2, 3) => b"200",
+                _ => b"x",
+            };
+            np.apply_attribute(e, a, value);
+        }
+        assert_eq!(np.state, PlaybackState::Playing);
+        assert_eq!(np.volume, Some(0.5));
+        assert_eq!(np.duration, Some(200.0));
+        assert_eq!(np.title.as_deref(), Some("x"));
     }
 
     #[test]

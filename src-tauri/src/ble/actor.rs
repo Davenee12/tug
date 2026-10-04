@@ -995,11 +995,33 @@ impl Actor {
         for registration in ams::registrations() {
             winrt::write(&entity, &registration).await?;
         }
+        self.read_current_media(&svc).await;
         Ok(Media {
             _service: svc,
             remote_command: remote,
             _entity_update: entity,
         })
+    }
+
+    /// Pick up whatever is already playing; Entity Update only reports changes.
+    async fn read_current_media(&self, svc: &GattDeviceService) {
+        let attr = match winrt::characteristic(svc, guid(ams::ENTITY_ATTRIBUTE), "AMS entity attribute").await {
+            Ok(c) => c,
+            Err(e) => return log::info!("AMS current values unavailable: {e}"),
+        };
+        for [entity, attribute] in ams::current_value_queries() {
+            if let Err(e) = winrt::write(&attr, &[entity, attribute]).await {
+                log::debug!("AMS select {entity}/{attribute} failed: {e}");
+                continue;
+            }
+            match winrt::read(&attr).await {
+                Ok(value) => self
+                    .shared
+                    .update_now_playing(|np| np.apply_attribute(entity, attribute, &value)),
+                Err(e) => log::debug!("AMS read {entity}/{attribute} failed: {e}"),
+            }
+        }
+        log::info!("AMS current values read");
     }
 
     async fn setup_battery(
