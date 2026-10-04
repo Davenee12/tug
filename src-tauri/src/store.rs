@@ -56,6 +56,28 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Messages from any connector (first: the iPhone over Bluetooth MAP).
+CREATE TABLE IF NOT EXISTS messages (
+    id          INTEGER PRIMARY KEY,
+    source      TEXT    NOT NULL,
+    handle      TEXT,
+    direction   TEXT    NOT NULL CHECK (direction IN ('in', 'out')),
+    address     TEXT    NOT NULL,
+    sender_name TEXT,
+    body        TEXT    NOT NULL,
+    sent_at     TEXT,
+    received_at INTEGER NOT NULL,
+    status      TEXT    NOT NULL,
+    UNIQUE (source, handle)
+);
+CREATE INDEX IF NOT EXISTS messages_address ON messages (address, received_at);
+
+-- Names learned for addresses (e.g. by matching a notification to a MAP message).
+CREATE TABLE IF NOT EXISTS contacts (
+    address TEXT PRIMARY KEY,
+    name    TEXT NOT NULL
+);
 "#;
 
 const SELECT: &str =
@@ -118,7 +140,7 @@ impl Store {
         Ok(Self { conn: Mutex::new(conn) })
     }
 
-    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         // A panic while holding the lock leaves SQLite itself consistent, so keep going.
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }

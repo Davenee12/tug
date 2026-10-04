@@ -7,6 +7,7 @@ use tauri::State;
 
 use crate::ams::{NowPlaying, RemoteCommand};
 use crate::ble::{BleHandle, Command};
+use crate::messages::{Contact, StoredMessage};
 use crate::state::{DeviceStatus, Shared};
 use crate::store::StoredNotification;
 
@@ -106,6 +107,33 @@ pub async fn set_advertising(state: State<'_, AppState>, enabled: bool) -> Resul
         .ble
         .request(|reply| Command::SetAdvertising { enabled, reply })
         .await
+}
+
+#[tauri::command]
+pub fn list_messages(state: State<'_, AppState>, limit: u32) -> Result<Vec<StoredMessage>> {
+    state
+        .shared
+        .store
+        .recent_messages(limit.min(5000))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_contacts(state: State<'_, AppState>) -> Result<Vec<Contact>> {
+    state.shared.store.contacts().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn send_message(state: State<'_, AppState>, address: String, text: String) -> Result<StoredMessage> {
+    let map = state.shared.map.get().cloned().ok_or("Message service isn't running")?;
+    map.send(address, text).await
+}
+
+#[tauri::command]
+pub fn refresh_messages(state: State<'_, AppState>) {
+    if let Some(map) = state.shared.map.get() {
+        map.refresh();
+    }
 }
 
 /// UI preferences only; Bluetooth settings go through their own commands.

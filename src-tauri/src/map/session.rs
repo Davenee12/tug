@@ -51,6 +51,8 @@ pub enum MapError {
     Parse(#[from] ObexError),
     #[error("Windows Bluetooth error: {}", .0.message())]
     Win(#[from] windows::core::Error),
+    #[error("storage error: {0}")]
+    Store(#[from] rusqlite::Error),
 }
 
 pub type Result<T> = std::result::Result<T, MapError>;
