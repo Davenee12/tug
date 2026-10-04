@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { api, errorMessage, on } from "../lib/ipc";
-import { appLabel } from "../lib/format";
+import { appLabel, threadKey } from "../lib/format";
 import type {
   DeviceStatus,
   DiscoveredDevice,
@@ -55,6 +55,15 @@ export const useTugStore = defineStore("tug", () => {
   const flash = ref<{ kind: "error" | "info"; text: string } | null>(null);
   let flashTimer: number | undefined;
 
+  /** Middle-panel view, and the conversation open in Messages. */
+  const view = ref<"feed" | "messages">("feed");
+  const selectedThread = ref<string | null>(null);
+
+  /** When each feed entry (conversation or app stack) was last looked at. */
+  const seen = ref<Record<string, number>>({});
+  /** History from before tug started tracking "seen" never counts as new. */
+  const seenSince = ref(Date.now());
+
   const connected = computed(() => status.value.connection === "connected");
   const visible = computed(() => searchResults.value ?? notifications.value);
 
@@ -103,8 +112,34 @@ export const useTugStore = defineStore("tug", () => {
     sendNotification({ title, body: [n.subtitle, n.message].filter(Boolean).join("\n") });
   }
 
+  function isNew(key: string, n: PhoneNotification): boolean {
+    // Cleared on the phone or watch means it was already read there.
+    return n.removedAt == null && n.receivedAt > (seen.value[key] ?? seenSince.value);
+  }
+
+  function newCount(key: string, items: PhoneNotification[]): number {
+    return items.reduce((c, n) => c + (isNew(key, n) ? 1 : 0), 0);
+  }
+
+  function markSeen(key: string) {
+    seen.value = { ...seen.value, [key]: Date.now() };
+    void attempt(() => api.setSetting("ui.seen", JSON.stringify(seen.value)));
+  }
+
+  function openThread(key: string) {
+    selectedThread.value = key;
+    view.value = "messages";
+    markSeen(key);
+  }
+
   async function loadSettings() {
     const raw = await api.getSettings();
+    seen.value = raw["ui.seen"] ? (JSON.parse(raw["ui.seen"]) as Record<string, number>) : {};
+    if (raw["ui.seenSince"]) {
+      seenSince.value = Number(raw["ui.seenSince"]);
+    } else {
+      await api.setSetting("ui.seenSince", String(seenSince.value));
+    }
     advertiseEnabled.value = raw.advertise !== "false";
     settings.value = {
       toasts: raw["ui.toasts"] !== "false",
@@ -129,9 +164,10 @@ export const useTugStore = defineStore("tug", () => {
         nowPlayingAt.value = Date.now();
       }),
       on("notification", (n) => {
-        const isNew = upsert(notifications.value, n);
+        const added = upsert(notifications.value, n);
         if (searchResults.value) upsert(searchResults.value, n);
-        if (isNew) void maybeToast(n);
+        if (view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
+        if (added) void maybeToast(n);
       }),
       on("notification-removed", (id) => patch(id, { removedAt: Date.now(), live: false })),
       on("app-name", ({ appId, appName }) => {
@@ -195,6 +231,9 @@ export const useTugStore = defineStore("tug", () => {
     settings,
     advertiseEnabled,
     flash,
+    view,
+    selectedThread,
+    seen,
     connected,
     visible,
     init,
@@ -203,6 +242,10 @@ export const useTugStore = defineStore("tug", () => {
     setSetting,
     toggleMuted,
     notify,
+    isNew,
+    newCount,
+    markSeen,
+    openThread,
     performAction: (id: number, positive: boolean) => attempt(() => api.performAction(id, positive)),
     media: (command: MediaCommand) => attempt(() => api.mediaCommand(command)),
     startDiscovery: () => attempt(api.startDiscovery),
