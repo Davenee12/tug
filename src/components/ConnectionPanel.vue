@@ -163,7 +163,7 @@ const advertisingLabel = computed(
               <p class="flex gap-2 text-[12px] text-muted">
                 <span v-if="d.connected" class="font-medium text-ink">Connected now</span>
                 <span v-if="d.paired">Paired</span>
-                <span v-if="d.transport === 'classic'">Windows Settings pairing</span>
+                <span v-if="d.transport === 'classic'">Paired for calls &amp; audio</span>
               </p>
             </div>
             <button
