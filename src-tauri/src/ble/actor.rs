@@ -154,6 +154,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         link: None,
         retry_in: 0,
         advertise_retry_in: None,
+        carried_name: None,
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -183,6 +184,8 @@ struct Actor {
     retry_in: u32,
     /// Seconds until advertising is retried after Windows aborted it.
     advertise_retry_in: Option<u32>,
+    /// Name of a Classic-paired iPhone whose LE side is being paired on its behalf.
+    carried_name: Option<String>,
 }
 
 fn now_ms() -> i64 {
@@ -246,9 +249,23 @@ impl Actor {
             }
             Command::StopDiscovery => self.stop_discovery(),
             Command::Pair { id, reply } => self.pair(id, reply),
-            Command::UseDevice { id, reply } => {
-                let _ = reply.send(self.use_device(&id).await);
-            }
+            Command::UseDevice { id, reply } => match self.use_device(&id).await {
+                Err(e) => match self.le_side_of_classic(&id) {
+                    // Classic-only pairing (calls/audio): pair the same phone's LE
+                    // side, which LightBlue has connected, and keep the Classic name.
+                    Some((le_id, name)) => {
+                        log::info!("{name} has no LE record; pairing its connected LE side {le_id}");
+                        self.carried_name = Some(name);
+                        self.pair(le_id, reply);
+                    }
+                    None => {
+                        let _ = reply.send(Err(e));
+                    }
+                },
+                ok => {
+                    let _ = reply.send(ok);
+                }
+            },
             Command::Forget { reply } => {
                 let _ = reply.send(self.forget().await);
             }
@@ -602,6 +619,28 @@ impl Actor {
         self.shared.emit(events::DISCOVERED_DEVICES, list);
     }
 
+    /// For a Classic-paired phone, the connected-but-unpaired LE device that is
+    /// almost certainly the same phone: same name, or the only such candidate.
+    fn le_side_of_classic(&self, classic_id: &str) -> Option<(String, String)> {
+        let classic = self.discovered.get(classic_id)?;
+        if classic.transport != Transport::Classic {
+            return None;
+        }
+        let name = classic.info.Name().ok()?.to_string();
+        let candidates: Vec<(&String, String)> = self
+            .discovered
+            .iter()
+            .filter(|(_, d)| d.transport == Transport::Le && bool_property(&d.info, PROP_IS_CONNECTED))
+            .filter(|(_, d)| !d.info.Pairing().and_then(|p| p.IsPaired()).unwrap_or(false))
+            .map(|(id, d)| (id, d.info.Name().map(|n| n.to_string()).unwrap_or_default()))
+            .collect();
+        let pick = candidates
+            .iter()
+            .find(|(_, n)| *n == name)
+            .or_else(|| (candidates.len() == 1).then(|| &candidates[0]))?;
+        Some((pick.0.clone(), name))
+    }
+
     fn pair(&mut self, id: String, reply: Reply) {
         let Some(d) = self.discovered.get(&id) else {
             let _ = reply.send(Err("That device is no longer in range".into()));
@@ -632,13 +671,27 @@ impl Actor {
 
     /// Adopt a device as "the iPhone": persist it and start connecting.
     async fn use_device(&mut self, id: &str) -> Result<(), String> {
-        let le = resolve_le_device(id, self.discovered.get(id).map(|d| d.transport))
-            .await
-            .map_err(|e| format!("Couldn't open that device over Bluetooth LE: {}", e.message()))?;
+        let transport = self.discovered.get(id).map(|d| d.transport);
+        let le = resolve_le_device(id, transport).await.map_err(|e| {
+            // WinRT reports "no such device" as a null result with S_OK.
+            if e.code().is_ok() && transport == Some(Transport::Classic) {
+                "Windows has this iPhone paired only for calls and audio (Classic Bluetooth), not Bluetooth LE, which notifications need. In LightBlue on the iPhone, tap the Unnamed entry for this PC, then click Use again."
+                    .to_string()
+            } else if e.code().is_ok() {
+                "Windows couldn't find that device over Bluetooth LE. Reconnect from LightBlue and try again.".to_string()
+            } else {
+                format!("Couldn't open that device over Bluetooth LE: {}", e.message())
+            }
+        })?;
         let le_id = le.DeviceId().map_err(|e| e.message().to_string())?.to_string();
         log::info!("using device {le_id}");
         let name = le.Name().map(|n| n.to_string()).unwrap_or_default();
-        let name = if name.is_empty() { "iPhone".to_string() } else { name };
+        let carried = self.carried_name.take();
+        let name = match (name.is_empty(), carried) {
+            (false, _) => name,
+            (true, Some(c)) => c,
+            (true, None) => "iPhone".to_string(),
+        };
         let store = &self.shared.store;
         store.set_setting(keys::DEVICE_ID, &le_id).map_err(|e| e.to_string())?;
         store.set_setting(keys::DEVICE_NAME, &name).map_err(|e| e.to_string())?;
@@ -1108,7 +1161,9 @@ async fn pair_device(
     if pairing.IsPaired()? {
         return Ok(DevicePairingResultStatus::AlreadyPaired);
     }
-    let device_name = info.Name()?.to_string();
+    let device_name = Some(info.Name()?.to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "your iPhone".to_string());
     let custom = pairing.Custom()?;
     custom.PairingRequested(&TypedEventHandler::<
         DeviceInformationCustomPairing,
