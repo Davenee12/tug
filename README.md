@@ -1,24 +1,25 @@
 # tug
 
-Your iPhone's notifications and media controls on your Windows PC, over Bluetooth LE.
-No app on the phone, no Mac, no cloud.
+Your iPhone on your Windows PC: notifications, texts (read and reply), contacts and media
+controls, over Bluetooth. No app on the phone, no Mac, no cloud.
 
 tug is a Windows desktop app (Tauri 2 + Rust + Vue 3) that pairs with an iPhone the way a
-smartwatch or car kit does. It uses the Bluetooth services Apple publishes for accessories:
+smartwatch or car kit does, using the Bluetooth services Apple publishes for accessories.
+**Current release: v0.5.0** — see [CHANGELOG.md](CHANGELOG.md).
 
 | Feature | How | Status |
 |---|---|---|
-| Live notifications from every app | Apple Notification Center Service (ANCS) | Built |
-| Notification actions (answer/decline, clear) | ANCS Control Point | Built |
-| Searchable history that outlives the phone's lock screen | Local SQLite + FTS5 | Built |
-| Message threads (incoming, grouped by sender) | ANCS notifications from chat apps | Built |
-| Now playing + play/pause/skip/volume | Apple Media Service (AMS) | Built |
-| Phone battery level | Bluetooth Battery Service | Built (if iOS exposes it) |
-| Windows toasts, per-app mute, do not disturb | Tauri notification plugin | Built |
-| Replying to texts | Bluetooth MAP (Classic, OBEX) | Not yet |
-| Contacts, calls | PBAP, HFP | Not yet |
-| Full iMessage history, groups, attachments | Needs an always-on Mac relay | Out of scope |
-| Clipboard, files | Needs an iOS companion app | Out of scope |
+| Live notifications from every app, with actions (answer/decline/clear) | ANCS (Bluetooth LE) | ✅ Verified on iPhone 15 Pro Max |
+| Compact feed: one row per person/app, cleared items disappear | Local | ✅ |
+| Searchable history that outlives the phone's lock screen | SQLite + FTS5 | ✅ |
+| Read texts, including ones read in the open chat | MAP (Classic Bluetooth, OBEX) | ✅ Verified |
+| Reply and start new texts from the PC | MAP PushMessage | ✅ Verified (SMS/iMessage chosen by iOS) |
+| Contact names, new message by name | PBAP | Built; needs *Sync Contacts* on the phone |
+| Now playing + play/pause/skip/volume | AMS (Bluetooth LE) | ✅ Verified |
+| Phone battery level | Battery Service | ✅ Verified (level only; no charging flag) |
+| Windows toasts, per-app mute, do not disturb, Ctrl +/−/0 zoom | Local | ✅ |
+| Calls: dial, recent calls | HFP + PBAP call history | Planned |
+| Group texts, photos, texts sent from the phone itself | Not exposed by iOS over Bluetooth | Out of scope |
 
 ## Requirements
 
@@ -42,8 +43,12 @@ through a free BLE app. After that, iOS reconnects to the PC by itself.
 4. In tug's Connection panel the iPhone appears at the top as **Connected now**. Click **Pair**,
    check the code matches the one on the phone, and confirm on both.
 
-A phone already paired through Windows Settings › Bluetooth also shows in the list; **Use** tries its
-Bluetooth LE side.
+A phone already paired through Windows Settings › Bluetooth (e.g. via Phone Link) also shows in the
+list as *Paired for calls & audio*; **Use** pairs that same phone's Bluetooth LE side for you.
+
+**iPhone switches** (Settings › Bluetooth › ⓘ next to this PC): *Share System Notifications* for the
+feed, *Show Notifications* for reading and sending texts, *Sync Contacts* for names and new messages.
+The first time tug asks for messages or contacts, iOS refuses once; that's what makes the switch appear.
 
 **Message text missing?** iOS only shares what the lock screen would show. Set
 Settings › Notifications › Show Previews to *Always*.
@@ -94,11 +99,13 @@ duplicated.
 
 ## Roadmap
 
-1. Hardware validation on the iPhone 15 Pro Max (pairing flow, reconnect, battery service).
-2. ANCS service-solicitation advert so the PC appears in iOS Settings › Bluetooth without LightBlue
-   (needs testing: Windows may reject the advert type).
-3. Bluetooth MAP client (SDP + RFCOMM + OBEX) for 1:1 replies and recent message bodies.
-4. PBAP contacts; HFP calls.
+1. **Calls:** recent calls via PBAP call history; dialing via hands-free (HFP). Windows' own stack
+   already holds the iPhone's hands-free link, so this starts with a feasibility spike.
+2. **Connectors:** messages are stored with a `source`; next sources are Android, then apps like
+   Slack, Teams, WhatsApp and Wispr Flow feeding the same inbox.
+3. **PC media:** show and control what's playing on the PC (e.g. YouTube in a browser) next to the phone.
+4. **Exact charging state:** iOS exposes none over BLE; needs a companion app or a USB trust pairing.
+5. ANCS service-solicitation advert so the PC appears in iOS Settings without LightBlue.
 
 ## Icon
 

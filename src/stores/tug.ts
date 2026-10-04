@@ -3,8 +3,11 @@ import { computed, ref } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { api, errorMessage, on } from "../lib/ipc";
 import { appLabel, threadKey } from "../lib/format";
+import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import type {
+  Contact,
   DeviceStatus,
+  SmsMessage,
   DiscoveredDevice,
   MediaCommand,
   NowPlaying,
@@ -22,8 +25,10 @@ const EMPTY_STATUS: DeviceStatus = {
   device: null,
   connection: "noDevice",
   battery: null,
-  services: { notifications: false, media: false, battery: false },
+  services: { notifications: false, media: false, battery: false, messages: false },
   lastError: null,
+  messagesError: null,
+  contactsError: null,
 };
 
 const EMPTY_NOW_PLAYING: NowPlaying = {
@@ -45,6 +50,9 @@ export const useTugStore = defineStore("tug", () => {
   /** When the last now-playing update arrived, to advance the progress bar locally. */
   const nowPlayingAt = ref(Date.now());
   const notifications = ref<PhoneNotification[]>([]);
+  /** Messages from message access (MAP), oldest first. */
+  const messages = ref<SmsMessage[]>([]);
+  const contacts = ref<Contact[]>([]);
   const hasMore = ref(true);
   const searchQuery = ref("");
   const searchResults = ref<PhoneNotification[] | null>(null);
@@ -52,12 +60,15 @@ export const useTugStore = defineStore("tug", () => {
   const pairingRequest = ref<PairingRequest | null>(null);
   const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [] });
   const advertiseEnabled = ref(true);
+  const zoom = ref(1);
   const flash = ref<{ kind: "error" | "info"; text: string } | null>(null);
   let flashTimer: number | undefined;
 
   /** Middle-panel view, and the conversation open in Messages. */
   const view = ref<"feed" | "messages">("feed");
   const selectedThread = ref<string | null>(null);
+  /** A new conversation being started from the + button, before any message exists. */
+  const composeTo = ref<{ address: string; name: string } | null>(null);
 
   /** When each feed entry (conversation or app stack) was last looked at. */
   const seen = ref<Record<string, number>>({});
@@ -145,6 +156,12 @@ export const useTugStore = defineStore("tug", () => {
     return n ? appLabel(n) : appLabel({ appId, appName: null });
   }
 
+  function startConversation(address: string, name: string) {
+    composeTo.value = { address, name };
+    selectedThread.value = threadKey({ appId: "com.apple.MobileSMS", title: name });
+    view.value = "messages";
+  }
+
   function openThread(key: string) {
     selectedThread.value = key;
     view.value = "messages";
@@ -153,6 +170,8 @@ export const useTugStore = defineStore("tug", () => {
 
   async function loadSettings() {
     const raw = await api.getSettings();
+    zoom.value = Number(raw["ui.zoom"]) || 1;
+    applyZoom(zoom.value);
     seen.value = raw["ui.seen"] ? (JSON.parse(raw["ui.seen"]) as Record<string, number>) : {};
     if (raw["ui.seenSince"]) {
       seenSince.value = Number(raw["ui.seenSince"]);
@@ -168,6 +187,14 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   async function init() {
+    installZoomShortcuts(
+      () => zoom.value,
+      (z) => {
+        zoom.value = z;
+        notify("info", `Zoom ${Math.round(z * 100)}%`);
+        void attempt(() => api.setSetting("ui.zoom", String(z)));
+      },
+    );
     await Promise.all([
       on("device-status", (s) => {
         const wasConnected = status.value.connection === "connected";
@@ -195,10 +222,29 @@ export const useTugStore = defineStore("tug", () => {
         }
       }),
       on("discovered-devices", (list) => (discovered.value = list)),
+      on("message", (m) => {
+        const i = messages.value.findIndex((x) => x.id === m.id);
+        if (i >= 0) messages.value[i] = m;
+        else messages.value.push(m);
+      }),
+      on("contacts", (list) => {
+        contacts.value = list;
+        // Names are joined into messages server-side; apply them to what's loaded.
+        const byAddress = new Map(list.map((c) => [c.address, c.name]));
+        for (const m of messages.value) m.contactName = byAddress.get(m.address) ?? m.contactName;
+      }),
       on("pairing-request", (req) => (pairingRequest.value = req)),
       on("pairing-request-closed", () => (pairingRequest.value = null)),
     ]);
-    const [s, np, first] = await Promise.all([api.getStatus(), api.getNowPlaying(), api.listNotifications(PAGE)]);
+    const [s, np, first, msgs, people] = await Promise.all([
+      api.getStatus(),
+      api.getNowPlaying(),
+      api.listNotifications(PAGE),
+      api.listMessages(2000),
+      api.getContacts(),
+    ]);
+    messages.value = msgs;
+    contacts.value = people;
     status.value = s;
     nowPlaying.value = np;
     notifications.value = first;
@@ -242,6 +288,8 @@ export const useTugStore = defineStore("tug", () => {
     nowPlaying,
     nowPlayingAt,
     notifications,
+    messages,
+    contacts,
     hasMore,
     searchQuery,
     searchResults,
@@ -252,6 +300,7 @@ export const useTugStore = defineStore("tug", () => {
     flash,
     view,
     selectedThread,
+    composeTo,
     seen,
     connected,
     visible,
@@ -265,8 +314,19 @@ export const useTugStore = defineStore("tug", () => {
     newCount,
     markSeen,
     openThread,
+    startConversation,
     clearItems,
     appNameFor,
+    /** Send through the iPhone. The pending message appears via the `message` event. */
+    async sendMessage(address: string, text: string): Promise<boolean> {
+      try {
+        await api.sendMessage(address, text);
+        return true;
+      } catch (e) {
+        notify("error", errorMessage(e));
+        return false;
+      }
+    },
     performAction: (id: number, positive: boolean) => attempt(() => api.performAction(id, positive)),
     media: (command: MediaCommand) => attempt(() => api.mediaCommand(command)),
     startDiscovery: () => attempt(api.startDiscovery),

@@ -8,7 +8,7 @@
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification } from "../types/protocol";
+import type { Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -80,8 +80,10 @@ const status: DeviceStatus = setup
       device: null,
       connection: "noDevice",
       battery: null,
-      services: { notifications: false, media: false, battery: false },
+      services: { notifications: false, media: false, battery: false, messages: false },
       lastError: null,
+      messagesError: null,
+      contactsError: null,
     }
   : {
       radio: "on",
@@ -90,8 +92,10 @@ const status: DeviceStatus = setup
       device: { id: "mock", name: "Jordan's iPhone" },
       connection: "connected",
       battery: 76,
-      services: { notifications: true, media: true, battery: true },
+      services: { notifications: true, media: true, battery: true, messages: true },
       lastError: null,
+      messagesError: null,
+      contactsError: null,
     };
 
 const nowPlaying: NowPlaying = setup
@@ -116,6 +120,37 @@ const discovered: DiscoveredDevice[] = [
 ];
 
 // seenSince 0: everything still on the phone counts as new, so badges show in the preview.
+// Message access (MAP): Zoe's texts, including ones read in the open chat that
+// never became notifications, plus a reply sent from tug.
+const ZOE = "+13025550142";
+const contacts: Contact[] = setup
+  ? []
+  : [
+      { address: ZOE, name: "Zoe" },
+      { address: "+12145550199", name: "Priya" },
+      { address: "+19725550111", name: "Dave Smith" },
+    ];
+let nextMsg = 1;
+const sms = (direction: "in" | "out", body: string, agoMin: number): SmsMessage => ({
+  id: nextMsg++,
+  source: "iphone-map",
+  direction,
+  address: ZOE,
+  contactName: "Zoe",
+  body,
+  sentAt: null,
+  receivedAt: now - agoMin * min,
+  status: direction === "in" ? "received" : "accepted",
+});
+const messages: SmsMessage[] = setup
+  ? []
+  : [
+      sms("in", "are you coming tonight?", 40),
+      sms("out", "yeah! leaving soon", 38),
+      sms("in", "did you see the photos I sent?", 4),
+      sms("in", "omw, 10 mins 🚗", 1),
+    ];
+
 const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
 
 mockIPC(
@@ -133,6 +168,17 @@ mockIPC(
       case "search_notifications": {
         const q = String(a.query).toLowerCase();
         return history.filter((x) => [x.title, x.message, x.appName ?? ""].some((s) => s.toLowerCase().includes(q)));
+      }
+      case "list_messages":
+        return messages;
+      case "get_contacts":
+        return contacts;
+      case "send_message": {
+        const m: SmsMessage = { ...sms("out", String(a.text), 0), status: "pending" };
+        messages.push(m);
+        setTimeout(() => void emit("message", m), 0);
+        setTimeout(() => void emit("message", { ...m, status: "accepted" }), 700);
+        return m;
       }
       case "get_settings":
         return settings;
