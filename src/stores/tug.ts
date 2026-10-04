@@ -1,0 +1,238 @@
+import { defineStore } from "pinia";
+import { computed, ref } from "vue";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { api, errorMessage, on } from "../lib/ipc";
+import { appLabel } from "../lib/format";
+import type {
+  DeviceStatus,
+  DiscoveredDevice,
+  MediaCommand,
+  NowPlaying,
+  PairingRequest,
+  PhoneNotification,
+  UiSettings,
+} from "../types/protocol";
+
+const PAGE = 100;
+
+const EMPTY_STATUS: DeviceStatus = {
+  radio: "unknown",
+  peripheralSupported: null,
+  advertising: "off",
+  device: null,
+  connection: "noDevice",
+  battery: null,
+  services: { notifications: false, media: false, battery: false },
+  lastError: null,
+};
+
+const EMPTY_NOW_PLAYING: NowPlaying = {
+  player: null,
+  state: "unknown",
+  rate: null,
+  elapsed: null,
+  volume: null,
+  title: null,
+  artist: null,
+  album: null,
+  duration: null,
+  available: [],
+};
+
+export const useTugStore = defineStore("tug", () => {
+  const status = ref<DeviceStatus>(EMPTY_STATUS);
+  const nowPlaying = ref<NowPlaying>(EMPTY_NOW_PLAYING);
+  /** When the last now-playing update arrived, to advance the progress bar locally. */
+  const nowPlayingAt = ref(Date.now());
+  const notifications = ref<PhoneNotification[]>([]);
+  const hasMore = ref(true);
+  const searchQuery = ref("");
+  const searchResults = ref<PhoneNotification[] | null>(null);
+  const discovered = ref<DiscoveredDevice[]>([]);
+  const pairingRequest = ref<PairingRequest | null>(null);
+  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [] });
+  const advertiseEnabled = ref(true);
+  const flash = ref<{ kind: "error" | "info"; text: string } | null>(null);
+  let flashTimer: number | undefined;
+
+  const connected = computed(() => status.value.connection === "connected");
+  const visible = computed(() => searchResults.value ?? notifications.value);
+
+  function notify(kind: "error" | "info", text: string) {
+    flash.value = { kind, text };
+    window.clearTimeout(flashTimer);
+    flashTimer = window.setTimeout(() => (flash.value = null), 5000);
+  }
+
+  async function attempt<T>(fn: () => Promise<T>): Promise<T | undefined> {
+    try {
+      return await fn();
+    } catch (e) {
+      notify("error", errorMessage(e));
+      return undefined;
+    }
+  }
+
+  function upsert(list: PhoneNotification[], n: PhoneNotification): boolean {
+    const i = list.findIndex((x) => x.id === n.id);
+    if (i >= 0) {
+      list[i] = n;
+      return false;
+    }
+    // Ids are monotonic, so newest-first order is id-descending.
+    const at = list.findIndex((x) => x.id < n.id);
+    list.splice(at < 0 ? list.length : at, 0, n);
+    return true;
+  }
+
+  function patch(id: number, change: Partial<PhoneNotification>) {
+    for (const list of [notifications.value, searchResults.value ?? []]) {
+      const n = list.find((x) => x.id === id);
+      if (n) Object.assign(n, change);
+    }
+  }
+
+  async function maybeToast(n: PhoneNotification) {
+    const s = settings.value;
+    if (!s.toasts || s.doNotDisturb || n.flags.silent || n.flags.preExisting) return;
+    if (s.mutedApps.includes(n.appId)) return;
+    let granted = await isPermissionGranted();
+    if (!granted) granted = (await requestPermission()) === "granted";
+    if (!granted) return;
+    const title = [appLabel(n), n.title].filter(Boolean).join(" · ");
+    sendNotification({ title, body: [n.subtitle, n.message].filter(Boolean).join("\n") });
+  }
+
+  async function loadSettings() {
+    const raw = await api.getSettings();
+    advertiseEnabled.value = raw.advertise !== "false";
+    settings.value = {
+      toasts: raw["ui.toasts"] !== "false",
+      doNotDisturb: raw["ui.doNotDisturb"] === "true",
+      mutedApps: raw["ui.mutedApps"] ? (JSON.parse(raw["ui.mutedApps"]) as string[]) : [],
+    };
+  }
+
+  async function init() {
+    await Promise.all([
+      on("device-status", (s) => {
+        const wasConnected = status.value.connection === "connected";
+        status.value = s;
+        // Notification UIDs die with the connection, so nothing stays actionable.
+        if (wasConnected && s.connection !== "connected") {
+          for (const n of notifications.value) n.live = false;
+          for (const n of searchResults.value ?? []) n.live = false;
+        }
+      }),
+      on("now-playing", (np) => {
+        nowPlaying.value = np;
+        nowPlayingAt.value = Date.now();
+      }),
+      on("notification", (n) => {
+        const isNew = upsert(notifications.value, n);
+        if (searchResults.value) upsert(searchResults.value, n);
+        if (isNew) void maybeToast(n);
+      }),
+      on("notification-removed", (id) => patch(id, { removedAt: Date.now(), live: false })),
+      on("app-name", ({ appId, appName }) => {
+        for (const list of [notifications.value, searchResults.value ?? []]) {
+          for (const n of list) if (n.appId === appId) n.appName = appName;
+        }
+      }),
+      on("discovered-devices", (list) => (discovered.value = list)),
+      on("pairing-request", (req) => (pairingRequest.value = req)),
+      on("pairing-request-closed", () => (pairingRequest.value = null)),
+    ]);
+    const [s, np, first] = await Promise.all([api.getStatus(), api.getNowPlaying(), api.listNotifications(PAGE)]);
+    status.value = s;
+    nowPlaying.value = np;
+    notifications.value = first;
+    hasMore.value = first.length === PAGE;
+    await attempt(loadSettings);
+  }
+
+  async function loadMore() {
+    if (!hasMore.value || searchResults.value) return;
+    const last = notifications.value.at(-1);
+    const page = await attempt(() => api.listNotifications(PAGE, last?.id));
+    if (!page) return;
+    for (const n of page) upsert(notifications.value, n);
+    hasMore.value = page.length === PAGE;
+  }
+
+  let searchSeq = 0;
+  async function search(q: string) {
+    searchQuery.value = q;
+    const seq = ++searchSeq;
+    if (!q.trim()) {
+      searchResults.value = null;
+      return;
+    }
+    const results = await attempt(() => api.searchNotifications(q, 300));
+    if (results && seq === searchSeq) searchResults.value = results;
+  }
+
+  async function setSetting<K extends keyof UiSettings>(key: K, value: UiSettings[K]) {
+    settings.value = { ...settings.value, [key]: value };
+    await attempt(() => api.setSetting(`ui.${key}`, typeof value === "string" ? value : JSON.stringify(value)));
+  }
+
+  function toggleMuted(appId: string) {
+    const muted = settings.value.mutedApps;
+    void setSetting("mutedApps", muted.includes(appId) ? muted.filter((a) => a !== appId) : [...muted, appId]);
+  }
+
+  return {
+    status,
+    nowPlaying,
+    nowPlayingAt,
+    notifications,
+    hasMore,
+    searchQuery,
+    searchResults,
+    discovered,
+    pairingRequest,
+    settings,
+    advertiseEnabled,
+    flash,
+    connected,
+    visible,
+    init,
+    loadMore,
+    search,
+    setSetting,
+    toggleMuted,
+    notify,
+    performAction: (id: number, positive: boolean) => attempt(() => api.performAction(id, positive)),
+    media: (command: MediaCommand) => attempt(() => api.mediaCommand(command)),
+    startDiscovery: () => attempt(api.startDiscovery),
+    stopDiscovery: () => {
+      discovered.value = [];
+      return attempt(api.stopDiscovery);
+    },
+    async pair(id: string) {
+      const ok = await attempt(() => api.pairDevice(id).then(() => true));
+      if (ok) notify("info", "Paired. Connecting to your iPhone…");
+      return ok === true;
+    },
+    async useDevice(id: string) {
+      const ok = await attempt(() => api.useDevice(id).then(() => true));
+      return ok === true;
+    },
+    forget: () => attempt(api.forgetDevice),
+    async setAdvertising(enabled: boolean) {
+      advertiseEnabled.value = enabled;
+      await attempt(() => api.setAdvertising(enabled));
+    },
+    async confirmPairing(accept: boolean) {
+      pairingRequest.value = null;
+      await attempt(() => api.confirmPairing(accept));
+    },
+    async clearHistory() {
+      await attempt(api.clearHistory);
+      notifications.value = [];
+      searchResults.value = searchResults.value ? [] : null;
+      hasMore.value = false;
+    },
+  };
+});
