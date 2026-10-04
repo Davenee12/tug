@@ -16,8 +16,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use windows::core::{Interface, GUID, HSTRING};
 use windows::Devices::Bluetooth::GenericAttributeProfile::{
-    GattCharacteristic, GattCharacteristicProperties, GattLocalCharacteristicParameters, GattProtectionLevel,
-    GattServiceProvider, GattServiceProviderAdvertisementStatus,
+    GattCharacteristic, GattCharacteristicProperties, GattDeviceService, GattLocalCharacteristicParameters,
+    GattProtectionLevel, GattServiceProvider, GattServiceProviderAdvertisementStatus,
     GattServiceProviderAdvertisementStatusChangedEventArgs, GattServiceProviderAdvertisingParameters, GattSession,
 };
 use windows::Devices::Bluetooth::{
@@ -104,6 +104,9 @@ enum Request {
 }
 
 struct Ancs {
+    // The service handle must outlive its characteristics: if Windows closes the
+    // service, their ValueChanged notifications stop without any error.
+    _service: GattDeviceService,
     control_point: GattCharacteristic,
     // Held so their ValueChanged registrations stay alive.
     _notification_source: GattCharacteristic,
@@ -117,6 +120,7 @@ struct Ancs {
 }
 
 struct Media {
+    _service: GattDeviceService,
     remote_command: GattCharacteristic,
     _entity_update: GattCharacteristic,
 }
@@ -131,7 +135,7 @@ struct Link {
     session_id: Option<String>,
     ancs: Option<Ancs>,
     media: Option<Media>,
-    _battery: Option<GattCharacteristic>,
+    _battery: Option<(GattDeviceService, GattCharacteristic)>,
 }
 
 struct Discovered {
@@ -286,6 +290,14 @@ impl Actor {
 
     async fn event(&mut self, ev: Event) {
         let current = self.link.as_ref().map(|l| l.gen);
+        match &ev {
+            Event::NotificationSource { gen, data } => {
+                log::debug!("ANCS event {data:02X?} (gen {gen}, current {current:?})")
+            }
+            Event::DataSource { gen, data } => log::debug!("ANCS data {} bytes (gen {gen})", data.len()),
+            Event::MediaEntity { data, .. } => log::debug!("AMS update {} bytes", data.len()),
+            _ => {}
+        }
         match ev {
             Event::NotificationSource { gen, data } if Some(gen) == current => self.on_notification_source(&data).await,
             Event::DataSource { gen, data } if Some(gen) == current => self.on_data_source(&data).await,
@@ -306,7 +318,7 @@ impl Actor {
             | Event::MediaEntity { .. }
             | Event::MediaCommands { .. }
             | Event::Battery { .. }
-            | Event::Connection { .. } => {} // from a link we've since replaced
+            | Event::Connection { .. } => log::debug!("ignored event from a replaced link"),
             Event::Advertising(status) => {
                 let name = match status {
                     GattServiceProviderAdvertisementStatus::Created => "created",
@@ -932,7 +944,12 @@ impl Actor {
             let _ = tx.send(Event::NotificationSource { gen, data });
         })
         .await?;
+        log::info!(
+            "ANCS subscribed (session {})",
+            self.shared.live_session().unwrap_or_default()
+        );
         Ok(Ancs {
+            _service: svc,
             control_point,
             _notification_source: ns,
             _data_source: ds,
@@ -965,12 +982,17 @@ impl Actor {
             winrt::write(&entity, &registration).await?;
         }
         Ok(Media {
+            _service: svc,
             remote_command: remote,
             _entity_update: entity,
         })
     }
 
-    async fn setup_battery(&self, device: &BluetoothLEDevice, gen: u64) -> Result<GattCharacteristic, BleError> {
+    async fn setup_battery(
+        &self,
+        device: &BluetoothLEDevice,
+        gen: u64,
+    ) -> Result<(GattDeviceService, GattCharacteristic), BleError> {
         let svc = winrt::service(device, winrt::sig_uuid(BATTERY_SERVICE))
             .await?
             .ok_or(BleError::NotFound("Battery service"))?;
@@ -985,7 +1007,7 @@ impl Actor {
         {
             log::info!("battery notifications unavailable, showing last read value: {e}");
         }
-        Ok(level)
+        Ok((svc, level))
     }
 
     // ---------------------------------------------------------------- ANCS
@@ -995,9 +1017,11 @@ impl Actor {
             Ok(ev) => ev,
             Err(e) => return log::warn!("bad ANCS notification source packet: {e}"),
         };
-        let Some(link) = self.link.as_mut() else { return };
+        let Some(link) = self.link.as_mut() else {
+            return log::warn!("ANCS event with no link");
+        };
         let (Some(a), Some(session)) = (link.ancs.as_mut(), link.session_id.as_deref()) else {
-            return;
+            return log::warn!("ANCS event before subscription finished; dropped");
         };
         match ev.event {
             EventId::Added | EventId::Modified => {
