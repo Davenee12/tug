@@ -2,6 +2,7 @@ mod ams;
 mod ancs;
 mod ble;
 mod commands;
+pub mod map;
 mod state;
 mod store;
 

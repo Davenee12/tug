@@ -32,8 +32,11 @@ windows = { version = "0.62", features = [
   "Devices_Bluetooth",
   "Devices_Bluetooth_Advertisement",
   "Devices_Bluetooth_GenericAttributeProfile",
+  "Devices_Bluetooth_Rfcomm",
   "Devices_Enumeration",
   "Devices_Radios",
+  "Networking",
+  "Networking_Sockets",
   "Storage_Streams",
 ] }
 windows-collections = "0.3"
