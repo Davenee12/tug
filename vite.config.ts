@@ -1,15 +1,15 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-// @ts-expect-error type error without @types/node package
+import tailwindcss from "@tailwindcss/vite";
 import process from "node:process";
+
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
-  plugins: [vue()],
+  plugins: [vue(), tailwindcss()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
@@ -17,16 +17,8 @@ export default defineConfig(() => ({
     port: 1420,
     strictPort: true,
     host: host || false,
-    hmr: host
-      ? {
-          protocol: "ws",
-          host,
-          port: 1421,
-        }
-      : undefined,
-    watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
-    },
+    hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
+    // 3. tell Vite to ignore watching `src-tauri`
+    watch: { ignored: ["**/src-tauri/**"] },
   },
 }));

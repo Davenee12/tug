@@ -1,5 +1,5 @@
 {
-  "name": "linkstr",
+  "name": "tug",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -7,18 +7,27 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "check": "vue-tsc --noEmit && cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
-    "vue": "^3.5.13",
+    "@fontsource/eb-garamond": "^5.3.0",
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/plugin-notification": "^2.5.1",
+    "lucide-vue-next": "^1.0.0",
+    "pinia": "^4.0.3",
+    "vue": "^3.5.13"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^26.6.4",
     "@vitejs/plugin-vue": "^6.0.7",
+    "tailwindcss": "^4.3.3",
     "typescript": "~6.0.3",
     "vite": "^8.0.16",
-    "vue-tsc": "^3.3.5",
-    "@tauri-apps/cli": "^2"
+    "vue-tsc": "^3.3.5"
   }
 }
