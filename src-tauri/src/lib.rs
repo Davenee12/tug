@@ -30,7 +30,11 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show(app)))
         .plugin(
             // Logs land in %LOCALAPPDATA%\dev.davejames.tug\logs for hardware debugging.
+            // Keep a few rotated files: the default (one 40 KB file) had already thrown away
+            // the minutes before a failure by the time anyone looked.
             tauri_plugin_log::Builder::new()
+                .max_file_size(2_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5))
                 .level(log::LevelFilter::Info)
                 .level_for("tug_lib", log::LevelFilter::Debug)
                 .build(),

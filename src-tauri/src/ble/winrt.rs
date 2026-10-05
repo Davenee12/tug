@@ -29,6 +29,13 @@ impl BleError {
     pub fn is_stale_bond(&self) -> bool {
         matches!(self, Self::Win(e) if e.code() == STALE_BOND)
     }
+
+    /// RO_E_CLOSED: Windows tore down tug's GATT objects (e.g. the device's Bluetooth services
+    /// were changed in Settings) while the link itself still looks connected. Only a fresh
+    /// connection brings them back.
+    pub fn is_closed(&self) -> bool {
+        matches!(self, Self::Win(e) if e.code() == windows::core::HRESULT(0x8000_0013_u32 as i32))
+    }
 }
 
 impl From<windows::core::Error> for BleError {

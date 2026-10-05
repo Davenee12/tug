@@ -22,6 +22,13 @@ impl Actor {
         });
     }
 
+    /// Drop the link and connect again on the next tick.
+    pub(super) fn relink(&mut self, why: &str) {
+        log::warn!("{why}; reconnecting");
+        self.drop_link();
+        self.retry_in = 0;
+    }
+
     pub(super) async fn connect(&mut self) {
         let Some(id) = self.device_id.clone() else { return };
         log::debug!("connecting to {id}");
@@ -232,6 +239,7 @@ impl Actor {
         };
         let control_point = a.control_point.clone();
         let idle = a.requests.inflight().is_none();
+        let mut closed = false;
         for (name, ch) in [
             ("data source", a.data_source.characteristic().clone()),
             ("notification source", a.notification_source.characteristic().clone()),
@@ -244,8 +252,18 @@ impl Actor {
                         log::warn!("ANCS {name}: re-enable failed: {e}");
                     }
                 }
-                Err(e) => log::warn!("ANCS {name}: couldn't read subscription state: {e}"),
+                Err(e) => {
+                    closed |= e.is_closed();
+                    log::warn!("ANCS {name}: couldn't read subscription state: {e}");
+                }
             }
+        }
+        // Seen on hardware: unticking a service in the iPhone's Windows device properties closed
+        // every GATT object while the link stayed "connected", so notifications (calls included)
+        // and media silently stopped until tug was restarted. Rebuild the link instead.
+        if closed {
+            self.relink("Windows closed tug's Bluetooth objects for the iPhone");
+            return;
         }
         // Only probe between requests so the probe can't interleave with a real response.
         if idle {

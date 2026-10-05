@@ -302,7 +302,13 @@ impl Actor {
                 let res = match self.link.as_ref().and_then(|l| l.media.as_ref()) {
                     Some(m) => {
                         let ch = m.remote_command.clone();
-                        winrt::write(&ch, &[command.id()]).await.map_err(|e| e.to_string())
+                        match winrt::write(&ch, &[command.id()]).await {
+                            Err(e) if e.is_closed() => {
+                                self.relink("media controls were closed by Windows");
+                                Err("Reconnecting to your iPhone. Try again in a moment.".into())
+                            }
+                            other => other.map_err(|e| e.to_string()),
+                        }
                     }
                     None => Err("Media controls aren't available right now".into()),
                 };
