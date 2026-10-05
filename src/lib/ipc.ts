@@ -61,6 +61,7 @@ interface EventPayloads {
   "pairing-request-closed": null;
   message: SmsMessage;
   contacts: Contact[];
+  "open-latest-conversation": null;
 }
 
 export function on<E extends keyof EventPayloads>(
