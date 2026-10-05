@@ -20,6 +20,8 @@ See docs/STABILIZATION.md for the current backlog.
   Trusted Signing). Spike first on Dave's PC; signing also removes SmartScreen's "unknown publisher".
 - **Live texts (MAP notifications / MNS)**: texts land the instant the phone gets them, instead of
   within ~8 s of polling; sends can show "Sent".
+- **Press and hold volume**: holding Now Playing's volume up/down keeps stepping (AMS VolumeUp/Down
+  repeated, accelerating, stopping on release), instead of one tap per step.
 - Follow-up: remember the texts (Classic) device by id rather than name, so a phone rename can't
   confuse which phone texts come from.
 
