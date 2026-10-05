@@ -173,6 +173,9 @@ mod worker {
         device_id: Option<String>,
         next_contacts_sync: Instant,
         unshared_contact_pulls: u32,
+        /// The last contacts pull came back with people in it, so Sync Contacts is on: an empty
+        /// call list then really means the history was cleared.
+        contacts_shared: bool,
         backfilled: bool,
         health: Health,
         /// The phone Windows has paired for texts, found even when connecting to it fails.
@@ -188,6 +191,7 @@ mod worker {
             device_id: None,
             next_contacts_sync: Instant::now(),
             unshared_contact_pulls: 0,
+            contacts_shared: false,
             backfilled: false,
             health: Health::default(),
             texts_device: None,
@@ -359,11 +363,13 @@ mod worker {
                 // The iPhone answers with an empty list, not a refusal, while Sync Contacts is
                 // off. Keep any names already saved and ask again rather than in 6 hours.
                 Ok(entries) if entries.is_empty() => {
+                    self.contacts_shared = false;
                     log::info!("the iPhone shared no contacts (Sync Contacts off?), asking again soon");
                     self.next_contacts_sync = Instant::now() + self.soon();
                 }
                 Ok(entries) => {
                     self.unshared_contact_pulls = 0;
+                    self.contacts_shared = true;
                     let pairs: Vec<(String, String)> = entries
                         .iter()
                         .flat_map(|e| e.numbers.iter().map(move |n| (normalize(n), e.name.clone())))
@@ -389,6 +395,9 @@ mod worker {
                 Err(e) => {
                     log::info!("contacts sync failed: {e}");
                     let consent = matches!(e, MapError::ContactsConsent);
+                    if consent {
+                        self.contacts_shared = false;
+                    }
                     let shown = consent.then(|| e.to_string());
                     self.shared.update_status(|s| s.contacts_error = shown);
                     // A refusal is the switch still being off, like an empty list: during setup
@@ -423,9 +432,10 @@ mod worker {
                 .await
                 .unwrap_or(Err(MapError::Timeout));
             match pulled {
-                // Like the phonebook, an empty answer is how Sync Contacts being off looks, so
-                // it never wipes a list tug already has. (A refusal shows as the contacts error.)
-                Ok(calls) if calls.is_empty() && !self.shared.calls().is_empty() => {
+                // An empty answer is also how Sync Contacts being off looks, so it only wipes the
+                // list when contacts are coming through (then the history really was cleared).
+                // (A refusal shows as the contacts error.)
+                Ok(calls) if calls.is_empty() && !self.contacts_shared && !self.shared.calls().is_empty() => {
                     log::info!("the iPhone shared no recent calls; keeping the ones tug has");
                 }
                 Ok(calls) => {
