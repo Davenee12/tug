@@ -57,6 +57,7 @@ const history: PhoneNotification[] = setup
       n("com.apple.MobileSMS", "Messages", "Tay", "omw, 10 mins 🚗", 1),
       n("com.apple.MobileSMS", "Messages", "Tay", "did you see the photos I sent?", 4),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Are we still meeting at 5? I can grab a table if you're running late.", 2),
+      n("com.google.Gmail", "Gmail", "Google", "G-591204 is your Google verification code.", 6, { category: "email" }),
       n("net.whatsapp.WhatsApp", "WhatsApp", "Sam Okafor", "Sent you the slides, have a look before the call", 9),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Also bring the charger 🙏", 14),
       n("com.apple.mobilecal", "Calendar", "Design review", "In 15 minutes · Room 4", 18, { category: "schedule" }),

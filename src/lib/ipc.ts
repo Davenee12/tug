@@ -38,6 +38,7 @@ export const api = {
   getContacts: () => invoke<Contact[]>("get_contacts"),
   sendMessage: (address: string, text: string) => invoke<SmsMessage>("send_message", { address, text }),
   refreshMessages: () => invoke<void>("refresh_messages"),
+  copyText: (text: string) => invoke<void>("copy_text", { text }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),
   markRead: (messageIds: number[]) => invoke<void>("mark_read", { messageIds }),
   searchAll: (query: string, limit: number) => invoke<SearchResults>("search_all", { query, limit }),

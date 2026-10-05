@@ -13,6 +13,8 @@ import {
   type ConversationItem,
 } from "../lib/format";
 import AppAvatar from "./AppAvatar.vue";
+import CodeChip from "./CodeChip.vue";
+import { findCode } from "../lib/codes";
 
 const tug = useTugStore();
 const convs = computed(() => {
@@ -142,6 +144,7 @@ function showDay(i: number): boolean {
 }
 
 const outgoing = (i: ConversationItem) => i.kind === "message" && i.m.direction === "out";
+const codeIn = (i: ConversationItem) => findCode(i.body);
 const statusLabel = (i: ConversationItem) => {
   if (i.kind !== "message" || i.m.direction !== "out") return "";
   return { pending: "Sending…", accepted: "Sent via iPhone", failed: "Not sent", received: "" }[i.m.status];
@@ -285,6 +288,12 @@ function onKey(e: KeyboardEvent) {
                 <RotateCcw :size="11" /> Retry
               </button>
             </span>
+            <CodeChip
+              v-if="!outgoing(item) && codeIn(item)"
+              class="mt-1.5"
+              :code="codeIn(item)!.code"
+              :from="item.kind === 'notification' ? [item.n] : []"
+            />
           </div>
         </template>
       </div>
