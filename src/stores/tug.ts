@@ -90,6 +90,8 @@ export const useTugStore = defineStore("tug", () => {
     return appIcons.value[appId] ?? null;
   }
   const advertiseEnabled = ref(true);
+  /** Start with Windows. Mirrors the real autostart registry entry, not a stored setting. */
+  const autostartEnabled = ref(false);
   const zoom = ref(1);
   /** First-run setup finished (or skipped). Until then, with no iPhone paired, setup shows. */
   const onboarded = ref(true);
@@ -519,6 +521,8 @@ export const useTugStore = defineStore("tug", () => {
       await api.setSetting("ui.seenSince", String(seenSince.value));
     }
     advertiseEnabled.value = raw.advertise !== "false";
+    // The autostart registry entry is the source of truth, not a stored setting.
+    autostartEnabled.value = (await attempt(api.getAutostart)) ?? false;
     settings.value = {
       toasts: raw["ui.toasts"] !== "false",
       doNotDisturb: raw["ui.doNotDisturb"] === "true",
@@ -689,6 +693,7 @@ export const useTugStore = defineStore("tug", () => {
     settings,
     iconFor,
     advertiseEnabled,
+    autostartEnabled,
     flash,
     view,
     selectedThread,
@@ -765,6 +770,15 @@ export const useTugStore = defineStore("tug", () => {
     async setAdvertising(enabled: boolean) {
       advertiseEnabled.value = enabled;
       await attempt(() => api.setAdvertising(enabled));
+    },
+    async setAutostart(enabled: boolean) {
+      // Show the change at once, then confirm against what the registry actually holds, so a
+      // failure doesn't leave the switch lying about whether tug starts with Windows.
+      autostartEnabled.value = enabled;
+      const ok = await attempt(() => api.setAutostart(enabled).then(() => true));
+      if (ok !== true) {
+        autostartEnabled.value = (await attempt(api.getAutostart)) ?? false;
+      }
     },
     async confirmPairing(accept: boolean) {
       pairingRequest.value = null;

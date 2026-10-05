@@ -41,6 +41,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 const toasts = computed({ get: () => tug.settings.toasts, set: (v) => void tug.setSetting("toasts", v) });
 const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tug.setSetting("doNotDisturb", v) });
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
+const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) => void tug.setAutostart(v) });
 const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
 const advertise = computed({ get: () => tug.advertiseEnabled, set: (v) => void tug.setAdvertising(v) });
 const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
@@ -155,6 +156,12 @@ async function clearHistory() {
               description="Closing the window keeps tug in the tray, still mirroring your iPhone. Quit from the tray menu."
             >
               <SettingsSwitch v-model="closeToTray" label="Keep running when closed" />
+            </SettingsRow>
+            <SettingsRow
+              label="Start with Windows"
+              description="Open tug when you sign in, hidden in the tray so it's mirroring your iPhone from the start."
+            >
+              <SettingsSwitch v-model="startWithWindows" label="Start with Windows" />
             </SettingsRow>
             <SettingsRow label="Zoom" description="Ctrl + and Ctrl − work from anywhere.">
               <div class="flex items-center gap-1">
