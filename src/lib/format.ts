@@ -1,4 +1,4 @@
-import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
+import type { CallRecord, Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 /** Bundle ids whose notifications are conversations, grouped as threads. */
 export const MESSAGING_APPS: Record<string, string> = {
@@ -318,6 +318,38 @@ function resolveNumbers(c: Conversation, contactNumbers: string[]) {
   // Several numbers: default to whoever texted most recently; with no messages to
   // go on, don't guess.
   c.address = messages.find((m) => m.direction === "in")?.address ?? messages[0]?.address ?? null;
+}
+
+/** When a call happened, if the phone said. A time without a zone is phone-local, like texts. */
+export function callTime(c: CallRecord): Date | null {
+  if (!c.at) return null;
+  const d = new Date(c.at);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Who a call was with: their name in your contacts now, else what the phone called them, else the number. */
+export function callName(c: CallRecord, nameFor: Map<string, string>): string {
+  const saved = c.number ? nameFor.get(c.number) : undefined;
+  return cleanName(saved ?? c.name ?? (c.number ? formatAddress(c.number) : "No caller ID"));
+}
+
+/** Recent calls under day headings, newest first as the phone sends them; untimed ones last. */
+export function groupCalls(calls: CallRecord[], now = new Date()): Array<{ label: string; calls: CallRecord[] }> {
+  const out: Array<{ label: string; calls: CallRecord[] }> = [];
+  const untimed: CallRecord[] = [];
+  for (const c of calls) {
+    const at = callTime(c);
+    if (!at) {
+      untimed.push(c);
+      continue;
+    }
+    const label = dayLabel(at, now);
+    const last = out.at(-1);
+    if (last?.label === label) last.calls.push(c);
+    else out.push({ label, calls: [c] });
+  }
+  if (untimed.length) out.push({ label: "Earlier", calls: untimed });
+  return out;
 }
 
 /** Words the user typed, for highlighting (same tokens the search matches on). */

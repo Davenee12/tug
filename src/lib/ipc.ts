@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppName,
+  CallRecord,
   Contact,
   SearchResults,
   SmsMessage,
@@ -49,6 +50,10 @@ export const api = {
   placeLookup: (latitude: number, longitude: number) => invoke<string>("place_lookup", { latitude, longitude }),
   markRead: (messageIds: number[]) => invoke<void>("mark_read", { messageIds }),
   searchAll: (query: string, limit: number) => invoke<SearchResults>("search_all", { query, limit }),
+  getCalls: () => invoke<CallRecord[]>("get_calls"),
+  refreshCalls: () => invoke<void>("refresh_calls"),
+  /** Experimental hands-free dialing; with no number, only checks the link can be opened. */
+  dial: (number: string | null) => invoke<void>("dial", { number }),
 };
 
 interface EventPayloads {
@@ -63,6 +68,7 @@ interface EventPayloads {
   message: SmsMessage;
   contacts: Contact[];
   "open-latest-conversation": null;
+  calls: CallRecord[];
 }
 
 export function on<E extends keyof EventPayloads>(

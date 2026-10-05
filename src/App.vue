@@ -5,6 +5,7 @@ import { useTugStore } from "./stores/tug";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
 import FeedPanel from "./components/FeedPanel.vue";
+import IncomingCall from "./components/IncomingCall.vue";
 import NewConversation from "./components/NewConversation.vue";
 import SearchPalette from "./components/SearchPalette.vue";
 import SettingsPage from "./components/SettingsPage.vue";
@@ -43,6 +44,8 @@ function onShortcut(e: KeyboardEvent) {
     else tug.notify("info", "No code in the last 10 minutes");
     return;
   }
+  // A ringing call has the keyboard (Enter answers, Esc declines) until it's dealt with.
+  if (tug.ringing) return;
   const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable]") !== null;
   if (key === "k") {
     e.preventDefault();
@@ -93,6 +96,8 @@ onUnmounted(() => {
     <PairingDialog v-if="tug.pairingRequest && !tug.showSetup" />
     <NewConversation v-if="tug.pickerOpen" />
     <SearchPalette v-if="tug.searchOpen" />
+    <!-- Last, so a ringing call sits over any other dialog. -->
+    <IncomingCall v-if="tug.ringing && !tug.showSetup" :key="tug.ringing.id" :call="tug.ringing" />
 
     <Transition enter-from-class="opacity-0 translate-y-2" leave-to-class="opacity-0 translate-y-2" enter-active-class="transition" leave-active-class="transition">
       <div
