@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
-import { appLabel, groupConversations, groupThreads, threadKey } from "../lib/format";
+import { appLabel, canClear, groupConversations, groupThreads, threadKey } from "../lib/format";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
@@ -240,7 +240,7 @@ export const useTugStore = defineStore("tug", () => {
 
   /** Clear every notification in a row that's still on the phone and clearable. */
   async function clearItems(items: PhoneNotification[], { quiet = false } = {}) {
-    const clearable = items.filter((n) => n.live && n.removedAt == null && n.flags.negativeAction);
+    const clearable = items.filter(canClear);
     let failure: unknown = null;
     // One that's already gone from the phone mustn't stop the rest from clearing.
     for (const n of clearable) {
