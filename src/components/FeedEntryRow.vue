@@ -4,7 +4,7 @@ import { ChevronRight, ExternalLink, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { notificationTime, relativeTime, type FeedEntry } from "../lib/format";
 import { findCode } from "../lib/codes";
-import { GMAIL_APP_ID, webLinkFor } from "../lib/weblinks";
+import { GMAIL_APP_ID, mayHaveWebsite, webLinkFor, type WebLink } from "../lib/weblinks";
 import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import NotificationItem from "./NotificationItem.vue";
@@ -32,7 +32,14 @@ const clearable = computed(() => items.value.some((n) => n.live && n.flags.negat
 const code = computed(() => findCode(latest.value.message || latest.value.subtitle));
 // A web page to open for this app, but only for app stacks — conversation threads (people) never
 // get an "Open" button. For a stack the latest notification stands in (same app for all items).
-const webLink = computed(() => (props.entry.kind === "stack" ? webLinkFor(latest.value) : null));
+// Every app can be opened: its best page when tug knows one, else the app's own website.
+const webLink = computed<WebLink | null>(() => {
+  if (!(props.entry.kind === "stack")) return null;
+  const known = webLinkFor(latest.value);
+  if (known) return known;
+  const site = mayHaveWebsite(latest.value.appId) ? tug.websiteFor(latest.value.appId) : null;
+  return site ? { url: site, label: appLabel.value } : null;
+});
 // Clicking a single Gmail notification's body opens it in the browser instead of expanding — the
 // owner's "click the notification to open" for the one case where it doesn't fight the stack UI.
 const bodyOpens = computed(

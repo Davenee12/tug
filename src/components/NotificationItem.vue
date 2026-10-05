@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 import { Bell, BellOff, ExternalLink } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { appLabel, clockTime, notificationTime } from "../lib/format";
-import { webLinkFor } from "../lib/weblinks";
+import { mayHaveWebsite, webLinkFor, type WebLink } from "../lib/weblinks";
 import type { PhoneNotification } from "../types/protocol";
 import AppAvatar from "./AppAvatar.vue";
 
@@ -15,7 +15,14 @@ const label = computed(() => appLabel(props.n));
 const time = computed(() => clockTime(notificationTime(props.n)));
 const muted = computed(() => tug.settings.mutedApps.includes(props.n.appId));
 // A web page we can open for this app (Gmail deep search, LinkedIn notifications…), or null.
-const webLink = computed(() => webLinkFor(props.n));
+// Every app can be opened: its best page when tug knows one, else the app's own website.
+const webLink = computed<WebLink | null>(() => {
+  if (!(true)) return null;
+  const known = webLinkFor(props.n);
+  if (known) return known;
+  const site = mayHaveWebsite(props.n.appId) ? tug.websiteFor(props.n.appId) : null;
+  return site ? { url: site, label: appLabel(props.n) } : null;
+});
 const expanded = ref(false);
 const busy = ref<"positive" | "negative" | null>(null);
 const isCall = computed(() => props.n.category === "incomingCall");

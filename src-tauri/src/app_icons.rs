@@ -59,6 +59,55 @@ pub fn data_uri(bytes: &[u8]) -> Option<String> {
     ))
 }
 
+/// The app's own website from an App Store lookup answer (`sellerUrl`), for the Feed's "Open".
+pub fn seller_url(lookup_json: &str) -> Option<String> {
+    let j: serde_json::Value = serde_json::from_str(lookup_json).ok()?;
+    let url = j
+        .get("results")?
+        .as_array()?
+        .first()?
+        .get("sellerUrl")?
+        .as_str()?
+        .trim();
+    let ok = (url.starts_with("https://") || url.starts_with("http://"))
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control());
+    ok.then(|| url.to_string())
+}
+
+/// The app's website: from the cache (`<id>.url`), or looked up now. `Ok(None)` when the App
+/// Store has none (remembered for a week); `Err` for a network failure (asked again next time).
+pub fn website(dir: &Path, app_id: &str) -> Result<Option<String>, String> {
+    if !valid_app_id(app_id) {
+        return Ok(None);
+    }
+    let icons = dir.join("icons");
+    let (url_file, miss) = (
+        icons.join(format!("{app_id}.url")),
+        icons.join(format!("{app_id}.nourl")),
+    );
+    if let Ok(url) = std::fs::read_to_string(&url_file) {
+        return Ok(Some(url.trim().to_string()).filter(|u| !u.is_empty()));
+    }
+    let recent_miss = std::fs::metadata(&miss)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| SystemTime::now().duration_since(t).unwrap_or_default() < MISS_RETRY);
+    if recent_miss {
+        return Ok(None);
+    }
+    let lookup = http::get_string(&format!("https://itunes.apple.com/lookup?bundleId={app_id}"))?;
+    let _ = std::fs::create_dir_all(&icons);
+    match seller_url(&lookup) {
+        Some(url) => {
+            std::fs::write(&url_file, &url).map_err(|e| e.to_string())?;
+            Ok(Some(url))
+        }
+        None => {
+            let _ = std::fs::write(&miss, b"");
+            Ok(None)
+        }
+    }
+}
+
 fn paths(dir: &Path, app_id: &str) -> (PathBuf, PathBuf) {
     let icons = dir.join("icons");
     (
@@ -185,6 +234,20 @@ mod tests {
             None
         );
         assert_eq!(artwork_url("not json"), None);
+    }
+
+    #[test]
+    fn seller_url_only_for_web_addresses() {
+        let j =
+            r#"{"resultCount":1,"results":[{"sellerUrl":"https://www.chase.com/online/services/mobile-banking.htm"}]}"#;
+        assert_eq!(
+            seller_url(j).as_deref(),
+            Some("https://www.chase.com/online/services/mobile-banking.htm")
+        );
+        assert_eq!(seller_url(r#"{"results":[{"sellerUrl":"javascript:alert(1)"}]}"#), None);
+        assert_eq!(seller_url(r#"{"results":[{"sellerUrl":"https://a.com/x y"}]}"#), None);
+        assert_eq!(seller_url(r#"{"results":[{}]}"#), None);
+        assert_eq!(seller_url(r#"{"resultCount":0,"results":[]}"#), None);
     }
 
     #[test]
