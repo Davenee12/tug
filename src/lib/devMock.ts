@@ -6,6 +6,7 @@
 //   http://localhost:1420/?setup      first run, nothing paired (scripted: pair, PIN, sharing, first notification)
 //   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
+//   http://localhost:1420/?call       a call rings 1.5 s after load (rings out after 30 s, as a missed call)
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
@@ -49,12 +50,7 @@ function n(appId: string, appName: string | null, title: string, message: string
 const history: PhoneNotification[] = setup
   ? []
   : [
-      n("com.apple.mobilephone", "Phone", "Mum", "Incoming call", 0, {
-        category: "incomingCall",
-        flags: flags({ important: true, positiveAction: true }),
-        positiveLabel: "Answer",
-        negativeLabel: "Decline",
-      }),
+      n("com.apple.mobilephone", "Phone", "Mum", "Missed Call", 3, { category: "missedCall" }),
       n("com.apple.MobileSMS", "Messages", "Zoe", "omw, 10 mins 🚗", 1),
       n("com.apple.MobileSMS", "Messages", "Zoe", "did you see the photos I sent?", 4),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Are we still meeting at 5? I can grab a table if you're running late.", 2),
@@ -270,14 +266,16 @@ mockIPC(
       case "use_device":
         simulateConnect(String(a.id));
         return null;
-      case "perform_action":
-        // Like the iPhone: a negative action (Clear/Decline) removes the notification.
-        if (!a.positive) {
-          const target = history.find((x) => x.id === a.id);
+      case "perform_action": {
+        // Like the iPhone: a negative action (Clear/Decline) removes the notification, and so
+        // does answering a call (it stops ringing).
+        const target = history.find((x) => x.id === a.id);
+        if (!a.positive || target?.category === "incomingCall") {
           if (target) target.removedAt = Date.now();
           setTimeout(() => void emit("notification-removed", a.id), 150);
         }
         return null;
+      }
       default:
         return null;
     }
@@ -298,4 +296,32 @@ if (setup && params.has("btoff")) {
 
 if (params.has("pairing")) {
   setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913" }), 600);
+}
+
+// ?call: the phone rings. Answer or Decline takes it down (perform_action above); left alone,
+// it rings out after 30 s and comes back as a missed call, the way iOS reports it over ANCS.
+if (params.has("call")) {
+  const ring = n("com.apple.mobilephone", "Phone", "Jane Doe", "Incoming Call", 0, {
+    category: "incomingCall",
+    subtitle: "mobile",
+    flags: flags({ important: true, positiveAction: true }),
+    positiveLabel: "Answer",
+    negativeLabel: "Decline",
+  });
+  ring.id = 600;
+  setTimeout(() => {
+    ring.receivedAt = Date.now();
+    history.unshift(ring);
+    void emit("notification", ring);
+  }, 1500);
+  setTimeout(() => {
+    if (ring.removedAt != null) return;
+    ring.removedAt = Date.now();
+    void emit("notification-removed", ring.id);
+    const missed = n("com.apple.mobilephone", "Phone", "Jane Doe", "Missed Call", 0, { category: "missedCall" });
+    missed.id = 601;
+    missed.receivedAt = Date.now();
+    history.unshift(missed);
+    void emit("notification", missed);
+  }, 31500);
 }

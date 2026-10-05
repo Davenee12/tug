@@ -96,8 +96,17 @@ export const useTugStore = defineStore("tug", () => {
   const pickerOpen = ref(false);
   /** Universal search (Ctrl+K or the search box). */
   const searchOpen = ref(false);
+  /** Ringing calls whose card was answered or hidden here; their Feed row stays until the phone drops them. */
+  const callsHandled = ref<number[]>([]);
+  /** The call ringing on the phone right now (newest first), for the incoming-call card. */
+  const ringing = computed(
+    () =>
+      notifications.value.find(
+        (n) => n.category === "incomingCall" && n.live && n.removedAt == null && !callsHandled.value.includes(n.id),
+      ) ?? null,
+  );
   /** Something is covering the main view, so whatever is behind it isn't being looked at. */
-  const overlayOpen = computed(() => searchOpen.value || pickerOpen.value || !!pairingRequest.value);
+  const overlayOpen = computed(() => searchOpen.value || pickerOpen.value || !!pairingRequest.value || !!ringing.value);
 
   function openSettings(section?: SettingsSection) {
     if (view.value !== "settings") viewBeforeSettings = view.value;
@@ -329,6 +338,24 @@ export const useTugStore = defineStore("tug", () => {
     if (messageIds.length) api.markRead(messageIds).catch(() => undefined);
   }
 
+  /** Take the ringing card down here; the phone keeps ringing (and the Feed row stays). */
+  function hideCall(id: number) {
+    if (!callsHandled.value.includes(id)) callsHandled.value = [...callsHandled.value.slice(-20), id];
+  }
+
+  /**
+   * Answer or decline on the phone (ANCS positive/negative action). The card goes once the
+   * phone takes it; answering doesn't always remove the notification right away, so it's
+   * taken down here too. The call's audio stays on the iPhone.
+   */
+  async function respondToCall(n: PhoneNotification, answer: boolean): Promise<boolean> {
+    const ok = await attempt(() => api.performAction(n.id, answer).then(() => true));
+    if (!ok) return false;
+    hideCall(n.id);
+    if (answer) notify("info", "Answered. Talk on your iPhone.");
+    return true;
+  }
+
   /** Display name for a bundle id, from the history tug has seen. */
   function appNameFor(appId: string): string {
     const n = notifications.value.find((x) => x.appId === appId);
@@ -519,6 +546,9 @@ export const useTugStore = defineStore("tug", () => {
     pickerOpen,
     searchOpen,
     unreadTexts,
+    ringing,
+    hideCall,
+    respondToCall,
     overlayOpen,
     settingsSection,
     openSettings,
