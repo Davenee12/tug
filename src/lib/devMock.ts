@@ -190,6 +190,7 @@ const calls: CallRecord[] = setup
     ];
 
 const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
+let autostart = false;
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
 // Pair → PIN → connected → the iPhone's three switches come on one by one → a first
@@ -291,6 +292,11 @@ mockIPC(
         return settings;
       case "set_setting":
         settings[a.key as string] = a.value as string;
+        return null;
+      case "get_autostart":
+        return autostart;
+      case "set_autostart":
+        autostart = a.enabled as boolean;
         return null;
       case "app_icon": {
         // Stand-in icons (the real ones come from the App Store): a coloured tile per app.

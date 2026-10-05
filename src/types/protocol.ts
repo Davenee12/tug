@@ -189,6 +189,8 @@ export interface UiSettings {
   closeToTray: boolean;
   /** Real app icons in the Feed, fetched once per app from Apple's App Store. */
   appIcons: boolean;
+  /** A Windows pop-up when the iPhone's battery drops to 20% and 10%. */
+  lowBattery: boolean;
   /** Experimental Call buttons. Only a successful hands-free check (Settings › iPhone) turns them on. */
   dialing: boolean;
 }
