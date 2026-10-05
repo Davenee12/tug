@@ -19,6 +19,7 @@ import type {
 } from "../types/protocol";
 
 const PAGE = 100;
+const SEEN_KEEP = 300;
 
 const EMPTY_STATUS: DeviceStatus = {
   radio: "unknown",
@@ -140,21 +141,37 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   function markSeen(key: string) {
-    seen.value = { ...seen.value, [key]: Date.now() };
+    // Keep the most recently opened conversations only, so the saved setting can't grow forever.
+    const kept = Object.entries(seen.value)
+      .filter(([k]) => k !== key)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, SEEN_KEEP - 1);
+    seen.value = { ...Object.fromEntries(kept), [key]: Date.now() };
     void attempt(() => api.setSetting("ui.seen", JSON.stringify(seen.value)));
   }
 
   /** Clear every notification in a row that's still on the phone and clearable. */
-  async function clearItems(items: PhoneNotification[]) {
+  async function clearItems(items: PhoneNotification[], { quiet = false } = {}) {
     const clearable = items.filter((n) => n.live && n.removedAt == null && n.flags.negativeAction);
     for (const n of clearable) {
       try {
         await api.performAction(n.id, false);
       } catch (e) {
-        notify("error", errorMessage(e));
+        // Automatic clears (opening a conversation) shouldn't nag; the ✕ button does.
+        if (!quiet) notify("error", errorMessage(e));
         return;
       }
     }
+  }
+
+  /**
+   * A conversation is open in front of the user: what's in it has been read. Clear its
+   * notifications on the phone (which also takes them off the Feed) and mark its texts
+   * read over message access. Both only touch what's still unread, so repeats are free.
+   */
+  function readConversation(notifications: PhoneNotification[], messageIds: number[]) {
+    void clearItems(notifications, { quiet: true });
+    if (messageIds.length) api.markRead(messageIds).catch(() => undefined);
   }
 
   /** Display name for a bundle id, from the history tug has seen. */
@@ -244,6 +261,8 @@ export const useTugStore = defineStore("tug", () => {
           // Names are joined into messages server-side; apply them to what's loaded.
           const byAddress = new Map(list.map((c) => [c.address, c.name]));
           for (const m of messages.value) m.contactName = byAddress.get(m.address) ?? m.contactName;
+          // Notifications under a contact's old name come back under the new one.
+          void refreshLoadedNotifications();
         }),
         on("pairing-request", (req) => (pairingRequest.value = req)),
         on("pairing-request-closed", () => (pairingRequest.value = null)),
@@ -282,6 +301,13 @@ export const useTugStore = defineStore("tug", () => {
     if (!page) return;
     for (const n of page) upsert(notifications.value, n);
     hasMore.value = page.length === PAGE;
+  }
+
+  /** Re-read what's loaded (names are resolved server-side, e.g. after a contact is renamed). */
+  async function refreshLoadedNotifications() {
+    const count = Math.min(Math.max(notifications.value.length, PAGE), 500);
+    const fresh = await api.listNotifications(count).catch(() => null);
+    if (fresh) for (const n of fresh) upsert(notifications.value, n);
   }
 
   /** Universal search: people, texts and notifications. */
@@ -332,6 +358,7 @@ export const useTugStore = defineStore("tug", () => {
     openThread,
     startConversation,
     clearItems,
+    readConversation,
     appNameFor,
     /** Send through the iPhone. The pending message appears via the `message` event. */
     async sendMessage(address: string, text: string): Promise<boolean> {

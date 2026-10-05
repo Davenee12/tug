@@ -100,7 +100,49 @@ const MIGRATIONS: &[&str] = &[
     END;
     INSERT INTO messages_fts (messages_fts) VALUES ('rebuild');
     "#,
+    // v3: whether the phone still lists the message as unread, so opening it in tug
+    // marks it read on the phone once. Existing history counts as already read.
+    // Plus an index of notifications still open, for the sweep after each reconnect
+    // (a full scan took ~170 ms at 50k rows).
+    r#"
+    ALTER TABLE messages ADD COLUMN unread_on_phone INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX notifications_open ON notifications (session) WHERE removed_at IS NULL;
+    "#,
+    // v4: names a contact used to have ("zoe 💜" before Dave renamed her "zoe"), so
+    // notifications that arrived under an old name stay in the same conversation.
+    r#"
+    CREATE TABLE contact_aliases (
+        address TEXT NOT NULL,
+        alias   TEXT NOT NULL,
+        PRIMARY KEY (address, alias)
+    );
+    CREATE INDEX contact_aliases_alias ON contact_aliases (alias);
+    "#,
 ];
+
+/// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
+/// inner whitespace collapsed, and iOS's inline-reply suffix ("zoe replied to you",
+/// "… replied to your message") removed from the end. Also callable from SQL.
+pub(crate) fn clean_name(name: &str) -> String {
+    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    for suffix in [" replied to your message", " replied to you"] {
+        let cut = name.len().wrapping_sub(suffix.len());
+        if name.len() >= suffix.len() && name.is_char_boundary(cut) && name[cut..].eq_ignore_ascii_case(suffix) {
+            return name[..cut].to_string();
+        }
+    }
+    name
+}
+
+fn register_functions(conn: &Connection) -> Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function(
+        "clean_name",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| Ok(clean_name(&ctx.get::<String>(0)?)),
+    )
+}
 
 /// The schema version this build expects.
 pub const SCHEMA_VERSION: i64 = 1 + MIGRATIONS.len() as i64;
@@ -130,9 +172,16 @@ fn migrate(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-const SELECT: &str =
-    "SELECT n.id, n.session, n.uid, n.app_id, a.display_name, n.category, n.title, n.subtitle, n.message,
-            n.posted_at, n.received_at, n.flags, n.positive_label, n.negative_label, n.removed_at
+// A Messages notification that arrived under a contact's old name is shown under the
+// current one, when the old name points at exactly one contact and nobody has it now.
+const SELECT: &str = "SELECT n.id, n.session, n.uid, n.app_id, a.display_name, n.category,
+            CASE WHEN n.app_id = 'com.apple.MobileSMS' THEN COALESCE((
+                SELECT CASE WHEN COUNT(DISTINCT c.name) = 1 THEN MIN(c.name) END
+                FROM contact_aliases ca JOIN contacts c ON c.address = ca.address
+                WHERE ca.alias = clean_name(n.title)
+                  AND NOT EXISTS (SELECT 1 FROM contacts c2 WHERE c2.name = ca.alias)
+            ), n.title) ELSE n.title END,
+            n.subtitle, n.message, n.posted_at, n.received_at, n.flags, n.positive_label, n.negative_label, n.removed_at
      FROM notifications n LEFT JOIN apps a ON a.app_id = n.app_id";
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -186,6 +235,7 @@ impl Store {
 
     fn init(mut conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        register_functions(&conn)?;
         conn.execute_batch(SCHEMA)?;
         migrate(&mut conn)?;
         Ok(Self { conn: Mutex::new(conn) })
@@ -452,6 +502,21 @@ mod tests {
                 received_at: 1_000,
             })
             .unwrap()
+    }
+
+    #[test]
+    fn clean_name_matches_the_ui() {
+        assert_eq!(clean_name("  marco  "), "marco");
+        assert_eq!(clean_name("zoe 💜 replied to you"), "zoe 💜");
+        assert_eq!(clean_name("Zoe Replied To Your Message"), "Zoe");
+        assert_eq!(clean_name("Mary  Ann"), "Mary Ann");
+        assert_eq!(clean_name("Replied to you Club"), "Replied to you Club");
+        assert_eq!(
+            clean_name("replied to you"),
+            "replied to you",
+            "a bare phrase isn't a suffix"
+        );
+        assert_eq!(clean_name(""), "");
     }
 
     #[test]

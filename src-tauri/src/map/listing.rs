@@ -46,6 +46,22 @@ pub fn parse(xml: &str) -> Vec<ListedMessage> {
     out
 }
 
+/// A listing `datetime` as phone-local ISO (`2026-10-04T18:30:12`). MAP allows a
+/// UTC offset after the local time (`20261004T183012-0400`) or a `Z`; the local
+/// part is kept either way, matching how notification times are stored. Anything
+/// else is `None`.
+pub fn datetime_to_iso(s: &str) -> Option<String> {
+    let s = s.trim();
+    let local = s.get(..15)?;
+    let zone = &s[15..];
+    let zone_ok = match zone.as_bytes() {
+        [] | [b'Z'] => true,
+        [b'+' | b'-', rest @ ..] => rest.len() == 4 && rest.iter().all(u8::is_ascii_digit),
+        _ => false,
+    };
+    zone_ok.then(|| crate::ancs::ancs_date_to_iso(local)).flatten()
+}
+
 /// `key="value"` / `key='value'` pairs, entity-decoded.
 fn attributes(s: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
@@ -125,6 +141,19 @@ mod tests {
         assert_eq!(msgs[1].subject, "Fish & chips 🍟");
         assert_eq!(msgs[1].sender_name, "Sam");
         assert!(msgs[1].read);
+    }
+
+    #[test]
+    fn datetimes_with_or_without_a_zone_keep_their_time() {
+        let local = Some("2026-10-04T18:30:12".to_string());
+        assert_eq!(datetime_to_iso("20261004T183012"), local);
+        assert_eq!(datetime_to_iso("20261004T183012-0400"), local);
+        assert_eq!(datetime_to_iso("20261004T183012+0530"), local);
+        assert_eq!(datetime_to_iso("20261004T183012Z"), local);
+        assert_eq!(datetime_to_iso("20261004T183012-04"), None);
+        assert_eq!(datetime_to_iso("20261004T1830"), None);
+        assert_eq!(datetime_to_iso("2026-10-04 18:30"), None);
+        assert_eq!(datetime_to_iso("20261004T183012-04é0"), None);
     }
 
     #[test]

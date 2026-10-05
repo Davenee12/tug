@@ -14,6 +14,8 @@ use crate::state::Shared;
 
 pub enum MapCommand {
     Refresh,
+    /// Mark these stored messages read on the phone (those it still lists as unread).
+    MarkRead(Vec<i64>),
     Send {
         address: String,
         text: String,
@@ -29,6 +31,10 @@ pub struct MapHandle {
 impl MapHandle {
     pub fn refresh(&self) {
         let _ = self.tx.send(MapCommand::Refresh);
+    }
+
+    pub fn mark_read(&self, ids: Vec<i64>) {
+        let _ = self.tx.send(MapCommand::MarkRead(ids));
     }
 
     pub async fn send(&self, address: String, text: String) -> Result<StoredMessage, String> {
@@ -80,8 +86,8 @@ mod worker {
     use tokio::time::Instant;
 
     use super::MapCommand;
-    use crate::ancs::ancs_date_to_iso;
     use crate::map::address::normalize;
+    use crate::map::listing;
     use crate::map::session::{find_devices, pull_contacts, MapError, MapSession};
     use crate::messages::{IncomingMessage, Status, StoredMessage, SOURCE_IPHONE_MAP};
     use crate::state::{events, Shared};
@@ -116,12 +122,24 @@ mod worker {
             device_id: None,
             next_contacts_sync: Instant::now(),
         };
+        // Old names from renames that happened while tug wasn't keeping track.
+        match w.shared.store.learn_aliases() {
+            Ok(0) => {}
+            Ok(n) => {
+                log::info!("learned {n} earlier contact name(s)");
+                if let Ok(all) = w.shared.store.contacts() {
+                    w.shared.emit(events::CONTACTS, all);
+                }
+            }
+            Err(e) => log::warn!("learning old contact names failed: {e}"),
+        }
         let mut next = Instant::now() + FIRST_SYNC_DELAY;
         loop {
             tokio::select! {
                 cmd = commands.recv() => match cmd {
                     None => break,
                     Some(MapCommand::Refresh) => w.refresh().await,
+                    Some(MapCommand::MarkRead(ids)) => w.mark_read(&ids).await,
                     Some(MapCommand::Send { address, text, reply }) => {
                         let _ = reply.send(w.send(&address, &text).await);
                     }
@@ -194,6 +212,10 @@ mod worker {
                     match self.shared.store.save_phonebook(&pairs) {
                         Ok(n) => {
                             log::info!("contacts synced: {} people, {n} numbers", entries.len());
+                            // A rename on the phone may leave history under the old name.
+                            if let Err(e) = self.shared.store.learn_aliases() {
+                                log::warn!("learning old contact names failed: {e}");
+                            }
                             if let Ok(all) = self.shared.store.contacts() {
                                 self.shared.emit(events::CONTACTS, all);
                             }
@@ -239,6 +261,10 @@ mod worker {
             // Oldest first so arrival order matches the phone.
             for item in listed.iter().rev() {
                 if shared.store.has_message(SOURCE_IPHONE_MAP, &item.handle)? {
+                    // Read on the phone since: nothing left for tug to mark.
+                    if item.read {
+                        shared.store.set_read_on_phone(SOURCE_IPHONE_MAP, &item.handle)?;
+                    }
                     continue;
                 }
                 let msg = session.get_message(&item.handle).await?;
@@ -248,7 +274,7 @@ mod worker {
                 } else {
                     msg.body
                 };
-                let sent_at = ancs_date_to_iso(&item.datetime);
+                let sent_at = listing::datetime_to_iso(&item.datetime);
                 let sender_name = Some(item.sender_name.as_str()).filter(|n| !n.is_empty() && *n != address);
                 let stored = shared.store.insert_incoming(&IncomingMessage {
                     source: SOURCE_IPHONE_MAP,
@@ -258,16 +284,52 @@ mod worker {
                     body: &body,
                     sent_at: sent_at.as_deref(),
                     received_at: now_ms(),
+                    unread_on_phone: !item.read,
                 })?;
                 if let Some(m) = stored {
                     shared.emit(events::MESSAGE, m);
                     added += 1;
                 }
             }
-            if added > 0 && !shared.store.learn_contacts()?.is_empty() {
-                shared.emit(events::CONTACTS, shared.store.contacts()?);
+            if added > 0 {
+                let named = !shared.store.learn_contacts()?.is_empty();
+                let aliased = shared.store.learn_aliases()? > 0;
+                if named || aliased {
+                    shared.emit(events::CONTACTS, shared.store.contacts()?);
+                }
             }
             Ok(added)
+        }
+
+        /// Mark messages read on the phone. Only those it still lists as unread are
+        /// sent, so reopening a conversation costs nothing.
+        async fn mark_read(&mut self, ids: &[i64]) {
+            let handles = match self.shared.store.unread_on_phone(SOURCE_IPHONE_MAP, ids) {
+                Ok(h) if !h.is_empty() => h,
+                Ok(_) => return,
+                Err(e) => return log::warn!("reading unread messages failed: {e}"),
+            };
+            let store = self.shared.store.clone();
+            let session = match self.ensure().await {
+                Ok(s) => s,
+                Err(e) => return log::debug!("mark read: {e}"),
+            };
+            for handle in &handles {
+                match session.set_read(handle, true).await {
+                    Ok(()) => {
+                        if let Err(e) = store.set_read_on_phone(SOURCE_IPHONE_MAP, handle) {
+                            log::warn!("saving read state failed: {e}");
+                        }
+                    }
+                    // The phone refused this one (e.g. no longer exists); try again next open.
+                    Err(MapError::Obex { code, .. }) => log::info!("phone refused mark-read for {handle}: {code:#04x}"),
+                    Err(e) => {
+                        log::debug!("mark read failed: {e}");
+                        return self.fail(&e);
+                    }
+                }
+            }
+            log::info!("marked {} message(s) read on the iPhone", handles.len());
         }
 
         async fn send(&mut self, address: &str, text: &str) -> Result<StoredMessage, String> {

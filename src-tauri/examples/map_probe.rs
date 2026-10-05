@@ -4,6 +4,8 @@
 //!   cargo run --example map_probe            # summary only (no message text)
 //!   cargo run --example map_probe -- --show  # also print message text
 //!   cargo run --example map_probe -- --send "+15551234567" "hello from tug"
+//!   cargo run --example map_probe -- --mark-read <handle>    # SetMessageStatus, then re-list
+//!   cargo run --example map_probe -- --mark-unread <handle>
 
 /// Prints the library's log lines to stderr so protocol details show up here.
 struct StderrLog;
@@ -32,6 +34,11 @@ fn main() {
         .iter()
         .position(|a| a == "--send")
         .map(|i| (args[i + 1].clone(), args[i + 2].clone()));
+    let mark = ["--mark-read", "--mark-unread"].iter().find_map(|flag| {
+        args.iter()
+            .position(|a| a == flag)
+            .map(|i| (args[i + 1].clone(), *flag == "--mark-read"))
+    });
     let redact = |s: &str| {
         if show {
             s.to_string()
@@ -101,7 +108,9 @@ fn main() {
                         redact(&m.subject)
                     );
                 }
-                if let Some(first) = msgs.first() {
+                if mark.is_some() {
+                    // Skip GetMessage so the probe touches only the one message.
+                } else if let Some(first) = msgs.first() {
                     match session.get_message(&first.handle).await {
                         Ok(b) => println!(
                             "GetMessage {}: type={} from={} body={}",
@@ -115,6 +124,21 @@ fn main() {
                 }
             }
             Err(e) => println!("list inbox failed: {e}"),
+        }
+
+        if let Some((handle, read)) = &mark {
+            match session.set_read(handle, *read).await {
+                Ok(()) => println!("SetMessageStatus {handle} read={read}: accepted (0xA0)"),
+                Err(e) => println!("SetMessageStatus {handle} read={read}: {e}"),
+            }
+            // What the phone now reports for that message.
+            match session.list("inbox", 10).await {
+                Ok(msgs) => match msgs.iter().find(|m| &m.handle == handle) {
+                    Some(m) => println!("after: {} read={}", m.handle, m.read),
+                    None => println!("after: {handle} no longer in the inbox window"),
+                },
+                Err(e) => println!("re-list failed: {e}"),
+            }
         }
 
         match session.list("sent", 5).await {
