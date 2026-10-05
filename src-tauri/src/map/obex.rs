@@ -3,15 +3,21 @@
 //! Packet: `[opcode or response code][length: u16 BE, whole packet][fields][headers]`.
 //! Header identifier's top two bits give the encoding:
 //! `00` UTF-16BE text with NUL terminator, `01` byte sequence, `10` one byte, `11` four bytes.
+//! Both directions: tug is the client of the phone's MAS/PBAP servers, and (for MAP
+//! notifications) the server the phone connects to and PUTs event reports into.
 //! Pure encode/decode; the transport lives in `map::session`.
 
 use thiserror::Error;
 
+/// The final bit: set on the last packet of a request (CONNECT/DISCONNECT/SETPATH always).
+pub const FINAL_BIT: u8 = 0x80;
+pub const OP_PUT: u8 = 0x02;
 pub const OP_CONNECT: u8 = 0x80;
 pub const OP_DISCONNECT: u8 = 0x81;
 pub const OP_PUT_FINAL: u8 = 0x82;
 pub const OP_GET_FINAL: u8 = 0x83;
 pub const OP_SETPATH: u8 = 0x85;
+pub const OP_ABORT: u8 = 0xFF;
 
 pub const RSP_CONTINUE: u8 = 0x90;
 pub const RSP_SUCCESS: u8 = 0xA0;
@@ -36,6 +42,8 @@ pub const SETPATH_DONT_CREATE: u8 = 0x02;
 
 /// Largest packet we advertise in CONNECT; the peer may answer with less.
 pub const MAX_PACKET: u16 = 0x2000;
+/// OBEX 1.0, as carried in CONNECT requests and responses.
+pub const OBEX_VERSION: u8 = 0x10;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ObexError {
@@ -116,8 +124,17 @@ pub fn request(opcode: u8, fields: &[u8], headers: &[Header]) -> Vec<u8> {
 }
 
 pub fn connect(target: &[u8; 16]) -> Vec<u8> {
-    let fields = [0x10, 0x00, (MAX_PACKET >> 8) as u8, MAX_PACKET as u8];
-    request(OP_CONNECT, &fields, &[Header::Bytes(HI_TARGET, target.to_vec())])
+    request(
+        OP_CONNECT,
+        &connect_fields(),
+        &[Header::Bytes(HI_TARGET, target.to_vec())],
+    )
+}
+
+/// CONNECT's fields, the same in both directions: version, flags (none), max packet.
+fn connect_fields() -> [u8; 4] {
+    let [hi, lo] = MAX_PACKET.to_be_bytes();
+    [OBEX_VERSION, 0x00, hi, lo]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,31 +151,50 @@ impl Response {
     }
 
     pub fn connection_id(&self) -> Option<u32> {
-        self.headers.iter().find_map(|h| match h {
-            Header::U32(HI_CONNECTION_ID, v) => Some(*v),
-            _ => None,
-        })
+        find_connection_id(&self.headers)
     }
 
     /// Body and End-of-Body bytes, concatenated.
     pub fn body(&self) -> Vec<u8> {
-        self.headers
-            .iter()
-            .filter_map(|h| match h {
-                Header::Bytes(HI_BODY | HI_END_OF_BODY, v) => Some(v.as_slice()),
-                _ => None,
-            })
-            .flatten()
-            .copied()
-            .collect()
+        concat_body(&self.headers)
     }
 
     pub fn name(&self) -> Option<&str> {
-        self.headers.iter().find_map(|h| match h {
-            Header::Name(Some(n)) => Some(n.as_str()),
+        find_name(&self.headers)
+    }
+}
+
+fn find_connection_id(headers: &[Header]) -> Option<u32> {
+    headers.iter().find_map(|h| match h {
+        Header::U32(HI_CONNECTION_ID, v) => Some(*v),
+        _ => None,
+    })
+}
+
+fn find_bytes(headers: &[Header], id: u8) -> Option<&[u8]> {
+    headers.iter().find_map(|h| match h {
+        Header::Bytes(hid, v) if *hid == id => Some(v.as_slice()),
+        _ => None,
+    })
+}
+
+fn concat_body(headers: &[Header]) -> Vec<u8> {
+    headers
+        .iter()
+        .filter_map(|h| match h {
+            Header::Bytes(HI_BODY | HI_END_OF_BODY, v) => Some(v.as_slice()),
             _ => None,
         })
-    }
+        .flatten()
+        .copied()
+        .collect()
+}
+
+fn find_name(headers: &[Header]) -> Option<&str> {
+    headers.iter().find_map(|h| match h {
+        Header::Name(Some(n)) => Some(n.as_str()),
+        _ => None,
+    })
 }
 
 /// Total packet length from the first three bytes, once they've arrived.
@@ -177,11 +213,20 @@ pub fn parse_response(b: &[u8], connect: bool) -> Result<Response, ObexError> {
     if b.len() < len {
         return Err(ObexError::Truncated);
     }
-    let (max_packet, mut rest) = if connect && len >= 7 {
+    let (max_packet, rest) = if connect && len >= 7 {
         (Some(u16::from_be_bytes([b[5], b[6]])), &b[7..len])
     } else {
         (None, &b[3..len])
     };
+    Ok(Response {
+        code: b[0],
+        max_packet,
+        headers: parse_headers(rest)?,
+    })
+}
+
+/// Decode a run of headers that fills `rest` exactly.
+fn parse_headers(mut rest: &[u8]) -> Result<Vec<Header>, ObexError> {
     let mut headers = Vec::new();
     while let Some(&id) = rest.first() {
         let (header, used) = match id >> 6 {
@@ -210,11 +255,130 @@ pub fn parse_response(b: &[u8], connect: bool) -> Result<Response, ObexError> {
         headers.push(header);
         rest = &rest[used..];
     }
-    Ok(Response {
-        code: b[0],
-        max_packet,
-        headers,
+    Ok(headers)
+}
+
+// ---- Server side: requests the phone sends us, responses we send back. ----
+
+/// CONNECT request fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConnectParams {
+    pub version: u8,
+    pub flags: u8,
+    /// The peer's maximum packet size: no response may be bigger.
+    pub max_packet: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Request {
+    /// The opcode without the final bit (`OP_PUT` for both PUT and PUT-final);
+    /// ABORT keeps its full `OP_ABORT`.
+    pub opcode: u8,
+    /// Last packet of this request. A PUT without it expects Continue and more packets.
+    pub is_final: bool,
+    /// CONNECT only.
+    pub connect: Option<ConnectParams>,
+    pub headers: Vec<Header>,
+}
+
+impl Request {
+    pub fn connection_id(&self) -> Option<u32> {
+        find_connection_id(&self.headers)
+    }
+
+    /// The Target UUID a CONNECT asks for.
+    pub fn target(&self) -> Option<&[u8]> {
+        find_bytes(&self.headers, HI_TARGET)
+    }
+
+    /// The Type header without its NUL terminator.
+    pub fn type_(&self) -> Option<&str> {
+        let raw = find_bytes(&self.headers, HI_TYPE)?;
+        let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+        std::str::from_utf8(&raw[..end]).ok()
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        find_name(&self.headers)
+    }
+
+    /// Body and End-of-Body bytes in this packet, concatenated.
+    pub fn body(&self) -> Vec<u8> {
+        concat_body(&self.headers)
+    }
+
+    /// End-of-Body present: this packet completes the object.
+    pub fn has_end_of_body(&self) -> bool {
+        find_bytes(&self.headers, HI_END_OF_BODY).is_some()
+    }
+
+    /// One MAP application parameter's value, if present and well formed.
+    pub fn app_param(&self, tag: u8) -> Option<&[u8]> {
+        decode_app_params(find_bytes(&self.headers, HI_APP_PARAMS)?)?
+            .into_iter()
+            .find_map(|(t, v)| (t == tag).then_some(v))
+    }
+}
+
+/// Parse one complete request packet the peer sent us.
+pub fn parse_request(b: &[u8]) -> Result<Request, ObexError> {
+    let len = packet_len(b).ok_or(ObexError::Truncated)?;
+    if len < 3 {
+        return Err(ObexError::BadLength(len));
+    }
+    if b.len() < len {
+        return Err(ObexError::Truncated);
+    }
+    let raw = b[0];
+    // CONNECT carries version/flags/max packet and SETPATH flags/constants before the
+    // headers; a packet too short for them is corrupt.
+    let fields = match raw {
+        OP_CONNECT => 4,
+        OP_SETPATH => 2,
+        _ => 0,
+    };
+    if len < 3 + fields {
+        return Err(ObexError::BadLength(len));
+    }
+    let connect = (raw == OP_CONNECT).then(|| ConnectParams {
+        version: b[3],
+        flags: b[4],
+        max_packet: u16::from_be_bytes([b[5], b[6]]),
+    });
+    let (opcode, is_final) = if raw == OP_ABORT {
+        (OP_ABORT, true)
+    } else {
+        (raw & !FINAL_BIT, raw & FINAL_BIT != 0)
+    };
+    Ok(Request {
+        opcode,
+        is_final,
+        connect,
+        headers: parse_headers(&b[3 + fields..len])?,
     })
+}
+
+/// A response with no opcode fields: Success, Continue, Bad Request…
+pub fn response(code: u8, headers: &[Header]) -> Vec<u8> {
+    request(code, &[], headers)
+}
+
+/// The response to a CONNECT, which (success or not) carries our version, flags and
+/// max packet before the headers.
+pub fn connect_response(code: u8, headers: &[Header]) -> Vec<u8> {
+    request(code, &connect_fields(), headers)
+}
+
+/// Accept a CONNECT to a directed service: the ConnectionId the peer must quote on every
+/// later request, and Who echoing the Target it asked for.
+pub fn connect_success(connection_id: u32, who: &[u8; 16]) -> Vec<u8> {
+    connect_response(
+        RSP_SUCCESS,
+        &[
+            Header::connection_id(connection_id),
+            Header::Bytes(HI_WHO, who.to_vec()),
+        ],
+    )
 }
 
 fn decode_utf16(b: &[u8]) -> Option<String> {
@@ -235,6 +399,17 @@ pub fn app_params(params: &[(u8, &[u8])]) -> Header {
         v.extend_from_slice(value);
     }
     Header::Bytes(HI_APP_PARAMS, v)
+}
+
+/// The inverse of [`app_params`]: `None` if a triplet runs past the end.
+pub fn decode_app_params(mut b: &[u8]) -> Option<Vec<(u8, &[u8])>> {
+    let mut out = Vec::new();
+    while let [tag, len, rest @ ..] = b {
+        let len = *len as usize;
+        out.push((*tag, rest.get(..len)?));
+        b = &rest[len..];
+    }
+    b.is_empty().then_some(out)
 }
 
 #[cfg(test)]
@@ -328,5 +503,155 @@ mod tests {
             app_params(&[(0x01, &[0, 10]), (0x14, &[1])]),
             Header::Bytes(HI_APP_PARAMS, vec![1, 2, 0, 10, 0x14, 1, 1])
         );
+    }
+
+    const MNS: [u8; 16] = [
+        0xBB, 0x58, 0x2B, 0x41, 0x42, 0x0C, 0x11, 0xDB, 0xB0, 0xDE, 0x08, 0x00, 0x20, 0x0C, 0x9A, 0x66,
+    ];
+
+    #[test]
+    fn parses_a_connect_request_round_trip() {
+        let r = parse_request(&connect(&MNS)).unwrap();
+        assert_eq!(r.opcode, OP_CONNECT & !FINAL_BIT);
+        assert!(r.is_final);
+        assert_eq!(
+            r.connect,
+            Some(ConnectParams {
+                version: OBEX_VERSION,
+                flags: 0,
+                max_packet: MAX_PACKET,
+            })
+        );
+        assert_eq!(r.target(), Some(&MNS[..]));
+
+        // A peer with its own (smaller) max packet and flags.
+        let b = request(
+            OP_CONNECT,
+            &[0x10, 0x01, 0x03, 0xF9],
+            &[Header::Bytes(HI_TARGET, MNS.to_vec())],
+        );
+        let r = parse_request(&b).unwrap();
+        assert_eq!(r.connect.map(|c| (c.flags, c.max_packet)), Some((0x01, 0x03F9)));
+    }
+
+    #[test]
+    fn parses_an_event_report_put() {
+        let xml = b"<MAP-event-report version=\"1.0\"><event type=\"NewMessage\"/></MAP-event-report>";
+        let b = request(
+            OP_PUT_FINAL,
+            &[],
+            &[
+                Header::connection_id(7),
+                Header::type_("x-bt/MAP-event-report"),
+                app_params(&[(0x0F, &[0])]),
+                Header::Bytes(HI_END_OF_BODY, xml.to_vec()),
+            ],
+        );
+        let r = parse_request(&b).unwrap();
+        assert_eq!((r.opcode, r.is_final, r.connect), (OP_PUT, true, None));
+        assert_eq!(r.connection_id(), Some(7));
+        assert_eq!(r.type_(), Some("x-bt/MAP-event-report"));
+        assert_eq!(r.app_param(0x0F), Some(&[0u8][..]));
+        assert_eq!(r.app_param(0x0E), None);
+        assert!(r.has_end_of_body());
+        assert_eq!(r.body(), xml);
+    }
+
+    #[test]
+    fn a_non_final_put_carries_body_without_end() {
+        let b = request(
+            OP_PUT,
+            &[],
+            &[Header::connection_id(1), Header::Bytes(HI_BODY, b"<MAP-".to_vec())],
+        );
+        let r = parse_request(&b).unwrap();
+        assert_eq!((r.opcode, r.is_final), (OP_PUT, false));
+        assert!(!r.has_end_of_body());
+        assert_eq!(r.body(), b"<MAP-");
+        assert_eq!(r.type_(), None);
+    }
+
+    #[test]
+    fn parses_disconnect_setpath_and_abort() {
+        let r = parse_request(&request(OP_DISCONNECT, &[], &[Header::connection_id(3)])).unwrap();
+        assert_eq!((r.opcode, r.is_final), (OP_DISCONNECT & !FINAL_BIT, true));
+        assert_eq!(r.connection_id(), Some(3));
+
+        let r = parse_request(&request(
+            OP_SETPATH,
+            &[SETPATH_DONT_CREATE, 0],
+            &[Header::Name(Some("msg".into()))],
+        ))
+        .unwrap();
+        assert_eq!(
+            r.name(),
+            Some("msg"),
+            "SETPATH's two field bytes aren't read as headers"
+        );
+
+        let r = parse_request(&request(OP_ABORT, &[], &[])).unwrap();
+        assert_eq!((r.opcode, r.is_final), (OP_ABORT, true));
+    }
+
+    #[test]
+    fn rejects_malformed_requests() {
+        assert_eq!(parse_request(&[OP_PUT_FINAL, 0]), Err(ObexError::Truncated));
+        assert_eq!(parse_request(&[OP_PUT_FINAL, 0, 2]), Err(ObexError::BadLength(2)));
+        assert_eq!(parse_request(&[OP_PUT_FINAL, 0, 9, 0]), Err(ObexError::Truncated));
+        assert_eq!(
+            parse_request(&[OP_CONNECT, 0, 5, 0x10, 0x00]),
+            Err(ObexError::BadLength(5)),
+            "CONNECT without its max packet"
+        );
+        assert_eq!(parse_request(&[OP_SETPATH, 0, 4, 0]), Err(ObexError::BadLength(4)));
+        assert_eq!(
+            parse_request(&[OP_PUT_FINAL, 0, 6, HI_END_OF_BODY, 0, 9]),
+            Err(ObexError::BadHeader(HI_END_OF_BODY))
+        );
+        assert_eq!(
+            parse_request(&[OP_PUT_FINAL, 0, 5, HI_CONNECTION_ID, 0]),
+            Err(ObexError::BadHeader(HI_CONNECTION_ID))
+        );
+    }
+
+    #[test]
+    fn builds_plain_responses() {
+        assert_eq!(response(RSP_SUCCESS, &[]), [0xA0, 0x00, 0x03]);
+        assert_eq!(response(RSP_CONTINUE, &[]), [0x90, 0x00, 0x03]);
+        assert_eq!(response(RSP_BAD_REQUEST, &[]), [0xC0, 0x00, 0x03]);
+        let r = parse_response(&response(RSP_SUCCESS, &[Header::connection_id(9)]), false).unwrap();
+        assert!(r.is_success());
+        assert_eq!(r.connection_id(), Some(9));
+    }
+
+    #[test]
+    fn builds_a_connect_success_round_trip() {
+        let b = connect_success(0x0102_0304, &MNS);
+        assert_eq!(packet_len(&b), Some(b.len()));
+        assert_eq!(&b[..7], &[RSP_SUCCESS, 0x00, 31, OBEX_VERSION, 0x00, 0x20, 0x00]);
+        assert_eq!(&b[7..12], &[HI_CONNECTION_ID, 1, 2, 3, 4]);
+        assert_eq!(&b[12..15], &[HI_WHO, 0x00, 19]);
+        let r = parse_response(&b, true).unwrap();
+        assert!(r.is_success());
+        assert_eq!(r.max_packet, Some(MAX_PACKET));
+        assert_eq!(r.connection_id(), Some(0x0102_0304));
+        assert!(r.headers.contains(&Header::Bytes(HI_WHO, MNS.to_vec())));
+
+        let refused = connect_response(RSP_BAD_REQUEST, &[]);
+        assert_eq!(refused, [RSP_BAD_REQUEST, 0x00, 0x07, OBEX_VERSION, 0x00, 0x20, 0x00]);
+    }
+
+    #[test]
+    fn decodes_app_params_round_trip() {
+        let Header::Bytes(_, v) = app_params(&[(0x0E, &[1]), (0x0F, &[0]), (0x01, &[0, 10])]) else {
+            unreachable!()
+        };
+        assert_eq!(
+            decode_app_params(&v),
+            Some(vec![(0x0E, &[1u8][..]), (0x0F, &[0u8][..]), (0x01, &[0u8, 10][..])])
+        );
+        assert_eq!(decode_app_params(&[]), Some(vec![]));
+        assert_eq!(decode_app_params(&[0x0E, 2, 1]), None, "value runs past the end");
+        assert_eq!(decode_app_params(&[0x0E, 1, 1, 0x0F]), None, "dangling tag");
     }
 }
