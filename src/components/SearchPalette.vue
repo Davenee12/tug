@@ -275,7 +275,7 @@ function onKey(e: KeyboardEvent) {
 
               <!-- Person -->
               <template v-else-if="o.kind === 'person'">
-                <AppAvatar app-id="com.apple.MobileSMS" :label="o.c.name" size="sm" />
+                <AppAvatar app-id="com.apple.MobileSMS" :label="o.c.name" person size="sm" />
                 <span class="min-w-0 flex-1">
                   <span class="block truncate text-[14px] font-medium text-ink">
                     <template v-for="(r, j) in highlight(cleanName(o.c.name), query)" :key="j">
