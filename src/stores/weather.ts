@@ -93,6 +93,13 @@ export const useWeatherStore = defineStore("weather", () => {
     await refresh(true);
   }
 
+  /** This PC's place, named when the lookup answers ("Portland, Oregon"). Throws if it can't. */
+  async function findMyPlace(): Promise<Place> {
+    const pos = await api.locate();
+    const name = await nameFor(pos.latitude, pos.longitude).catch(() => null);
+    return { name: name ?? UNNAMED, ...pos };
+  }
+
   async function useMyLocation(): Promise<string | null> {
     try {
       const pos = await api.locate();
@@ -124,5 +131,5 @@ export const useWeatherStore = defineStore("weather", () => {
     window.clearInterval(timer);
   }
 
-  return { place, unit, forecast, loading, error, ready, init, refresh, setPlace, useMyLocation, hide, reset, toggleUnit, dispose };
+  return { place, unit, forecast, loading, error, ready, init, refresh, setPlace, findMyPlace, useMyLocation, hide, reset, toggleUnit, dispose };
 });

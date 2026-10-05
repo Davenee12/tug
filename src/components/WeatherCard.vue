@@ -18,6 +18,9 @@ import {
 import { useWeatherStore } from "../stores/weather";
 import { dayLabel, describe, hourLabel, localTime, outlook, searchPlaces, temp, wind, type Place, type Sky } from "../lib/weather";
 import { relativeTime } from "../lib/format";
+import { errorMessage } from "../lib/ipc";
+import { friendlyLocateError } from "../lib/locating";
+import { useLocating } from "../lib/useLocating";
 
 const w = useWeatherStore();
 
@@ -188,10 +191,22 @@ async function pick(p: Place) {
   setupError.value = null;
   await w.setPlace(p);
 }
+// "Use my location": tug's own words while it looks, "There you are" when it's found.
+const finding = useLocating();
 async function locate() {
+  setupError.value = null;
   locating.value = true;
-  setupError.value = await w.useMyLocation();
-  locating.value = false;
+  finding.start();
+  try {
+    const p = await w.findMyPlace();
+    await finding.succeed();
+    await w.setPlace(p);
+  } catch (e) {
+    setupError.value = friendlyLocateError(errorMessage(e));
+  } finally {
+    finding.stop();
+    locating.value = false;
+  }
 }
 async function change() {
   open.value = false;
@@ -208,9 +223,22 @@ async function change() {
     <p class="mt-1 max-w-md text-[13px] text-muted">
       Today at a glance; drag it open for the week. Only the place you choose is sent to the forecast service.
     </p>
-    <div class="relative mt-4 flex flex-wrap items-center gap-2">
+    <!-- While it looks: one line at a time, in tug's voice -->
+    <div v-if="finding.line.value" class="mt-4 flex h-9 items-center gap-2 text-[14px]" role="status" aria-live="polite">
+      <MapPin :size="15" :class="finding.found.value ? 'text-primary' : 'animate-pulse text-muted motion-reduce:animate-none'" />
+      <Transition
+          mode="out-in"
+          enter-active-class="transition duration-300 ease-out motion-reduce:transition-none"
+          enter-from-class="opacity-0 translate-y-1"
+          leave-active-class="transition duration-200 ease-in motion-reduce:transition-none"
+          leave-to-class="opacity-0 -translate-y-1"
+        >
+        <span :key="finding.line.value" :class="finding.found.value ? 'font-medium text-ink' : 'text-body'">{{ finding.line.value }}</span>
+      </Transition>
+    </div>
+    <div v-else class="relative mt-4 flex flex-wrap items-center gap-2">
       <button class="btn-primary btn-sm" :disabled="locating" @click="locate">
-        <LocateFixed :size="14" /> {{ locating ? "Finding you…" : "Use my location" }}
+        <LocateFixed :size="14" /> Use my location
       </button>
       <div class="relative w-56">
         <input v-model="query" class="input h-9 text-[14px]" placeholder="or type a city" aria-label="City" spellcheck="false" />
