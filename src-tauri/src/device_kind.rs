@@ -44,6 +44,30 @@ const ACCESSORY_WORDS: &[&str] = &[
     "airtag",
 ];
 
+/// Whether a name from a Bluetooth NameChanged event is worth adopting. iOS briefly reports
+/// junk mid-rename (Dave's phone flashed up as "4" once), and a one- or two-character name is
+/// never a real iPhone name; keep the last good one instead of following it.
+pub fn plausible_device_name(name: &str) -> bool {
+    name.trim().chars().count() >= 3
+}
+
+/// Whether `candidate` is a better phone name to show than `current`. The LE side often reports
+/// the bare generic "iPhone", while the Classic side carries the real "Dave's iPhone"; prefer a
+/// specific, plausible candidate over a generic or empty current name, but never overwrite an
+/// already-specific name.
+pub fn more_specific_name(current: &str, candidate: &str) -> bool {
+    let candidate = candidate.trim();
+    if !plausible_device_name(candidate) || is_generic_name(candidate) {
+        return false;
+    }
+    is_generic_name(current.trim())
+}
+
+/// A placeholder/default name that any real one should replace.
+fn is_generic_name(name: &str) -> bool {
+    name.is_empty() || name.eq_ignore_ascii_case("iphone") || name.eq_ignore_ascii_case("unnamed device")
+}
+
 pub fn classify(name: &str, appearance: Option<u16>, cod_major: Option<u32>) -> DeviceKind {
     let name = name.to_lowercase();
     let category = appearance.map(|a| a >> 6).filter(|&c| c != 0);
@@ -88,6 +112,32 @@ mod tests {
         // Class 4: audio/video. 0x00C0: watch.
         assert_eq!(classify("Thing", None, Some(4)), DeviceKind::Accessory);
         assert_eq!(classify("Thing", Some(0x00C0), None), DeviceKind::Accessory);
+    }
+
+    #[test]
+    fn implausible_short_names_are_rejected() {
+        // iOS flashed "4" mid-rename; one- and two-character names are never a real iPhone.
+        assert!(!plausible_device_name("4"));
+        assert!(!plausible_device_name("ab"));
+        assert!(!plausible_device_name("  x "));
+        assert!(!plausible_device_name(""));
+        // Real names (and a trimmed three-plus) are kept.
+        assert!(plausible_device_name("Dave's iPhone"));
+        assert!(plausible_device_name("iPhone"));
+        assert!(plausible_device_name(" Pro "));
+    }
+
+    #[test]
+    fn prefers_a_specific_name_over_the_generic_one() {
+        // The LE side gives "iPhone"; the Classic side has the real name.
+        assert!(more_specific_name("iPhone", "Dave's iPhone"));
+        assert!(more_specific_name("", "Dave's iPhone"));
+        assert!(more_specific_name("Unnamed device", "Dave's iPhone"));
+        // Don't downgrade a real name, don't swap one real name for another, don't take junk.
+        assert!(!more_specific_name("Dave's iPhone", "iPhone"));
+        assert!(!more_specific_name("Dave's iPhone", "Work iPhone"));
+        assert!(!more_specific_name("iPhone", "iPhone"));
+        assert!(!more_specific_name("iPhone", "4"));
     }
 
     #[test]

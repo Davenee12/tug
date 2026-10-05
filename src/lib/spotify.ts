@@ -47,3 +47,9 @@ export function nextRepeat(mode: RepeatMode | null): RepeatMode {
   if (mode === "one") return "off";
   return "all";
 }
+
+/** A playlist's subtitle: owner and song count, leaving out a count Spotify didn't give. */
+export function playlistDetail(p: Pick<SpotifyPlaylist, "owner" | "trackCount">): string {
+  const songs = p.trackCount == null ? null : `${p.trackCount} song${p.trackCount === 1 ? "" : "s"}`;
+  return [p.owner, songs].filter(Boolean).join(" · ");
+}

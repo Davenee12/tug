@@ -6,6 +6,7 @@ import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { connectionHealth, errorAge, type HealthLink, type LinkState } from "../lib/health";
+import { phoneSwitches } from "../lib/phoneSwitches";
 import { stepZoom } from "../lib/zoom";
 import { escClosesSettings } from "../lib/escape";
 import PhoneSetup from "./PhoneSetup.vue";
@@ -99,33 +100,8 @@ const SHORTCUTS: Array<[string, string[]]> = [
   ["Zoom in · out · reset", ["Ctrl", "+  −  0"]],
 ];
 
-// ---- iPhone: the three switches on the phone, checked live ----
-type Check = { label: string; where: string; state: "ok" | "off" | "unknown"; fix: string };
-const checks = computed<Check[]>(() => {
-  const s = tug.status;
-  const connected = s.connection === "connected";
-  const where = "Settings › Bluetooth › ⓘ next to this PC";
-  return [
-    {
-      label: "Share System Notifications",
-      where,
-      state: !connected ? "unknown" : s.services.notifications ? "ok" : "off",
-      fix: "Turn it on so your notifications reach tug.",
-    },
-    {
-      label: "Show Notifications",
-      where,
-      state: s.messagesError ? "off" : s.services.messages ? "ok" : "unknown",
-      fix: "Turn it on so tug can read and send your texts.",
-    },
-    {
-      label: "Sync Contacts",
-      where,
-      state: s.contactsError ? "off" : tug.contacts.length > 0 ? "ok" : "unknown",
-      fix: "Turn it on so tug shows names instead of numbers.",
-    },
-  ];
-});
+// ---- iPhone: the three switches on the phone, checked live (shared pure logic) ----
+const checks = computed(() => phoneSwitches(tug.status, tug.contacts.length));
 
 // ---- iPhone: experimental calling, on only after the hands-free check passes ----
 const checkingCalls = ref(false);
@@ -338,7 +314,7 @@ async function clearHistory() {
                   <p class="mt-1 text-[13px] font-medium text-body-strong">{{ c.fix }}</p>
                 </template>
                 <span
-                  v-if="c.state === 'ok'"
+                  v-if="c.state === 'on'"
                   class="flex items-center gap-1.5 text-[13px] font-medium text-ink"
                 ><Check :size="15" class="text-accent-teal" /> On</span>
                 <span v-else-if="c.state === 'off'" class="pill bg-accent-amber/20 text-[12px] text-ink">Needs turning on</span>
