@@ -91,6 +91,8 @@ export interface NowPlaying {
   state: PlaybackState;
   rate: number | null;
   elapsed: number | null;
+  /** Unix ms when the phone reported `elapsed`; progress advances from here. */
+  elapsedAt: number | null;
   volume: number | null;
   title: string | null;
   artist: string | null;

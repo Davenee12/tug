@@ -8,7 +8,7 @@
 //! AMS and Battery services over that same link. `GattSession::MaintainConnection`
 //! asks Windows to keep re-establishing the link whenever the phone is in range.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::sync_channel;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -35,7 +35,8 @@ use windows_collections::IIterable;
 use super::winrt::{self, BleError};
 use super::{Command, Reply};
 use crate::ams::{self, NowPlaying};
-use crate::ancs::{self, Category, EventFlags, EventId, Response};
+use crate::ancs::{self, Category, EventFlags, EventId, ParseError, Response};
+use crate::ancs_queue::{Request, RequestQueue, MAX_ATTEMPTS};
 use crate::state::{
     events, keys, AdvertisingState, AppName, ConnectionState, DiscoveredDevice, PairedDevice, PairingRequest,
     RadioState, Services, Shared, Transport,
@@ -101,12 +102,6 @@ enum Event {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Request {
-    Notification(u32),
-    App(String),
-}
-
 struct Ancs {
     // The service handle must outlive its characteristics: if Windows closes the
     // service, their ValueChanged notifications stop without any error.
@@ -115,9 +110,12 @@ struct Ancs {
     // Held so their ValueChanged registrations stay alive.
     notification_source: GattCharacteristic,
     data_source: GattCharacteristic,
-    queue: VecDeque<Request>,
-    inflight: Option<Instant>,
+    /// Control Point requests, one in flight at a time (see ancs_queue).
+    requests: RequestQueue,
     reassembler: ancs::Reassembler,
+    /// While a late reply to a timed-out request is being read, the request to
+    /// listen for again once it's done.
+    resume: Option<Request>,
     meta: HashMap<u32, (EventFlags, Category)>,
     rows: HashMap<u32, i64>,
     asked_apps: HashSet<String>,
@@ -133,7 +131,11 @@ struct Media {
 
 /// One opened iPhone. Survives disconnects; services are rebuilt on reconnect.
 struct Link {
+    /// Stamp for this link's connection events.
     gen: u64,
+    /// Stamp for the current GATT subscription; changes on every (re)subscribe so
+    /// events still queued from before a disconnect are ignored.
+    sub_gen: u64,
     device: BluetoothLEDevice,
     _gatt_session: Option<GattSession>,
     connected: bool,
@@ -298,7 +300,8 @@ impl Actor {
     }
 
     async fn event(&mut self, ev: Event) {
-        let current = self.link.as_ref().map(|l| l.gen);
+        let link_gen = self.link.as_ref().map(|l| l.gen);
+        let current = self.link.as_ref().map(|l| l.sub_gen);
         match &ev {
             Event::NotificationSource { gen, data } => {
                 log::debug!("ANCS event {data:02X?} (gen {gen}, current {current:?})")
@@ -311,7 +314,8 @@ impl Actor {
             Event::NotificationSource { gen, data } if Some(gen) == current => self.on_notification_source(&data).await,
             Event::DataSource { gen, data } if Some(gen) == current => self.on_data_source(&data).await,
             Event::MediaEntity { gen, data } if Some(gen) == current => {
-                self.shared.update_now_playing(|np| np.apply_entity_update(&data));
+                self.shared
+                    .update_now_playing(|np| np.apply_entity_update(&data, now_ms()));
             }
             Event::MediaCommands { gen, data } if Some(gen) == current => {
                 self.shared.update_now_playing(|np| np.apply_available_commands(&data));
@@ -321,7 +325,7 @@ impl Actor {
                     self.shared.update_status(|s| s.battery = Some(level.min(100)));
                 }
             }
-            Event::Connection { gen, connected } if Some(gen) == current => self.on_connection(connected),
+            Event::Connection { gen, connected } if Some(gen) == link_gen => self.on_connection(connected),
             Event::NotificationSource { .. }
             | Event::DataSource { .. }
             | Event::MediaEntity { .. }
@@ -426,13 +430,16 @@ impl Actor {
             .link
             .as_ref()
             .and_then(|l| l.ancs.as_ref())
-            .and_then(|a| a.inflight)
-            .is_some_and(|t| t.elapsed() > ANCS_RESPONSE_TIMEOUT);
+            .is_some_and(|a| a.requests.timed_out(Instant::now(), ANCS_RESPONSE_TIMEOUT));
         if stalled {
-            log::warn!("ANCS response timed out; skipping");
             if let Some(a) = self.link.as_mut().and_then(|l| l.ancs.as_mut()) {
-                a.inflight = None;
+                let req = a.requests.inflight().cloned();
                 a.reassembler.reset();
+                a.resume = None;
+                match a.requests.fail_inflight() {
+                    Some(gave_up) => log::warn!("ANCS request {gave_up:?} timed out {MAX_ATTEMPTS} times; giving up"),
+                    None => log::info!("ANCS request {req:?} timed out; retrying"),
+                }
             }
             self.pump().await;
         }
@@ -857,6 +864,7 @@ impl Actor {
         }
         Ok(Link {
             gen,
+            sub_gen: gen,
             device,
             _gatt_session: gatt_session,
             connected,
@@ -900,10 +908,17 @@ impl Actor {
     }
 
     async fn setup_services(&mut self) -> Result<(), BleError> {
-        let (device, gen) = match self.link.as_ref() {
-            Some(l) => (l.device.clone(), l.gen),
+        let device = match self.link.as_ref() {
+            Some(l) => l.device.clone(),
             None => return Err(BleError::Unreachable),
         };
+        // Every (re)subscription gets a fresh stamp, so GATT events still queued
+        // from before a disconnect can't be taken for this subscription's.
+        self.gen += 1;
+        let gen = self.gen;
+        if let Some(l) = self.link.as_mut() {
+            l.sub_gen = gen;
+        }
 
         // ANCS is required; media and battery are optional extras.
         let ancs = self.setup_ancs(&device, gen).await?;
@@ -980,9 +995,9 @@ impl Actor {
             control_point,
             notification_source: ns,
             data_source: ds,
-            queue: VecDeque::new(),
-            inflight: None,
+            requests: RequestQueue::default(),
             reassembler: ancs::Reassembler::default(),
+            resume: None,
             meta: HashMap::new(),
             rows: HashMap::new(),
             asked_apps: HashSet::new(),
@@ -1031,7 +1046,7 @@ impl Actor {
             match winrt::read(&attr).await {
                 Ok(value) => self
                     .shared
-                    .update_now_playing(|np| np.apply_attribute(entity, attribute, &value)),
+                    .update_now_playing(|np| np.apply_attribute(entity, attribute, &value, now_ms())),
                 Err(e) => log::debug!("AMS read {entity}/{attribute} failed: {e}"),
             }
         }
@@ -1084,11 +1099,17 @@ impl Actor {
         let (Some(a), Some(session)) = (link.ancs.as_mut(), link.session_id.as_deref()) else {
             return;
         };
-        let settled = a.sweep_after.is_some_and(|t| Instant::now() >= t) && a.queue.is_empty() && a.inflight.is_none();
+        let settled = a.sweep_after.is_some_and(|t| Instant::now() >= t) && a.requests.is_idle();
         if !settled {
             return;
         }
         a.sweep_after = None;
+        // If some replayed notification couldn't be fetched, its row still carries
+        // an old session id even though it's on the phone: don't guess, skip.
+        if !a.requests.all_notifications_fetched() {
+            log::warn!("skipping the cleared-while-away sweep: some notifications couldn't be fetched");
+            return;
+        }
         match self.shared.store.sweep_stale(session, now_ms()) {
             Ok(ids) => {
                 if !ids.is_empty() {
@@ -1109,7 +1130,7 @@ impl Actor {
             return;
         };
         let control_point = a.control_point.clone();
-        let idle = a.inflight.is_none();
+        let idle = a.requests.inflight().is_none();
         for (name, ch) in [
             ("data source", a.data_source.clone()),
             ("notification source", a.notification_source.clone()),
@@ -1138,7 +1159,7 @@ impl Actor {
         let Some(link) = self.link.as_ref().filter(|l| l.connected) else {
             return;
         };
-        let (device, gen) = (link.device.clone(), link.gen);
+        let (device, gen) = (link.device.clone(), link.sub_gen);
         let (need_media, need_battery) = (link.media.is_none(), link._battery.is_none());
         if need_media {
             match self.setup_media(&device, gen).await {
@@ -1212,15 +1233,12 @@ impl Actor {
         match ev.event {
             EventId::Added | EventId::Modified => {
                 a.meta.insert(ev.uid, (ev.flags, ev.category));
-                let req = Request::Notification(ev.uid);
-                if !a.queue.contains(&req) {
-                    a.queue.push_back(req);
-                }
+                a.requests.push(Request::Notification(ev.uid));
             }
             EventId::Removed => {
                 a.meta.remove(&ev.uid);
                 a.rows.remove(&ev.uid);
-                a.queue.retain(|r| *r != Request::Notification(ev.uid));
+                a.requests.forget_notification(ev.uid);
                 match self.shared.store.mark_removed(session, ev.uid, now_ms()) {
                     Ok(Some(id)) => self.shared.emit(events::NOTIFICATION_REMOVED, id),
                     Ok(None) => {}
@@ -1235,16 +1253,49 @@ impl Actor {
         let Some(a) = self.link.as_mut().and_then(|l| l.ancs.as_mut()) else {
             return;
         };
-        match a.reassembler.push(data) {
+        let mut result = a.reassembler.push(data);
+        // A late reply to a request that already timed out: it names a notification
+        // we did ask about, so its data is still good. Read it, then go back to
+        // listening for the request that's actually in flight.
+        if let Err(ParseError::UidMismatch { got, .. }) = result {
+            if a.meta.contains_key(&got) {
+                log::info!("late ANCS reply for {got}; accepting it");
+                if a.resume.is_none() {
+                    a.resume = a.requests.inflight().cloned();
+                }
+                a.reassembler.expect_notification(got);
+                result = a.reassembler.push(data);
+            }
+        }
+        let resp = match result {
             Ok(None) => return,
             Ok(Some(resp)) => {
-                a.inflight = None;
-                self.on_response(resp);
+                let done = match &resp {
+                    Response::Notification { uid, .. } => Request::Notification(*uid),
+                    Response::App { app_id, .. } => Request::App(app_id.clone()),
+                };
+                a.requests.complete(&done);
+                if let Some(next) = a.resume.take() {
+                    if a.requests.inflight() == Some(&next) {
+                        expect(&mut a.reassembler, &next);
+                        a.requests.touch(Instant::now());
+                    }
+                }
+                Some(resp)
             }
             Err(e) => {
+                // Garbled or unexpected data. Don't abandon the request in flight —
+                // its real reply may still come; listen again and let the timeout decide.
                 log::warn!("ANCS data source: {e}");
-                a.inflight = None;
+                a.resume = None;
+                if let Some(cur) = a.requests.inflight().cloned() {
+                    expect(&mut a.reassembler, &cur);
+                }
+                None
             }
+        };
+        if let Some(resp) = resp {
+            self.on_response(resp);
         }
         self.pump().await;
     }
@@ -1276,7 +1327,7 @@ impl Actor {
                         a.rows.insert(uid, n.id);
                         if n.app_name.is_none() && !attrs.app_id.is_empty() && a.asked_apps.insert(attrs.app_id.clone())
                         {
-                            a.queue.push_back(Request::App(attrs.app_id.clone()));
+                            a.requests.push(Request::App(attrs.app_id.clone()));
                         }
                         self.shared.emit(events::NOTIFICATION, n);
                     }
@@ -1302,32 +1353,31 @@ impl Actor {
             let Some(a) = self.link.as_mut().and_then(|l| l.ancs.as_mut()) else {
                 return;
             };
-            if a.inflight.is_some() {
+            let Some(req) = a.requests.start_next(Instant::now()) else {
                 return;
-            }
-            let Some(req) = a.queue.pop_front() else { return };
-            let bytes = match &req {
-                Request::Notification(uid) => {
-                    a.reassembler.expect_notification(*uid);
-                    ancs::get_notification_attributes(*uid)
-                }
-                Request::App(app_id) => {
-                    a.reassembler.expect_app(app_id);
-                    ancs::get_app_attributes(app_id)
-                }
             };
-            a.inflight = Some(Instant::now());
+            expect(&mut a.reassembler, &req);
+            let bytes = match &req {
+                Request::Notification(uid) => ancs::get_notification_attributes(*uid),
+                Request::App(app_id) => ancs::get_app_attributes(app_id),
+            };
             let cp = a.control_point.clone();
-            match winrt::write(&cp, &bytes).await {
+            let result = winrt::write(&cp, &bytes).await;
+            let Some(a) = self.link.as_mut().and_then(|l| l.ancs.as_mut()) else {
+                return;
+            };
+            match result {
                 Ok(()) => return,
+                // 0xA2: the notification vanished before we asked. Nothing to fetch.
+                Err(BleError::Protocol(Some(ancs::ERR_INVALID_PARAMETER))) => {
+                    a.reassembler.reset();
+                    a.requests.drop_inflight();
+                }
                 Err(e) => {
-                    // 0xA2 means the notification vanished before we asked; just move on.
-                    if !matches!(e, BleError::Protocol(Some(ancs::ERR_INVALID_PARAMETER))) {
-                        log::warn!("ANCS request {req:?} failed: {e}");
-                    }
-                    if let Some(a) = self.link.as_mut().and_then(|l| l.ancs.as_mut()) {
-                        a.inflight = None;
-                        a.reassembler.reset();
+                    log::warn!("ANCS request {req:?} failed: {e}");
+                    a.reassembler.reset();
+                    if let Some(gave_up) = a.requests.fail_inflight() {
+                        log::warn!("giving up on ANCS request {gave_up:?} after {MAX_ATTEMPTS} attempts");
                     }
                 }
             }
@@ -1365,6 +1415,14 @@ impl Actor {
 
     fn set_error(&self, message: String) {
         self.shared.update_status(|s| s.last_error = Some(message));
+    }
+}
+
+/// Point the reassembler at the response `req` will produce.
+fn expect(reassembler: &mut ancs::Reassembler, req: &Request) {
+    match req {
+        Request::Notification(uid) => reassembler.expect_notification(*uid),
+        Request::App(app_id) => reassembler.expect_app(app_id),
     }
 }
 

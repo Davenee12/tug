@@ -17,7 +17,10 @@ onUnmounted(() => window.clearInterval(timer));
 const elapsed = computed(() => {
   const base = np.value.elapsed;
   if (base == null) return null;
-  const drift = playing.value ? ((now.value - tug.nowPlayingAt) / 1000) * (np.value.rate ?? 1) : 0;
+  // Advance from when the phone reported the position, not from the last update of
+  // any kind (a volume change must not rewind the bar).
+  const reportedAt = np.value.elapsedAt ?? now.value;
+  const drift = playing.value ? (Math.max(0, now.value - reportedAt) / 1000) * (np.value.rate ?? 1) : 0;
   return np.value.duration != null ? Math.min(base + drift, np.value.duration) : base + drift;
 });
 const progress = computed(() =>
