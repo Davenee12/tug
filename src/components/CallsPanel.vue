@@ -91,6 +91,8 @@ const emptyHint = computed(() => {
                 {{ tug.calling === c.number ? "Calling…" : c.direction === "missed" ? "Call back" : "Call" }}
               </button>
             </template>
+            <!-- Same width as the Message button, so times line up on rows without a number. -->
+            <span v-else class="size-[27px] shrink-0" aria-hidden="true" />
           </li>
         </ul>
       </section>

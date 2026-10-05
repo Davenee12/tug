@@ -36,10 +36,11 @@ async function respond(answer: boolean) {
   busy.value = null;
 }
 
-// Esc declines (or just hides, if the phone offers no decline). Enter answers once the Answer
-// button has focus, which it gets after a beat: a keypress meant for whatever you were typing
-// when the call came in mustn't pick it up.
-useFocusTrap(root, () => (canDecline.value ? void respond(false) : tug.hideCall(props.call.id)));
+// Esc only hides the card (the phone keeps ringing), as Esc closes everything else in tug: a
+// reflex must never hang up on someone. Declining is the Decline button. Enter answers once the
+// Answer button has focus, which it gets after a beat: a keypress meant for whatever you were
+// typing when the call came in mustn't pick it up.
+useFocusTrap(root, () => tug.hideCall(props.call.id));
 let armTimer: number | undefined;
 onMounted(async () => {
   await nextTick();
@@ -113,7 +114,7 @@ onUnmounted(() => {
         </button>
       </div>
       <p class="relative mt-5 font-mono text-[11px] text-on-dark-soft">
-        <template v-if="canAnswer">Enter answers · </template>Esc {{ canDecline ? "declines" : "hides" }}
+        <template v-if="canAnswer">Enter answers · </template>Esc hides
       </p>
     </div>
   </div>

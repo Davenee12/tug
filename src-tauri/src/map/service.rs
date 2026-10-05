@@ -148,8 +148,9 @@ mod worker {
     /// Each pull is a whole PBAP session: however often one is asked for, this far apart is plenty.
     const CALLS_MIN_GAP: Duration = Duration::from_secs(10);
     const CALLS_PULL_TIMEOUT: Duration = Duration::from_secs(45);
-    /// Connect, hands-free setup, dial and a moment to hear the call start, end to end.
-    const DIAL_TIMEOUT: Duration = Duration::from_secs(45);
+    /// Connect, hands-free setup, dial and a moment to hear the call start, end to end. Kept
+    /// short: texts (send, sync, mark read) wait on this worker while a call is being placed.
+    const DIAL_TIMEOUT: Duration = Duration::from_secs(15);
     /// How long to keep the hands-free link after dialing, so the call is under way before
     /// tug lets go of it.
     const DIAL_HOLD: Duration = Duration::from_secs(3);
