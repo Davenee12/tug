@@ -93,7 +93,10 @@ feature `ApplicationModel_Calls`.
 From GitHub Releases, **after** releases are signed (same signing work as calling).
 
 ## v0.5.8 — candidates
-- **Reply from the Windows pop-up** (type into the toast, Enter sends; technically risky).
+- **Reply from the Windows pop-up** — *built, awaiting a hardware test:* native WinRT toasts with a
+  reply box (texts from a person), Mark read, Copy code, Call back (missed calls) and Clear. Presses
+  work while tug runs (it lives in the tray); after tug quits its pop-ups are taken back, since a
+  press would only start tug and lose the action.
 - **Welcome back**: after 30+ min away, who texted and called.
 - **Calls in Ctrl+K search**: a person's recent calls in their search result.
 

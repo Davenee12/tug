@@ -10,12 +10,14 @@ import {
   formatAddress,
   groupConversations,
   groupThreads,
+  isConversation,
   missedCallFor,
   newestUnreadThread,
   threadKey,
   type Conversation,
   type Thread,
 } from "../lib/format";
+import { toastSpec } from "../lib/toastSpec";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
@@ -34,6 +36,7 @@ import type {
   PairingRequest,
   PhoneNotification,
   SearchResults,
+  ToastPressed,
   UiSettings,
 } from "../types/protocol";
 
@@ -293,8 +296,45 @@ export const useTugStore = defineStore("tug", () => {
       }
       return;
     }
-    const title = [appLabel(n), n.title].filter(Boolean).join(" · ");
-    sendNotification({ title, body: [n.subtitle, n.message].filter(Boolean).join("\n") });
+    // With buttons for what applies (reply, mark read, copy code, call back, clear); the
+    // backend falls back to a plain pop-up itself if Windows won't take that one.
+    const spec = toastSpec(n, messages.value, contacts.value);
+    api.showToast(spec).catch(() => sendNotification({ title: spec.title, body: spec.body }));
+  }
+
+  /**
+   * A pop-up's button or body was pressed and the backend has done its part (sent the
+   * reply, copied the code, asked the phone to call back). Bring tug's own state along,
+   * the same way the in-app buttons do.
+   */
+  function onToastPressed({ kind, id }: ToastPressed) {
+    const n = notifications.value.find((x) => x.id === id);
+    if (!n) return;
+    if (kind === "open") {
+      // tug is already in front; show the notification that was clicked.
+      searchOpen.value = false;
+      pickerOpen.value = false;
+      closeSettings();
+      if (isConversation(n)) {
+        openThread(threadKey(n));
+      } else if (n.category !== "incomingCall") {
+        view.value = "feed";
+        focusItem.value = `n${n.id}`;
+      }
+    } else if (kind === "read" || kind === "replied") {
+      // As if the conversation had been opened: seen here, read and cleared on the phone.
+      const key = threadKey(n);
+      const c = groupConversations(notifications.value, messages.value, contacts.value).find((x) => x.key === key);
+      markSeen(key);
+      const ids = c ? messages.value.filter((m) => m.direction === "in" && c.addresses.includes(m.address)).map((m) => m.id) : [];
+      readConversation(c?.notifications ?? [n], ids);
+    } else if (kind === "copied") {
+      // Same as Copy in tug: the code's notification has done its job on the phone.
+      void clearItems([n], { quiet: true });
+    } else if (kind === "calledBack") {
+      // The phone logs the call a moment later; show it in Calls without waiting.
+      window.setTimeout(() => void api.refreshCalls().catch(() => undefined), 6000);
+    }
   }
 
   function isNew(key: string, n: PhoneNotification): boolean {
@@ -645,6 +685,7 @@ export const useTugStore = defineStore("tug", () => {
         on("pairing-request", (req) => (pairingRequest.value = req)),
         on("pairing-request-closed", () => (pairingRequest.value = null)),
         on("open-latest-conversation", openLatestConversation),
+        on("toast-pressed", onToastPressed),
       ])),
     );
     const [s, np, first, msgs, people, recent] = await Promise.all([
