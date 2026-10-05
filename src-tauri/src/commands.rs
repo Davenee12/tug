@@ -158,6 +158,14 @@ pub async fn send_message(state: State<'_, AppState>, address: String, text: Str
     map.send(address, text).await
 }
 
+/// The user opened these messages in tug: mark them read on the phone too.
+#[tauri::command]
+pub fn mark_read(state: State<'_, AppState>, message_ids: Vec<i64>) {
+    if let Some(map) = state.shared.map.get() {
+        map.mark_read(message_ids);
+    }
+}
+
 #[tauri::command]
 pub fn refresh_messages(state: State<'_, AppState>) {
     if let Some(map) = state.shared.map.get() {
