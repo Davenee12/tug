@@ -1,7 +1,6 @@
 //! State shared between the Bluetooth actor, Tauri commands and the UI.
 //! Every type here is mirrored in `src/types/protocol.ts`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
@@ -175,7 +174,9 @@ pub struct Shared {
     pub map: OnceLock<MapHandle>,
     /// The user is looking at the iPhone's switches (setup's sharing step, Settings): check
     /// them every couple of seconds so flipping one on the phone shows up right away.
-    watching: AtomicBool,
+    /// Until when fast checks run. Expires on its own unless the UI keeps renewing it, so a
+    /// missed "stop" (window hidden mid-screen) can't leave the phone polled every 2 s forever.
+    watching_until: Mutex<Option<std::time::Instant>>,
     /// Called after every Now Playing change (Windows' media controls follow it).
     now_playing_hook: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
@@ -203,18 +204,22 @@ impl Shared {
             live_session: Mutex::default(),
             pairing_confirm: Mutex::default(),
             map: OnceLock::new(),
-            watching: AtomicBool::new(false),
+            watching_until: Mutex::new(None),
             now_playing_hook: OnceLock::new(),
         }
     }
 
     pub fn watching(&self) -> bool {
-        self.watching.load(Ordering::Relaxed)
+        lock(&self.watching_until).is_some_and(|until| std::time::Instant::now() < until)
     }
 
-    /// Returns whether this turned watching on (so callers can check right away).
+    /// Start (or renew, for WATCH_FOR) or stop fast checks. Returns whether this turned them
+    /// on, so callers can check right away.
     pub fn set_watching(&self, on: bool) -> bool {
-        !self.watching.swap(on, Ordering::Relaxed) && on
+        const WATCH_FOR: std::time::Duration = std::time::Duration::from_secs(90);
+        let was = self.watching();
+        *lock(&self.watching_until) = on.then(|| std::time::Instant::now() + WATCH_FOR);
+        on && !was
     }
 
     pub fn emit<S: Serialize + Clone>(&self, event: &str, payload: S) {

@@ -104,9 +104,7 @@ fn check(status: GattCommunicationStatus, protocol_error: windows::core::Result<
 /// First GATT service with `uuid`, going to the device rather than the cache so
 /// a fresh link (or a fresh bond) is reflected.
 pub async fn service(device: &BluetoothLEDevice, uuid: GUID) -> Result<Option<GattDeviceService>> {
-    let res = device
-        .GetGattServicesForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?
-        .await?;
+    let res = bounded(device.GetGattServicesForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?).await?;
     check(res.Status()?, res.ProtocolError())?;
     let services = res.Services()?;
     Ok(if services.Size()? > 0 {
@@ -117,9 +115,7 @@ pub async fn service(device: &BluetoothLEDevice, uuid: GUID) -> Result<Option<Ga
 }
 
 pub async fn characteristic(service: &GattDeviceService, uuid: GUID, name: &'static str) -> Result<GattCharacteristic> {
-    let res = service
-        .GetCharacteristicsForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?
-        .await?;
+    let res = bounded(service.GetCharacteristicsForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?).await?;
     check(res.Status()?, res.ProtocolError())?;
     let chars = res.Characteristics()?;
     if chars.Size()? == 0 {
@@ -173,18 +169,17 @@ pub async fn subscribe(ch: &GattCharacteristic, on_value: impl Fn(Vec<u8>) + Sen
 
 /// Write the CCCD on the peripheral to turn notifications on.
 pub async fn enable_notify(ch: &GattCharacteristic) -> Result<()> {
-    let res = ch
-        .WriteClientCharacteristicConfigurationDescriptorWithResultAsync(
-            GattClientCharacteristicConfigurationDescriptorValue::Notify,
-        )?
-        .await?;
+    let res = bounded(ch.WriteClientCharacteristicConfigurationDescriptorWithResultAsync(
+        GattClientCharacteristicConfigurationDescriptorValue::Notify,
+    )?)
+    .await?;
     check(res.Status()?, res.ProtocolError())
 }
 
 /// Whether notifications are currently enabled on the peripheral, read back
 /// from the device. The CCCD is shared by every app on this PC using the link.
 pub async fn notify_enabled(ch: &GattCharacteristic) -> Result<bool> {
-    let res = ch.ReadClientCharacteristicConfigurationDescriptorAsync()?.await?;
+    let res = bounded(ch.ReadClientCharacteristicConfigurationDescriptorAsync()?).await?;
     check(res.Status()?, res.ProtocolError())?;
     Ok(res.ClientCharacteristicConfigurationDescriptor()?
         == GattClientCharacteristicConfigurationDescriptorValue::Notify)
@@ -194,6 +189,15 @@ pub async fn notify_enabled(ch: &GattCharacteristic) -> Result<bool> {
 /// when the link drops, but a stuck one would park the whole actor (and with it the ANCS
 /// timeout, reconnects and the CCCD watchdog), so give up and treat it as unreachable.
 const GATT_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Any WinRT Bluetooth operation, given up on after GATT_OP_TIMEOUT (as unreachable): service
+/// discovery, CCCD reads/writes and opening the device can hang just like reads and writes
+/// when the phone drops mid-way, and every one of them runs on the actor's loop.
+pub async fn bounded<T>(op: impl std::future::IntoFuture<Output = windows::core::Result<T>>) -> Result<T> {
+    Ok(tokio::time::timeout(GATT_OP_TIMEOUT, op)
+        .await
+        .map_err(|_| BleError::Unreachable)??)
+}
 
 pub async fn write(ch: &GattCharacteristic, bytes: &[u8]) -> Result<()> {
     let op = ch.WriteValueWithResultAndOptionAsync(&to_buffer(bytes)?, GattWriteOption::WriteWithResponse)?;

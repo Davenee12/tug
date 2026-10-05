@@ -109,7 +109,7 @@ impl Actor {
     }
 
     pub(super) async fn open_link(&mut self, id: &str) -> Result<Link, BleError> {
-        let device = BluetoothLEDevice::FromIdAsync(&HSTRING::from(id))?.await?;
+        let device = winrt::bounded(BluetoothLEDevice::FromIdAsync(&HSTRING::from(id))?).await?;
         self.gen += 1;
         let gen = self.gen;
         let tx = self.tx.clone();
@@ -136,7 +136,7 @@ impl Actor {
             }),
         )?;
         // Ask Windows to keep the link up and re-establish it when the phone returns.
-        let gatt_session = match async { GattSession::FromDeviceIdAsync(&device.BluetoothDeviceId()?)?.await }.await {
+        let gatt_session = match winrt::bounded(GattSession::FromDeviceIdAsync(&device.BluetoothDeviceId()?)?).await {
             Ok(s) => {
                 let _ = s.SetMaintainConnection(true);
                 Some(s)
