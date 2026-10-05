@@ -45,7 +45,7 @@ pub struct SpotifyStatus {
     pub connected: bool,
     pub account: Option<String>,
     pub client_id: Option<String>,
-    /// The exact Redirect URI to register (no port — any bound loopback port is accepted).
+    /// The exact Redirect URI to register in the Spotify dashboard.
     pub redirect_uri: String,
 }
 
@@ -144,12 +144,12 @@ impl Spotify {
             .client_id()
             .ok_or("Add your Spotify Client ID first, then connect.")?;
 
-        let (tcp, port) = listener::bind()?;
-        let redirect = format!("http://127.0.0.1:{port}{}", listener::REDIRECT_PATH);
+        let tcp = listener::bind()?;
+        let redirect = listener::REGISTERED_REDIRECT;
         let verifier = auth::code_verifier(&http::random_bytes(32)?);
         let challenge = auth::code_challenge(&verifier);
         let state = auth::oauth_state(&http::random_bytes(16)?);
-        let url = auth::authorize_url(&client_id, &redirect, &challenge, &state);
+        let url = auth::authorize_url(&client_id, redirect, &challenge, &state);
 
         crate::commands::open_in_browser(&url)?;
         let query = listener::wait_for_callback(tcp, listener::CALLBACK_TIMEOUT)?;
@@ -159,7 +159,7 @@ impl Spotify {
         let body = format!(
             "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
             pe(&code),
-            pe(&redirect),
+            pe(redirect),
             pe(&client_id),
             pe(&verifier),
         );
@@ -430,7 +430,7 @@ mod tests {
         let s = sp.status();
         assert!(!s.connected);
         assert_eq!(s.client_id, None);
-        assert_eq!(s.redirect_uri, "http://127.0.0.1/callback");
+        assert_eq!(s.redirect_uri, "http://127.0.0.1:8972/callback");
         // Setting the client id is reflected; clearing it removes it.
         sp.set_client_id("  abc123  ").unwrap();
         assert_eq!(sp.status().client_id.as_deref(), Some("abc123"));

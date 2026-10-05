@@ -448,7 +448,7 @@ async function clearHistory() {
                     <code class="selectable rounded bg-canvas px-2 py-1 font-mono text-[12px] text-ink">{{ tug.spotify.redirectUri }}</code>
                     <button class="btn-secondary btn-sm" @click="copyRedirect"><Copy :size="13" /> Copy</button>
                   </span>
-                  <span class="mt-1 block text-[12px] text-muted-soft">It has no port on purpose: tug listens on a loopback port and Spotify accepts any port for a loopback address.</span>
+                  <span class="mt-1 block text-[12px] text-muted-soft">Copy it exactly, port included: tug listens for Spotify's sign-in at this address.</span>
                 </li>
                 <li>Under <strong class="text-body-strong">Which API/SDKs are you planning to use?</strong>, tick <strong class="text-body-strong">Web API</strong>.</li>
                 <li>Click <strong class="text-body-strong">Save</strong>, open the app's <strong class="text-body-strong">Settings</strong>, and copy its <strong class="text-body-strong">Client ID</strong>.</li>

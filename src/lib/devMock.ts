@@ -206,7 +206,7 @@ const spotifyState: SpotifyStatus = {
   connected: !setup && !params.has("spotifyoff"),
   account: !setup && !params.has("spotifyoff") ? "Dave James" : null,
   clientId: !setup && !params.has("spotifyoff") ? "0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d" : null,
-  redirectUri: "http://127.0.0.1/callback",
+  redirectUri: "http://127.0.0.1:8972/callback",
 };
 const artSvg =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="6" fill="#1db954"/><circle cx="24" cy="44" r="7" fill="#0b2e18"/><rect x="29" y="18" width="6" height="26" fill="#0b2e18"/><path d="M35 18 L52 14 V22 L35 26 Z" fill="#0b2e18"/></svg>';
