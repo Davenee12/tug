@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { ListMusic, Music2, Search, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
-import { matchPlaylists } from "../lib/spotify";
+import { matchPlaylists, playlistDetail } from "../lib/spotify";
+import { api } from "../lib/ipc";
 
 const tug = useTugStore();
 const root = ref<HTMLElement | null>(null);
@@ -28,6 +29,25 @@ const shown = computed(() => {
   const q = query.value.trim();
   return q ? matchPlaylists(q, tug.playlists, 100) : tug.playlists;
 });
+
+// Covers come through tug (the webview never loads remote images), fetched once per URL for the
+// rows being shown and cached on disk by the backend.
+const covers = ref<Record<string, string | null>>({});
+watch(
+  shown,
+  (list) => {
+    for (const p of list.slice(0, 60)) {
+      const url = p.imageUrl;
+      if (!url || url in covers.value) continue;
+      covers.value = { ...covers.value, [url]: null };
+      api
+        .spotifyCover(url)
+        .then((uri) => (covers.value = { ...covers.value, [url]: uri }))
+        .catch(() => undefined);
+    }
+  },
+  { immediate: true },
+);
 
 function close() {
   tug.spotifyPanelOpen = false;
@@ -81,13 +101,19 @@ async function play(uri: string, name: string) {
             :disabled="startingUri !== null"
             @click="play(p.uri, p.name)"
           >
-            <span class="flex size-9 shrink-0 items-center justify-center rounded-md bg-surface-card text-muted">
+            <img
+              v-if="p.imageUrl && covers[p.imageUrl]"
+              :src="covers[p.imageUrl]!"
+              alt=""
+              class="size-9 shrink-0 rounded-md object-cover"
+            />
+            <span v-else class="flex size-9 shrink-0 items-center justify-center rounded-md bg-surface-card text-muted">
               <Music2 :size="16" />
             </span>
             <span class="min-w-0 flex-1">
               <span class="block truncate text-[14px] font-medium text-ink">{{ p.name }}</span>
               <span class="block truncate text-[12px] text-muted-soft">
-                {{ [p.owner, `${p.trackCount} song${p.trackCount === 1 ? "" : "s"}`].filter(Boolean).join(" · ") }}
+                {{ playlistDetail(p) }}
               </span>
             </span>
             <span v-if="startingUri === p.uri" class="shrink-0 text-[12px] text-muted">Starting…</span>

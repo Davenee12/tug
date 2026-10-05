@@ -222,11 +222,11 @@ const spotifyPlayer: SpotifyPlayer = {
   deviceName: "Dave's iPhone",
 };
 const spotifyPlaylists: SpotifyPlaylist[] = [
-  { uri: "spotify:playlist:1", name: "Deep Focus", owner: "Spotify", trackCount: 120 },
-  { uri: "spotify:playlist:2", name: "Morning Run", owner: "Dave", trackCount: 42 },
-  { uri: "spotify:playlist:3", name: "Discover Weekly", owner: "Spotify", trackCount: 30 },
-  { uri: "spotify:playlist:4", name: "Coding Flow", owner: "Dave", trackCount: 88 },
-  { uri: "spotify:playlist:5", name: "Rainy Day Jazz", owner: "Dave", trackCount: 61 },
+  { uri: "spotify:playlist:1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: null },
+  { uri: "spotify:playlist:2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: null },
+  { uri: "spotify:playlist:3", name: "Discover Weekly", owner: "Spotify", trackCount: 30, imageUrl: null },
+  { uri: "spotify:playlist:4", name: "Coding Flow", owner: "Dave", trackCount: 88, imageUrl: null },
+  { uri: "spotify:playlist:5", name: "Rainy Day Jazz", owner: "Dave", trackCount: 61, imageUrl: null },
 ];
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
@@ -463,6 +463,8 @@ mockIPC(
         return { ...spotifyState };
       case "spotify_playlists":
         return spotifyState.connected ? spotifyPlaylists.map((p) => ({ ...p })) : [];
+      case "spotify_cover":
+        return null;
       case "spotify_play_playlist":
         console.log("[devMock] spotify play", a.uri);
         return null;
