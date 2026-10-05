@@ -35,6 +35,9 @@ export const api = {
   setAdvertising: (enabled: boolean) => invoke<void>("set_advertising", { enabled }),
   getSettings: () => invoke<Record<string, string>>("get_settings"),
   setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),
+  /** Whether tug starts with Windows (reads the actual registry entry). */
+  getAutostart: () => invoke<boolean>("get_autostart"),
+  setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
   listMessages: (limit: number) => invoke<SmsMessage[]>("list_messages", { limit }),
   getContacts: () => invoke<Contact[]>("get_contacts"),
   sendMessage: (address: string, text: string) => invoke<SmsMessage>("send_message", { address, text }),
@@ -46,6 +49,8 @@ export const api = {
   openLogsFolder: () => invoke<void>("open_logs_folder"),
   setUnread: (count: number) => invoke<void>("set_unread", { count }),
   openWindowsSettings: (page: "bluetooth" | "location" | "notifications") => invoke<void>("open_windows_settings", { page }),
+  /** Open an http(s) link (a notification's "Open in browser") in the default browser. */
+  openUrl: (url: string) => invoke<void>("open_url", { url }),
   setHidden: (notificationIds: number[], messageIds: number[], hidden: boolean) =>
     invoke<void>("set_hidden", { notificationIds, messageIds, hidden }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),

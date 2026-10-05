@@ -80,9 +80,12 @@ async function openLogs() {
 
 // ---- General ----
 const toasts = computed({ get: () => tug.settings.toasts, set: (v) => void tug.setSetting("toasts", v) });
+const lowBattery = computed({ get: () => tug.settings.lowBattery, set: (v) => void tug.setSetting("lowBattery", v) });
 const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tug.setSetting("doNotDisturb", v) });
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
+const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) => void tug.setAutostart(v) });
 const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
+const filterUnknown = computed({ get: () => tug.settings.filterUnknown, set: (v) => void tug.setSetting("filterUnknown", v) });
 const advertise = computed({ get: () => tug.advertiseEnabled, set: (v) => void tug.setAdvertising(v) });
 const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
 
@@ -191,11 +194,20 @@ async function clearHistory() {
             <SettingsRow label="Do not disturb" description="Keep collecting, stop popping up.">
               <SettingsSwitch v-model="dnd" label="Do not disturb" :disabled="!tug.settings.toasts" />
             </SettingsRow>
+            <SettingsRow label="Low phone battery" description="Pop up when your iPhone drops to 20% and again at 10%.">
+              <SettingsSwitch v-model="lowBattery" label="Low phone battery" :disabled="!tug.settings.toasts" />
+            </SettingsRow>
             <SettingsRow
               label="Keep running when closed"
               description="Closing the window keeps tug in the tray, still mirroring your iPhone. Quit from the tray menu."
             >
               <SettingsSwitch v-model="closeToTray" label="Keep running when closed" />
+            </SettingsRow>
+            <SettingsRow
+              label="Start with Windows"
+              description="Open tug when you sign in, hidden in the tray so it's mirroring your iPhone from the start."
+            >
+              <SettingsSwitch v-model="startWithWindows" label="Start with Windows" />
             </SettingsRow>
             <SettingsRow label="Zoom" description="Ctrl + and Ctrl − work from anywhere.">
               <div class="flex items-center gap-1">
@@ -337,6 +349,14 @@ async function clearHistory() {
 
         <!-- Notifications -->
         <template v-else-if="current.id === 'notifications'">
+          <div class="mb-4 rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Filter unknown senders"
+              description="Texts from numbers that aren't in your contacts, and that you've never texted, wait in their own list in Messages: no badge, no pop-up. Texts with a code still pop up."
+            >
+              <SettingsSwitch v-model="filterUnknown" label="Filter unknown senders" />
+            </SettingsRow>
+          </div>
           <div class="rounded-xl bg-surface-card px-5 py-4">
             <p class="text-[14px] font-medium text-ink">Muted on this PC</p>
             <p class="mt-0.5 text-[13px] text-muted">

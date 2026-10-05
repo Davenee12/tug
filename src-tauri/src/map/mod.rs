@@ -2,7 +2,8 @@
 //! messages and send replies through it, over the Classic Bluetooth pairing.
 //!
 //! Layering: `obex` (framing) → `session` (RFCOMM transport + MAP operations),
-//! with `bmessage` and `listing` as the two MAP object formats. Everything but
+//! with `bmessage` and `listing` as the two MAP object formats, and `mns_event` for the
+//! event reports the phone pushes once notifications are registered. Everything but
 //! `session` is pure and unit-tested. PBAP (contacts in `vcard`, call history in `calls`)
 //! rides the same Classic pairing and OBEX code.
 
@@ -11,7 +12,9 @@ pub mod bmessage;
 pub mod calls;
 pub mod health;
 pub mod listing;
+pub mod mns_event;
 pub mod obex;
+pub mod pick;
 pub mod service;
 #[cfg(windows)]
 pub mod session;
