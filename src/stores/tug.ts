@@ -531,7 +531,8 @@ export const useTugStore = defineStore("tug", () => {
     },
     async pair(id: string) {
       const ok = await attempt(() => api.pairDevice(id).then(() => true));
-      if (ok) notify("info", "Paired. Connecting to your iPhone…");
+      // Setup shows this itself; a toast over it would just cover the screen.
+      if (ok && !showSetup.value) notify("info", "Paired. Connecting to your iPhone…");
       return ok === true;
     },
     async useDevice(id: string) {
