@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased (v0.5.8)
+## v0.5.8 — 2026-10-05
 
-Smoother setup, texts that arrive instantly, and Spotify. Merged as #48–#59; tried on Dave's
+Smoother setup, texts that arrive instantly, and Spotify. Merged as #48–#61; tried on Dave's
 iPhone where noted.
 
 ### New
@@ -10,8 +10,7 @@ iPhone where noted.
   tug lists it by name; click Pair, the code shows in tug, and that one pairing brings
   notifications, music, battery and texts. No LightBlue needed. Tapping the PC on the iPhone (or
   Windows' "Add a device" pop-up) still works: tug says Windows will show the code, then offers
-  your iPhone. *(The Windows pop-up path was proven on Jordan's iPhone; tug's own scan, #59, is
-  built and checked, waiting on a fresh-setup run.)*
+  your iPhone. *(Both paths proven on Jordan's iPhone, including two setups from a clean install.)*
 - **Setup tells you what to do:** "Look at your iPhone and tap Allow" while the phone waits on
   you, a checklist of the iPhone's three switches naming the one that's off, a confirmed
   **Start over** for old or duplicate pairings, and your phone's real name instead of "iPhone".
@@ -31,6 +30,9 @@ iPhone where noted.
 - A new pairing no longer drops texts and notifications every few seconds while the iPhone waits
   for you to tap Allow.
 - tug doesn't touch a phone until you've picked it in setup.
+- Setup shows your iPhone once (it could appear twice, and one of the two couldn't pair).
+- The setup checklist's Sync Contacts reflects what the phone is sharing right now, not contacts
+  tug saved earlier.
 
 ### Known limits
 - Spotify extras need Spotify Premium; while tug's Spotify app is in Spotify's Development Mode,
