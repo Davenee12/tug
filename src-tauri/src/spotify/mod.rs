@@ -31,9 +31,12 @@ use model::ApiError;
 pub use model::Playlist;
 
 const API_BASE: &str = "https://api.spotify.com/v1";
-/// Settings keys (UI-prefixed, so they ride the normal settings channel; neither is secret —
-/// the refresh token is the only secret, and it lives in Credential Manager).
-const CLIENT_ID_KEY: &str = "ui.spotifyClientId";
+/// tug's own Spotify app, so people just click Connect. A Client ID isn't a secret under PKCE.
+/// While the app is in Spotify's Development Mode, only listeners added by email under User
+/// Management in its dashboard can connect (up to 5).
+const CLIENT_ID: &str = "61a67dc51282488092dbf75214d6e7b8";
+/// Settings key for the account name shown in Settings (not secret — the refresh token is the
+/// only secret, and it lives in Credential Manager).
 const ACCOUNT_KEY: &str = "ui.spotifyAccount";
 /// Refresh the access token this long before it actually expires.
 const EXPIRY_SKEW_MS: i64 = 60_000;
@@ -44,9 +47,6 @@ const EXPIRY_SKEW_MS: i64 = 60_000;
 pub struct SpotifyStatus {
     pub connected: bool,
     pub account: Option<String>,
-    pub client_id: Option<String>,
-    /// The exact Redirect URI to register in the Spotify dashboard.
-    pub redirect_uri: String,
 }
 
 /// The Spotify-specific Now Playing augmentation. Mirrored in `src/types/protocol.ts`.
@@ -97,15 +97,6 @@ impl Spotify {
 
     // ---- Settings / status ----------------------------------------------------------------
 
-    fn client_id(&self) -> Option<String> {
-        self.store
-            .setting(CLIENT_ID_KEY)
-            .ok()
-            .flatten()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    }
-
     /// Whether a refresh token is stored (tug considers itself connected then).
     fn connected(&self) -> bool {
         creds::load(creds::TARGET).ok().flatten().is_some()
@@ -115,24 +106,7 @@ impl Spotify {
         SpotifyStatus {
             connected: self.connected(),
             account: self.store.setting(ACCOUNT_KEY).ok().flatten(),
-            client_id: self.client_id(),
-            redirect_uri: listener::REGISTERED_REDIRECT.to_string(),
         }
-    }
-
-    /// Save the Client ID. Changing it (or clearing it) disconnects, since the stored tokens
-    /// belong to the old app.
-    pub fn set_client_id(&self, id: &str) -> Result<SpotifyStatus, String> {
-        let id = id.trim();
-        if self.client_id().as_deref() != Some(id) {
-            self.disconnect()?;
-        }
-        if id.is_empty() {
-            self.store.delete_setting(CLIENT_ID_KEY).map_err(|e| e.to_string())?;
-        } else {
-            self.store.set_setting(CLIENT_ID_KEY, id).map_err(|e| e.to_string())?;
-        }
-        Ok(self.status())
     }
 
     // ---- OAuth connect / disconnect -------------------------------------------------------
@@ -140,16 +114,14 @@ impl Spotify {
     /// Run the full Authorization Code + PKCE flow: bind a loopback port, open the browser, wait
     /// for the redirect, exchange the code, store the refresh token, and record the account name.
     pub fn connect(&self) -> Result<SpotifyStatus, String> {
-        let client_id = self
-            .client_id()
-            .ok_or("Add your Spotify Client ID first, then connect.")?;
+        let client_id = CLIENT_ID;
 
         let tcp = listener::bind()?;
         let redirect = listener::REGISTERED_REDIRECT;
         let verifier = auth::code_verifier(&http::random_bytes(32)?);
         let challenge = auth::code_challenge(&verifier);
         let state = auth::oauth_state(&http::random_bytes(16)?);
-        let url = auth::authorize_url(&client_id, redirect, &challenge, &state);
+        let url = auth::authorize_url(client_id, redirect, &challenge, &state);
 
         crate::commands::open_in_browser(&url)?;
         let query = listener::wait_for_callback(tcp, listener::CALLBACK_TIMEOUT)?;
@@ -160,7 +132,7 @@ impl Spotify {
             "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
             pe(&code),
             pe(redirect),
-            pe(&client_id),
+            pe(client_id),
             pe(&verifier),
         );
         let resp = http::request(
@@ -219,14 +191,14 @@ impl Spotify {
     /// Exchange the stored refresh token for a fresh access token (and a rotated refresh token,
     /// when Spotify sends one). A failed refresh means the connection is dead.
     fn refresh(&self) -> Result<String, ApiError> {
-        let client_id = self.client_id().ok_or(ApiError::Unauthorized)?;
+        let client_id = CLIENT_ID;
         let refresh = creds::load(creds::TARGET)
             .map_err(|e| ApiError::Other { status: 0, message: e })?
             .ok_or(ApiError::Unauthorized)?;
         let body = format!(
             "grant_type=refresh_token&refresh_token={}&client_id={}",
             pe(&refresh),
-            pe(&client_id),
+            pe(client_id),
         );
         let resp = http::request(
             Method::Post,
@@ -431,17 +403,11 @@ mod tests {
     }
 
     #[test]
-    fn status_reports_client_id_and_redirect() {
+    fn status_starts_disconnected() {
         let store = Arc::new(Store::in_memory().unwrap());
-        let sp = Spotify::new(store.clone(), std::env::temp_dir());
+        let sp = Spotify::new(store, std::env::temp_dir());
         let s = sp.status();
         assert!(!s.connected);
-        assert_eq!(s.client_id, None);
-        assert_eq!(s.redirect_uri, "http://127.0.0.1:8972/callback");
-        // Setting the client id is reflected; clearing it removes it.
-        sp.set_client_id("  abc123  ").unwrap();
-        assert_eq!(sp.status().client_id.as_deref(), Some("abc123"));
-        sp.set_client_id("").unwrap();
-        assert_eq!(sp.status().client_id, None);
+        assert_eq!(s.account, None);
     }
 }

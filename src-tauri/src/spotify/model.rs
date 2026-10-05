@@ -257,7 +257,7 @@ impl ApiError {
     /// A plain-English message for the UI (never contains tokens or the account name).
     pub fn user_message(&self) -> String {
         match self {
-            Self::Unauthorized => "Spotify sign-in expired. Reconnect under Settings › Spotify.".into(),
+            Self::Unauthorized => "Spotify sign-in expired. Reconnect under Settings › Connectors.".into(),
             Self::RateLimited { retry_after } => {
                 format!("Spotify is rate-limiting; try again in {retry_after}s.")
             }

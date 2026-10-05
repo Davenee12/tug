@@ -510,12 +510,6 @@ pub fn spotify_status(state: State<'_, AppState>) -> SpotifyStatus {
     state.spotify.status()
 }
 
-/// Save (or clear) the Spotify Client ID. Changing it disconnects the old app's tokens.
-#[tauri::command]
-pub fn spotify_set_client_id(state: State<'_, AppState>, client_id: String) -> Result<SpotifyStatus> {
-    state.spotify.set_client_id(&client_id)
-}
-
 /// Run the OAuth (PKCE) connect flow: opens the browser, waits for the loopback redirect.
 #[tauri::command]
 pub async fn spotify_connect(state: State<'_, AppState>) -> Result<SpotifyStatus> {
