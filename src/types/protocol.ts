@@ -155,4 +155,6 @@ export interface UiSettings {
   toasts: boolean;
   doNotDisturb: boolean;
   mutedApps: string[];
+  /** Closing the window keeps tug running in the tray (read by the backend too). */
+  closeToTray: boolean;
 }
