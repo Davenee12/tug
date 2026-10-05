@@ -177,6 +177,7 @@ impl Actor {
         self.drop_link();
         self.device_id = Some(le_id.clone());
         self.retry_in = 0;
+        self.connect_failures = 0;
         self.stop_discovery();
         self.shared.update_status(|s| {
             s.device = Some(PairedDevice { id: le_id, name });
