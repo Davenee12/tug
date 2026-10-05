@@ -1,9 +1,9 @@
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
-import { appLabel, threadKey } from "../lib/format";
+import { appLabel, groupThreads, threadKey } from "../lib/format";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
@@ -157,6 +157,12 @@ export const useTugStore = defineStore("tug", () => {
     // Cleared on the phone or watch means it was already read there.
     return n.removedAt == null && n.receivedAt > (seen.value[key] ?? seenSince.value);
   }
+
+  /** New texts across conversations: the Messages tab badge, the tray and the taskbar dot. */
+  const unreadTexts = computed(() =>
+    groupThreads(notifications.value).reduce((sum, t) => sum + newCount(t.key, t.items), 0),
+  );
+  watch(unreadTexts, (n) => void api.setUnread(n).catch(() => undefined), { immediate: true });
 
   function newCount(key: string, items: PhoneNotification[]): number {
     return items.reduce((c, n) => c + (isNew(key, n) ? 1 : 0), 0);
@@ -431,6 +437,7 @@ export const useTugStore = defineStore("tug", () => {
     composeTo,
     pickerOpen,
     searchOpen,
+    unreadTexts,
     panelOpen,
     overlayOpen,
     focusItem,

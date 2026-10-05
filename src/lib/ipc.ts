@@ -39,6 +39,7 @@ export const api = {
   sendMessage: (address: string, text: string) => invoke<SmsMessage>("send_message", { address, text }),
   refreshMessages: () => invoke<void>("refresh_messages"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
+  setUnread: (count: number) => invoke<void>("set_unread", { count }),
   setHidden: (notificationIds: number[], messageIds: number[], hidden: boolean) =>
     invoke<void>("set_hidden", { notificationIds, messageIds, hidden }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),
