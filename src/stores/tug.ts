@@ -203,7 +203,8 @@ export const useTugStore = defineStore("tug", () => {
   const setupSharingShown = ref(false);
   let watchRenew: number | undefined;
   const pageVisible = ref(document.visibilityState === "visible");
-  document.addEventListener("visibilitychange", () => (pageVisible.value = document.visibilityState === "visible"));
+  // Registered in init() and removed in dispose(), so it's torn down with the rest (see teardown).
+  const onVisibilityChange = () => (pageVisible.value = document.visibilityState === "visible");
   // The switches get flipped on the phone, with tug on any screen or in the tray. So for the
   // first minutes after launch or pairing, check fast whenever one is still off, too.
   const FRESH_MS = 5 * 60 * 1000;
@@ -213,9 +214,10 @@ export const useTugStore = defineStore("tug", () => {
     () => status.value.device?.id,
     (id) => {
       if (!id) return;
+      // A fresh connection reopens the fast-check window; the renew interval below owns its own
+      // lifecycle (set when watching turns on, cleared on re-run and in dispose), so leave it be.
       fresh.value = true;
       window.clearTimeout(freshTimer);
-    window.clearInterval(watchRenew);
       freshTimer = window.setTimeout(() => (fresh.value = false), FRESH_MS);
     },
   );
@@ -666,6 +668,8 @@ export const useTugStore = defineStore("tug", () => {
   async function init() {
     if (started) return;
     started = true;
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    teardown.push(() => document.removeEventListener("visibilitychange", onVisibilityChange));
     teardown.push(
       installZoomShortcuts(
         () => zoom.value,
@@ -746,9 +750,14 @@ export const useTugStore = defineStore("tug", () => {
   function dispose() {
     for (const off of teardown) off();
     teardown = [];
+    // Everything with a lifetime gets cleared here, so init() can be called again cleanly (a
+    // remount or dev hot-reload) without a leaked timer firing or an interval double-polling.
     window.clearTimeout(toastSummary);
     window.clearTimeout(freshTimer);
+    window.clearTimeout(flashTimer);
+    window.clearInterval(watchRenew);
     toastSummary = undefined;
+    watchRenew = undefined;
     started = false;
   }
 
