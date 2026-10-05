@@ -31,6 +31,7 @@ windows = { version = "0.62", features = [
   "ApplicationModel_DataTransfer",
   "Foundation",
   "Foundation_Collections",
+  "Data_Xml_Dom",
   "Devices_Bluetooth",
   "Devices_Bluetooth_Advertisement",
   "Devices_Bluetooth_GenericAttributeProfile",
@@ -41,6 +42,7 @@ windows = { version = "0.62", features = [
   "Networking",
   "Networking_Sockets",
   "Storage_Streams",
+  "UI_Notifications",
   "Web_Http",
 ] }
 windows-collections = "0.3"

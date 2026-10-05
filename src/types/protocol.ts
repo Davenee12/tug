@@ -1,4 +1,4 @@
-// Mirrors the serde types in src-tauri/src/{state,store,ams,ancs,map/calls}.rs.
+// Mirrors the serde types in src-tauri/src/{state,store,ams,ancs,map/calls,toast}.rs.
 // Keep field names and enum strings in sync with the Rust side.
 
 export type RadioState = "unknown" | "on" | "off" | "unavailable";
@@ -191,4 +191,33 @@ export interface UiSettings {
   appIcons: boolean;
   /** Experimental Call buttons. Only a successful hands-free check (Settings › iPhone) turns them on. */
   dialing: boolean;
+}
+
+/**
+ * A Windows pop-up for one phone notification and what it offers (`show_toast`,
+ * `src-tauri/src/toast/xml.rs`). The frontend decides whether it shows and what applies.
+ */
+export interface ToastSpec {
+  /** The notification's id: what every button acts on. */
+  id: number;
+  title: string;
+  body: string;
+  /** Who it's from, for "Reply to …" and "Sent to …". */
+  name: string;
+  /** A text from a person tug can answer over message access: the reply box and Send. */
+  replyTo: string | null;
+  /** A conversation: "Mark read". */
+  markRead: boolean;
+  /** A one-time code: "Copy code". */
+  code: string | null;
+  /** A missed call still on the phone with its Dial action: "Call back". */
+  callBack: boolean;
+  /** Clearable on the phone (never a ringing call): "Clear". */
+  clear: boolean;
+}
+
+/** A pop-up's body or button was pressed and carried out (`toast-pressed`, `toast/mod.rs`). */
+export interface ToastPressed {
+  kind: "open" | "read" | "replied" | "copied" | "calledBack";
+  id: number;
 }

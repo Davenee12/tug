@@ -361,7 +361,8 @@ impl Store {
         rows.collect()
     }
 
-    #[cfg(test)]
+    /// One notification by row id (pop-up presses check what it is before acting).
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn get(&self, id: i64, live_session: Option<&str>) -> Result<Option<StoredNotification>> {
         self.conn()
             .query_row(&format!("{SELECT} WHERE n.id = ?1"), [id], |r| map_row(r, live_session))

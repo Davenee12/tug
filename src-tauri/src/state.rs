@@ -29,6 +29,8 @@ pub mod events {
     /// Tray click/Open with unread texts: the frontend opens the newest unread conversation.
     pub const OPEN_LATEST_CONVERSATION: &str = "open-latest-conversation";
     pub const CALLS: &str = "calls";
+    /// A pop-up's body or button was pressed and carried out (see `toast`).
+    pub const TOAST_PRESSED: &str = "toast-pressed";
 }
 
 /// Settings keys stored in SQLite.
@@ -203,6 +205,12 @@ impl Shared {
         if let Err(e) = self.app.emit(event, payload) {
             log::warn!("emit {event} failed: {e}");
         }
+    }
+
+    /// The phone cleared notification `id`: tell the UI, and take back its pop-up.
+    pub fn notification_removed(&self, id: i64) {
+        self.emit(events::NOTIFICATION_REMOVED, id);
+        crate::toast::withdraw(&self.app, id);
     }
 
     pub fn status(&self) -> DeviceStatus {

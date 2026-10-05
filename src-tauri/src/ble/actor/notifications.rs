@@ -79,7 +79,7 @@ impl Actor {
                     log::info!("{} notification(s) were cleared while tug was away", ids.len());
                 }
                 for id in ids {
-                    self.shared.emit(events::NOTIFICATION_REMOVED, id);
+                    self.shared.notification_removed(id);
                 }
             }
             Err(e) => log::error!("sweep_stale: {e}"),
@@ -144,7 +144,7 @@ impl Actor {
                 a.rows.remove(&ev.uid);
                 a.requests.forget_notification(ev.uid);
                 match self.shared.store.mark_removed(session, ev.uid, now_ms()) {
-                    Ok(Some(id)) => self.shared.emit(events::NOTIFICATION_REMOVED, id),
+                    Ok(Some(id)) => self.shared.notification_removed(id),
                     Ok(None) => {}
                     Err(e) => log::error!("mark_removed: {e}"),
                 }

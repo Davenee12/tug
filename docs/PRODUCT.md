@@ -36,7 +36,7 @@ go back to picking up your phone.
 ## Product opportunity backlog (keep ≤ 10)
 Scores: value · frequency · delight · complexity. Timing: **Next** = after stabilization, **Later** =
 after onboarding/settings. Shipped ideas keep their row with a ✅ status so the history stays honest;
-the ≤10 cap counts only **active** (not-yet-built) ideas — currently 5 (#2 building, #5, #7, #8, #9).
+the ≤10 cap counts only **active** (not-yet-built) ideas — currently 5 (#2 building, #5 built pending hardware test, #7, #8, #9).
 
 | # | Idea | Problem | Experience | V/F/D/C | Call | Timing |
 |---|---|---|---|---|---|---|
@@ -44,7 +44,7 @@ the ≤10 cap counts only **active** (not-yet-built) ideas — currently 5 (#2 b
 | 2 | **Live texts (MAP notifications / MNS)** | Texts can take up to 8 s to appear; no "Sent" confirmation | Texts land the instant the phone gets them; your sends show "Sent" | H/H/M/Med | 🔨 Building (v0.5.7) | Now |
 | 3 | **Ctrl+K actions** | Common actions need clicks through views | Type "zoe running late" → send; "pause"; "clear all" | H/M/H/Med | ✅ Shipped v0.5.5 (more v0.5.6) | — |
 | 4 | **Tray presence** | tug is invisible when minimized; no unread signal | Tray icon with unread count; click opens the latest conversation | H/H/M/Low | ✅ Shipped v0.5.5 (click → latest unread v0.5.6) | — |
-| 5 | **Reply from the Windows pop-up** | Answering a text means opening tug | Type into the toast, Enter sends | H/H/H/Med-High | Prototype (Tauri toast input support is the risk) | v0.5.8 candidate |
+| 5 | **Reply from the Windows pop-up** | Answering a text means opening tug | Type into the toast, Send; plus Mark read, Copy code, Call back, Clear on the pop-ups they fit | H/H/H/Med-High | 🔨 Built natively (WinRT toasts, not the plugin); needs a hardware test | v0.5.8 candidate |
 | 6 | **Glance strip** (widgets, done small) | Glanceable info (phone battery, what's playing, next meeting, weather) is scattered | One quiet row above the Feed; drag a card bigger for more (weather → 7-day), smaller for less | M/H/H/Med | ✅ Partly — weather card shipped v0.5.4–v0.5.5; multi-card strip not built | — |
 | 7 | **Welcome back** | Coming back to the PC, you don't know what you missed | After 30+ min away, the top of the Feed briefly summarizes who texted and what's waiting | M/M/H/Low-Med | Prototype | v0.5.8 candidate |
 | 8 | **Suggested replies** | Typing the same short answers | 2–3 one-tap replies under a new text, learned from your own replies first, AI opt-in | M/M/M/Med | Consider later | Later |
