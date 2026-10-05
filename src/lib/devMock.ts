@@ -196,6 +196,8 @@ mockIPC(
       case "set_setting":
         settings[a.key as string] = a.value as string;
         return null;
+      case "locate":
+        return { latitude: 32.78, longitude: -96.8 };
       case "start_discovery":
         setTimeout(() => void emit("discovered-devices", discovered), 400);
         return null;

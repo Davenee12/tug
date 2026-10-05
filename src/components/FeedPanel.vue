@@ -5,11 +5,16 @@ import { useTugStore } from "../stores/tug";
 import { dayLabel, entryLatest, groupFeed, groupThreads, notificationTime, type FeedEntry } from "../lib/format";
 import FeedEntryRow from "./FeedEntryRow.vue";
 import MessageThreads from "./MessageThreads.vue";
+import WeatherCard from "./WeatherCard.vue";
+import { useWeatherStore } from "../stores/weather";
 
 defineProps<{ panelInline: boolean }>();
 const emit = defineEmits<{ openPanel: [] }>();
 
 const tug = useTugStore();
+const weather = useWeatherStore();
+onMounted(() => void weather.init());
+onUnmounted(() => weather.dispose());
 
 // The feed is what's still waiting: anything cleared (here, on the phone or the
 // watch) leaves it. History stays in Messages and in search.
@@ -94,8 +99,12 @@ const setUp = computed(() => tug.status.device != null);
 
     <MessageThreads v-else-if="tug.view === 'messages'" />
 
-    <div v-else class="min-h-0 flex-1 overflow-y-auto px-5 pb-10">
-      <div v-if="entryGroups.length === 0" class="flex h-full items-center justify-center">
+    <div v-else class="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-10">
+      <div v-if="weather.place !== 'off'" class="mx-auto w-full max-w-3xl px-3 pt-5">
+        <WeatherCard />
+      </div>
+
+      <div v-if="entryGroups.length === 0" class="flex flex-1 items-center justify-center py-10">
         <div class="max-w-lg text-center">
           <p class="headline text-[28px]">{{ tug.notifications.length ? "You're all caught up" : "Quiet for now" }}</p>
           <p class="mt-2 text-[14px] text-muted">
@@ -110,7 +119,7 @@ const setUp = computed(() => tug.status.device != null);
         </div>
       </div>
 
-      <div class="mx-auto max-w-3xl">
+      <div class="mx-auto w-full max-w-3xl">
         <section v-for="g in entryGroups" :key="g.label">
           <h2 class="caption-upper sticky top-0 z-10 bg-canvas/95 px-3 pt-5 pb-2 text-muted backdrop-blur-sm">{{ g.label }}</h2>
           <div class="flex flex-col gap-0.5">
