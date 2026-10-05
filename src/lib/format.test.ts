@@ -47,6 +47,11 @@ describe("names and keys", () => {
     expect(threadKey({ appId: "x", title: "marco " })).toBe(threadKey({ appId: "x", title: "Marco" }));
   });
 
+  it("treats iOS inline-reply titles as the same person", () => {
+    expect(cleanName("zoe 💜 replied to you")).toBe("zoe 💜");
+    expect(threadKey({ appId: "x", title: "zoe 💜 replied to you" })).toBe(threadKey({ appId: "x", title: "zoe 💜" }));
+  });
+
   it("never splits an emoji into a broken initial", () => {
     expect(initials("zoe 💜")).toBe("ZO"); // emoji skipped, like any single name
     expect(initials("Jane Doe")).toBe("JD");
@@ -101,6 +106,15 @@ describe("groupConversations — duplicates (M4)", () => {
     const notifications = [note("Zoe", "ok", 0), note("Zoe", "ok", 2)];
     const [c] = groupConversations(notifications, [sms("+1302", "ok", 0, "in", "Zoe")], []);
     expect(c.items.map((i) => i.body)).toEqual(["ok", "ok"]);
+  });
+
+  it("puts an inline reply in the sender's conversation, shown once", () => {
+    const notes = [note("zoe 💜", "hi", 0), note("zoe 💜 replied to you", "Yes", 2)];
+    const convs = groupConversations(notes, [sms("+1302", "Yes", 2, "in", "zoe 💜")], []);
+    expect(convs).toHaveLength(1);
+    expect(convs[0].contact).toBe("zoe 💜");
+    expect(convs[0].items.map((i) => i.body)).toEqual(["hi", "Yes"]);
+    expect(groupFeed(notes)).toHaveLength(1);
   });
 
   it("merges a notification titled with padding into the same conversation", () => {

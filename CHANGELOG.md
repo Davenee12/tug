@@ -13,6 +13,8 @@ Stability release (Sprint 2): fixes found by a full review of the app, each with
 - **Notifications no longer vanish after a reconnect** when fetching their details fails; tug retries,
   and won't mark anything "cleared" unless it's sure.
 - **Two identical notifications or texts** (e.g. two "ok"s) are both kept instead of merged.
+- **Inline replies stay in the sender's conversation:** iOS titles them "zoe replied to you", which
+  used to open a second conversation with the same message in both.
 - **Messaging can't freeze or crash** on a stuck connection or a corrupt Bluetooth packet.
 - **Now Playing progress no longer jumps back** when you change the volume.
 - Fewer lost notification details around reconnects.

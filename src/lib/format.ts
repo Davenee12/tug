@@ -98,9 +98,12 @@ export function isConversation(n: PhoneNotification): boolean {
   return n.appId in MESSAGING_APPS && !!n.title;
 }
 
-/** Names as people see them: iOS sometimes pads notification titles ("marco "). */
+/** iOS rewrites the title of an inline reply ("zoe replied to you"); it's still zoe. */
+const IOS_REPLY_SUFFIX = /\s+replied to (you|your message)$/i;
+
+/** Names as people see them: iOS pads some titles ("marco ") and rewrites replies. */
 export function cleanName(name: string): string {
-  return name.trim().replace(/\s+/g, " ");
+  return name.trim().replace(/\s+/g, " ").replace(IOS_REPLY_SUFFIX, "");
 }
 
 /** One conversation per app + sender, however the sender's name is padded or cased. */
