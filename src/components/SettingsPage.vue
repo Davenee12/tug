@@ -39,6 +39,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 // ---- General ----
 const toasts = computed({ get: () => tug.settings.toasts, set: (v) => void tug.setSetting("toasts", v) });
+const lowBattery = computed({ get: () => tug.settings.lowBattery, set: (v) => void tug.setSetting("lowBattery", v) });
 const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tug.setSetting("doNotDisturb", v) });
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
 const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
@@ -149,6 +150,9 @@ async function clearHistory() {
             </SettingsRow>
             <SettingsRow label="Do not disturb" description="Keep collecting, stop popping up.">
               <SettingsSwitch v-model="dnd" label="Do not disturb" :disabled="!tug.settings.toasts" />
+            </SettingsRow>
+            <SettingsRow label="Low phone battery" description="Pop up when your iPhone drops to 20% and again at 10%.">
+              <SettingsSwitch v-model="lowBattery" label="Low phone battery" :disabled="!tug.settings.toasts" />
             </SettingsRow>
             <SettingsRow
               label="Keep running when closed"
