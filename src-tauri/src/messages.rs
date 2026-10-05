@@ -226,10 +226,24 @@ impl Store {
 
     pub fn set_outgoing_status(&self, id: i64, status: Status, handle: Option<&str>) -> Result<StoredMessage> {
         let conn = self.conn();
-        conn.execute(
-            "UPDATE messages SET status = ?2, handle = COALESCE(?3, handle) WHERE id = ?1 AND direction = 'out'",
-            params![id, status.as_str(), handle],
-        )?;
+        let update = |handle: Option<&str>| {
+            conn.execute(
+                "UPDATE messages SET status = ?2, handle = COALESCE(?3, handle) WHERE id = ?1 AND direction = 'out'",
+                params![id, status.as_str(), handle],
+            )
+        };
+        match update(handle) {
+            // The phone handed back a handle another stored message already has. The send
+            // itself worked, so record the status without the handle rather than leaving the
+            // message stuck on "Sending…".
+            Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => {
+                log::warn!("phone reused message handle {handle:?}; keeping the sent message without it");
+                update(None)?;
+            }
+            other => {
+                other?;
+            }
+        }
         conn.query_row(&format!("{SELECT} WHERE m.id = ?1"), [id], map_row)
     }
 
@@ -667,6 +681,18 @@ mod tests {
             .is_none());
         assert!(s.has_message(SOURCE_IPHONE_MAP, "H1").unwrap());
         assert!(!s.has_message(SOURCE_IPHONE_MAP, "H2").unwrap());
+    }
+
+    #[test]
+    fn a_reused_handle_doesnt_leave_a_sent_message_pending() {
+        let s = Store::in_memory().unwrap();
+        s.insert_incoming(&incoming("H7", "+13025550100", "hey")).unwrap();
+        let m = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "hi back", 2_000)
+            .unwrap();
+        // iOS assigns the sent text a handle an inbox message already has.
+        let m = s.set_outgoing_status(m.id, Status::Accepted, Some("H7")).unwrap();
+        assert_eq!(m.status, Status::Accepted);
     }
 
     #[test]
