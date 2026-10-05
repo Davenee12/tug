@@ -24,26 +24,39 @@ onMounted(async () => {
       class="w-[400px] rounded-xl bg-surface-dark p-8 text-on-dark"
     >
       <p class="caption-upper text-on-dark-soft">Pairing request</p>
-      <p id="pairing-title" class="mt-2 font-display text-[30px] leading-tight" style="letter-spacing: -0.02em">
-        {{ tug.pairingRequest?.pin ? "Do the codes match?" : "Pair with this device?" }}
-      </p>
-      <p class="mt-1 text-[14px] text-on-dark-soft">{{ tug.pairingRequest?.deviceName }}</p>
+      <!-- ConfirmOnly: Windows has accepted; the user confirms on the iPhone. Nothing to do here. -->
+      <template v-if="tug.pairingRequest?.confirmOnPhone">
+        <p id="pairing-title" class="mt-2 font-display text-[30px] leading-tight" style="letter-spacing: -0.02em">
+          Tap Pair on your iPhone
+        </p>
+        <p class="mt-1 text-[14px] text-on-dark-soft">{{ tug.pairingRequest?.deviceName }}</p>
+        <p class="mt-4 text-[13px] text-on-dark-soft">Confirm the pairing on your iPhone — it continues on its own.</p>
+        <div class="mt-6 flex justify-end">
+          <button ref="cancel" class="btn-on-dark" @click="tug.confirmPairing(false)">Close</button>
+        </div>
+      </template>
+      <template v-else>
+        <p id="pairing-title" class="mt-2 font-display text-[30px] leading-tight" style="letter-spacing: -0.02em">
+          {{ tug.pairingRequest?.pin ? "Do the codes match?" : "Pair with this device?" }}
+        </p>
+        <p class="mt-1 text-[14px] text-on-dark-soft">{{ tug.pairingRequest?.deviceName }}</p>
 
-      <p v-if="tug.pairingRequest?.pin" class="my-6 text-center font-mono text-[44px] tracking-[0.2em] text-on-dark">
-        {{ tug.pairingRequest.pin }}
-      </p>
-      <p class="text-[13px] text-on-dark-soft">
-        {{
-          tug.pairingRequest?.pin
-            ? "Check it matches the code on your iPhone, then tap Pair here and on the phone."
-            : "Tap Pair here, then confirm on your iPhone."
-        }}
-      </p>
+        <p v-if="tug.pairingRequest?.pin" class="my-6 text-center font-mono text-[44px] tracking-[0.2em] text-on-dark">
+          {{ tug.pairingRequest.pin }}
+        </p>
+        <p class="text-[13px] text-on-dark-soft">
+          {{
+            tug.pairingRequest?.pin
+              ? "Check it matches the code on your iPhone, then tap Pair here and on the phone."
+              : "Tap Pair here, then confirm on your iPhone."
+          }}
+        </p>
 
-      <div class="mt-6 flex justify-end gap-2">
-        <button ref="cancel" class="btn-on-dark" @click="tug.confirmPairing(false)">Cancel</button>
-        <button class="btn-primary" @click="tug.confirmPairing(true)">Pair</button>
-      </div>
+        <div class="mt-6 flex justify-end gap-2">
+          <button ref="cancel" class="btn-on-dark" @click="tug.confirmPairing(false)">Cancel</button>
+          <button class="btn-primary" @click="tug.confirmPairing(true)">Pair</button>
+        </div>
+      </template>
     </div>
   </div>
 </template>

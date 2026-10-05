@@ -38,6 +38,8 @@ export const api = {
   confirmPairing: (accept: boolean) => invoke<void>("confirm_pairing", { accept }),
   useDevice: (id: string) => invoke<void>("use_device", { id }),
   forgetDevice: () => invoke<void>("forget_device"),
+  /** Pair the iPhone's Classic (texts) side from inside tug; the PIN shows via pairing-request. */
+  pairTexts: () => invoke<void>("pair_texts"),
   setAdvertising: (enabled: boolean) => invoke<void>("set_advertising", { enabled }),
   getSettings: () => invoke<Record<string, string>>("get_settings"),
   setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),

@@ -60,6 +60,7 @@ const EMPTY_STATUS: DeviceStatus = {
   lastError: null,
   lastErrorAt: null,
   pairingStale: false,
+  awaitingPhoneAllow: false,
   messagesError: null,
   contactsError: null,
   textsPairing: "unknown",
@@ -172,9 +173,13 @@ export const useTugStore = defineStore("tug", () => {
    * pairing mid-setup gives us a device, and setup still has steps to go after that.
    */
   const setupActive = ref(false);
-  watch([onboarded, () => status.value.device], ([done, device]) => {
-    if (!done && device == null) setupActive.value = true;
-  });
+  watch(
+    [onboarded, () => status.value.device],
+    ([done, device]) => {
+      if (!done && device == null) setupActive.value = true;
+    },
+    { immediate: true },
+  );
   const showSetup = computed(() => setupRequested.value || setupActive.value);
   const flash = ref<{ kind: "error" | "info"; text: string; action?: { label: string; run: () => void } } | null>(null);
   let flashTimer: number | undefined;
@@ -654,6 +659,9 @@ export const useTugStore = defineStore("tug", () => {
 
   async function loadSettings() {
     const raw = await api.getSettings();
+    // Set this first: on a fresh install `ui.onboarded` is absent, and if a later await in here
+    // threw, onboarded stayed at its optimistic default (true) and the wizard never opened.
+    onboarded.value = raw["ui.onboarded"] === "1";
     zoom.value = Number(raw["ui.zoom"]) || 1;
     applyZoom(zoom.value);
     seen.value = raw["ui.seen"] ? (JSON.parse(raw["ui.seen"]) as Record<string, number>) : {};
@@ -1073,6 +1081,11 @@ export const useTugStore = defineStore("tug", () => {
       return ok === true;
     },
     forget: () => attempt(api.forgetDevice),
+    /** Pair the iPhone's Classic (texts) side from inside tug; true on success. */
+    async pairTexts(): Promise<boolean> {
+      const ok = await attempt(() => api.pairTexts().then(() => true));
+      return ok === true;
+    },
     async setAdvertising(enabled: boolean) {
       advertiseEnabled.value = enabled;
       await attempt(() => api.setAdvertising(enabled));
