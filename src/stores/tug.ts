@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
 import { appLabel, threadKey } from "../lib/format";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
@@ -13,6 +14,7 @@ import type {
   NowPlaying,
   PairingRequest,
   PhoneNotification,
+  SearchResults,
   UiSettings,
 } from "../types/protocol";
 
@@ -48,13 +50,12 @@ const EMPTY_NOW_PLAYING: NowPlaying = {
 export const useTugStore = defineStore("tug", () => {
   const status = ref<DeviceStatus>(EMPTY_STATUS);
   const nowPlaying = ref<NowPlaying>(EMPTY_NOW_PLAYING);
+  /** Newest first. */
   const notifications = ref<PhoneNotification[]>([]);
   /** Messages from message access (MAP), oldest first. */
   const messages = ref<SmsMessage[]>([]);
   const contacts = ref<Contact[]>([]);
   const hasMore = ref(true);
-  const searchQuery = ref("");
-  const searchResults = ref<PhoneNotification[] | null>(null);
   const discovered = ref<DiscoveredDevice[]>([]);
   const pairingRequest = ref<PairingRequest | null>(null);
   const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [] });
@@ -70,6 +71,10 @@ export const useTugStore = defineStore("tug", () => {
   const composeTo = ref<{ address: string; name: string } | null>(null);
   /** The New message picker (+ or Ctrl+N). */
   const pickerOpen = ref(false);
+  /** Universal search (Ctrl+K or the search box). */
+  const searchOpen = ref(false);
+  /** An item to scroll to and highlight after navigating from search: `m<id>` or `n<id>`. */
+  const focusItem = ref<string | null>(null);
 
   /** When each feed entry (conversation or app stack) was last looked at. */
   const seen = ref<Record<string, number>>({});
@@ -77,12 +82,11 @@ export const useTugStore = defineStore("tug", () => {
   const seenSince = ref(Date.now());
 
   const connected = computed(() => status.value.connection === "connected");
-  const visible = computed(() => searchResults.value ?? notifications.value);
 
   function notify(kind: "error" | "info", text: string) {
     flash.value = { kind, text };
     window.clearTimeout(flashTimer);
-    flashTimer = window.setTimeout(() => (flash.value = null), 5000);
+    flashTimer = window.setTimeout(() => (flash.value = null), kind === "info" ? 2500 : 5000);
   }
 
   async function attempt<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -106,20 +110,22 @@ export const useTugStore = defineStore("tug", () => {
     return true;
   }
 
-  function patch(id: number, change: Partial<PhoneNotification>) {
-    for (const list of [notifications.value, searchResults.value ?? []]) {
-      const n = list.find((x) => x.id === id);
-      if (n) Object.assign(n, change);
-    }
+  function upsertMessage(m: SmsMessage) {
+    const i = messages.value.findIndex((x) => x.id === m.id);
+    if (i >= 0) messages.value[i] = m;
+    else messages.value.push(m);
   }
 
+  // Windows notification permission: ask once per launch, not on every notification.
+  let toastPermission: boolean | null = null;
   async function maybeToast(n: PhoneNotification) {
     const s = settings.value;
     if (!s.toasts || s.doNotDisturb || n.flags.silent || n.flags.preExisting) return;
     if (s.mutedApps.includes(n.appId)) return;
-    let granted = await isPermissionGranted();
-    if (!granted) granted = (await requestPermission()) === "granted";
-    if (!granted) return;
+    if (toastPermission === null) {
+      toastPermission = (await isPermissionGranted()) || (await requestPermission()) === "granted";
+    }
+    if (!toastPermission) return;
     const title = [appLabel(n), n.title].filter(Boolean).join(" · ");
     sendNotification({ title, body: [n.subtitle, n.message].filter(Boolean).join("\n") });
   }
@@ -164,6 +170,7 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   function openThread(key: string) {
+    composeTo.value = null;
     selectedThread.value = key;
     view.value = "messages";
     markSeen(key);
@@ -187,55 +194,61 @@ export const useTugStore = defineStore("tug", () => {
     };
   }
 
+  // Listeners and shortcuts are installed once and torn down by dispose(), so a
+  // remount (or dev hot-reload) can't double every toast and keypress.
+  let teardown: Array<UnlistenFn | (() => void)> = [];
+  let started = false;
+
   async function init() {
-    installZoomShortcuts(
-      () => zoom.value,
-      (z) => {
-        zoom.value = z;
-        notify("info", `Zoom ${Math.round(z * 100)}%`);
-        void attempt(() => api.setSetting("ui.zoom", String(z)));
-      },
+    if (started) return;
+    started = true;
+    teardown.push(
+      installZoomShortcuts(
+        () => zoom.value,
+        (z) => {
+          zoom.value = z;
+          notify("info", `Zoom ${Math.round(z * 100)}%`);
+          void attempt(() => api.setSetting("ui.zoom", String(z)));
+        },
+      ),
     );
-    await Promise.all([
-      on("device-status", (s) => {
-        const wasConnected = status.value.connection === "connected";
-        status.value = s;
-        // Notification UIDs die with the connection, so nothing stays actionable.
-        if (wasConnected && s.connection !== "connected") {
-          for (const n of notifications.value) n.live = false;
-          for (const n of searchResults.value ?? []) n.live = false;
-        }
-      }),
-      on("now-playing", (np) => {
-        nowPlaying.value = np;
-      }),
-      on("notification", (n) => {
-        const added = upsert(notifications.value, n);
-        if (searchResults.value) upsert(searchResults.value, n);
-        if (view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
-        if (added) void maybeToast(n);
-      }),
-      on("notification-removed", (id) => patch(id, { removedAt: Date.now(), live: false })),
-      on("app-name", ({ appId, appName }) => {
-        for (const list of [notifications.value, searchResults.value ?? []]) {
-          for (const n of list) if (n.appId === appId) n.appName = appName;
-        }
-      }),
-      on("discovered-devices", (list) => (discovered.value = list)),
-      on("message", (m) => {
-        const i = messages.value.findIndex((x) => x.id === m.id);
-        if (i >= 0) messages.value[i] = m;
-        else messages.value.push(m);
-      }),
-      on("contacts", (list) => {
-        contacts.value = list;
-        // Names are joined into messages server-side; apply them to what's loaded.
-        const byAddress = new Map(list.map((c) => [c.address, c.name]));
-        for (const m of messages.value) m.contactName = byAddress.get(m.address) ?? m.contactName;
-      }),
-      on("pairing-request", (req) => (pairingRequest.value = req)),
-      on("pairing-request-closed", () => (pairingRequest.value = null)),
-    ]);
+    teardown.push(
+      ...(await Promise.all([
+        on("device-status", (s) => {
+          const wasConnected = status.value.connection === "connected";
+          status.value = s;
+          // Notification UIDs die with the connection, so nothing stays actionable.
+          if (wasConnected && s.connection !== "connected") {
+            for (const n of notifications.value) n.live = false;
+          }
+        }),
+        on("now-playing", (np) => {
+          nowPlaying.value = np;
+        }),
+        on("notification", (n) => {
+          const added = upsert(notifications.value, n);
+          if (view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
+          if (added) void maybeToast(n);
+        }),
+        on("notification-removed", (id) => {
+          const n = notifications.value.find((x) => x.id === id);
+          if (n) Object.assign(n, { removedAt: Date.now(), live: false });
+        }),
+        on("app-name", ({ appId, appName }) => {
+          for (const n of notifications.value) if (n.appId === appId) n.appName = appName;
+        }),
+        on("discovered-devices", (list) => (discovered.value = list)),
+        on("message", upsertMessage),
+        on("contacts", (list) => {
+          contacts.value = list;
+          // Names are joined into messages server-side; apply them to what's loaded.
+          const byAddress = new Map(list.map((c) => [c.address, c.name]));
+          for (const m of messages.value) m.contactName = byAddress.get(m.address) ?? m.contactName;
+        }),
+        on("pairing-request", (req) => (pairingRequest.value = req)),
+        on("pairing-request-closed", () => (pairingRequest.value = null)),
+      ])),
+    );
     const [s, np, first, msgs, people] = await Promise.all([
       api.getStatus(),
       api.getNowPlaying(),
@@ -243,17 +256,27 @@ export const useTugStore = defineStore("tug", () => {
       api.listMessages(2000),
       api.getContacts(),
     ]);
-    messages.value = msgs;
-    contacts.value = people;
+    // Merge rather than replace: events may have arrived while these loaded.
+    for (const n of first) upsert(notifications.value, n);
+    const live = new Set(messages.value.map((m) => m.id));
+    messages.value = [...msgs.filter((m) => !live.has(m.id)), ...messages.value].sort(
+      (a, b) => a.receivedAt - b.receivedAt || a.id - b.id,
+    );
+    if (contacts.value.length === 0) contacts.value = people;
     status.value = s;
     nowPlaying.value = np;
-    notifications.value = first;
     hasMore.value = first.length === PAGE;
     await attempt(loadSettings);
   }
 
+  function dispose() {
+    for (const off of teardown) off();
+    teardown = [];
+    started = false;
+  }
+
   async function loadMore() {
-    if (!hasMore.value || searchResults.value) return;
+    if (!hasMore.value) return;
     const last = notifications.value.at(-1);
     const page = await attempt(() => api.listNotifications(PAGE, last?.id));
     if (!page) return;
@@ -261,16 +284,9 @@ export const useTugStore = defineStore("tug", () => {
     hasMore.value = page.length === PAGE;
   }
 
-  let searchSeq = 0;
-  async function search(q: string) {
-    searchQuery.value = q;
-    const seq = ++searchSeq;
-    if (!q.trim()) {
-      searchResults.value = null;
-      return;
-    }
-    const results = await attempt(() => api.searchNotifications(q, 300));
-    if (results && seq === searchSeq) searchResults.value = results;
+  /** Universal search: people, texts and notifications. */
+  async function searchAll(query: string): Promise<SearchResults | undefined> {
+    return attempt(() => api.searchAll(query, 30));
   }
 
   async function setSetting<K extends keyof UiSettings>(key: K, value: UiSettings[K]) {
@@ -290,8 +306,6 @@ export const useTugStore = defineStore("tug", () => {
     messages,
     contacts,
     hasMore,
-    searchQuery,
-    searchResults,
     discovered,
     pairingRequest,
     settings,
@@ -301,12 +315,14 @@ export const useTugStore = defineStore("tug", () => {
     selectedThread,
     composeTo,
     pickerOpen,
+    searchOpen,
+    focusItem,
     seen,
     connected,
-    visible,
     init,
+    dispose,
     loadMore,
-    search,
+    searchAll,
     setSetting,
     toggleMuted,
     notify,
@@ -355,7 +371,6 @@ export const useTugStore = defineStore("tug", () => {
     async clearHistory() {
       await attempt(api.clearHistory);
       notifications.value = [];
-      searchResults.value = searchResults.value ? [] : null;
       hasMore.value = false;
     },
   };

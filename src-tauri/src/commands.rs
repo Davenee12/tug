@@ -10,6 +10,7 @@ use crate::ble::{BleHandle, Command};
 use crate::messages::{Contact, StoredMessage};
 use crate::state::{DeviceStatus, Shared};
 use crate::store::StoredNotification;
+use serde::Serialize;
 
 pub struct AppState {
     pub shared: Arc<Shared>,
@@ -48,6 +49,34 @@ pub fn search_notifications(state: State<'_, AppState>, query: String, limit: u3
         .store
         .search(&query, limit.min(500), state.shared.live_session().as_deref())
         .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResults {
+    pub people: Vec<Contact>,
+    pub messages: Vec<StoredMessage>,
+    pub notifications: Vec<StoredNotification>,
+}
+
+/// One search across people, texts and notifications (universal search).
+#[tauri::command]
+pub fn search_all(state: State<'_, AppState>, query: String, limit: u32) -> Result<SearchResults> {
+    let limit = limit.clamp(1, 200);
+    let store = &state.shared.store;
+    let live = state.shared.live_session();
+    let has_text = !query.trim().is_empty();
+    Ok(SearchResults {
+        people: store.search_contacts(&query, limit).map_err(|e| e.to_string())?,
+        messages: store.search_messages(&query, limit).map_err(|e| e.to_string())?,
+        notifications: if has_text {
+            store
+                .search(&query, limit, live.as_deref())
+                .map_err(|e| e.to_string())?
+        } else {
+            Vec::new()
+        },
+    })
 }
 
 #[tauri::command]
