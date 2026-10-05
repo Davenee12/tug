@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasDuplicateIphones, pairedPhones, pairingProblem } from "./pairings";
+import { hasDuplicateIphones, pairedPhones, pairingProblem, setupDeviceLists, startedOutsideTug } from "./pairings";
 import type { DiscoveredDevice } from "../types/protocol";
 
 function dev(overrides: Partial<DiscoveredDevice>): DiscoveredDevice {
@@ -78,5 +78,69 @@ describe("pairingProblem", () => {
 
   it("does not trip when the remembered phone is simply away (nothing paired visible)", () => {
     expect(pairingProblem([dev({ paired: false, id: "x" })], "remembered")).toBeNull();
+  });
+});
+
+describe("setupDeviceLists", () => {
+  it("offers a discoverable iPhone even when it isn't connected to the PC yet", () => {
+    // The old LightBlue assumption required `connected`; Dave's phone was discoverable but not
+    // connected, so the wizard's list was empty and he tapped the PC from the phone instead.
+    const list = [dev({ id: "p", name: "Dave's iPhone", paired: false, connected: false, kind: "phone" })];
+    const { phones } = setupDeviceLists(list);
+    expect(phones.map((d) => d.id)).toEqual(["p"]);
+  });
+
+  it("keeps an Echo Dot out of the phone offer", () => {
+    const list = [
+      dev({ id: "phone", name: "Dave's iPhone", kind: "phone" }),
+      dev({ id: "echo", name: "Echo Dot-5TF", kind: "unknown", paired: true }),
+    ];
+    const lists = setupDeviceLists(list);
+    expect(lists.phones.map((d) => d.id)).toEqual(["phone"]);
+    expect(lists.others.map((d) => d.id)).toEqual(["echo"]);
+  });
+
+  it("hides accessories and counts them", () => {
+    const list = [
+      dev({ id: "phone", kind: "phone" }),
+      dev({ id: "kbd", name: "Keychron", kind: "accessory" }),
+      dev({ id: "mouse", name: "MX Master", kind: "accessory" }),
+    ];
+    const lists = setupDeviceLists(list);
+    expect(lists.phones.map((d) => d.id)).toEqual(["phone"]);
+    expect(lists.hiddenAccessories).toBe(2);
+    expect(lists.others).toEqual([]);
+  });
+
+  it("only considers the LE transport", () => {
+    const list = [
+      dev({ id: "le", transport: "le", kind: "phone" }),
+      dev({ id: "classic", transport: "classic", kind: "phone" }),
+    ];
+    expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["le"]);
+  });
+
+  it("puts a connected phone first", () => {
+    const list = [
+      dev({ id: "away", name: "B iPhone", connected: false, kind: "phone" }),
+      dev({ id: "here", name: "A iPhone", connected: true, kind: "phone" }),
+    ];
+    expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["here", "away"]);
+  });
+});
+
+describe("startedOutsideTug", () => {
+  it("flags an unpaired→paired flip that tug didn't start", () => {
+    expect(startedOutsideTug(false, true, false)).toBe(true);
+  });
+
+  it("ignores a flip tug started itself", () => {
+    expect(startedOutsideTug(false, true, true)).toBe(false);
+  });
+
+  it("ignores devices that were already paired or are still unpaired", () => {
+    expect(startedOutsideTug(true, true, false)).toBe(false);
+    expect(startedOutsideTug(false, false, false)).toBe(false);
+    expect(startedOutsideTug(undefined, true, false)).toBe(false);
   });
 });
