@@ -1,10 +1,12 @@
 mod ams;
 mod ancs;
 mod ancs_queue;
+mod app_icons;
 mod ble;
 mod clipboard;
 mod commands;
 mod device_kind;
+pub mod hfp;
 mod location;
 pub mod map;
 mod messages;
@@ -105,8 +107,12 @@ pub fn run() {
             commands::open_windows_settings,
             commands::locate,
             commands::place_lookup,
+            commands::app_icon,
             commands::mark_read,
             commands::set_watching,
+            commands::get_calls,
+            commands::refresh_calls,
+            commands::dial,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

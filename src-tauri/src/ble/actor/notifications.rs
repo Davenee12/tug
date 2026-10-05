@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// How long after a call ends before asking the phone for Recents, so the call is logged.
+const CALL_LOG_SETTLE: Duration = Duration::from_secs(3);
+
 impl Actor {
     pub(super) async fn setup_ancs(&mut self, device: &BluetoothLEDevice, gen: u64) -> Result<Ancs, BleError> {
         let svc = winrt::service(device, guid(ancs::SERVICE))
@@ -132,7 +135,12 @@ impl Actor {
                 a.requests.push(Request::Notification(ev.uid));
             }
             EventId::Removed => {
-                a.meta.remove(&ev.uid);
+                // A ringing call that stopped (answered, declined, rang out): it's in Recents now.
+                if let Some((_, Category::IncomingCall)) = a.meta.remove(&ev.uid) {
+                    if let Some(map) = self.shared.map.get() {
+                        map.refresh_calls(CALL_LOG_SETTLE);
+                    }
+                }
                 a.rows.remove(&ev.uid);
                 a.requests.forget_notification(ev.uid);
                 match self.shared.store.mark_removed(session, ev.uid, now_ms()) {
@@ -232,6 +240,13 @@ impl Actor {
                         if n.app_id == "com.apple.MobileSMS" {
                             if let Some(map) = self.shared.map.get() {
                                 map.refresh();
+                            }
+                        }
+                        // A new missed call: Recents has it (and the ringing call's removal may
+                        // have come first, or not at all if tug connected mid-ring).
+                        if category == Category::MissedCall && !flags.pre_existing {
+                            if let Some(map) = self.shared.map.get() {
+                                map.refresh_calls(CALL_LOG_SETTLE);
                             }
                         }
                         a.rows.insert(uid, n.id);

@@ -36,6 +36,14 @@ impl BleError {
     pub fn is_closed(&self) -> bool {
         matches!(self, Self::Win(e) if e.code() == windows::core::HRESULT(0x8000_0013_u32 as i32))
     }
+
+    /// The ATT error code the peripheral answered with, when it answered with one.
+    pub fn att_code(&self) -> Option<u8> {
+        match self {
+            Self::Protocol(code) => *code,
+            _ => None,
+        }
+    }
 }
 
 impl From<windows::core::Error> for BleError {
