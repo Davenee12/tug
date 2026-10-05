@@ -7,10 +7,11 @@
 //   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
 //   http://localhost:1420/?call       a call rings 1.5 s after load (rings out after 30 s, as a missed call)
+//   http://localhost:1420/?nodial     Settings › iPhone › Calls check fails, like a blocked hands-free link
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, SmsMessage } from "../types/protocol";
+import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -154,6 +155,22 @@ const messages: SmsMessage[] = setup
       sms("in", "omw, 10 mins 🚗", 1),
     ];
 
+// Recents (PBAP call history): phone-local times, newest first, as the iPhone sends them.
+const localIso = (agoMin: number) => {
+  const d = new Date(now - agoMin * min);
+  return new Date(d.getTime() - d.getTimezoneOffset() * min).toISOString().slice(0, 19);
+};
+const calls: CallRecord[] = setup
+  ? []
+  : [
+      { direction: "missed", name: "Mum", number: "+19725550123", at: localIso(3) },
+      { direction: "outgoing", name: "Tay", number: TAY, at: localIso(52) },
+      { direction: "incoming", name: null, number: "+12145550199", at: localIso(130) },
+      { direction: "missed", name: null, number: null, at: localIso(60 * 20) },
+      { direction: "incoming", name: "Jane Doe", number: "+14695550188", at: localIso(60 * 26) },
+      { direction: "outgoing", name: null, number: "+18005550100", at: localIso(60 * 50) },
+    ];
+
 const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
@@ -228,6 +245,19 @@ mockIPC(
       }
       case "list_messages":
         return messages;
+      case "get_calls":
+        return calls;
+      // Experimental hands-free dialing: works here, unless ?nodial shows the refusal.
+      case "dial":
+        return new Promise((resolve, reject) =>
+          setTimeout(
+            () =>
+              params.has("nodial")
+                ? reject("Windows won't share the iPhone's hands-free link with tug (Windows or Phone Link is probably using it)")
+                : resolve(null),
+            900,
+          ),
+        );
       case "get_contacts":
         return contacts;
       case "send_message": {
