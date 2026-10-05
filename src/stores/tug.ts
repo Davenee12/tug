@@ -180,6 +180,28 @@ export const useTugStore = defineStore("tug", () => {
     }
     return appIcons.value[appId] ?? null;
   }
+
+  /** Contact photos as data URIs, keyed by the lookup (a number or a name); null = no photo (initials). */
+  const contactPhotos = ref<Record<string, string | null>>({});
+  const photoRequests = new Set<string>();
+  /**
+   * A contact's photo for their avatar, asked the first time it's shown (then cached by the
+   * backend). `key` is a phone number or the name on the avatar; the backend resolves either.
+   * Returns null until it arrives, and whenever the iPhone shares no photo — the avatar shows
+   * initials in the meantime.
+   */
+  function contactPhoto(key: string | null | undefined): string | null {
+    if (!key) return null;
+    if (!(key in contactPhotos.value) && !photoRequests.has(key)) {
+      photoRequests.add(key);
+      api
+        .contactPhoto(key)
+        .then((uri) => (contactPhotos.value = { ...contactPhotos.value, [key]: uri }))
+        // Not shared yet, or the lookup failed: initials for now, asked again on the next sync.
+        .catch(() => undefined);
+    }
+    return contactPhotos.value[key] ?? null;
+  }
   const advertiseEnabled = ref(true);
   /** Start with Windows. Mirrors the real autostart registry entry, not a stored setting. */
   const autostartEnabled = ref(false);
@@ -821,6 +843,9 @@ export const useTugStore = defineStore("tug", () => {
         }),
         on("contacts", (list) => {
           contacts.value = list;
+          // A resync may have added, changed or removed photos: drop the cache so avatars re-ask.
+          contactPhotos.value = {};
+          photoRequests.clear();
           // Names are joined into messages server-side; apply them to what's loaded.
           const byAddress = new Map(list.map((c) => [c.address, c.name]));
           for (const m of messages.value) m.contactName = byAddress.get(m.address) ?? m.contactName;
@@ -1118,6 +1143,7 @@ export const useTugStore = defineStore("tug", () => {
     settings,
     iconFor,
     websiteFor,
+    contactPhoto,
     advertiseEnabled,
     autostartEnabled,
     flash,

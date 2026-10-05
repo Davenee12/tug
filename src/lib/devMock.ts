@@ -425,6 +425,20 @@ mockIPC(
         return null;
       case "app_website":
         return "https://www.example.com/";
+      case "contact_photo": {
+        // Stand-in contact photos so the avatar path is visible without a phone: a couple of mock
+        // people have one, the rest fall back to initials (as iOS contacts without a photo would).
+        const key = String(a.key ?? "");
+        const withPhoto = new Set([ZOE, "Zoe", "+19725550111", "Dave Smith", "+19725550123", "Mum"]);
+        if (!withPhoto.has(key)) return null;
+        const hue = [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+        const svg =
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">` +
+          `<rect width="64" height="64" fill="hsl(${hue} 55% 60%)"/>` +
+          `<circle cx="32" cy="25" r="12" fill="hsl(${hue} 45% 88%)"/>` +
+          `<path d="M12 60c0-13 9-20 20-20s20 7 20 20z" fill="hsl(${hue} 45% 88%)"/></svg>`;
+        return `data:image/svg+xml;base64,${btoa(svg)}`;
+      }
       case "place_lookup":
         return JSON.stringify({ city: "Dallas", principalSubdivision: "Texas", countryCode: "US" });
       case "locate":

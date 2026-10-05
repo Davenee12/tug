@@ -18,7 +18,7 @@ const outgoing = (i: ConversationItem) => i.kind === "message" && i.m.direction 
       :class="['flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left', active ? 'bg-surface-card' : 'active:bg-surface-soft']"
       @click="$emit('select')"
     >
-      <AppAvatar :app-id="c.appId" :label="c.contact" person size="sm" />
+      <AppAvatar :app-id="c.appId" :label="c.contact" :photo-key="c.address ?? undefined" person size="sm" />
       <span class="min-w-0 flex-1">
         <span class="flex items-baseline gap-2">
           <span :class="['truncate text-[14px] text-ink', tug.newCount(c.key, c.notifications) ? 'font-semibold' : 'font-medium']">

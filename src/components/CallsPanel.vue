@@ -2,8 +2,9 @@
 import { computed, onMounted, onUnmounted } from "vue";
 import { MessageSquare, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { callName, callTime, clockTime, formatAddress, groupCalls } from "../lib/format";
+import { callName, callTime, clockTime, formatAddress, groupCalls, MESSAGES_APP } from "../lib/format";
 import type { CallDirection, CallRecord } from "../types/protocol";
+import AppAvatar from "./AppAvatar.vue";
 
 // Recents from the iPhone (PBAP call history): who, which way, when. Message anyone back.
 // Click a person to call them: back from their missed call (works without hands-free), or by
@@ -37,6 +38,10 @@ function callFrom(c: CallRecord) {
 }
 // The number goes under the name only when the name isn't the number already.
 const showNumber = (c: CallRecord) => !!c.number && name(c) !== formatAddress(c.number);
+// A caller's photo (when the iPhone shared one) stands in for the direction tile; direction stays
+// in the row's subtitle. A number finds it most reliably, falling back to the name.
+const photoKey = (c: CallRecord) => c.number ?? name(c);
+const photo = (c: CallRecord) => tug.contactPhoto(photoKey(c));
 const time = (c: CallRecord) => {
   const at = callTime(c);
   return at ? clockTime(at) : "";
@@ -71,7 +76,16 @@ const emptyHint = computed(() => {
             :title="c.number ? `Call ${name(c)}${route(c) === 'back' ? ' back' : ''} on your iPhone` : undefined"
             @click="callFrom(c)"
           >
+            <AppAvatar
+              v-if="photo(c)"
+              :app-id="MESSAGES_APP"
+              :label="name(c)"
+              :photo-key="photoKey(c)"
+              person
+              size="sm"
+            />
             <span
+              v-else
               :class="['grid size-8 shrink-0 place-items-center rounded-lg', DIRECTION[c.direction].tone]"
               :title="DIRECTION[c.direction].label"
             >
