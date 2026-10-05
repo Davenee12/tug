@@ -84,11 +84,8 @@ pub enum MapError {
 
 pub type Result<T> = std::result::Result<T, MapError>;
 
-#[derive(Debug, Clone)]
-pub struct MapDevice {
-    pub id: String,
-    pub name: String,
-}
+// Defined in the pure `pick` module (with the selection logic that is unit-tested there).
+pub use super::pick::MapDevice;
 
 fn service_id(uuid: u128) -> windows::core::Result<RfcommServiceId> {
     RfcommServiceId::FromUuid(GUID::from_u128(uuid))

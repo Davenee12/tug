@@ -12,6 +12,7 @@ pub mod calls;
 pub mod health;
 pub mod listing;
 pub mod obex;
+pub mod pick;
 pub mod service;
 #[cfg(windows)]
 pub mod session;
