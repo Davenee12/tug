@@ -9,6 +9,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::ams::NowPlaying;
+use crate::map::health::TextsPairing;
 use crate::map::service::MapHandle;
 use crate::store::Store;
 
@@ -98,6 +99,10 @@ pub struct DeviceStatus {
     pub messages_error: Option<String>,
     /// Why the phone's contacts aren't available, when the user can fix it.
     pub contacts_error: Option<String>,
+    /// Whether the texts (Classic) pairing works, is missing, or needs making again.
+    pub texts_pairing: TextsPairing,
+    /// The phone Windows has paired for texts (what to remove when it needs re-pairing).
+    pub texts_device: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
