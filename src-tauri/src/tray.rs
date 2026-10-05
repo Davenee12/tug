@@ -3,11 +3,13 @@
 //! Closing the window hides tug to the tray (it keeps mirroring the phone); Quit is in the
 //! tray menu.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
+
+use crate::state::events;
 
 const TRAY_ID: &str = "tug";
 /// Settings key: the "still running in the tray" hint has been shown once.
@@ -17,11 +19,17 @@ const HINT_SHOWN: &str = "tray.hint_shown";
 /// with no way back or out, so closing quits as before.
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
+/// Unread texts the UI last reported (see `set_unread`). The backend doesn't know about
+/// threads, so it uses this only to decide whether a tray click should also open the
+/// newest conversation; the frontend picks which one.
+static UNREAD: AtomicU32 = AtomicU32::new(0);
+
 pub fn installed() -> bool {
     INSTALLED.load(Ordering::Relaxed)
 }
 
-/// Left-click brings tug forward; right-click offers Open and Quit.
+/// Left-click (and the menu's Open) bring tug forward and, with unread texts, open the
+/// newest unread conversation; right-click offers Open and Quit.
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open tug", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit tug", true, None::<&str>)?;
@@ -31,7 +39,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "open" => show(app),
+            "open" => show_and_open_latest(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -42,7 +50,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 ..
             } = event
             {
-                show(tray.app_handle());
+                show_and_open_latest(tray.app_handle());
             }
         });
     if let Some(icon) = app.default_window_icon() {
@@ -83,8 +91,19 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Bring tug forward and, if there are unread texts, ask the frontend to open the newest
+/// unread conversation (as if it were clicked, so it's read and cleared the usual way).
+/// With nothing unread this is just `show`, leaving the user on whatever view they left.
+fn show_and_open_latest<R: Runtime>(app: &AppHandle<R>) {
+    show(app);
+    if UNREAD.load(Ordering::Relaxed) > 0 {
+        let _ = app.emit(events::OPEN_LATEST_CONVERSATION, ());
+    }
+}
+
 /// Unread texts: the count in the tray tooltip, and a dot on the taskbar button.
 pub fn set_unread<R: Runtime>(app: &AppHandle<R>, count: u32) -> tauri::Result<()> {
+    UNREAD.store(count, Ordering::Relaxed);
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         tray.set_tooltip(Some(tooltip(count)))?;
     }

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from "vue";
-import { Music2, Pause, Play, SkipBack, SkipForward, Volume1, Volume2 } from "lucide-vue-next";
+import { Music2, Pause, Play, RotateCcw, SkipBack, SkipForward, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { duration } from "../lib/format";
+import { canRestart } from "../lib/media";
 
 const tug = useTugStore();
 const np = computed(() => tug.nowPlaying);
@@ -27,13 +28,35 @@ const progress = computed(() =>
   elapsed.value != null && np.value.duration ? (elapsed.value / np.value.duration) * 100 : 0,
 );
 const can = (c: string) => np.value.available.length === 0 || np.value.available.includes(c as never);
+
+// Start the song over with Back, only where Back restarts rather than skips (see canRestart).
+function restart() {
+  if (canRestart(elapsed.value)) void tug.media("previousTrack");
+  else tug.notify("info", "Already at the start of the song");
+}
+
+// No loop button: on Jordan's iPhone Spotify offers no remote commands for repeat and Apple Music
+// accepts AdvanceRepeatMode but never changes mode (checked in the log, 2026-10-05). tug still
+// reads and logs the repeat mode (see lib/media.ts), so a button can return for a player that
+// honours it.
 </script>
 
 <template>
   <section class="rounded-xl bg-surface-dark-elevated p-5">
     <div class="caption-upper mb-3 flex items-center gap-2 text-on-dark-soft">
       <Music2 :size="13" />
-      {{ available ? np.player ?? "Now playing" : "Now playing" }}
+      <span class="min-w-0 flex-1 truncate">{{ available ? np.player ?? "Now playing" : "Now playing" }}</span>
+      <template v-if="available">
+        <button
+          class="rounded-full p-1.5 normal-case text-on-dark-soft active:text-on-dark"
+          :disabled="!can('previousTrack')"
+          aria-label="Restart song"
+          title="Restart song"
+          @click="restart"
+        >
+          <RotateCcw :size="15" />
+        </button>
+      </template>
     </div>
 
     <template v-if="available">
@@ -45,7 +68,12 @@ const can = (c: string) => np.value.available.length === 0 || np.value.available
       </p>
 
       <div class="mt-4 h-1 overflow-hidden rounded-full bg-surface-dark-soft">
-        <div class="h-full rounded-full bg-on-dark transition-[width] duration-1000 ease-linear" :style="{ width: `${progress}%` }" />
+        <!-- Keyed by track so a new song starts at its position instead of sliding back. -->
+        <div
+          :key="np.title ?? ''"
+          class="h-full rounded-full bg-on-dark transition-[width] duration-1000 ease-linear"
+          :style="{ width: `${progress}%` }"
+        />
       </div>
       <div class="mt-1.5 flex justify-between font-mono text-[11px] text-on-dark-soft">
         <span>{{ duration(elapsed) }}</span>
