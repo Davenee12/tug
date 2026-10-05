@@ -18,14 +18,25 @@ press-and-hold volume, connection health + Copy diagnostics, start with Windows,
 plus a stabilization pass (Settings flicker, per-conversation drafts, bounded Bluetooth calls,
 calmer polling). See CHANGELOG.md.
 
-## v0.5.8 — stability, live texts, Spotify (agreed with Dave, 2026-10-05)
+## v0.5.8 — stability, setup, live texts, Spotify (agreed with Dave, 2026-10-05)
 
 ### 1. Finish the stabilization pass (first)
 - Feed scroll resets to the top when entries update.
 - Messages doesn't jump to the newest text when a conversation opens or a text arrives.
 - freshTimer / listener setup isn't symmetric with teardown in the store.
 
-### 2. Live texts (MAP notifications / MNS) — hardware to prove
+### 2. Setup, ironed out (added after Dave's rough re-pair, 2026-10-05)
+- **"Look at your iPhone and tap Allow"** while iOS holds the notifications subscribe open on a new
+  pairing (it looked stuck; #49 stops the 10 s give-up that tore the link down).
+- **Live switch checklist**: Share System Notifications, Show Notifications, Sync Contacts, each
+  read from real signals, naming the one that's off.
+- **Old or duplicate pairings** detected, with one confirmed "Start over" that removes both of the
+  phone's pairings; implausible transient phone names ignored.
+- **tug pairs for texts itself** (pulled back from v0.5.9): discover the unpaired Classic iPhone
+  during the Texts step, pair with a PIN shown in tug, **LE (notifications) first, then Classic
+  (texts)** because of CTKD; Windows › Add device stays as a fallback.
+
+### 3. Live texts (MAP notifications / MNS) — hardware to prove
 Texts land the instant the phone gets them instead of within ~8 s of polling; sends show "Sent".
 iOS supports `SetNotificationRegistration`. tug hosts an MNS server (`RfcommServiceProvider` 0x1133 +
 `StreamSocketListener` + SDP: name, MAP profile v1.1), keeping the 8 s poll as a backstop.
@@ -34,7 +45,7 @@ iOS supports `SetNotificationRegistration`. tug hosts an MNS server (`RfcommServ
 - Risks: an RFCOMM **server** from an unpackaged app is unproven; the `PushMessage` handle may not
   equal the `SendingSuccess` handle (so "Sent" matching may be approximate).
 
-### 3. Spotify connector (new)
+### 4. Spotify connector (new)
 Connect Spotify in Settings, then: your own playlists in tug (tap to play on the iPhone), repeat
 and shuffle that work (AMS gives Spotify none), like the current song, album art on Now Playing,
 Ctrl+K "play <playlist>". Spotify Web API from Rust, OAuth with PKCE (no client secret).
@@ -51,11 +62,6 @@ Ctrl+K "play <playlist>". Spotify Web API from Rust, OAuth with PKCE (no client 
 - Hardware runs for live texts and Spotify-on-iPhone.
 
 ## v0.5.9 — candidates
-- **tug pairs for texts itself** (moved from v0.5.8): the setup's Texts step pairs the phone's
-  Classic side from inside tug instead of Windows › Add device. Discover the unpaired Classic iPhone
-  via `BluetoothDevice.GetDeviceSelectorFromPairingState(false)` (iPhone must have Settings ›
-  Bluetooth open), pair with the existing `DeviceInformationCustomPairing` code. **LE
-  (notifications) first, then Classic (texts)** because of CTKD; persist `TEXTS_DEVICE_ID`.
 - **Welcome back**: after 30+ min away, who texted and called.
 - **Calls in Ctrl+K search**: a person's recent calls in their search result.
 
