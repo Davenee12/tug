@@ -36,6 +36,9 @@ pub mod keys {
     pub const DEVICE_ID: &str = "device_id";
     pub const DEVICE_NAME: &str = "device_name";
     pub const ADVERTISE: &str = "advertise";
+    /// The Classic (texts) device id tug last connected a MAP session to. Remembered so a
+    /// phone rename can't make tug follow the old name onto the wrong device.
+    pub const TEXTS_DEVICE_ID: &str = "texts_device_id";
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
