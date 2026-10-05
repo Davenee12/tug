@@ -274,7 +274,8 @@ impl Spotify {
     }
 
     /// Start a playlist on the iPhone. Picks the iPhone from the device list (preferring the
-    /// paired phone's name); if no phone is listed, says to open Spotify on it first.
+    /// paired phone's name). Spotify only lists the iPhone while its Spotify app is open; then
+    /// this returns `model::NO_PHONE` so the UI can wait for it.
     pub fn play_playlist(&self, uri: &str, phone_name: Option<&str>) -> Result<(), String> {
         if !uri.starts_with("spotify:playlist:") {
             return Err("That doesn't look like a playlist.".into());
@@ -282,8 +283,7 @@ impl Spotify {
         let devices = self
             .api(Method::Get, "/me/player/devices", None)
             .map_err(|e| e.user_message())?;
-        let device = model::choose_device(&devices.body, phone_name)
-            .ok_or("Open Spotify on your iPhone once, then try again.")?;
+        let device = model::choose_device(&devices.body, phone_name).ok_or(model::NO_PHONE)?;
         let path = format!("/me/player/play?device_id={}", pe(&device.id));
         let body = serde_json::json!({ "context_uri": uri }).to_string();
         self.api(Method::Put, &path, Some(("application/json", body)))
