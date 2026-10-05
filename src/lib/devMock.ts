@@ -116,10 +116,12 @@ const nowPlaying: NowPlaying = setup
       available: ["play", "pause", "togglePlayPause", "nextTrack", "previousTrack", "volumeUp", "volumeDown"],
     };
 
+// A connected keyboard listed first: setup must still offer only the iPhone.
 const discovered: DiscoveredDevice[] = [
-  { id: "a", name: "Dave's iPhone", transport: "le", paired: false, connected: true, canPair: true },
-  { id: "b", name: "WH-1000XM5", transport: "classic", paired: true, connected: false, canPair: false },
-  { id: "c", name: "LE-Bose Flex", transport: "le", paired: false, connected: false, canPair: true },
+  { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
+  { id: "a", name: "Dave's iPhone", transport: "le", paired: false, connected: true, canPair: true, kind: "phone" },
+  { id: "b", name: "WH-1000XM5", transport: "classic", paired: true, connected: false, canPair: false, kind: "accessory" },
+  { id: "c", name: "LE-Bose Flex", transport: "le", paired: false, connected: false, canPair: true, kind: "accessory" },
 ];
 
 // seenSince 0: everything still on the phone counts as new, so badges show in the preview.

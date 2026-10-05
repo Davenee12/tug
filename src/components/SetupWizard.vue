@@ -65,11 +65,20 @@ watch(
 );
 
 // ---- Connect: the phone shows up in discovery once LightBlue connects to this PC ----
-const phone = computed<DiscoveredDevice | null>(
-  () => tug.discovered.find((d) => d.connected && d.transport === "le") ?? null,
+// Only connected devices that could be a phone: a keyboard or headphones also show up
+// connected, and must never be offered as the iPhone. Likely phones first.
+const KIND_RANK: Record<DiscoveredDevice["kind"], number> = { phone: 0, unknown: 1, accessory: 2 };
+const candidates = computed(() =>
+  tug.discovered
+    .filter((d) => d.connected && d.transport === "le" && d.kind !== "accessory")
+    .sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind])
+    .slice(0, 3),
 );
-const others = computed(() => tug.discovered.filter((d) => d !== phone.value && d.transport === "le").slice(0, 3));
+/** One device that says it's a phone: offer it plainly. Otherwise ask which one. */
+const sure = computed(() => candidates.value.length === 1 && candidates.value[0].kind === "phone");
+const others = computed(() => tug.discovered.filter((d) => !candidates.value.includes(d) && d.transport === "le").slice(0, 3));
 const pairing = ref(false);
+const choosingId = ref<string | null>(null);
 const connectError = ref<string | null>(null);
 watch(
   step,
@@ -84,6 +93,7 @@ watch(
 async function choose(d: DiscoveredDevice) {
   connectError.value = null;
   pairing.value = true;
+  choosingId.value = d.id;
   // The result decides, not the PIN prompt closing: Windows closes it a moment before the
   // phone is actually chosen, so "closed, no device yet" is the normal path to success.
   const ok = d.paired ? await tug.useDevice(d.id) : await tug.pair(d.id);
@@ -293,15 +303,25 @@ const SHORTCUTS: Array<[string, string]> = [
               <p class="min-w-0 flex-1 truncate text-[15px] font-medium text-ink">Paired with {{ s.device.name }}</p>
               <button class="btn-primary" data-autofocus @click="go('sharing')">Continue</button>
             </div>
-            <div v-else-if="phone" class="flex items-center gap-4">
-              <span class="flex size-10 items-center justify-center rounded-full bg-canvas"><Smartphone :size="18" class="text-ink" /></span>
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-[15px] font-medium text-ink">{{ phone.name }}</p>
-                <p class="text-[12px] font-medium text-accent-teal">Connected now</p>
+            <div v-else-if="candidates.length" class="flex flex-col gap-3">
+              <p v-if="!sure" class="text-[13px] text-muted">
+                {{ candidates.length > 1 ? "Which one is your iPhone?" : "Is this your iPhone?" }}
+              </p>
+              <div v-for="(d, i) in candidates" :key="d.id" class="flex items-center gap-4">
+                <span class="flex size-10 items-center justify-center rounded-full bg-canvas"><Smartphone :size="18" class="text-ink" /></span>
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-[15px] font-medium text-ink">{{ d.name }}</p>
+                  <p class="text-[12px] font-medium text-accent-teal">Connected now</p>
+                </div>
+                <button
+                  :class="i === 0 ? 'btn-primary' : 'btn-secondary'"
+                  :disabled="pairing"
+                  :data-autofocus="i === 0 ? '' : undefined"
+                  @click="choose(d)"
+                >
+                  <LoaderCircle v-if="pairing && choosingId === d.id" :size="14" class="animate-spin" /> This is my iPhone
+                </button>
               </div>
-              <button class="btn-primary" :disabled="pairing" data-autofocus @click="choose(phone)">
-                <LoaderCircle v-if="pairing" :size="14" class="animate-spin" /> This is my iPhone
-              </button>
             </div>
             <p v-else class="flex items-center gap-3 text-[14px] text-muted">
               <LoaderCircle :size="16" class="animate-spin" /> Waiting for your iPhone to connect…

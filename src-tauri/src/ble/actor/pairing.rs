@@ -2,6 +2,11 @@
 
 use super::link::resolve_le_device;
 use super::*;
+use crate::device_kind;
+use crate::state::DeviceKind;
+
+const PROP_LE_APPEARANCE: &str = "System.Devices.Aep.Bluetooth.Le.Appearance";
+const PROP_COD_MAJOR: &str = "System.Devices.Aep.Bluetooth.Cod.Major";
 
 impl Actor {
     pub(super) fn start_discovery(&mut self) -> windows::core::Result<()> {
@@ -15,15 +20,27 @@ impl Actor {
             "System.Devices.Aep.ProtocolId:=\"{AEP_PROTOCOL_CLASSIC}\" AND System.Devices.Aep.IsPaired:=System.StructuredQueryType.Boolean#True"
         );
         for (aqs, transport) in [(le, Transport::Le), (classic, Transport::Classic)] {
-            let props = IIterable::<HSTRING>::from(vec![
-                HSTRING::from(PROP_IS_CONNECTED),
-                HSTRING::from("System.Devices.Aep.IsPaired"),
-            ]);
-            let watcher = DeviceInformation::CreateWatcherWithKindAqsFilterAndAdditionalProperties(
-                &HSTRING::from(aqs),
-                &props,
-                DeviceInformationKind::AssociationEndpoint,
-            )?;
+            let kind_prop = match transport {
+                Transport::Le => PROP_LE_APPEARANCE,
+                Transport::Classic => PROP_COD_MAJOR,
+            };
+            let create = |extra: &[&str]| {
+                let mut props = vec![
+                    HSTRING::from(PROP_IS_CONNECTED),
+                    HSTRING::from("System.Devices.Aep.IsPaired"),
+                ];
+                props.extend(extra.iter().map(|p| HSTRING::from(*p)));
+                DeviceInformation::CreateWatcherWithKindAqsFilterAndAdditionalProperties(
+                    &HSTRING::from(aqs.as_str()),
+                    &IIterable::<HSTRING>::from(props),
+                    DeviceInformationKind::AssociationEndpoint,
+                )
+            };
+            // The kind property is a nicety: if this Windows build rejects it, discover without it.
+            let watcher = create(&[kind_prop]).or_else(|e| {
+                log::warn!("discovery without {kind_prop}: {}", e.message());
+                create(&[])
+            })?;
             let tx = self.tx.clone();
             watcher.Added(&TypedEventHandler::<DeviceWatcher, DeviceInformation>::new(
                 move |_, info| {
@@ -78,6 +95,11 @@ impl Actor {
                     (true, false) => return None,
                 };
                 let pairing = d.info.Pairing().ok();
+                let kind = device_kind::classify(
+                    &name,
+                    uint_property(&d.info, PROP_LE_APPEARANCE).and_then(|a| u16::try_from(a).ok()),
+                    uint_property(&d.info, PROP_COD_MAJOR),
+                );
                 Some(DiscoveredDevice {
                     id: id.clone(),
                     name,
@@ -85,13 +107,21 @@ impl Actor {
                     paired: pairing.as_ref().and_then(|p| p.IsPaired().ok()).unwrap_or(false),
                     can_pair: pairing.as_ref().and_then(|p| p.CanPair().ok()).unwrap_or(false),
                     connected,
+                    kind,
                 })
             })
             .collect();
-        // Connected first: when the iPhone connects from LightBlue it jumps to the top.
+        // Phones first, accessories last; within that, connected first: when the iPhone connects
+        // from LightBlue it jumps to the top.
+        let rank = |k: DeviceKind| match k {
+            DeviceKind::Phone => 0,
+            DeviceKind::Unknown => 1,
+            DeviceKind::Accessory => 2,
+        };
         list.sort_by(|a, b| {
-            b.connected
-                .cmp(&a.connected)
+            rank(a.kind)
+                .cmp(&rank(b.kind))
+                .then(b.connected.cmp(&a.connected))
                 .then(b.paired.cmp(&a.paired))
                 .then(a.name.cmp(&b.name))
         });
@@ -269,4 +299,16 @@ pub(super) fn bool_property(info: &DeviceInformation, key: &str) -> bool {
         .and_then(|v| v.cast::<IReference<bool>>())
         .and_then(|r| r.Value())
         .unwrap_or(false)
+}
+
+/// An unsigned-integer property, whichever width Windows stored it as.
+fn uint_property(info: &DeviceInformation, key: &str) -> Option<u32> {
+    let v = info.Properties().and_then(|p| p.Lookup(&HSTRING::from(key))).ok()?;
+    if let Ok(r) = v.cast::<IReference<u16>>() {
+        return r.Value().ok().map(u32::from);
+    }
+    if let Ok(r) = v.cast::<IReference<u8>>() {
+        return r.Value().ok().map(u32::from);
+    }
+    v.cast::<IReference<u32>>().and_then(|r| r.Value()).ok()
 }
