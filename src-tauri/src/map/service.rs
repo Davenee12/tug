@@ -88,6 +88,7 @@ mod worker {
     use super::MapCommand;
     use crate::map::address::normalize;
     use crate::map::listing;
+    use crate::map::obex::RSP_NOT_FOUND;
     use crate::map::session::{find_devices, pull_contacts, MapError, MapSession};
     use crate::messages::{IncomingMessage, Status, StoredMessage, SOURCE_IPHONE_MAP};
     use crate::state::{events, Shared};
@@ -99,6 +100,7 @@ mod worker {
     const LIST_MAX: u16 = 20;
     const CONTACTS_RESYNC: Duration = Duration::from_secs(6 * 60 * 60);
     const CONTACTS_RETRY: Duration = Duration::from_secs(10 * 60);
+    const CONTACTS_PULL_TIMEOUT: Duration = Duration::from_secs(90);
 
     fn now_ms() -> i64 {
         SystemTime::now()
@@ -170,10 +172,11 @@ mod worker {
                 let devices = find_devices().await?;
                 // Prefer the phone tug is paired with; the Classic and LE names usually match.
                 let wanted = self.shared.status().device.map(|d| d.name);
+                // With no name match, only a lone phone is a safe guess; never pick one of several.
                 let device = devices
                     .iter()
                     .find(|d| wanted.as_deref() == Some(d.name.as_str()))
-                    .or(devices.first())
+                    .or(if devices.len() == 1 { devices.first() } else { None })
                     .ok_or(MapError::NoDevice)?;
                 let session = MapSession::connect(&device.id).await?;
                 log::info!("message access connected to {}", device.name);
@@ -203,7 +206,11 @@ mod worker {
             if Instant::now() < self.next_contacts_sync {
                 return;
             }
-            match pull_contacts(&device_id).await {
+            // Bounded as a whole: the pull runs on the same worker as sending and mark-read.
+            let pulled = tokio::time::timeout(CONTACTS_PULL_TIMEOUT, pull_contacts(&device_id))
+                .await
+                .unwrap_or(Err(MapError::Timeout));
+            match pulled {
                 Ok(entries) => {
                     let pairs: Vec<(String, String)> = entries
                         .iter()
@@ -267,12 +274,25 @@ mod worker {
                     }
                     continue;
                 }
-                let msg = session.get_message(&item.handle).await?;
-                let address = normalize(msg.originator_address.as_deref().unwrap_or(&item.sender_addressing));
-                let body = if msg.body.is_empty() {
+                let (originator, full_body) = match session.get_message(&item.handle).await {
+                    Ok(msg) => (msg.originator_address, msg.body),
+                    // The phone refused this one message (e.g. an attachment it won't serialize).
+                    // Don't let it block every newer text or drop the session: keep the listing's
+                    // preview if there is one, otherwise skip it.
+                    Err(MapError::Obex { code, .. }) => {
+                        log::info!("phone refused message {}: {code:#04x}; using its preview", item.handle);
+                        if item.subject.is_empty() {
+                            continue;
+                        }
+                        (None, String::new())
+                    }
+                    Err(e) => return Err(e),
+                };
+                let address = normalize(originator.as_deref().unwrap_or(&item.sender_addressing));
+                let body = if full_body.is_empty() {
                     item.subject.clone()
                 } else {
-                    msg.body
+                    full_body
                 };
                 let sent_at = listing::datetime_to_iso(&item.datetime);
                 let sender_name = Some(item.sender_name.as_str()).filter(|n| !n.is_empty() && *n != address);
@@ -321,7 +341,15 @@ mod worker {
                             log::warn!("saving read state failed: {e}");
                         }
                     }
-                    // The phone refused this one (e.g. no longer exists); try again next open.
+                    // Gone from the phone (deleted there): nothing left to mark, stop trying.
+                    Err(MapError::Obex {
+                        code: RSP_NOT_FOUND, ..
+                    }) => {
+                        if let Err(e) = store.set_read_on_phone(SOURCE_IPHONE_MAP, handle) {
+                            log::warn!("saving read state failed: {e}");
+                        }
+                    }
+                    // Refused for another reason; try again next time it's opened.
                     Err(MapError::Obex { code, .. }) => log::info!("phone refused mark-read for {handle}: {code:#04x}"),
                     Err(e) => {
                         log::debug!("mark read failed: {e}");

@@ -49,18 +49,23 @@ function select(key: string) {
   tug.markSeen(key);
 }
 
-// Opening Messages without a choice shows the newest conversation, which counts as seen.
+// Opening Messages without a choice shows the newest conversation, which counts as seen
+// (in tug only) — unless something is covering it, e.g. the New message picker (Ctrl+N).
 watch(
-  () => selected.value?.key,
-  (key) => {
-    if (key && tug.view === "messages" && tug.newCount(key, selected.value!.notifications)) tug.markSeen(key);
+  () => [selected.value?.key, tug.overlayOpen] as const,
+  ([key]) => {
+    if (key && tug.view === "messages" && !tug.overlayOpen && tug.newCount(key, selected.value!.notifications)) {
+      tug.markSeen(key);
+    }
   },
   { immediate: true },
 );
 
-// The open conversation is read: clear it on the phone (and so the Feed) and mark its texts
-// read there — on open, when new texts land in it, and when the window comes back into focus.
-// Only while tug is focused, so a text arriving in the background still waits for you.
+// The conversation on screen is read: clear it on the phone (and so the Feed) and mark its
+// texts read there — on open, when new texts land in it, and when you come back to it. That
+// includes the newest one Messages shows by default (Dave's call). Clearing the phone can't
+// be undone, so only while you can actually see it: the window is focused and nothing
+// (search, the picker, settings, pairing) covers it.
 const focused = ref(document.hasFocus());
 const onFocus = () => (focused.value = true);
 const onBlur = () => (focused.value = false);
@@ -72,11 +77,21 @@ onUnmounted(() => {
   window.removeEventListener("focus", onFocus);
   window.removeEventListener("blur", onBlur);
 });
+const lookingAt = (c: Conversation | null): c is Conversation =>
+  !!c && c.items.length > 0 && focused.value && tug.view === "messages" && !tug.overlayOpen;
 watch(
-  () => [selected.value?.key, selected.value?.items.length, selected.value?.notifications.length, focused.value] as const,
+  () =>
+    [
+      selected.value?.key,
+      selected.value?.items.length,
+      selected.value?.notifications.length,
+      focused.value,
+      tug.overlayOpen,
+      tug.selectedThread,
+    ] as const,
   () => {
     const c = selected.value;
-    if (!c || !focused.value || tug.view !== "messages" || !c.items.length) return;
+    if (!lookingAt(c)) return;
     const ids = tug.messages.filter((m) => m.direction === "in" && c.addresses.includes(m.address)).map((m) => m.id);
     tug.readConversation(c.notifications, ids);
   },

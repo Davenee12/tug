@@ -232,15 +232,6 @@ const advertisingLabel = computed(
           {{ confirmClear ? "Tap again to delete everything" : "Clear history" }}
         </button>
       </section>
-
-      <section class="rounded-xl bg-surface-card p-4 text-[12px] leading-relaxed text-muted">
-        <p class="font-medium text-body-strong">What tug can and can't do</p>
-        <p class="mt-1">
-          Works over Bluetooth LE with no app on the phone: notifications and their actions (Apple's ANCS), media controls
-          (AMS), battery level.
-        </p>
-        <p class="mt-1">Not yet: replying to messages, calls, clipboard, photos. iOS keeps those out of reach without extra work.</p>
-      </section>
     </div>
   </aside>
 </template>

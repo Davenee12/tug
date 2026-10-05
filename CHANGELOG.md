@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased (Sprint 5)
+
+### Fixed
+- **Opening the new-message picker no longer clears another conversation on the phone.** The
+  phone only clears for a conversation you clicked into, while nothing (search, the picker,
+  settings) covers it.
+- A notification dismissed on the phone while tug was fetching its details no longer comes back.
+- A contact can't pick up an unsaved sender's name from one shared short text ("ok").
+- One text the phone won't send over no longer stops newer texts from syncing.
+- A text you sent can't get stuck on "Sending…" when the phone reuses a message id.
+- A `>` in a text no longer hides the rest of its details (including whether it's read).
+- Apps whose name lookup failed get asked again instead of showing a raw app id.
+- Pop-up notifications are rate-limited: a burst becomes "N more notifications" (calls always ring).
+- Esc closes search and the new-message picker from anywhere inside them.
+- Weather: the "now" dot stays on its bar, and a stalled request can't leave the card loading.
+- Removed the out-of-date "What tug can and can't do" box from settings.
+
+### Developer
+- GitHub Actions runs the full check suite on every PR and on main (Windows).
+- `ble/actor.rs` split into six focused modules (a pure move, verified function by function).
+- GATT notification handlers unregister themselves; GATT reads/writes time out after 10 s.
+
 ## v0.5.4 — 2026-10-05
 
 Phone sync and weather (Sprint 4).
@@ -12,8 +34,8 @@ Phone sync and weather (Sprint 4).
 
 ### Fixed
 - **Opening a conversation clears it on the phone.** Notifications for the conversation you're
-  reading leave your lock screen and the Feed, and its texts are marked read over Bluetooth (on
-  iPhone, the Messages app's own unread dot still needs the phone; Android clears fully).
+  reading leave your lock screen and the Feed, and its texts are marked read over Bluetooth, so the
+  unread dot in the phone's Messages app clears too.
 - **Renaming a contact on your phone no longer splits their conversation.** tug remembers earlier
   names, including renames made before this version, and keeps everything under the current one.
 - A contact name saved from an inline reply no longer comes out garbled ("Tayr message").
