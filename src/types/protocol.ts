@@ -191,4 +191,8 @@ export interface UiSettings {
   appIcons: boolean;
   /** Experimental Call buttons. Only a successful hands-free check (Settings › iPhone) turns them on. */
   dialing: boolean;
+  /** Texts from unknown senders go to their own list in Messages: no badge, no pop-up (codes still pop up). */
+  filterUnknown: boolean;
+  /** Numbers/emails moved to conversations by hand ("Move to conversations"), normalised. */
+  knownSenders: string[];
 }
