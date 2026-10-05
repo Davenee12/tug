@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, Smartphone } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import NowPlayingCard from "./NowPlayingCard.vue";
@@ -8,6 +8,14 @@ import TugMark from "./TugMark.vue";
 
 const tug = useTugStore();
 const s = computed(() => tug.status);
+
+// The sidebar never scrolls. On a short window, tighten the section gaps and drop the Quick
+// toggles' one-line descriptions (the labels stay) so the Now Playing card still fits at the bottom.
+const vh = ref(window.innerHeight);
+const onResize = () => (vh.value = window.innerHeight);
+onMounted(() => window.addEventListener("resize", onResize));
+onUnmounted(() => window.removeEventListener("resize", onResize));
+const compact = computed(() => vh.value < 750);
 
 const connectionLabel = computed(() => {
   switch (s.value.connection) {
@@ -62,13 +70,13 @@ const dnd = computed({
 </script>
 
 <template>
-  <aside class="dark-scroll flex h-full flex-col overflow-y-auto bg-surface-dark px-4 py-6 text-on-dark">
+  <aside :class="['flex h-full flex-col overflow-hidden bg-surface-dark px-4 text-on-dark', compact ? 'py-4' : 'py-6']">
     <div class="flex items-center gap-2.5 px-2">
       <TugMark :size="30" class="text-on-dark" />
       <span class="font-display text-[30px] leading-none text-on-dark" style="letter-spacing: -0.03em">tug</span>
     </div>
 
-    <section class="mt-8 px-2">
+    <section :class="[compact ? 'mt-5' : 'mt-7', 'px-2']">
       <div class="caption-upper text-on-dark-soft">Your iPhone</div>
       <div class="mt-2 flex items-start gap-3">
         <Smartphone :size="20" class="mt-1.5 shrink-0 text-on-dark-soft" />
@@ -93,7 +101,7 @@ const dnd = computed({
         {{ s.radio === "off" ? "Bluetooth is off in Windows" : "No Bluetooth adapter found" }}
       </div>
 
-      <div class="mt-4 flex flex-wrap gap-1.5">
+      <div class="mt-3 flex flex-wrap gap-1.5">
         <span
           v-for="svc in services"
           :key="svc.label"
@@ -105,14 +113,14 @@ const dnd = computed({
       </div>
     </section>
 
-    <section class="mt-8">
+    <section :class="compact ? 'mt-5' : 'mt-6'">
       <div class="caption-upper mb-1 px-2 text-on-dark-soft">Quick toggles</div>
-      <ToggleRow v-model="advertise" label="Visible to iPhone" description="Lets your phone find and reconnect to this PC" />
-      <ToggleRow v-model="toasts" label="Windows alerts" description="Pop up new notifications on this PC" />
-      <ToggleRow v-model="dnd" label="Do not disturb" description="Keep collecting, stop popping up" :disabled="!tug.settings.toasts" />
+      <ToggleRow v-model="advertise" label="Visible to iPhone" :description="compact ? undefined : 'Lets your phone find and reconnect to this PC'" />
+      <ToggleRow v-model="toasts" label="Windows alerts" :description="compact ? undefined : 'Pop up new notifications on this PC'" />
+      <ToggleRow v-model="dnd" label="Do not disturb" :description="compact ? undefined : 'Keep collecting, stop popping up'" :disabled="!tug.settings.toasts" />
     </section>
 
-    <div class="mt-auto pt-8">
+    <div :class="compact ? 'mt-auto pt-4' : 'mt-auto pt-6'">
       <NowPlayingCard />
     </div>
   </aside>
