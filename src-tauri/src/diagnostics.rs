@@ -1,6 +1,7 @@
 //! "Copy diagnostics": a plain-text report the owner can send for support. It gathers the
 //! app and Windows versions, the live `DeviceStatus`, the non-sensitive settings flags and the
-//! tail of the rotated log files, with phone numbers, names and emails masked out. The pieces
+//! tail of the rotated log files, with phone numbers, emails, the phone's own name and Bluetooth
+//! addresses masked out (tug never logs contact names or message text). The pieces
 //! that read files or the OS live in the command; the redaction and the report layout are pure
 //! here so they can be unit-tested without hardware.
 
@@ -55,7 +56,53 @@ pub fn os_version() -> String {
 /// digits, while short numbers (`v0.5.7`, a `76%` battery, a year) and ISO dates like
 /// `2026-10-05` stay so the log keeps its timestamps.
 pub fn redact(text: &str) -> String {
-    redact_emails(&redact_number_runs(text))
+    redact_emails(&redact_number_runs(&redact_bluetooth_addresses(text)))
+}
+
+/// Mask the phone's own name(s) (e.g. "My iPhone" names a person) wherever they appear.
+pub fn redact_names(text: &str, names: &[String]) -> String {
+    let mut out = text.to_string();
+    for name in names.iter().map(|n| n.trim()).filter(|n| n.len() >= 3) {
+        out = out.replace(name, "[phone]");
+    }
+    out
+}
+
+/// Bluetooth addresses (`00:11:22:33:44:55`, also inside Windows device ids) identify the phone.
+fn redact_bluetooth_addresses(text: &str) -> String {
+    let b = text.as_bytes();
+    let is_hex = |c: u8| c.is_ascii_hexdigit();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < b.len() {
+        let mac = i + 17 <= b.len()
+            && (0..6).all(|k| is_hex(b[i + 3 * k]) && is_hex(b[i + 3 * k + 1]))
+            && (0..5).all(|k| b[i + 3 * k + 2] == b':')
+            // No leading boundary: Windows glues the address onto "BluetoothLE…" (hex "E").
+            && (i + 17 == b.len() || !is_hex(b[i + 17]));
+        if mac {
+            out.push_str("[address]");
+            i += 17;
+        } else {
+            let ch = text[i..].chars().next().expect("in bounds");
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+/// The status snapshot without what identifies the phone: its name and device ids.
+pub fn anonymize_status(status: &DeviceStatus) -> DeviceStatus {
+    let mut s = status.clone();
+    if let Some(d) = s.device.as_mut() {
+        d.id = "[device id]".into();
+        d.name = "[phone]".into();
+    }
+    if s.texts_device.is_some() {
+        s.texts_device = Some("[phone]".into());
+    }
+    s
 }
 
 const NUMBER_SEP: &[u8] = b" -.()+";
@@ -238,6 +285,8 @@ pub struct Report<'a> {
     /// `(label, value)` settings flags, non-sensitive only.
     pub settings: &'a [(String, String)],
     pub log_lines: &'a [String],
+    /// The phone's name(s), masked wherever they appear in the log tail.
+    pub phone_names: &'a [String],
 }
 
 impl Report<'_> {
@@ -272,7 +321,7 @@ impl Report<'_> {
             out.push_str("(no log files found)\n");
         } else {
             for line in self.log_lines {
-                out.push_str(&redact(line));
+                out.push_str(&redact(&redact_names(line, self.phone_names)));
                 out.push('\n');
             }
         }
@@ -362,6 +411,7 @@ mod tests {
             status_json: "{\n  \"textsDevice\": \"call 3025550142\"\n}",
             settings: &settings,
             log_lines: &logs,
+            phone_names: &[],
         };
         let out = report.render();
         assert!(out.contains("app version:     0.5.7"));
@@ -370,6 +420,41 @@ mod tests {
         assert!(out.contains("\"textsDevice\": \"call [number]\""));
         assert!(!out.contains("3025550142"));
         assert!(out.contains("recent log (2 lines)"));
+    }
+
+    #[test]
+    fn the_phone_is_never_named_or_addressed() {
+        let status = DeviceStatus {
+            device: Some(crate::state::PairedDevice {
+                id: "BluetoothLE#BluetoothLE00:11:22:33:44:55-66:77:88:99:aa:bb".into(),
+                name: "My iPhone".into(),
+            }),
+            texts_device: Some("My iPhone".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&anonymize_status(&status)).unwrap();
+        assert!(!json.contains("My iPhone") && !json.contains("88:99"), "{json}");
+
+        let names = vec!["My iPhone".to_string()];
+        let logs = vec![
+            "message access connected to My iPhone".to_string(),
+            "connecting to BluetoothLE#BluetoothLE00:11:22:33:44:55-66:77:88:99:aa:bb".to_string(),
+            "[2026-10-05][14:52:21][tug_lib::map][INFO] build 10.0.26200".to_string(),
+        ];
+        let out = Report {
+            app_version: "0.5.7",
+            windows_version: "Windows 11",
+            bluetooth: "radio on",
+            status_json: &json,
+            settings: &[],
+            log_lines: &logs,
+            phone_names: &names,
+        }
+        .render();
+        assert!(!out.contains("My iPhone"), "{out}");
+        assert!(out.contains("connected to [phone]"));
+        assert!(out.contains("BluetoothLE#BluetoothLE[address]-[address]"));
+        assert!(out.contains("[2026-10-05][14:52:21]"), "times stay readable: {out}");
     }
 
     #[test]
