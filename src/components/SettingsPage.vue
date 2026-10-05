@@ -160,9 +160,9 @@ async function clearHistory() {
       <p class="mt-auto px-3 font-mono text-[11px] text-muted-soft">tug {{ version ?? "" }}</p>
     </nav>
 
-    <!-- The frame never scrolls; each section is built to fit. The iPhone section is being rebuilt
-         on another branch, so it keeps its own scroll until that lands. -->
-    <main :class="['min-w-0 flex-1', current.id === 'iphone' ? 'overflow-y-auto' : 'overflow-hidden']">
+    <!-- The window frame and the section list never scroll. The layout is tightened so most
+         sections fit; a section with genuinely more content scrolls inside this content area only. -->
+    <main class="min-w-0 flex-1 overflow-y-auto">
       <div class="mx-auto max-w-3xl px-8 pt-6 pb-8">
         <header class="mb-5 flex items-center">
           <h1 class="headline text-[36px] leading-none">{{ current.label }}</h1>
@@ -180,13 +180,21 @@ async function clearHistory() {
             <SettingsRow class="bg-surface-card" label="Do not disturb" description="Keep collecting, stop popping up.">
               <SettingsSwitch v-model="dnd" label="Do not disturb" :disabled="!tug.settings.toasts" />
             </SettingsRow>
-            <SettingsRow class="bg-surface-card" label="Low phone battery" description="Pop up at 20%, then again at 10%.">
+            <SettingsRow class="bg-surface-card" label="Low phone battery" description="Pop up when your iPhone drops to 20% and again at 10%.">
               <SettingsSwitch v-model="lowBattery" label="Low phone battery" :disabled="!tug.settings.toasts" />
             </SettingsRow>
-            <SettingsRow class="bg-surface-card" label="Keep running when closed" description="Closing keeps tug in the tray. Quit from there.">
+            <SettingsRow
+              class="bg-surface-card"
+              label="Keep running when closed"
+              description="Closing the window keeps tug in the tray, still mirroring your iPhone. Quit from the tray menu."
+            >
               <SettingsSwitch v-model="closeToTray" label="Keep running when closed" />
             </SettingsRow>
-            <SettingsRow class="bg-surface-card" label="Start with Windows" description="Opens hidden in the tray when you sign in.">
+            <SettingsRow
+              class="bg-surface-card"
+              label="Start with Windows"
+              description="Open tug when you sign in, hidden in the tray so it's mirroring your iPhone from the start."
+            >
               <SettingsSwitch v-model="startWithWindows" label="Start with Windows" />
             </SettingsRow>
             <SettingsRow class="bg-surface-card" label="Zoom" description="Ctrl + and Ctrl − work from anywhere.">
