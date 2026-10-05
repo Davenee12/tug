@@ -41,6 +41,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 const toasts = computed({ get: () => tug.settings.toasts, set: (v) => void tug.setSetting("toasts", v) });
 const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tug.setSetting("doNotDisturb", v) });
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
+const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
 const advertise = computed({ get: () => tug.advertiseEnabled, set: (v) => void tug.setAdvertising(v) });
 const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
 
@@ -295,8 +296,14 @@ async function clearHistory() {
             />
             <SettingsRow
               label="What goes online"
-              description="Only for weather, and only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name."
+              description="Weather, only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name. App icons: each app's ID (like com.google.Gmail, never what it sent you) goes to Apple's App Store once."
             />
+            <SettingsRow
+              label="App icons"
+              description="Show each app's real icon in the Feed instead of its initials. Fetched once per app from Apple's App Store and kept on this PC."
+            >
+              <SettingsSwitch v-model="appIcons" label="App icons" />
+            </SettingsRow>
             <SettingsRow label="Clear history" description="Deletes tug's copy of everything. Your iPhone keeps its own.">
               <button
                 :class="['btn-secondary btn-sm', confirmClear ? 'text-error' : '']"
