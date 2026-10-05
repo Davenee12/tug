@@ -742,6 +742,8 @@ export const useTugStore = defineStore("tug", () => {
       }
     },
     performAction: (id: number, positive: boolean) => attempt(() => api.performAction(id, positive)),
+    /** Open a notification's web link in the default browser. Never clears the notification. */
+    openUrl: (url: string) => attempt(() => api.openUrl(url)),
     /** True once the phone accepted the write (which isn't the player acting on it). */
     async media(command: MediaCommand): Promise<boolean> {
       return (await attempt(() => api.mediaCommand(command).then(() => true))) === true;
