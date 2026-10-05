@@ -2,6 +2,7 @@ mod ams;
 mod ancs;
 mod ancs_queue;
 mod ble;
+mod clipboard;
 mod commands;
 mod location;
 pub mod map;
@@ -71,6 +72,7 @@ pub fn run() {
             commands::get_contacts,
             commands::send_message,
             commands::refresh_messages,
+            commands::copy_text,
             commands::locate,
             commands::mark_read,
         ])

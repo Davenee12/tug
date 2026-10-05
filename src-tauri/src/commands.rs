@@ -174,6 +174,13 @@ pub fn mark_read(state: State<'_, AppState>, message_ids: Vec<i64>) {
     }
 }
 
+/// Copy text to the clipboard. Sync on purpose: Tauri runs sync commands on the main
+/// (STA) thread, which the WinRT clipboard requires.
+#[tauri::command]
+pub fn copy_text(text: String) -> Result<()> {
+    crate::clipboard::set_text(&text)
+}
+
 #[tauri::command]
 pub fn refresh_messages(state: State<'_, AppState>) {
     if let Some(map) = state.shared.map.get() {

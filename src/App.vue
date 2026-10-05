@@ -25,9 +25,18 @@ watch(panelInline, (inline) => {
 });
 
 // Ctrl+K: search from anywhere. Ctrl+N: new message (not while typing in a field).
+// Ctrl+Shift+C: copy the latest one-time code.
 function onShortcut(e: KeyboardEvent) {
-  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
   const key = e.key.toLowerCase();
+  if (e.shiftKey) {
+    if (key !== "c") return;
+    e.preventDefault();
+    const latest = tug.latestCode();
+    if (latest) void tug.copyCode(latest.code, latest.from);
+    else tug.notify("info", "No code in the last 10 minutes");
+    return;
+  }
   const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable]") !== null;
   if (key === "k") {
     e.preventDefault();
