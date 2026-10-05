@@ -79,6 +79,8 @@ const EMPTY_NOW_PLAYING: NowPlaying = {
 
 export const useTugStore = defineStore("tug", () => {
   const status = ref<DeviceStatus>(EMPTY_STATUS);
+  /** The backend's status has arrived; until then `status` is a placeholder that says "noDevice". */
+  const statusKnown = ref(false);
   const nowPlaying = ref<NowPlaying>(EMPTY_NOW_PLAYING);
   /** Newest first. */
   const notifications = ref<PhoneNotification[]>([]);
@@ -670,6 +672,7 @@ export const useTugStore = defineStore("tug", () => {
           if (wasConnected && s.connection !== "connected") {
             for (const n of notifications.value) n.live = false;
           }
+          statusKnown.value = true;
         }),
         on("now-playing", (np) => {
           nowPlaying.value = np;
@@ -720,6 +723,7 @@ export const useTugStore = defineStore("tug", () => {
     );
     if (contacts.value.length === 0) contacts.value = people;
     status.value = s;
+    statusKnown.value = true;
     nowPlaying.value = np;
     hasMore.value = first.length === PAGE;
     await attempt(loadSettings);
@@ -791,6 +795,7 @@ export const useTugStore = defineStore("tug", () => {
   return {
     setupSharingShown,
     status,
+    statusKnown,
     nowPlaying,
     notifications,
     messages,
