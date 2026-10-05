@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.5.3 — 2026-10-05
+
+Search release (Sprint 3).
+
+### New
+- **Search everything with Ctrl+K.** One search box finds **people** (by name or part of their
+  number), **texts** and **notifications**, including ones you've already cleared. Pick a result to
+  jump straight to it: texts open the conversation and highlight the message.
+
+### Fixed
+- Starting a conversation with **+** no longer leaves an empty duplicate once their first text
+  arrives, and follows the text if it lands under their contact name.
+- Notifications or texts that arrive while tug is starting up are no longer lost from the screen.
+- Pop-ups (pairing, new message, search) keep keyboard focus inside them and close with Esc; the
+  pairing pop-up starts on Cancel so a stray Enter can't approve it. Ctrl+N no longer fires while
+  typing.
+
+### Developer
+- Versioned database migrations (`PRAGMA user_version`); v2 adds full-text search over texts and
+  indexes existing history on first launch. 67 Rust tests, 15 frontend tests.
+
 ## v0.5.2 — 2026-10-05
 
 Stability release (Sprint 2): fixes found by a full review of the app, each with a regression test.

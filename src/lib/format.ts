@@ -304,3 +304,42 @@ function resolveNumbers(c: Conversation, contactNumbers: string[]) {
   // go on, don't guess.
   c.address = messages.find((m) => m.direction === "in")?.address ?? messages[0]?.address ?? null;
 }
+
+/** Words the user typed, for highlighting (same tokens the search matches on). */
+function terms(query: string): string[] {
+  return query
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => t.toLowerCase());
+}
+
+/** Split `text` into runs, marking the parts that start-match a search word (prefix, case-insensitive). */
+export function highlight(text: string, query: string): Array<{ text: string; match: boolean }> {
+  const words = terms(query);
+  if (!words.length || !text) return [{ text, match: false }];
+  const escaped = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const re = new RegExp(`(${escaped.join("|")})`, "gi");
+  const out: Array<{ text: string; match: boolean }> = [];
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push({ text: text.slice(last, at), match: false });
+    out.push({ text: m[0], match: true });
+    last = at + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), match: false });
+  return out.length ? out : [{ text, match: false }];
+}
+
+/** A short excerpt of `text` around the first matching word, with ellipses. */
+export function snippet(text: string, query: string, width = 90): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= width) return flat;
+  const lower = flat.toLowerCase();
+  const hits = terms(query).map((w) => lower.indexOf(w)).filter((i) => i >= 0);
+  const at = hits.length ? Math.min(...hits) : 0;
+  const start = Math.max(0, Math.min(at - Math.floor(width / 3), flat.length - width));
+  const end = Math.min(flat.length, start + width);
+  return `${start > 0 ? "…" : ""}${flat.slice(start, end).trim()}${end < flat.length ? "…" : ""}`;
+}

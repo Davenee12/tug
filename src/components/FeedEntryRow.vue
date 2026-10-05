@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { ChevronRight, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { notificationTime, relativeTime, type FeedEntry } from "../lib/format";
@@ -26,6 +26,26 @@ const when = computed(() => relativeTime(notificationTime(latest.value)));
 const ringing = computed(() => latest.value.category === "incomingCall" && latest.value.live);
 const clearable = computed(() => items.value.some((n) => n.live && n.flags.negativeAction));
 
+const rowEl = ref<HTMLElement | null>(null);
+const flashed = ref(false);
+
+// Arriving from search: expand the stack holding the notification, scroll to it, highlight.
+watch(
+  () => tug.focusItem,
+  async (item) => {
+    if (!item?.startsWith("n")) return;
+    const id = Number(item.slice(1));
+    if (!items.value.some((n) => n.id === id)) return;
+    if (props.entry.kind === "stack") expanded.value = true;
+    tug.focusItem = null;
+    await nextTick();
+    rowEl.value?.scrollIntoView({ block: "center" });
+    flashed.value = true;
+    window.setTimeout(() => (flashed.value = false), 1800);
+  },
+  { immediate: true },
+);
+
 function open() {
   if (props.entry.kind === "thread") {
     tug.openThread(props.entry.key);
@@ -37,7 +57,14 @@ function open() {
 </script>
 
 <template>
-  <div :class="['rounded-xl transition-colors', expanded ? 'bg-surface-soft' : '']">
+  <div
+    ref="rowEl"
+    :class="[
+      'rounded-xl transition-colors',
+      expanded ? 'bg-surface-soft' : '',
+      flashed ? 'ring-2 ring-accent-amber ring-offset-2 ring-offset-canvas' : '',
+    ]"
+  >
     <div
       role="button"
       tabindex="0"

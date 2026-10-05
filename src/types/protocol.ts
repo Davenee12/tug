@@ -143,6 +143,13 @@ export interface Contact {
   name: string;
 }
 
+/** Universal search results (`search_all`). */
+export interface SearchResults {
+  people: Contact[];
+  messages: SmsMessage[];
+  notifications: PhoneNotification[];
+}
+
 /** UI preferences persisted in SQLite under the `ui.` prefix. */
 export interface UiSettings {
   toasts: boolean;

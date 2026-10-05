@@ -13,28 +13,30 @@ function step(current: number, dir: 1 | -1): number {
   return STEPS[Math.min(STEPS.length - 1, Math.max(0, at + dir))];
 }
 
-/** Install the shortcuts; `onChange` persists and announces the new factor. */
-export function installZoomShortcuts(get: () => number, onChange: (factor: number) => void) {
+/** Install the shortcuts; `onChange` persists and announces the new factor. Returns an uninstaller. */
+export function installZoomShortcuts(get: () => number, onChange: (factor: number) => void): () => void {
   const set = (z: number) => {
     if (Math.abs(z - get()) < 0.001) return;
     applyZoom(z);
     onChange(z);
   };
-  window.addEventListener("keydown", (e) => {
+  const onKey = (e: KeyboardEvent) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
     if (e.key === "=" || e.key === "+") set(step(get(), 1));
     else if (e.key === "-" || e.key === "_") set(step(get(), -1));
     else if (e.key === "0") set(1);
     else return;
     e.preventDefault();
-  });
-  window.addEventListener(
-    "wheel",
-    (e) => {
-      if (!e.ctrlKey) return;
-      e.preventDefault();
-      set(step(get(), e.deltaY < 0 ? 1 : -1));
-    },
-    { passive: false },
-  );
+  };
+  const onWheel = (e: WheelEvent) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    set(step(get(), e.deltaY < 0 ? 1 : -1));
+  };
+  window.addEventListener("keydown", onKey);
+  window.addEventListener("wheel", onWheel, { passive: false });
+  return () => {
+    window.removeEventListener("keydown", onKey);
+    window.removeEventListener("wheel", onWheel);
+  };
 }
