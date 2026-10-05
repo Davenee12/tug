@@ -244,7 +244,7 @@ const SHORTCUTS: Array<[string, string]> = [
             <li class="flex gap-3"><Check :size="18" class="mt-0.5 shrink-0 text-accent-teal" /> Your music, battery and codes, one glance away.</li>
           </ul>
           <p class="mt-8 text-[13px] text-muted">
-            About 3 minutes. Over Bluetooth, with nothing to install on your phone but a free helper app, once. Everything stays on this PC.
+            About 3 minutes. Over Bluetooth, with nothing to install on your phone but a free helper app, once. Your notifications and texts stay on this PC.
           </p>
           <div class="mt-8 flex items-center gap-4">
             <button class="btn-primary" data-autofocus @click="go('bluetooth')">Get started</button>
