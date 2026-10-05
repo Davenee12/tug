@@ -65,7 +65,7 @@ export const useTugStore = defineStore("tug", () => {
   const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [] });
   const advertiseEnabled = ref(true);
   const zoom = ref(1);
-  const flash = ref<{ kind: "error" | "info"; text: string } | null>(null);
+  const flash = ref<{ kind: "error" | "info"; text: string; action?: { label: string; run: () => void } } | null>(null);
   let flashTimer: number | undefined;
 
   /** Middle-panel view, and the conversation open in Messages. */
@@ -91,10 +91,12 @@ export const useTugStore = defineStore("tug", () => {
 
   const connected = computed(() => status.value.connection === "connected");
 
-  function notify(kind: "error" | "info", text: string) {
-    flash.value = { kind, text };
+  /** A short message at the bottom; with an action (e.g. Undo) it stays a little longer. */
+  function notify(kind: "error" | "info", text: string, action?: { label: string; run: () => void }) {
+    flash.value = { kind, text, action };
     window.clearTimeout(flashTimer);
-    flashTimer = window.setTimeout(() => (flash.value = null), kind === "info" ? 2500 : 5000);
+    const ms = action ? 8000 : kind === "info" ? 2500 : 5000;
+    flashTimer = window.setTimeout(() => (flash.value = null), ms);
   }
 
   async function attempt<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -182,6 +184,42 @@ export const useTugStore = defineStore("tug", () => {
         return;
       }
     }
+  }
+
+  /**
+   * Delete a conversation from tug: its notifications and texts disappear here (Feed,
+   * Messages, search) but nothing changes on the phone. Undo is offered for a few seconds;
+   * a new text from them starts the conversation again.
+   */
+  async function deleteConversation(c: { key: string; contact: string; addresses: string[]; notifications: PhoneNotification[] }) {
+    const gone = new Set(c.notifications.map((n) => n.id));
+    const removedNotifications = notifications.value.filter((n) => gone.has(n.id));
+    const removedMessages = messages.value.filter((m) => c.addresses.includes(m.address));
+    const nIds = removedNotifications.map((n) => n.id);
+    const mIds = removedMessages.map((m) => m.id);
+    try {
+      await api.setHidden(nIds, mIds, true);
+    } catch (e) {
+      notify("error", errorMessage(e));
+      return;
+    }
+    const hiddenMessages = new Set(mIds);
+    notifications.value = notifications.value.filter((n) => !gone.has(n.id));
+    messages.value = messages.value.filter((m) => !hiddenMessages.has(m.id));
+    if (selectedThread.value === c.key) selectedThread.value = null;
+    notify("info", `Deleted ${c.contact}`, {
+      label: "Undo",
+      run: () => {
+        flash.value = null;
+        void attempt(async () => {
+          await api.setHidden(nIds, mIds, false);
+          for (const n of removedNotifications) upsert(notifications.value, n);
+          for (const m of removedMessages) upsertMessage(m);
+          messages.value.sort((a, b) => a.receivedAt - b.receivedAt || a.id - b.id);
+          selectedThread.value = c.key;
+        });
+      },
+    });
   }
 
   /** Copy a one-time code; once it's used, its notification has done its job on the phone too. */
@@ -414,6 +452,7 @@ export const useTugStore = defineStore("tug", () => {
     readConversation,
     copyCode,
     latestCode,
+    deleteConversation,
     appNameFor,
     /** Send through the iPhone. The pending message appears via the `message` event. */
     async sendMessage(address: string, text: string): Promise<boolean> {
