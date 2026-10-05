@@ -368,10 +368,17 @@ impl Spotify {
     /// Like (save) or un-like (remove) a track in the user's library (Feb 2026 `/me/library`).
     pub fn set_saved(&self, uri: &str, saved: bool) -> Result<(), String> {
         let method = if saved { Method::Put } else { Method::Delete };
-        let body = serde_json::json!({ "uris": [uri] }).to_string();
-        self.api(method, "/me/library", Some(("application/json", body)))
-            .map(|_| ())
-            .map_err(|e| e.user_message())
+        // `uris` is a query parameter (comma-separated); a JSON body gets "Missing required
+        // field: uris" (Dave's account, 2026-10-05).
+        let path = format!("/me/library?uris={}", pe(uri));
+        self.api(method, &path, None).map(|_| ()).map_err(|e| e.user_message())
+    }
+
+    /// A playlist cover as a `data:` URI (same cache as album art). Only Spotify image hosts.
+    pub fn cover(&self, url: &str) -> Option<String> {
+        model::is_spotify_image_url(url)
+            .then(|| self.art_data_uri(url))
+            .flatten()
     }
 
     /// Album art as a `data:` URI, cached per URL under `<cache_dir>/spotify_art`.
