@@ -226,6 +226,8 @@ impl Actor {
         let store = &self.shared.store;
         let _ = store.delete_setting(keys::DEVICE_ID);
         let _ = store.delete_setting(keys::DEVICE_NAME);
+        // Forget the remembered texts phone too, so a new phone isn't matched to the old id.
+        let _ = store.delete_setting(keys::TEXTS_DEVICE_ID);
         self.shared.update_status(|s| {
             s.device = None;
             s.connection = ConnectionState::NoDevice;

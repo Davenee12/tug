@@ -1,19 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Info, Phone, Plus, RotateCcw, SendHorizontal, X } from "lucide-vue-next";
+import { ChevronRight, Info, Phone, Plus, RotateCcw, SendHorizontal, ShieldQuestionMark } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import {
-  clockTime,
-  dayLabel,
-  formatAddress,
-  groupConversations,
-  relativeTime,
-  threadKey,
-  type Conversation,
-  type ConversationItem,
-} from "../lib/format";
-import AppAvatar from "./AppAvatar.vue";
+import { clockTime, dayLabel, formatAddress, groupConversations, threadKey, type Conversation, type ConversationItem } from "../lib/format";
 import CodeChip from "./CodeChip.vue";
+import ConversationRow from "./ConversationRow.vue";
 import { findCode } from "../lib/codes";
 
 const tug = useTugStore();
@@ -42,8 +33,24 @@ const convs = computed(() => {
   }
   return list;
 });
-// The open conversation lives in the store so the Feed can open one directly.
-const selected = computed(() => convs.value.find((c) => c.key === tug.selectedThread) ?? convs.value[0] ?? null);
+// Filter unknown senders: people you don't know wait in a collapsed section at the bottom.
+// The draft (always someone you chose to text) stays with your conversations.
+const sections = computed(() => {
+  const known: Conversation[] = [];
+  const unknown: Conversation[] = [];
+  for (const c of convs.value) (c.items.length === 0 || tug.isKnown(c) ? known : unknown).push(c);
+  return { known, unknown };
+});
+// The open conversation lives in the store so the Feed can open one directly. With nothing
+// chosen, the newest *known* one opens: opening reads it, and that shouldn't happen to spam.
+const selected = computed(
+  () => convs.value.find((c) => c.key === tug.selectedThread) ?? sections.value.known[0] ?? null,
+);
+const selectedUnknown = computed(() => !!selected.value && sections.value.unknown.some((c) => c.key === selected.value!.key));
+// Collapsed until asked for; opening one from the Feed or search expands it so it's visible.
+const showUnknown = ref(false);
+watch(selectedUnknown, (u) => u && (showUnknown.value = true), { immediate: true });
+const unknownNew = computed(() => sections.value.unknown.reduce((n, c) => n + tug.newCount(c.key, c.notifications), 0));
 
 function select(key: string) {
   tug.composeTo = null;
@@ -212,49 +219,28 @@ function onKey(e: KeyboardEvent) {
       <p v-if="convs.length === 0" class="px-3 py-6 text-[13px] text-muted">
         No conversations yet. Texts from your iPhone and other chats collect here. Use + to start one.
       </p>
-      <div v-for="c in convs" :key="c.key" class="group relative">
+      <ConversationRow v-for="c in sections.known" :key="c.key" :c="c" :active="selected?.key === c.key" @select="select(c.key)" />
+      <p v-if="convs.length > 0 && sections.known.length === 0" class="px-3 py-4 text-[13px] text-muted">
+        Nothing from people you know yet.
+      </p>
+
+      <!-- Filter unknown senders: never interleaved, collapsed until asked for. -->
+      <section v-if="sections.unknown.length" class="mt-3 border-t border-hairline-soft pt-2">
         <button
-          :class="['flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left', selected?.key === c.key ? 'bg-surface-card' : 'active:bg-surface-soft']"
-          @click="select(c.key)"
+          class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left active:bg-surface-soft"
+          :aria-expanded="showUnknown"
+          @click="showUnknown = !showUnknown"
         >
-          <AppAvatar :app-id="c.appId" :label="c.contact" person size="sm" />
-          <span class="min-w-0 flex-1">
-            <span class="flex items-baseline gap-2">
-              <span :class="['truncate text-[14px] text-ink', tug.newCount(c.key, c.notifications) ? 'font-semibold' : 'font-medium']">
-                {{ c.contact }}
-              </span>
-              <span
-                v-if="c.items.length"
-                class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft group-focus-within:opacity-0 group-hover:opacity-0"
-              >
-                {{ relativeTime(c.latest.at) }}
-              </span>
-            </span>
-            <span class="flex items-center gap-2">
-              <span class="min-w-0 flex-1 truncate text-[13px] text-muted">
-                <template v-if="!c.items.length">New message</template>
-                <template v-else-if="outgoing(c.latest)">You: </template>{{ c.latest.body }}
-              </span>
-              <span
-                v-if="tug.newCount(c.key, c.notifications)"
-                class="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-ink px-1 text-[11px] font-semibold text-on-dark"
-              >
-                {{ tug.newCount(c.key, c.notifications) }}
-              </span>
-            </span>
+          <ChevronRight :size="14" :class="['shrink-0 text-muted transition-transform', showUnknown ? 'rotate-90' : '']" />
+          <span class="caption-upper text-muted">Unknown senders</span>
+          <span class="ml-auto font-mono text-[11px] text-muted-soft">
+            {{ sections.unknown.length }}<template v-if="unknownNew"> · {{ unknownNew }} new</template>
           </span>
         </button>
-        <!-- Delete from tug (not the phone); Undo in the toast. -->
-        <button
-          v-if="c.items.length"
-          class="absolute top-2 right-2 rounded-md p-1 text-muted-soft opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-surface-cream-strong hover:text-ink focus-visible:opacity-100"
-          :aria-label="`Delete conversation with ${c.contact}`"
-          :title="`Delete from tug (your iPhone keeps it)`"
-          @click.stop="tug.deleteConversation(c)"
-        >
-          <X :size="14" />
-        </button>
-      </div>
+        <template v-if="showUnknown">
+          <ConversationRow v-for="c in sections.unknown" :key="c.key" :c="c" :active="selected?.key === c.key" @select="select(c.key)" />
+        </template>
+      </section>
     </nav>
 
     <section v-if="selected" class="flex min-w-0 flex-1 flex-col">
@@ -276,6 +262,14 @@ function onKey(e: KeyboardEvent) {
           <Phone :size="13" /> {{ tug.calling === replyTo ? "Calling…" : "Call" }}
         </button>
       </header>
+      <div v-if="selectedUnknown" class="flex items-center gap-3 border-b border-hairline bg-surface-soft px-8 py-2.5">
+        <ShieldQuestionMark :size="15" class="shrink-0 text-muted" />
+        <p class="min-w-0 flex-1 text-[13px] text-muted">
+          Not in your contacts. Texts from unknown senders don't count as unread or pop up, except codes. Replying moves them to your
+          conversations.
+        </p>
+        <button class="btn-secondary btn-sm shrink-0" @click="tug.moveToConversations(selected)">Move to conversations</button>
+      </div>
 
       <div ref="scroller" class="flex-1 overflow-y-auto px-8 py-6">
         <template v-for="(item, i) in selected.items" :key="item.id">

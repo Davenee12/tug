@@ -38,6 +38,9 @@ pub mod keys {
     pub const DEVICE_ID: &str = "device_id";
     pub const DEVICE_NAME: &str = "device_name";
     pub const ADVERTISE: &str = "advertise";
+    /// The Classic (texts) device id tug last connected a MAP session to. Remembered so a
+    /// phone rename can't make tug follow the old name onto the wrong device.
+    pub const TEXTS_DEVICE_ID: &str = "texts_device_id";
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -99,6 +102,8 @@ pub struct DeviceStatus {
     pub battery: Option<u8>,
     pub services: Services,
     pub last_error: Option<String>,
+    /// Unix ms when `last_error` last changed to its current value, so the UI can say "2m ago".
+    pub last_error_at: Option<i64>,
     /// The iPhone rejects this PC's notifications bond (forgotten on the phone): pair again.
     pub pairing_stale: bool,
     /// Why message access isn't available, when the user can fix it (e.g. consent).
@@ -171,10 +176,20 @@ pub struct Shared {
     /// The user is looking at the iPhone's switches (setup's sharing step, Settings): check
     /// them every couple of seconds so flipping one on the phone shows up right away.
     watching: AtomicBool,
+    /// Called after every Now Playing change (Windows' media controls follow it).
+    now_playing_hook: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Wall-clock time in Unix milliseconds (for stamping when an error happened).
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 impl Shared {
@@ -189,6 +204,7 @@ impl Shared {
             pairing_confirm: Mutex::default(),
             map: OnceLock::new(),
             watching: AtomicBool::new(false),
+            now_playing_hook: OnceLock::new(),
         }
     }
 
@@ -223,6 +239,10 @@ impl Shared {
             let mut s = lock(&self.status);
             let before = s.clone();
             f(&mut s);
+            // Stamp when the error text changes, so the UI can show how long ago it happened.
+            if s.last_error != before.last_error {
+                s.last_error_at = s.last_error.is_some().then(now_ms);
+            }
             (*s != before).then(|| s.clone())
         };
         if let Some(s) = snapshot {
@@ -241,6 +261,16 @@ impl Shared {
         };
         if let Some(np) = snapshot {
             self.emit(events::NOW_PLAYING, np);
+            if let Some(hook) = self.now_playing_hook.get() {
+                hook();
+            }
+        }
+    }
+
+    /// Set once at startup: run `hook` after every Now Playing change.
+    pub fn set_now_playing_hook(&self, hook: Box<dyn Fn() + Send + Sync>) {
+        if self.now_playing_hook.set(hook).is_err() {
+            log::warn!("now-playing hook already set");
         }
     }
 

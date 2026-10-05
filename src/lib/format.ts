@@ -1,4 +1,8 @@
 import type { CallRecord, Contact, PhoneNotification, SmsMessage } from "../types/protocol";
+import { isAddressLike, normalizeAddress } from "./address";
+
+/** The iPhone's Messages app: texts (SMS/iMessage) that MAP can also read and send. */
+export const MESSAGES_APP = "com.apple.MobileSMS";
 
 /** Bundle ids whose notifications are conversations, grouped as threads. */
 export const MESSAGING_APPS: Record<string, string> = {
@@ -106,9 +110,19 @@ export function cleanName(name: string): string {
   return name.trim().replace(/\s+/g, " ").replace(IOS_REPLY_SUFFIX, "");
 }
 
-/** One conversation per app + sender, however the sender's name is padded or cased. */
+/**
+ * Who a Messages text is from, as a conversation is named: the name iOS gave or, for someone
+ * iOS shows as a number ("+1 (302) 555-0199", a short code, an email), that address formatted
+ * the way MAP's texts from them are, so their notifications and texts are one conversation.
+ */
+export function senderName(title: string): string {
+  return isAddressLike(title) ? formatAddress(normalizeAddress(title)) : cleanName(title);
+}
+
+/** One conversation per app + sender, however the sender's name (or number) is padded, cased or formatted. */
 export function threadKey(n: Pick<PhoneNotification, "appId" | "title">): string {
-  return `${n.appId}\u0000${cleanName(n.title).toLowerCase()}`;
+  const name = n.appId === MESSAGES_APP ? senderName(n.title) : cleanName(n.title);
+  return `${n.appId}\u0000${name.toLowerCase()}`;
 }
 
 const byTime = (a: PhoneNotification, b: PhoneNotification) =>
@@ -138,14 +152,16 @@ export function groupThreads(notifications: PhoneNotification[]): Thread[] {
 /**
  * The newest conversation that still has unread texts, or null if none. `groupThreads`
  * is already newest-first, so this is the first thread with a fresh count — the one the
- * tray opens on click. `newCount` is the store's (it knows what's been seen).
+ * tray opens on click. `newCount` is the store's (it knows what's been seen); `counts` leaves
+ * out threads that don't count toward unread (unknown senders).
  */
 export function newestUnreadThread(
   notifications: PhoneNotification[],
   newCount: (key: string, items: PhoneNotification[]) => number,
+  counts: (t: Thread) => boolean = () => true,
 ): string | null {
   for (const t of groupThreads(notifications)) {
-    if (newCount(t.key, t.items) > 0) return t.key;
+    if (counts(t) && newCount(t.key, t.items) > 0) return t.key;
   }
   return null;
 }
@@ -194,8 +210,6 @@ export function formatAddress(address: string): string {
   const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(address);
   return m ? `(${m[1]}) ${m[2]}-${m[3]}` : address;
 }
-
-const MESSAGES_APP = "com.apple.MobileSMS";
 
 export type ConversationItem =
   | { kind: "notification"; id: string; at: Date; body: string; n: PhoneNotification }
@@ -272,16 +286,27 @@ export function groupConversations(
   };
 
   for (const m of messages) {
-    const name = cleanName(m.contactName ?? nameFor.get(m.address) ?? formatAddress(m.address));
+    // A "name" that is just their number (learned from an unknown sender's notification) is
+    // shown as the number, so it keys the same as `senderName` does for their notifications.
+    const known = m.contactName ?? nameFor.get(m.address);
+    const name = known && !isAddressLike(known) ? cleanName(known) : formatAddress(m.address);
     const c = get(MESSAGES_APP, "Messages", name);
     c.items.push({ kind: "message", id: `m${m.id}`, at: messageTime(m), body: m.body, m });
   }
   // Each fetched message can stand in for at most one notification, so two
   // genuinely identical texts ("ok", "ok") both show.
   const absorbed = new Set<string>();
+  // Senders iOS titles with their number: that number is where a reply goes.
+  const titleNumbers = new Map<string, Set<string>>();
   for (const n of notifications) {
     if (!isConversation(n)) continue;
-    const c = get(n.appId, appLabel(n), cleanName(n.title));
+    const sms = n.appId === MESSAGES_APP;
+    const c = get(n.appId, appLabel(n), sms ? senderName(n.title) : cleanName(n.title));
+    if (sms && isAddressLike(n.title)) {
+      const set = titleNumbers.get(c.key) ?? new Set<string>();
+      set.add(normalizeAddress(n.title));
+      titleNumbers.set(c.key, set);
+    }
     c.notifications.push(n);
     const at = notificationTime(n);
     const body = n.message || n.subtitle;
@@ -301,7 +326,10 @@ export function groupConversations(
   for (const c of out) {
     c.items.sort((a, b) => a.at.getTime() - b.at.getTime());
     c.latest = c.items[c.items.length - 1];
-    if (c.appId === MESSAGES_APP) resolveNumbers(c, numbersFor.get(cleanName(c.contact).toLowerCase()) ?? []);
+    if (c.appId === MESSAGES_APP) {
+      const fromContacts = numbersFor.get(cleanName(c.contact).toLowerCase()) ?? [];
+      resolveNumbers(c, [...fromContacts, ...(titleNumbers.get(c.key) ?? [])]);
+    }
   }
   return out.sort((a, b) => b.latest.at.getTime() - a.latest.at.getTime());
 }

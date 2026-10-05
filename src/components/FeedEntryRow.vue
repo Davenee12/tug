@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { ChevronRight, X } from "lucide-vue-next";
+import { ChevronRight, ExternalLink, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { notificationTime, relativeTime, type FeedEntry } from "../lib/format";
 import { findCode } from "../lib/codes";
+import { GMAIL_APP_ID, webLinkFor } from "../lib/weblinks";
 import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import NotificationItem from "./NotificationItem.vue";
@@ -29,6 +30,14 @@ const ringing = computed(() => latest.value.category === "incomingCall" && lates
 const clearable = computed(() => items.value.some((n) => n.live && n.flags.negativeAction));
 // A verification code in the newest notification: copy it right from the row.
 const code = computed(() => findCode(latest.value.message || latest.value.subtitle));
+// A web page to open for this app, but only for app stacks — conversation threads (people) never
+// get an "Open" button. For a stack the latest notification stands in (same app for all items).
+const webLink = computed(() => (props.entry.kind === "stack" ? webLinkFor(latest.value) : null));
+// Clicking a single Gmail notification's body opens it in the browser instead of expanding — the
+// owner's "click the notification to open" for the one case where it doesn't fight the stack UI.
+const bodyOpens = computed(
+  () => props.entry.kind === "stack" && items.value.length === 1 && latest.value.appId === GMAIL_APP_ID && !!webLink.value,
+);
 
 const rowEl = ref<HTMLElement | null>(null);
 const flashed = ref(false);
@@ -53,6 +62,10 @@ watch(
 function open() {
   if (props.entry.kind === "thread") {
     tug.openThread(props.entry.key);
+    return;
+  }
+  if (bodyOpens.value && webLink.value) {
+    tug.openUrl(webLink.value.url);
     return;
   }
   expanded.value = !expanded.value;
@@ -95,6 +108,17 @@ function open() {
         {{ fresh }}
       </span>
       <span
+        v-if="webLink"
+        role="button"
+        tabindex="0"
+        class="shrink-0 rounded-md p-1 text-muted-soft active:bg-surface-card"
+        :title="`Open in ${webLink.label} on the web`"
+        @click.stop="tug.openUrl(webLink.url)"
+        @keydown.enter.stop="tug.openUrl(webLink.url)"
+      >
+        <ExternalLink :size="14" />
+      </span>
+      <span
         v-if="clearable && !ringing"
         role="button"
         tabindex="0"
@@ -106,6 +130,7 @@ function open() {
         <X :size="14" />
       </span>
       <ChevronRight
+        v-if="!bodyOpens"
         :size="15"
         :class="['shrink-0 text-muted-soft transition-transform', entry.kind === 'stack' && expanded ? 'rotate-90' : '']"
       />
