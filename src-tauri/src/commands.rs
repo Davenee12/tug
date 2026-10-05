@@ -204,6 +204,20 @@ pub async fn app_icon(app: tauri::AppHandle, state: State<'_, AppState>, app_id:
         .map_err(|e| e.to_string())?
 }
 
+/// The app's own website (from the same App Store lookup as its icon), for "Open" on apps tug
+/// has no page for. Off with App icons, since it sends the app's ID the same way.
+#[tauri::command]
+pub async fn app_website(app: tauri::AppHandle, state: State<'_, AppState>, app_id: String) -> Result<Option<String>> {
+    use tauri::Manager;
+    if state.shared.store.setting("ui.appIcons").ok().flatten().as_deref() == Some("false") {
+        return Ok(None);
+    }
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || crate::app_icons::website(&dir, &app_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// The reverse-lookup answer for coordinates (JSON), for naming "Use my location".
 #[tauri::command]
 pub async fn place_lookup(latitude: f64, longitude: f64) -> Result<String> {

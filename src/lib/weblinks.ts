@@ -1,6 +1,7 @@
 // Web links for notifications. iOS gives us no deep link to the exact item, so we map a
 // bundle id to the most useful landing page for that app on the web (inbox, notifications,
-// feed…). Gmail is special-cased into a deep search built from the sender and subject.
+// feed…). Gmail opens the inbox: a search built from the notification's sender and subject
+// often found nothing (iOS's sender name and subject rarely match Gmail's search exactly).
 //
 // Pure module: no Tauri, no DOM. The UI calls `webLinkFor` to decide whether to show an
 // "Open" button and where it points; see `src/lib/ipc.ts` `openUrl` for the actual launch.
@@ -15,12 +16,10 @@ export interface WebLink {
 }
 
 export const GMAIL_APP_ID = "com.google.Gmail";
+const GOOGLE_APP_ID = "com.google.GoogleMobile";
+/** Apps whose notifications are the phone itself, with their own actions (reply, call back). */
+const NO_WEB = new Set(["com.apple.MobileSMS", "com.apple.mobilephone", "com.apple.facetime"]);
 
-const GMAIL_SEARCH = "https://mail.google.com/mail/u/0/#search/";
-const GMAIL_INBOX = "https://mail.google.com/mail/u/0/#inbox";
-
-/** Longest Gmail query we build; keeps the URL sane when a subject line runs long. */
-const GMAIL_QUERY_MAX = 120;
 
 /**
  * Static landing pages, by iOS bundle id. Each is the page a person most likely wants after
@@ -49,39 +48,26 @@ const LANDING: Record<string, WebLink> = {
   "notion.id": { url: "https://www.notion.so/", label: "Notion" },
   "com.zhiliaoapp.musically": { url: "https://www.tiktok.com/", label: "TikTok" },
   "com.google.Voice": { url: "https://voice.google.com/", label: "Google Voice" },
+  [GMAIL_APP_ID]: { url: "https://mail.google.com/mail/u/0/#inbox", label: "Gmail" },
 };
-
-/** Drop double quotes (Gmail search has no escape for them) and collapse whitespace. */
-function clean(s: string | null | undefined): string {
-  return (s ?? "").replace(/"/g, "").replace(/\s+/g, " ").trim();
-}
-
-/**
- * The Gmail search for a notification, e.g. `from:"Jane Doe" "Your order shipped"`. The sender
- * is the notification title; the subject is the subtitle when there is one, else the first line
- * of the message (Gmail puts the subject there, sometimes with the snippet below). Returns an
- * empty string when there's nothing to search on, so the caller falls back to the inbox.
- */
-export function gmailQuery(n: Pick<PhoneNotification, "title" | "subtitle" | "message">): string {
-  const sender = clean(n.title);
-  const subject = clean(n.subtitle) || clean(n.message.split(/\r?\n/)[0]);
-  const parts: string[] = [];
-  if (sender) parts.push(`from:"${sender}"`);
-  if (subject) parts.push(`"${subject}"`);
-  return parts.join(" ").slice(0, GMAIL_QUERY_MAX).trim();
-}
-
-function gmailLink(n: PhoneNotification): WebLink {
-  const query = gmailQuery(n);
-  return { url: query ? GMAIL_SEARCH + encodeURIComponent(query) : GMAIL_INBOX, label: "Gmail" };
-}
 
 /**
  * Where this notification's app opens on the web, or null when we have no useful page for it
- * (Messages, Phone, and any app not in the map). Gmail gets a deep search; everything else a
- * fixed landing page.
+ * (Messages, Phone, and any app not in the map).
  */
 export function webLinkFor(n: PhoneNotification): WebLink | null {
-  if (n.appId === GMAIL_APP_ID) return gmailLink(n);
+  // The Google app's alerts (live scores, news) are about something: search for it.
+  if (n.appId === GOOGLE_APP_ID) {
+    const topic = (n.subtitle || n.message.split(/\r?\n/)[0] || n.title).split(" · ")[0].replace(/\s+/g, " ").trim();
+    return {
+      url: topic ? `https://www.google.com/search?q=${encodeURIComponent(topic.slice(0, 120))}` : "https://www.google.com/",
+      label: "Google",
+    };
+  }
   return LANDING[n.appId] ?? null;
+}
+
+/** Whether an app can have a website to open at all (not Messages, Phone or FaceTime). */
+export function mayHaveWebsite(appId: string): boolean {
+  return !NO_WEB.has(appId);
 }
