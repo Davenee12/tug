@@ -64,6 +64,11 @@ const PROP_IS_CONNECTED: &str = "System.Devices.Aep.IsConnected";
 const ANCS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const RETRY_CONNECTED_SECS: u32 = 2;
 const RETRY_IDLE_SECS: u32 = 10;
+/// Longest wait between connect attempts once they keep failing.
+const MAX_RETRY_SECS: u32 = 30;
+/// After this many failures in a row, treat link-up blips as flapping.
+const FLAPPING_AFTER: u32 = 3;
+const FLAP_SETTLE_SECS: u32 = 5;
 const ADVERTISE_RETRY_SECS: u32 = 3;
 /// Quiet period after the last replayed notification before sweeping stale rows.
 // Long enough that a slow replay's gaps aren't mistaken for its end (that swept, then
@@ -191,6 +196,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         device_id: None,
         link: None,
         retry_in: 0,
+        connect_failures: 0,
         advertise_retry_in: None,
         carried_name: None,
         cccd_check_in: CCCD_CHECK_SECS,
@@ -221,6 +227,8 @@ struct Actor {
     link: Option<Link>,
     /// Seconds until the next connection attempt.
     retry_in: u32,
+    /// Connect attempts that failed in a row; drives the backoff.
+    connect_failures: u32,
     /// Seconds until advertising is retried after Windows aborted it.
     advertise_retry_in: Option<u32>,
     /// Name of a Classic-paired iPhone whose LE side is being paired on its behalf.
@@ -234,6 +242,13 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Seconds before the next connect attempt: the base delay, doubling with each failure in
+/// a row (a phone at the edge of range fails every few seconds, all night), capped.
+fn retry_delay(base: u32, failures: u32) -> u32 {
+    let doublings = failures.saturating_sub(1).min(5);
+    base.saturating_mul(1 << doublings).min(MAX_RETRY_SECS)
 }
 
 fn guid(u: u128) -> GUID {
@@ -396,6 +411,7 @@ impl Actor {
                 self.shared.update_status(|s| s.radio = state);
                 if state == RadioState::On {
                     self.retry_in = 0;
+                    self.connect_failures = 0;
                 }
             }
             Event::DeviceAdded(info, transport) => {
@@ -488,5 +504,23 @@ impl Actor {
 
     fn set_error(&self, message: String) {
         self.shared.update_status(|s| s.last_error = Some(message));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connect_retries_back_off_then_cap() {
+        let waits: Vec<u32> = (0..=8).map(|f| retry_delay(RETRY_CONNECTED_SECS, f)).collect();
+        assert_eq!(waits, vec![2, 2, 4, 8, 16, 30, 30, 30, 30]);
+        assert_eq!(retry_delay(RETRY_IDLE_SECS, 1), 10);
+        assert_eq!(retry_delay(RETRY_IDLE_SECS, 3), 30);
+        assert_eq!(
+            retry_delay(RETRY_CONNECTED_SECS, u32::MAX),
+            MAX_RETRY_SECS,
+            "no overflow"
+        );
     }
 }
