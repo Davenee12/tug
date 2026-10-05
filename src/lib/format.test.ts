@@ -202,7 +202,15 @@ describe("canClear", () => {
   it("never clears a ringing call (its negative action is Decline)", () => {
     const ringing = note("Mum", "Incoming call", 0, { appId: "com.apple.mobilephone", category: "incomingCall", negativeLabel: "Decline" });
     expect(canClear(ringing)).toBe(false);
-    expect(canClear({ ...ringing, category: "missedCall" })).toBe(true);
+    expect(canClear({ ...ringing, category: "missedCall", negativeLabel: "Clear" })).toBe(true);
+  });
+
+  it("never ends a call in progress (WhatsApp's Active Call offers End Call)", () => {
+    const active = note("davia", "Active Call", 0, { appId: "net.whatsapp.WhatsApp", category: "other", negativeLabel: "End Call" });
+    expect(canClear(active)).toBe(false);
+    expect(canClear({ ...active, negativeLabel: "Decline" })).toBe(false);
+    expect(canClear({ ...active, negativeLabel: "Clear" })).toBe(true);
+    expect(canClear({ ...active, negativeLabel: "" })).toBe(true);
   });
 });
 
