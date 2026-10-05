@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.5.7 — 2026-10-05
+
+tug feels built into Windows, plus a full stabilization pass. Media keys verified on Dave's iPhone;
+the rest is built and checked, with Dave's hands-on testing continuing.
+
+### New
+- **Act from the Windows pop-up:** reply to a text right in the notification, Mark read, Copy code,
+  Call back a missed call, or Clear — without opening tug.
+- **Media keys and the Windows media panel** control your iPhone's music: play/pause, next and
+  previous, with the song shown in Windows' media controls.
+- **Open notifications on the web:** an Open button on any app's notification goes to that app's
+  best page, or its own website (Gmail opens your inbox; a Google alert searches for what it's about).
+- **Filter unknown senders:** texts from unsaved numbers, short codes and spam go to a collapsed
+  "Unknown senders" list, out of your conversations, the unread badge and pop-ups (verification
+  codes still pop up). Move someone to your conversations, or reply, and they're known.
+- **Hold to change volume** on the Now Playing card.
+- **Connection health** in Settings › iPhone, and **Copy diagnostics** for support (phone numbers,
+  emails, your phone's name and Bluetooth addresses are hidden).
+- **Start with Windows**, minimized to the tray (off by default).
+- **Low phone battery alert** at 20% and 10%.
+- **Finding your location** speaks in tug's voice ("Giving the map a little tug…").
+
+### Fixed
+- **Settings no longer seems to open and close by itself:** the Connection panel only appears if
+  your phone has been away for 30 seconds, and Esc closing search no longer closes Settings too.
+- **A draft can't be sent to the wrong person:** drafts belong to their own conversation.
+- **Links open in your browser** (they could open File Explorer).
+- **Recent calls clear** when you clear your phone's call history.
+- **tug can't freeze** if the phone drops mid-connection: every Bluetooth step has a time limit.
+- Lighter on the phone: contacts are re-checked at most every 10 s while the switches screen is
+  open, and fast checks switch themselves off.
+- Unknown numbers stay out of the new-message picker's Recent list.
+- tug remembers your phone by its id, so renaming it can't confuse texts.
+
+### Developer
+- Live texts groundwork (MNS event-report parser, OBEX server framing, registration request),
+  not yet switched on (v0.5.8).
+- Calling anyone is parked (v0.5.13+); see ROADMAP "Parked" for the spike findings.
+
 ## v0.5.6 — 2026-10-05
 
 Calls, real app icons and a steadier connection. Tested on Dave's iPhone.
