@@ -172,6 +172,8 @@ pub struct Shared {
     /// The user is looking at the iPhone's switches (setup's sharing step, Settings): check
     /// them every couple of seconds so flipping one on the phone shows up right away.
     watching: AtomicBool,
+    /// Called after every Now Playing change (Windows' media controls follow it).
+    now_playing_hook: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -190,6 +192,7 @@ impl Shared {
             pairing_confirm: Mutex::default(),
             map: OnceLock::new(),
             watching: AtomicBool::new(false),
+            now_playing_hook: OnceLock::new(),
         }
     }
 
@@ -236,6 +239,16 @@ impl Shared {
         };
         if let Some(np) = snapshot {
             self.emit(events::NOW_PLAYING, np);
+            if let Some(hook) = self.now_playing_hook.get() {
+                hook();
+            }
+        }
+    }
+
+    /// Set once at startup: run `hook` after every Now Playing change.
+    pub fn set_now_playing_hook(&self, hook: Box<dyn Fn() + Send + Sync>) {
+        if self.now_playing_hook.set(hook).is_err() {
+            log::warn!("now-playing hook already set");
         }
     }
 

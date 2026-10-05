@@ -31,7 +31,6 @@ pub const PBAP_TARGET: [u8; 16] = [
     0x79, 0x61, 0x35, 0xF0, 0xF0, 0xC5, 0x11, 0xD8, 0x09, 0x66, 0x08, 0x00, 0x20, 0x0C, 0x9A, 0x66,
 ];
 
-const OP_PUT: u8 = 0x02;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Device lookup + RFCOMM connect + OBEX CONNECT, end to end.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -40,6 +39,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const AP_MAX_LIST_COUNT: u8 = 0x01;
 const AP_LIST_START_OFFSET: u8 = 0x02;
 const AP_ATTACHMENT: u8 = 0x0A;
+const AP_NOTIFICATION_STATUS: u8 = 0x0E;
+const AP_MAS_INSTANCE_ID: u8 = 0x0F;
 const AP_CHARSET: u8 = 0x14;
 const AP_STATUS_INDICATOR: u8 = 0x17;
 const AP_STATUS_VALUE: u8 = 0x18;
@@ -369,6 +370,21 @@ impl MapSession {
         Ok(())
     }
 
+    /// SetNotificationRegistration: ask the phone to connect to our Message Notification
+    /// Server and push event reports (`map::mns_event`), or to stop. Nothing calls this
+    /// until tug hosts an MNS; turning it on without one leaves the phone retrying.
+    pub async fn set_notification_registration(&mut self, on: bool) -> Result<()> {
+        let packet = notification_registration_request(self.link.connection_id, on);
+        let resp = self.link.exchange(&packet, false).await?;
+        if !resp.is_success() {
+            return Err(MapError::Obex {
+                op: "SetNotificationRegistration",
+                code: resp.code,
+            });
+        }
+        Ok(())
+    }
+
     /// PushMessage to the outbox. Success means *accepted by the iPhone*; it does
     /// not confirm carrier delivery. Returns the handle iOS assigned, if any.
     pub async fn push_message(&mut self, recipient: &str, text: &str) -> Result<Option<String>> {
@@ -390,7 +406,7 @@ impl MapSession {
                 if last { obex::HI_END_OF_BODY } else { obex::HI_BODY },
                 chunk.to_vec(),
             ));
-            let opcode = if last { obex::OP_PUT_FINAL } else { OP_PUT };
+            let opcode = if last { obex::OP_PUT_FINAL } else { obex::OP_PUT };
             let resp = self.link.exchange(&obex::request(opcode, &[], &headers), false).await?;
             let expected = if last { obex::RSP_SUCCESS } else { obex::RSP_CONTINUE };
             if resp.code != expected {
@@ -409,6 +425,20 @@ impl MapSession {
     pub async fn disconnect(self) {
         self.link.disconnect().await;
     }
+}
+
+/// The SetNotificationRegistration PUT, kept pure so its bytes can be tested. iOS exposes a
+/// single MAS, instance 0. The End-of-Body carries MAP's 0x30 filler byte, like the spec, BlueZ,
+/// and tug's own UpdateInbox / SetMessageStatus PUTs, which Jordan's iPhone already accepts
+/// (another iOS client sends it empty; try that if iOS ever refuses the registration).
+fn notification_registration_request(connection_id: u32, on: bool) -> Vec<u8> {
+    let headers = [
+        Header::connection_id(connection_id),
+        Header::type_("x-bt/MAP-NotificationRegistration"),
+        obex::app_params(&[(AP_NOTIFICATION_STATUS, &[on as u8]), (AP_MAS_INSTANCE_ID, &[0])]),
+        Header::Bytes(obex::HI_END_OF_BODY, vec![0x30]),
+    ];
+    obex::request(obex::OP_PUT_FINAL, &[], &headers)
 }
 
 /// Pull the iPhone's contacts over PBAP (`telecom/pb.vcf`): names and numbers only.
@@ -472,4 +502,36 @@ async fn pull_calls(link: &mut ObexLink, list: &str, max: u16) -> Result<String>
     ];
     let raw = link.get("PullPhoneBook", headers).await?;
     Ok(String::from_utf8_lossy(&raw).into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notification_registration_bytes() {
+        let p = notification_registration_request(0x0000_0001, true);
+        let ty = b"x-bt/MAP-NotificationRegistration\0";
+        let mut expected = vec![obex::OP_PUT_FINAL, 0, 0];
+        expected.extend_from_slice(&[obex::HI_CONNECTION_ID, 0, 0, 0, 1]);
+        expected.extend_from_slice(&[obex::HI_TYPE, 0, (ty.len() + 3) as u8]);
+        expected.extend_from_slice(ty);
+        expected.extend_from_slice(&[obex::HI_APP_PARAMS, 0, 9, 0x0E, 0x01, 0x01, 0x0F, 0x01, 0x00]);
+        expected.extend_from_slice(&[obex::HI_END_OF_BODY, 0, 4, 0x30]);
+        let len = expected.len() as u16;
+        expected[1..3].copy_from_slice(&len.to_be_bytes());
+        assert_eq!(p, expected);
+    }
+
+    #[test]
+    fn notification_registration_off_and_parsed_back() {
+        let r = obex::parse_request(&notification_registration_request(42, false)).unwrap();
+        assert_eq!((r.opcode, r.is_final), (obex::OP_PUT, true));
+        assert_eq!(r.connection_id(), Some(42));
+        assert_eq!(r.type_(), Some("x-bt/MAP-NotificationRegistration"));
+        assert_eq!(r.app_param(AP_NOTIFICATION_STATUS), Some(&[0u8][..]));
+        assert_eq!(r.app_param(AP_MAS_INSTANCE_ID), Some(&[0u8][..]));
+        assert!(r.has_end_of_body());
+        assert_eq!(r.body(), &[0x30][..]);
+    }
 }

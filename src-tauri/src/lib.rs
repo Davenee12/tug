@@ -9,6 +9,7 @@ mod device_kind;
 pub mod hfp;
 mod location;
 pub mod map;
+mod media_keys;
 mod messages;
 #[cfg(test)]
 mod perf;
@@ -65,6 +66,7 @@ pub fn run() {
             let shared = Arc::new(Shared::new(app.handle().clone(), store));
             let ble = ble::start(shared.clone());
             let _ = shared.map.set(map::service::start(shared.clone()));
+            media_keys::start(shared.clone(), ble.clone());
             app.manage(AppState { shared, ble });
             // Nice to have, never a reason not to start.
             if let Err(e) = tray::install(app.handle()) {
