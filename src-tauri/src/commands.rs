@@ -268,6 +268,43 @@ pub fn open_windows_settings(page: String) -> Result<()> {
         .map_err(|e| e.to_string())
 }
 
+/// True when `url` is a plain http(s) URL with a host: the only thing `open_url` will launch.
+/// Pure (no I/O) so it can be unit-tested; see the tests at the bottom of this file. We parse
+/// by hand rather than add a URL crate — the check only needs scheme + host and to refuse
+/// anything that could be a non-web URI (`file:`, `javascript:`, `ms-settings:`) or carry shell
+/// metacharacters to `explorer.exe`.
+pub fn is_http_url(url: &str) -> bool {
+    // Nothing weird that a shell or the OS could reinterpret.
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    let rest = match url.split_once("://") {
+        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") => rest,
+        _ => return false,
+    };
+    // Authority is up to the first path/query/fragment delimiter.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Drop any userinfo (after the last '@') and port (after ':'); a host must remain.
+    let host_port = authority.rsplit('@').next().unwrap_or("");
+    let host = host_port.split(':').next().unwrap_or("");
+    !host.is_empty()
+}
+
+/// Open an http(s) link in the default browser (the "Open in browser" action on a notification).
+/// Validated first so the webview can't ask us to launch a `file:`/`javascript:`/settings URI;
+/// uses the same shell launch as `open_windows_settings`.
+#[tauri::command]
+pub fn open_url(url: String) -> Result<()> {
+    if !is_http_url(&url) {
+        return Err(format!("refusing to open non-web URL: {url}"));
+    }
+    std::process::Command::new("explorer.exe")
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Unread texts, for the tray tooltip and the taskbar dot.
 #[tauri::command]
 pub fn set_unread(app: tauri::AppHandle, count: u32) -> Result<()> {
@@ -387,4 +424,68 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
         return Err(format!("{key} is not a UI setting"));
     }
     state.shared.store.set_setting(&key, &value).map_err(|e| e.to_string())
+}
+
+/// Whether tug starts with Windows. The registry entry (via the autostart plugin) is the
+/// source of truth, so the Settings switch reads this rather than a stored preference.
+#[tauri::command]
+pub fn get_autostart(app: tauri::AppHandle) -> Result<bool> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// Turn "start with Windows" on or off. On writes an entry that launches tug with
+/// `--minimized`, so it comes up hidden in the tray.
+#[tauri::command]
+pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<()> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_http_url;
+
+    #[test]
+    fn accepts_http_and_https_with_a_host() {
+        assert!(is_http_url("https://mail.google.com/mail/u/0/#inbox"));
+        assert!(is_http_url("http://example.com"));
+        assert!(is_http_url("https://x.com/notifications"));
+        assert!(is_http_url("https://host:8443/path?q=1#frag"));
+        assert!(is_http_url("HTTPS://Example.com")); // scheme is case-insensitive
+                                                     // A percent-encoded Gmail search is a real query we build.
+        assert!(is_http_url(
+            "https://mail.google.com/mail/u/0/#search/from%3A%22Jane%20Doe%22"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_web_schemes() {
+        assert!(!is_http_url("file:///C:/Windows/System32/calc.exe"));
+        assert!(!is_http_url("javascript:alert(1)"));
+        assert!(!is_http_url("ms-settings:bluetooth"));
+        assert!(!is_http_url("ftp://example.com"));
+        assert!(!is_http_url("mailto:someone@example.com"));
+        assert!(!is_http_url("example.com")); // no scheme
+    }
+
+    #[test]
+    fn rejects_missing_host() {
+        assert!(!is_http_url("https://"));
+        assert!(!is_http_url("http:///just/a/path"));
+        assert!(!is_http_url("https://user@"));
+    }
+
+    #[test]
+    fn rejects_whitespace_and_control_chars() {
+        assert!(!is_http_url("https://example.com/a b"));
+        assert!(!is_http_url("https://example.com /x")); // would split into a second arg
+        assert!(!is_http_url("https://exa\nmple.com"));
+        assert!(!is_http_url("https://example.com\t"));
+    }
 }

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Bell, BellOff } from "lucide-vue-next";
+import { Bell, BellOff, ExternalLink } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { appLabel, clockTime, notificationTime } from "../lib/format";
+import { webLinkFor } from "../lib/weblinks";
 import type { PhoneNotification } from "../types/protocol";
 import AppAvatar from "./AppAvatar.vue";
 
@@ -13,6 +14,8 @@ const tug = useTugStore();
 const label = computed(() => appLabel(props.n));
 const time = computed(() => clockTime(notificationTime(props.n)));
 const muted = computed(() => tug.settings.mutedApps.includes(props.n.appId));
+// A web page we can open for this app (Gmail deep search, LinkedIn notifications…), or null.
+const webLink = computed(() => webLinkFor(props.n));
 const expanded = ref(false);
 const busy = ref<"positive" | "negative" | null>(null);
 const isCall = computed(() => props.n.category === "incomingCall");
@@ -60,6 +63,15 @@ async function act(positive: boolean) {
             {{ n.negativeLabel || "Dismiss" }}
           </button>
         </template>
+        <button
+          v-if="webLink"
+          class="btn-secondary btn-sm"
+          :title="`Open in ${webLink.label} on the web`"
+          @click="tug.openUrl(webLink.url)"
+        >
+          <ExternalLink :size="13" />
+          Open
+        </button>
         <button
           class="ml-auto rounded-md p-1.5 text-muted-soft active:bg-surface-card"
           :title="muted ? `Unmute ${label} alerts` : `Mute ${label} alerts on this PC`"

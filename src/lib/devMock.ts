@@ -70,6 +70,10 @@ const history: PhoneNotification[] = setup
       n("com.apple.MobileSMS", "Messages", "Tay", "lol yes that's exactly what I meant", 60 * 25, { live: false, removedAt: now - 60 * 24 * min }),
       n("com.apple.Health", null, "Stand", "Time to stand! Stand and move for a minute.", 60 * 27, { category: "healthAndFitness", live: false }),
       n("com.apple.MobileSMS", "Messages", "Bank", "Your code is 482913. Don't share it with anyone.", 60 * 50, { live: false }),
+      // Unknown senders (iOS titles them with the number): they land under Messages › Unknown
+      // senders, without a badge. The short code's text carries a code, so it would still pop up.
+      n("com.apple.MobileSMS", "Messages", "‪+1 (555) 013-2244‬", "Congrats! You've been selected for a $500 gift card. Reply YES to claim before midnight.", 7),
+      n("com.apple.MobileSMS", "Messages", "72975", "Your Acme verification code is 731904. It expires in 10 minutes.", 12),
     ];
 
 // Mirrors the backend's reconnect sweep: anything no longer on the phone is cleared.
@@ -155,12 +159,12 @@ const contacts: Contact[] = setup
       { address: "+19725550111", name: "Dave Smith" },
     ];
 let nextMsg = 1;
-const sms = (direction: "in" | "out", body: string, agoMin: number): SmsMessage => ({
+const sms = (direction: "in" | "out", body: string, agoMin: number, address = TAY, contactName: string | null = "Tay"): SmsMessage => ({
   id: nextMsg++,
   source: "iphone-map",
   direction,
-  address: TAY,
-  contactName: "Tay",
+  address,
+  contactName,
   body,
   sentAt: null,
   receivedAt: now - agoMin * min,
@@ -173,6 +177,8 @@ const messages: SmsMessage[] = setup
       sms("out", "yeah! leaving soon", 38),
       sms("in", "did you see the photos I sent?", 4),
       sms("in", "omw, 10 mins 🚗", 1),
+      // The spammer's earlier text, read over MAP: same conversation as their notification.
+      sms("in", "Final notice: your car warranty is about to expire. Call now.", 60 * 3, "+15550132244", null),
     ];
 
 // Recents (PBAP call history): phone-local times, newest first, as the iPhone sends them.
@@ -192,6 +198,7 @@ const calls: CallRecord[] = setup
     ];
 
 const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
+let autostart = false;
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
 // Pair → PIN → connected → the iPhone's three switches come on one by one → a first
@@ -283,7 +290,8 @@ mockIPC(
       case "get_contacts":
         return contacts;
       case "send_message": {
-        const m: SmsMessage = { ...sms("out", String(a.text), 0), status: "pending" };
+        const to = String(a.address ?? TAY);
+        const m: SmsMessage = { ...sms("out", String(a.text), 0, to, contacts.find((c) => c.address === to)?.name ?? null), status: "pending" };
         messages.push(m);
         setTimeout(() => void emit("message", m), 0);
         setTimeout(() => void emit("message", { ...m, status: "accepted" }), 700);
@@ -323,6 +331,11 @@ mockIPC(
       case "set_setting":
         settings[a.key as string] = a.value as string;
         return null;
+      case "get_autostart":
+        return autostart;
+      case "set_autostart":
+        autostart = a.enabled as boolean;
+        return null;
       case "app_icon": {
         // Stand-in icons (the real ones come from the App Store): a coloured tile per app.
         const id = String(a.appId ?? "");
@@ -340,6 +353,17 @@ mockIPC(
           Object.assign(nowPlaying, { elapsed: 0, elapsedAt: Date.now() });
           void emit("now-playing", { ...nowPlaying });
         }
+        // One AMS VolumeUp/VolumeDown is one phone step; iOS reports volume as a 0–1 fraction,
+        // ~16 steps. Clamp at the ends so press-and-hold stops there, as it would on hardware.
+        if (a.command === "volumeUp" || a.command === "volumeDown") {
+          const step = (a.command === "volumeUp" ? 1 : -1) / 16;
+          nowPlaying.volume = Math.min(1, Math.max(0, (nowPlaying.volume ?? 0.5) + step));
+          void emit("now-playing", { ...nowPlaying });
+        }
+        return null;
+      case "open_url":
+        // No browser launch in dev; just show what the real backend would open.
+        console.log("[devMock] open_url", a.url);
         return null;
       case "place_lookup":
         return JSON.stringify({ city: "Dallas", principalSubdivision: "Texas", countryCode: "US" });

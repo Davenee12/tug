@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Music2, Pause, Play, RotateCcw, SkipBack, SkipForward, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { duration } from "../lib/format";
-import { canRestart } from "../lib/media";
+import { canRestart, createHoldRepeater } from "../lib/media";
 
 const tug = useTugStore();
 const np = computed(() => tug.nowPlaying);
@@ -13,7 +13,44 @@ const playing = computed(() => np.value.state === "playing");
 // AMS only reports elapsed time on state changes; advance it locally while playing.
 const now = ref(Date.now());
 const timer = window.setInterval(() => (now.value = Date.now()), 1000);
-onUnmounted(() => window.clearInterval(timer));
+
+// Press-and-hold volume: one AMS step on press, then a steady repeat. The timing lives in
+// lib/media.ts (pure, unit-tested); this just wires DOM events to it. Volume is a 0–1 fraction,
+// so stop at the end in each direction to avoid spamming the phone at the limit.
+const timers = { set: (fn: () => void, ms: number) => window.setTimeout(fn, ms), clear: (h: number) => window.clearTimeout(h) };
+const holdUp = createHoldRepeater(timers);
+const holdDown = createHoldRepeater(timers);
+const atMax = () => (np.value.volume ?? 0) >= 1;
+const atMin = () => (np.value.volume ?? 1) <= 0;
+const pressUp = () => holdUp.start(() => tug.media("volumeUp"), atMax);
+const pressDown = () => holdDown.start(() => tug.media("volumeDown"), atMin);
+
+// Space/Enter held on a focused button: ignore the OS key-repeat and let our own timer set the
+// pace; preventDefault stops the synthetic click (and Space scrolling the page).
+function holdKey(e: KeyboardEvent, press: () => void) {
+  if (e.key !== " " && e.key !== "Enter" || e.repeat) return;
+  e.preventDefault();
+  press();
+}
+
+function stopHolds() {
+  holdUp.stop();
+  holdDown.stop();
+}
+// Leaving the tab or window (alt-tab, minimise) should end any hold even without a pointer/key up.
+function onVisibility() {
+  if (document.visibilityState !== "visible") stopHolds();
+}
+onMounted(() => {
+  window.addEventListener("blur", stopHolds);
+  document.addEventListener("visibilitychange", onVisibility);
+});
+onUnmounted(() => {
+  window.clearInterval(timer);
+  window.removeEventListener("blur", stopHolds);
+  document.removeEventListener("visibilitychange", onVisibility);
+  stopHolds();
+});
 
 const elapsed = computed(() => {
   const base = np.value.elapsed;
@@ -81,7 +118,19 @@ function restart() {
       </div>
 
       <div class="mt-3 flex items-center justify-between">
-        <button class="rounded-full p-2 text-on-dark-soft active:text-on-dark" :disabled="!can('volumeDown')" aria-label="Volume down" @click="tug.media('volumeDown')">
+        <button
+          class="rounded-full p-2 text-on-dark-soft active:text-on-dark"
+          :disabled="!can('volumeDown')"
+          aria-label="Volume down"
+          title="Hold to keep changing"
+          @pointerdown="pressDown"
+          @pointerup="holdDown.stop"
+          @pointercancel="holdDown.stop"
+          @pointerleave="holdDown.stop"
+          @blur="holdDown.stop"
+          @keydown="holdKey($event, pressDown)"
+          @keyup="holdDown.stop"
+        >
           <Volume1 :size="18" />
         </button>
         <div class="flex items-center gap-1">
@@ -100,7 +149,19 @@ function restart() {
             <SkipForward :size="18" />
           </button>
         </div>
-        <button class="rounded-full p-2 text-on-dark-soft active:text-on-dark" :disabled="!can('volumeUp')" aria-label="Volume up" @click="tug.media('volumeUp')">
+        <button
+          class="rounded-full p-2 text-on-dark-soft active:text-on-dark"
+          :disabled="!can('volumeUp')"
+          aria-label="Volume up"
+          title="Hold to keep changing"
+          @pointerdown="pressUp"
+          @pointerup="holdUp.stop"
+          @pointercancel="holdUp.stop"
+          @pointerleave="holdUp.stop"
+          @blur="holdUp.stop"
+          @keydown="holdKey($event, pressUp)"
+          @keyup="holdUp.stop"
+        >
           <Volume2 :size="18" />
         </button>
       </div>

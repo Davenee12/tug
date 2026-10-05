@@ -191,6 +191,12 @@ export interface UiSettings {
   closeToTray: boolean;
   /** Real app icons in the Feed, fetched once per app from Apple's App Store. */
   appIcons: boolean;
+  /** A Windows pop-up when the iPhone's battery drops to 20% and 10%. */
+  lowBattery: boolean;
   /** Experimental Call buttons. Only a successful hands-free check (Settings › iPhone) turns them on. */
   dialing: boolean;
+  /** Texts from unknown senders go to their own list in Messages: no badge, no pop-up (codes still pop up). */
+  filterUnknown: boolean;
+  /** Numbers/emails moved to conversations by hand ("Move to conversations"), normalised. */
+  knownSenders: string[];
 }
