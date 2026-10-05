@@ -725,10 +725,7 @@ mod tests {
             .insert_incoming(&incoming("H1", "+13025550100", "dinner?"))
             .unwrap()
             .unwrap();
-        let b = s
-            .insert_incoming(&incoming("H2", "+13025550199", "hello"))
-            .unwrap()
-            .unwrap();
+        s.insert_incoming(&incoming("H2", "+13025550199", "hello")).unwrap();
         s.set_hidden(&[], &[a.id], Some(5_000)).unwrap();
         let bodies = |v: Vec<StoredMessage>| v.into_iter().map(|m| m.body).collect::<Vec<_>>();
         assert_eq!(bodies(s.recent_messages(10).unwrap()), vec!["hello"]);
