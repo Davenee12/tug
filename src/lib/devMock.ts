@@ -103,7 +103,7 @@ const status: DeviceStatus = setup
     };
 
 const nowPlaying: NowPlaying = setup
-  ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, available: [] }
+  ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, repeat: null, available: [] }
   : {
       player: "Spotify",
       state: "playing",
@@ -115,7 +115,8 @@ const nowPlaying: NowPlaying = setup
       artist: "Massive Attack",
       album: "Mezzanine",
       duration: 330,
-      available: ["play", "pause", "togglePlayPause", "nextTrack", "previousTrack", "volumeUp", "volumeDown"],
+      repeat: "off",
+      available: ["play", "pause", "togglePlayPause", "nextTrack", "previousTrack", "volumeUp", "volumeDown", "advanceRepeatMode"],
     };
 
 // A connected keyboard listed first: setup must still offer only the iPhone.
@@ -245,6 +246,16 @@ mockIPC(
         return settings;
       case "set_setting":
         settings[a.key as string] = a.value as string;
+        return null;
+      case "media_command":
+        if (a.command === "advanceRepeatMode") {
+          nowPlaying.repeat = nowPlaying.repeat === "off" ? "all" : nowPlaying.repeat === "all" ? "one" : "off";
+          void emit("now-playing", { ...nowPlaying });
+        }
+        if (a.command === "previousTrack") {
+          Object.assign(nowPlaying, { elapsed: 0, elapsedAt: Date.now() });
+          void emit("now-playing", { ...nowPlaying });
+        }
         return null;
       case "place_lookup":
         return JSON.stringify({ city: "Dallas", principalSubdivision: "Texas", countryCode: "US" });

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from "vue";
-import { Music2, Pause, Play, SkipBack, SkipForward, Volume1, Volume2 } from "lucide-vue-next";
+import { Music2, Pause, Play, Repeat, Repeat1, RotateCcw, SkipBack, SkipForward, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { duration } from "../lib/format";
 
@@ -27,13 +27,51 @@ const progress = computed(() =>
   elapsed.value != null && np.value.duration ? (elapsed.value / np.value.duration) * 100 : 0,
 );
 const can = (c: string) => np.value.available.length === 0 || np.value.available.includes(c as never);
+
+// Start the song over. AMS has no "seek", but Back restarts the song once it's a few seconds
+// in (and only goes to the previous song near the start), so send it only past that point.
+const RESTART_AFTER_S = 3;
+function restart() {
+  if (elapsed.value == null || elapsed.value > RESTART_AFTER_S) void tug.media("previousTrack");
+}
+
+// Loop: only when the player says it supports it (not every app has a repeat mode).
+const canRepeat = computed(() => np.value.available.includes("advanceRepeatMode") || np.value.repeat != null);
+const repeatLabel = computed(
+  () => ({ off: "Repeat is off", all: "Repeating all", one: "Repeating this song" })[np.value.repeat ?? "off"],
+);
 </script>
 
 <template>
   <section class="rounded-xl bg-surface-dark-elevated p-5">
     <div class="caption-upper mb-3 flex items-center gap-2 text-on-dark-soft">
       <Music2 :size="13" />
-      {{ available ? np.player ?? "Now playing" : "Now playing" }}
+      <span class="min-w-0 flex-1 truncate">{{ available ? np.player ?? "Now playing" : "Now playing" }}</span>
+      <template v-if="available">
+        <button
+          class="rounded-full p-1.5 normal-case text-on-dark-soft active:text-on-dark"
+          :disabled="!can('previousTrack')"
+          aria-label="Restart song"
+          title="Restart song"
+          @click="restart"
+        >
+          <RotateCcw :size="15" />
+        </button>
+        <button
+          v-if="canRepeat"
+          :class="[
+            'rounded-full p-1.5 normal-case',
+            np.repeat && np.repeat !== 'off' ? 'bg-surface-dark-soft text-on-dark' : 'text-on-dark-soft active:text-on-dark',
+          ]"
+          :aria-label="repeatLabel"
+          :aria-pressed="np.repeat != null && np.repeat !== 'off'"
+          :title="repeatLabel"
+          @click="tug.media('advanceRepeatMode')"
+        >
+          <Repeat1 v-if="np.repeat === 'one'" :size="15" />
+          <Repeat v-else :size="15" />
+        </button>
+      </template>
     </div>
 
     <template v-if="available">
