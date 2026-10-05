@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { CircleAlert, LoaderCircle, RefreshCw, Smartphone } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { pairingProblem } from "../lib/pairings";
 import type { DiscoveredDevice } from "../types/protocol";
 
 // The paired iPhone, or the steps to pair one. Shared by first-run setup (the inline
@@ -31,6 +32,8 @@ watch(
 );
 onUnmounted(() => {
   if (scanning.value) void tug.stopDiscovery();
+  window.clearTimeout(resetTimer);
+  window.clearTimeout(startOverTimer);
 });
 
 async function choose(d: DiscoveredDevice) {
@@ -53,6 +56,21 @@ async function forget() {
   await tug.forget();
 }
 
+// More than one iPhone paired, or a different one than tug remembers: one clean Start over.
+const problem = computed(() => pairingProblem(tug.discovered, s.value.device?.id ?? null));
+const confirmStartOver = ref(false);
+let startOverTimer: number | undefined;
+async function startOver() {
+  if (!confirmStartOver.value) {
+    confirmStartOver.value = true;
+    window.clearTimeout(startOverTimer);
+    startOverTimer = window.setTimeout(() => (confirmStartOver.value = false), 4000);
+    return;
+  }
+  confirmStartOver.value = false;
+  await tug.forget();
+}
+
 // The phone forgot this PC: no confirm needed, the old pairing is already useless.
 // Forgetting starts a scan (the watch above), so the iPhone can be paired again right away.
 const pairAgain = () => void tug.forget();
@@ -71,6 +89,18 @@ const advertisingLabel = computed(
       <CircleAlert :size="16" class="mt-0.5 shrink-0 text-error" />
       <span class="selectable min-w-0 flex-1">{{ s.lastError }}</span>
       <button v-if="s.pairingStale" class="btn-primary btn-sm shrink-0" @click="pairAgain">Pair again</button>
+    </div>
+
+    <!-- More than one iPhone paired, or a different one than tug remembers: one clean Start over. -->
+    <div v-if="problem" class="flex flex-col gap-2 rounded-xl border border-hairline bg-canvas px-4 py-3">
+      <p class="text-[13px] text-body">
+        <template v-if="problem === 'duplicates'">More than one iPhone is paired with this PC, so tug can't tell which to use.</template>
+        <template v-else>The iPhone paired now isn't the one tug remembers.</template>
+        Start over clears the pairings tug made and begins again. Also tap <em>Forget This Device</em> for this PC under Settings › Bluetooth on the iPhone.
+      </p>
+      <button class="btn-secondary btn-sm self-start" @click="startOver">
+        {{ confirmStartOver ? "Tap again to start over" : "Start over" }}
+      </button>
     </div>
 
     <!-- Fresh bond: iOS holds the subscribe open until "Allow" is tapped on the phone. -->
