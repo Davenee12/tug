@@ -100,9 +100,12 @@ pub struct IncomingMessage<'a> {
     pub body: &'a str,
     pub sent_at: Option<&'a str>,
     pub received_at: i64,
+    /// The phone lists it as unread.
+    pub unread_on_phone: bool,
 }
 
-const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address, c.name, m.body, m.sent_at, m.received_at, m.status
+// A name the phone sent with the message stands in until the number is a known contact.
+const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address, COALESCE(c.name, m.sender_name), m.body, m.sent_at, m.received_at, m.status
      FROM messages m LEFT JOIN contacts c ON c.address = m.address";
 
 fn map_row(r: &Row) -> Result<StoredMessage> {
@@ -159,9 +162,18 @@ impl Store {
             return Ok(None);
         }
         let inserted = conn.execute(
-            "INSERT OR IGNORE INTO messages (source, handle, direction, address, sender_name, body, sent_at, received_at, status)
-             VALUES (?1, ?2, 'in', ?3, ?4, ?5, ?6, ?7, 'received')",
-            params![m.source, m.handle, m.address, m.sender_name, m.body, m.sent_at, m.received_at],
+            "INSERT OR IGNORE INTO messages (source, handle, direction, address, sender_name, body, sent_at, received_at, status, unread_on_phone)
+             VALUES (?1, ?2, 'in', ?3, ?4, ?5, ?6, ?7, 'received', ?8)",
+            params![
+                m.source,
+                m.handle,
+                m.address,
+                m.sender_name,
+                m.body,
+                m.sent_at,
+                m.received_at,
+                m.unread_on_phone
+            ],
         )?;
         if inserted == 0 {
             return Ok(None);
@@ -169,6 +181,28 @@ impl Store {
         let id = conn.last_insert_rowid();
         conn.query_row(&format!("{SELECT} WHERE m.id = ?1"), [id], map_row)
             .map(Some)
+    }
+
+    /// Handles of the given incoming messages that the phone still lists as unread.
+    pub fn unread_on_phone(&self, source: &str, ids: &[i64]) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT handle FROM messages
+             WHERE id IN (SELECT value FROM json_each(?1)) AND source = ?2
+               AND direction = 'in' AND unread_on_phone = 1 AND handle IS NOT NULL",
+        )?;
+        let ids = serde_json::to_string(ids).expect("ids serialize");
+        let rows = stmt.query_map(params![ids, source], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    /// The phone now lists this message as read (marked by tug, or read on the phone).
+    pub fn set_read_on_phone(&self, source: &str, handle: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE messages SET unread_on_phone = 0 WHERE source = ?1 AND handle = ?2 AND unread_on_phone = 1",
+            params![source, handle],
+        )?;
+        Ok(())
     }
 
     /// Record a reply before sending it, so it shows immediately as pending.
@@ -270,16 +304,45 @@ impl Store {
         let tx = conn.transaction()?;
         let mut n = 0;
         {
+            // A renamed contact keeps their old name as an alias, so history under it stays theirs.
+            let mut remember = tx.prepare(
+                "INSERT OR IGNORE INTO contact_aliases (address, alias)
+                 SELECT address, name FROM contacts WHERE address = ?1 AND name <> ?2",
+            )?;
+            let mut forget = tx.prepare("DELETE FROM contact_aliases WHERE address = ?1 AND alias = ?2")?;
             let mut stmt = tx.prepare(
                 "INSERT INTO contacts (address, name) VALUES (?1, ?2)
                  ON CONFLICT (address) DO UPDATE SET name = excluded.name",
             )?;
             for (address, name) in entries {
+                remember.execute(params![address, name])?;
+                forget.execute(params![address, name])?;
                 n += stmt.execute(params![address, name])?;
             }
         }
         tx.commit()?;
         Ok(n)
+    }
+
+    /// Learn old names of known contacts from history: a Messages notification whose text
+    /// matches a message from that contact (same rules as `learn_contacts`: the text came
+    /// from exactly one sender, close in time) but whose name differs from the contact's
+    /// current one. Covers renames that happened before tug kept aliases. Returns how
+    /// many were learned.
+    pub fn learn_aliases(&self) -> Result<usize> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO contact_aliases (address, alias)
+             SELECT DISTINCT m.address, clean_name(n.title)
+             FROM messages m
+             JOIN contacts c ON c.address = m.address
+             JOIN notifications n
+               ON n.app_id = ?1 AND n.message = m.body AND abs(n.received_at - m.received_at) <= ?2
+             WHERE m.direction = 'in' AND m.body <> ''
+               AND clean_name(n.title) <> '' AND lower(clean_name(n.title)) <> lower(c.name)
+               AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
+                    WHERE m2.direction = 'in' AND m2.body = m.body) = 1",
+            params![MESSAGES_APP, LEARN_WINDOW_MS],
+        )
     }
 
     /// Learn names for addresses that have none yet, by finding a Messages
@@ -289,22 +352,22 @@ impl Store {
     /// "ok" could swap names. Returns the newly learned contacts.
     pub fn learn_contacts(&self) -> Result<Vec<Contact>> {
         let conn = self.conn();
+        // Names as the UI shows them (clean_name mirrors format.ts cleanName).
         let mut stmt = conn.prepare(
-            "INSERT OR IGNORE INTO contacts (address, name)
+            "WITH titled AS (
+                 SELECT message, received_at, clean_name(title) AS name FROM notifications WHERE app_id = ?1
+             )
+             INSERT OR IGNORE INTO contacts (address, name)
              SELECT address, name FROM (
-                 SELECT m.address AS address,
-                        MIN(rtrim(replace(trim(n.title), ' replied to you', ''))) AS name,
-                        COUNT(DISTINCT rtrim(replace(trim(n.title), ' replied to you', ''))) AS names
+                 SELECT m.address AS address, MIN(n.name) AS name, COUNT(DISTINCT n.name) AS names
                  FROM messages m
-                 JOIN notifications n
-                   ON n.app_id = ?1 AND n.message = m.body AND rtrim(replace(trim(n.title), ' replied to you', '')) <> ''
-                  AND abs(n.received_at - m.received_at) <= ?2
+                 JOIN titled n
+                   ON n.message = m.body AND n.name <> '' AND abs(n.received_at - m.received_at) <= ?2
                  WHERE m.direction = 'in' AND m.body <> ''
                    AND m.address NOT IN (SELECT address FROM contacts)
                    AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
                         WHERE m2.direction = 'in' AND m2.body = m.body) = 1
-                   AND (SELECT COUNT(DISTINCT rtrim(replace(trim(n2.title), ' replied to you', ''))) FROM notifications n2
-                        WHERE n2.app_id = ?1 AND n2.message = m.body) = 1
+                   AND (SELECT COUNT(DISTINCT n2.name) FROM titled n2 WHERE n2.message = m.body) = 1
                  GROUP BY m.address
              )
              WHERE names = 1
@@ -335,6 +398,7 @@ mod tests {
             body,
             sent_at: Some("2026-10-04T19:11:17"),
             received_at: 1_000,
+            unread_on_phone: false,
         }
     }
 
@@ -425,6 +489,128 @@ mod tests {
         s.insert_incoming(&incoming("H1", "+13026698133", "Yes")).unwrap();
         let learned = s.learn_contacts().unwrap();
         assert_eq!(learned[0].name, "tay 🤎");
+    }
+
+    #[test]
+    fn reply_suffix_is_stripped_only_at_the_end() {
+        let s = Store::in_memory().unwrap();
+        // Used to come out as "Tayr message"; a name that merely contains the phrase stays whole.
+        notify(&s, 1, "Tay Replied To Your Message ", "Yes", 990);
+        s.insert_incoming(&incoming("H1", "+13026698133", "Yes")).unwrap();
+        notify(&s, 2, "Replied to you Club", "Sure", 990);
+        s.insert_incoming(&incoming("H2", "+12142230313", "Sure")).unwrap();
+        let mut names: Vec<String> = s.learn_contacts().unwrap().into_iter().map(|c| c.name).collect();
+        names.sort();
+        assert_eq!(names, vec!["Replied to you Club", "Tay"]);
+    }
+
+    fn titles(s: &Store) -> Vec<String> {
+        s.recent(50, None, None).unwrap().into_iter().map(|n| n.title).collect()
+    }
+
+    #[test]
+    fn renaming_a_contact_keeps_their_history_together() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[("+13026698133".into(), "tay 🤎".into())]).unwrap();
+        notify(&s, 1, "tay 🤎", "omw", 1_000);
+        notify(&s, 2, "tay 🤎 replied to you", "Yes", 2_000);
+        // Dave takes the heart off her name on the phone; the next contacts sync brings it over.
+        s.save_phonebook(&[("+13026698133".into(), "tay".into())]).unwrap();
+        notify(&s, 3, "tay", "hi again", 3_000);
+        assert_eq!(
+            titles(&s),
+            vec!["tay", "tay", "tay"],
+            "old notifications show the current name"
+        );
+        // Renaming back: "tay" becomes the old name, and "tay 🤎" is current again (titles
+        // that need no rewriting come back as iOS sent them; the UI cleans the reply suffix).
+        s.save_phonebook(&[("+13026698133".into(), "tay 🤎".into())]).unwrap();
+        assert_eq!(titles(&s), vec!["tay 🤎", "tay 🤎 replied to you", "tay 🤎"]);
+    }
+
+    #[test]
+    fn learns_old_names_from_history() {
+        let s = Store::in_memory().unwrap();
+        // Renamed before tug kept aliases: the contact is already "tay", history says "tay 🤎".
+        s.save_phonebook(&[("+13026698133".into(), "tay".into())]).unwrap();
+        notify(&s, 1, "tay 🤎", "dinner at 7?", 990);
+        s.insert_incoming(&incoming("H1", "+13026698133", "dinner at 7?"))
+            .unwrap();
+        assert_eq!(s.learn_aliases().unwrap(), 1);
+        assert_eq!(s.learn_aliases().unwrap(), 0, "learned once");
+        assert_eq!(titles(&s), vec!["tay"]);
+    }
+
+    #[test]
+    fn old_names_never_take_over_someone_elses() {
+        let s = Store::in_memory().unwrap();
+        // Sam used to be called "Alex"; there's also a different, current Alex.
+        s.save_phonebook(&[("+15550000001".into(), "Alex".into())]).unwrap();
+        s.save_phonebook(&[
+            ("+15550000001".into(), "Sam".into()),
+            ("+15550000002".into(), "Alex".into()),
+        ])
+        .unwrap();
+        notify(&s, 1, "Alex", "hey", 1_000);
+        assert_eq!(titles(&s), vec!["Alex"], "a current Alex keeps the name");
+
+        // Two people who both used to be "Jo": ambiguous, so leave it as iOS showed it.
+        let t = Store::in_memory().unwrap();
+        t.save_phonebook(&[
+            ("+15550000003".into(), "Jo".into()),
+            ("+15550000004".into(), "Jo".into()),
+        ])
+        .unwrap();
+        t.save_phonebook(&[
+            ("+15550000003".into(), "Jo A".into()),
+            ("+15550000004".into(), "Jo B".into()),
+        ])
+        .unwrap();
+        notify(&t, 1, "Jo", "hi", 1_000);
+        assert_eq!(titles(&t), vec!["Jo"]);
+    }
+
+    #[test]
+    fn tracks_which_messages_are_still_unread_on_the_phone() {
+        let s = Store::in_memory().unwrap();
+        let unread = IncomingMessage {
+            unread_on_phone: true,
+            ..incoming("H1", "+13026698133", "are you up?")
+        };
+        let a = s.insert_incoming(&unread).unwrap().unwrap();
+        let b = s
+            .insert_incoming(&incoming("H2", "+13026698133", "already read"))
+            .unwrap()
+            .unwrap();
+        let out = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13026698133", "yes", 2_000)
+            .unwrap();
+        let ids = [a.id, b.id, out.id, 999];
+        assert_eq!(s.unread_on_phone(SOURCE_IPHONE_MAP, &ids).unwrap(), vec!["H1"]);
+        s.set_read_on_phone(SOURCE_IPHONE_MAP, "H1").unwrap();
+        assert!(
+            s.unread_on_phone(SOURCE_IPHONE_MAP, &ids).unwrap().is_empty(),
+            "marked once, not again"
+        );
+        assert!(s.unread_on_phone(SOURCE_IPHONE_MAP, &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn name_sent_with_the_message_shows_until_the_contact_is_known() {
+        let s = Store::in_memory().unwrap();
+        let m = IncomingMessage {
+            sender_name: Some("Tay"),
+            ..incoming("H1", "+13026698133", "hi")
+        };
+        assert_eq!(
+            s.insert_incoming(&m).unwrap().unwrap().contact_name.as_deref(),
+            Some("Tay")
+        );
+        s.save_phonebook(&[("+13026698133".into(), "tay 🤎".into())]).unwrap();
+        assert_eq!(
+            s.recent_messages(10).unwrap()[0].contact_name.as_deref(),
+            Some("tay 🤎")
+        );
     }
 
     #[test]

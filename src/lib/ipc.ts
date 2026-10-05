@@ -39,6 +39,7 @@ export const api = {
   sendMessage: (address: string, text: string) => invoke<SmsMessage>("send_message", { address, text }),
   refreshMessages: () => invoke<void>("refresh_messages"),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),
+  markRead: (messageIds: number[]) => invoke<void>("mark_read", { messageIds }),
   searchAll: (query: string, limit: number) => invoke<SearchResults>("search_all", { query, limit }),
 };
 

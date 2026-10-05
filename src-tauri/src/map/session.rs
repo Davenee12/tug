@@ -38,7 +38,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const AP_MAX_LIST_COUNT: u8 = 0x01;
 const AP_ATTACHMENT: u8 = 0x0A;
 const AP_CHARSET: u8 = 0x14;
+const AP_STATUS_INDICATOR: u8 = 0x17;
+const AP_STATUS_VALUE: u8 = 0x18;
 const CHARSET_UTF8: u8 = 0x01;
+const STATUS_READ: u8 = 0x00;
 
 // PBAP application parameter tags.
 const PB_MAX_LIST_COUNT: u8 = 0x04;
@@ -331,6 +334,29 @@ impl MapSession {
         if !resp.is_success() {
             return Err(MapError::Obex {
                 op: "UpdateInbox",
+                code: resp.code,
+            });
+        }
+        Ok(())
+    }
+
+    /// SetMessageStatus: mark a message read (or unread) on the phone. Fetching a
+    /// message with GetMessage doesn't change its read state; only this does.
+    pub async fn set_read(&mut self, handle: &str, read: bool) -> Result<()> {
+        let headers = [
+            self.link.conn(),
+            Header::Name(Some(handle.to_string())),
+            Header::type_("x-bt/messageStatus"),
+            obex::app_params(&[(AP_STATUS_INDICATOR, &[STATUS_READ]), (AP_STATUS_VALUE, &[read as u8])]),
+            Header::Bytes(obex::HI_END_OF_BODY, vec![0x30]),
+        ];
+        let resp = self
+            .link
+            .exchange(&obex::request(obex::OP_PUT_FINAL, &[], &headers), false)
+            .await?;
+        if !resp.is_success() {
+            return Err(MapError::Obex {
+                op: "SetMessageStatus",
                 code: resp.code,
             });
         }
