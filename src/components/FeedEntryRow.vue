@@ -76,7 +76,7 @@ function open() {
       @click="open"
       @keydown.enter.self="open"
     >
-      <AppAvatar :app-id="appId" :label="entry.kind === 'thread' ? title : appLabel" size="sm" />
+      <AppAvatar :app-id="appId" :label="entry.kind === 'thread' ? title : appLabel" :person="entry.kind === 'thread'" size="sm" />
       <span class="min-w-0 flex-1">
         <span class="flex items-baseline gap-2">
           <span :class="['truncate text-[14px] text-ink', fresh ? 'font-semibold' : 'font-medium']">{{ title }}</span>

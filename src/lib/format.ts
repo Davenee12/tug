@@ -135,6 +135,21 @@ export function groupThreads(notifications: PhoneNotification[]): Thread[] {
   return [...threads.values()].sort((a, b) => byTime(b.latest, a.latest));
 }
 
+/**
+ * The newest conversation that still has unread texts, or null if none. `groupThreads`
+ * is already newest-first, so this is the first thread with a fresh count — the one the
+ * tray opens on click. `newCount` is the store's (it knows what's been seen).
+ */
+export function newestUnreadThread(
+  notifications: PhoneNotification[],
+  newCount: (key: string, items: PhoneNotification[]) => number,
+): string | null {
+  for (const t of groupThreads(notifications)) {
+    if (newCount(t.key, t.items) > 0) return t.key;
+  }
+  return null;
+}
+
 export interface AppStack {
   key: string;
   appId: string;
@@ -342,4 +357,12 @@ export function snippet(text: string, query: string, width = 90): string {
   const start = Math.max(0, Math.min(at - Math.floor(width / 3), flat.length - width));
   const end = Math.min(flat.length, start + width);
   return `${start > 0 ? "…" : ""}${flat.slice(start, end).trim()}${end < flat.length ? "…" : ""}`;
+}
+
+/**
+ * Can tug clear this notification on the phone? Only while it's still there and offers a
+ * clear. Never a ringing call: its "negative" action is Decline, which only its own button sends.
+ */
+export function canClear(n: PhoneNotification): boolean {
+  return n.live && n.removedAt == null && n.flags.negativeAction && n.category !== "incomingCall";
 }

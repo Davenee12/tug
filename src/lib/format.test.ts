@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanName, groupConversations, groupFeed, highlight, initials, snippet, threadKey } from "./format";
+import { canClear, cleanName, groupConversations, groupFeed, highlight, initials, newestUnreadThread, snippet, threadKey } from "./format";
 import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const T0 = Date.parse("2026-10-05T12:00:00");
@@ -136,6 +136,27 @@ describe("groupFeed", () => {
   });
 });
 
+describe("the tray's newest unread conversation", () => {
+  const key = (title: string) => threadKey({ appId: "com.apple.MobileSMS", title });
+
+  it("picks the newest thread that still has unread texts", () => {
+    // Jane is newer overall, but all read; Zoe is older and unread → Zoe wins.
+    const notes = [note("Jane Doe", "see you at 5", 10), note("Zoe", "omw 🚗", 4), note("Zoe", "did you see?", 2)];
+    const unread = new Set([key("Zoe")]);
+    expect(newestUnreadThread(notes, (k) => (unread.has(k) ? 1 : 0))).toBe(key("Zoe"));
+  });
+
+  it("prefers the newest when several conversations are unread", () => {
+    const notes = [note("Zoe", "older", 2), note("Jane Doe", "newer", 9)];
+    expect(newestUnreadThread(notes, () => 1)).toBe(key("Jane Doe"));
+  });
+
+  it("returns null when nothing is unread", () => {
+    expect(newestUnreadThread([note("Zoe", "hi", 1)], () => 0)).toBeNull();
+    expect(newestUnreadThread([], () => 1)).toBeNull();
+  });
+});
+
 describe("search presentation", () => {
   it("highlights every typed word, case-insensitively", () => {
     const runs = highlight("Dinner at 7? See you at dinner", "din AT");
@@ -154,5 +175,19 @@ describe("search presentation", () => {
     expect(s).toContain("dinner");
     expect(s.startsWith("…") && s.endsWith("…")).toBe(true);
     expect(snippet("short text", "x")).toBe("short text");
+  });
+});
+
+describe("canClear", () => {
+  it("clears what's still on the phone and offers a clear", () => {
+    expect(canClear(note("Zoe", "hey", 0))).toBe(true);
+    expect(canClear(note("Zoe", "hey", 0, { live: false }))).toBe(false);
+    expect(canClear(note("Zoe", "hey", 0, { removedAt: T0 }))).toBe(false);
+  });
+
+  it("never clears a ringing call (its negative action is Decline)", () => {
+    const ringing = note("Mum", "Incoming call", 0, { appId: "com.apple.mobilephone", category: "incomingCall", negativeLabel: "Decline" });
+    expect(canClear(ringing)).toBe(false);
+    expect(canClear({ ...ringing, category: "missedCall" })).toBe(true);
   });
 });
