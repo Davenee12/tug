@@ -1225,7 +1225,7 @@ impl Actor {
             return log::warn!("ANCS event with no link");
         };
         let (Some(a), Some(session)) = (link.ancs.as_mut(), link.session_id.as_deref()) else {
-            return log::warn!("ANCS event before subscription finished; dropped");
+            return log::debug!("ANCS event while not subscribed (link down or resubscribing); dropped");
         };
         if a.sweep_after.is_some() {
             a.sweep_after = Some(Instant::now() + REPLAY_SETTLE);
@@ -1256,8 +1256,14 @@ impl Actor {
         let mut result = a.reassembler.push(data);
         // A late reply to a request that already timed out: it names a notification
         // we did ask about, so its data is still good. Read it, then go back to
-        // listening for the request that's actually in flight.
-        if let Err(ParseError::UidMismatch { got, .. }) = result {
+        // listening for the request that's actually in flight. (It can arrive while
+        // we expect another notification's reply or an app-name reply.)
+        let late = match result {
+            Err(ParseError::UidMismatch { got, .. }) => Some(got),
+            Err(ParseError::UnexpectedCommand { .. }) => ancs::notification_response_uid(data),
+            _ => None,
+        };
+        if let Some(got) = late {
             if a.meta.contains_key(&got) {
                 log::info!("late ANCS reply for {got}; accepting it");
                 if a.resume.is_none() {
