@@ -4,6 +4,7 @@ import { ChevronRight, Info, Phone, Plus, RotateCcw, SendHorizontal, ShieldQuest
 import { useTugStore } from "../stores/tug";
 import { clockTime, dayLabel, formatAddress, groupConversations, threadKey, type Conversation, type ConversationItem } from "../lib/format";
 import { shouldStickToBottom } from "../lib/scroll";
+import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import ConversationRow from "./ConversationRow.vue";
 import { findCode } from "../lib/codes";
@@ -267,6 +268,7 @@ function onKey(e: KeyboardEvent) {
 
     <section v-if="selected" class="flex min-w-0 flex-1 flex-col">
       <header class="flex items-center gap-4 border-b border-hairline px-8 py-4">
+        <AppAvatar :app-id="selected.appId" :label="selected.contact" :photo-key="selected.address ?? undefined" person />
         <div class="min-w-0 flex-1">
           <p class="headline truncate text-[26px] leading-tight">{{ selected.contact }}</p>
           <p class="text-[13px] text-muted">
