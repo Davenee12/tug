@@ -5,6 +5,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
 import { appLabel, threadKey } from "../lib/format";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
+import { ToastLimiter } from "../lib/toastLimiter";
 import type {
   Contact,
   DeviceStatus,
@@ -123,6 +124,8 @@ export const useTugStore = defineStore("tug", () => {
 
   // Windows notification permission: ask once per launch, not on every notification.
   let toastPermission: boolean | null = null;
+  const toasts = new ToastLimiter();
+  let toastSummary: number | undefined;
   async function maybeToast(n: PhoneNotification) {
     const s = settings.value;
     if (!s.toasts || s.doNotDisturb || n.flags.silent || n.flags.preExisting) return;
@@ -131,6 +134,17 @@ export const useTugStore = defineStore("tug", () => {
       toastPermission = (await isPermissionGranted()) || (await requestPermission()) === "granted";
     }
     if (!toastPermission) return;
+    // Calls always ring through; everything else is rate-limited and summed up.
+    if (n.category !== "incomingCall" && !toasts.admit(Date.now())) {
+      if (toastSummary === undefined) {
+        toastSummary = window.setTimeout(() => {
+          toastSummary = undefined;
+          const held = toasts.takeHeld();
+          if (held > 0) sendNotification({ title: "tug", body: `${held} more notification${held === 1 ? "" : "s"}` });
+        }, toasts.windowMs);
+      }
+      return;
+    }
     const title = [appLabel(n), n.title].filter(Boolean).join(" · ");
     sendNotification({ title, body: [n.subtitle, n.message].filter(Boolean).join("\n") });
   }
@@ -295,6 +309,8 @@ export const useTugStore = defineStore("tug", () => {
   function dispose() {
     for (const off of teardown) off();
     teardown = [];
+    window.clearTimeout(toastSummary);
+    toastSummary = undefined;
     started = false;
   }
 
