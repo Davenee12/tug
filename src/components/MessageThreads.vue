@@ -154,7 +154,9 @@ const outgoing = (i: ConversationItem) => i.kind === "message" && i.m.direction 
 const codeIn = (i: ConversationItem) => findCode(i.body);
 const statusLabel = (i: ConversationItem) => {
   if (i.kind !== "message" || i.m.direction !== "out") return "";
-  return { pending: "Sending…", accepted: "Sent via iPhone", failed: "Not sent", received: "" }[i.m.status];
+  // "accepted" (the iPhone took it) and "sent" (a MAP SendingSuccess event confirmed it, when
+  // live texts are working) both read as "Sent" — a send the user can trust either way.
+  return { pending: "Sending…", accepted: "Sent", sent: "Sent", failed: "Not sent", received: "" }[i.m.status];
 };
 
 // Composer: replies go through the iPhone over message access (MAP).

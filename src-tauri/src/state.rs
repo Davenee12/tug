@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::ams::NowPlaying;
 use crate::map::calls::CallRecord;
-use crate::map::health::TextsPairing;
+use crate::map::health::{LiveTexts, TextsPairing};
 use crate::map::service::MapHandle;
 use crate::store::Store;
 
@@ -113,6 +113,8 @@ pub struct DeviceStatus {
     pub texts_pairing: TextsPairing,
     /// The phone Windows has paired for texts (what to remove when it needs re-pairing).
     pub texts_device: Option<String>,
+    /// Whether live texts (MAP notifications) are off, starting, active, or fell back to polling.
+    pub live_texts: LiveTexts,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

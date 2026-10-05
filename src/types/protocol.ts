@@ -39,9 +39,13 @@ export interface DeviceStatus {
   textsPairing: TextsPairing;
   /** The phone Windows has paired for texts (what to remove when it needs re-pairing). */
   textsDevice: string | null;
+  /** Live texts (MAP notifications): off, starting, active, or fell back to polling. */
+  liveTexts: LiveTexts;
 }
 
 export type TextsPairing = "unknown" | "missing" | "broken" | "ok";
+
+export type LiveTexts = "off" | "starting" | "active" | "unavailable";
 
 export type Category =
   | "other"
@@ -153,8 +157,12 @@ export interface SmsMessage {
   /** Phone-local ISO time, when the phone reported one. */
   sentAt: string | null;
   receivedAt: number;
-  /** Outgoing: pending → accepted (taken by the iPhone; not proof of delivery) or failed. */
-  status: "received" | "pending" | "accepted" | "failed";
+  /**
+   * Outgoing: pending → accepted (taken by the iPhone; not proof of delivery) → sent (a MAP
+   * SendingSuccess event confirmed it left), or failed. Without live texts a send stops at
+   * accepted; the UI shows both accepted and sent as "Sent".
+   */
+  status: "received" | "pending" | "accepted" | "sent" | "failed";
 }
 
 export interface Contact {
