@@ -95,6 +95,7 @@ const status: DeviceStatus = setup
       contactsError: null,
       textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
       textsDevice: setup ? null : "Jordan's iPhone",
+      liveTexts: "off",
     }
   : {
       radio: "on",
@@ -111,6 +112,7 @@ const status: DeviceStatus = setup
       contactsError: null,
       textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
       textsDevice: setup ? null : "Jordan's iPhone",
+      liveTexts: params.has("livetexts") ? "active" : "off",
     };
 
 const nowPlaying: NowPlaying = setup
