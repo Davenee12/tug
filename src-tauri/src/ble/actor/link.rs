@@ -10,6 +10,7 @@ impl Actor {
         self.shared.set_live_session(None);
         self.shared.update_status(|s| {
             s.battery = None;
+            s.awaiting_phone_allow = false;
             s.services = Services {
                 messages: s.services.messages,
                 ..Services::default()
@@ -82,6 +83,7 @@ impl Actor {
                     l.session_id = None;
                 }
                 self.shared.set_live_session(None);
+                self.shared.update_status(|s| s.awaiting_phone_allow = false);
                 self.fail_connect(e.to_string());
                 // One refusal can be a glitch; two in a row means the phone dropped the bond.
                 let stale = e.is_stale_bond() && self.connect_failures >= 2;

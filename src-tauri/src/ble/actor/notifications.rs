@@ -22,6 +22,10 @@ impl Actor {
             link.session_id = Some(session_id);
         }
 
+        // On a fresh bond iOS holds these CCCD writes open until the user taps "Allow" on the
+        // phone, so tell the UI to prompt for that instead of looking stuck. Cleared once both
+        // subscribes return; the failure paths in `connect`/`drop_link` clear it too.
+        self.shared.update_status(|s| s.awaiting_phone_allow = true);
         // Data Source first, so no attribute response can arrive unheard.
         let tx = self.tx.clone();
         let data_source = winrt::subscribe(&ds, move |data| {
@@ -33,6 +37,7 @@ impl Actor {
             let _ = tx.send(Event::NotificationSource { gen, data });
         })
         .await?;
+        self.shared.update_status(|s| s.awaiting_phone_allow = false);
         log::info!(
             "ANCS subscribed (session {})",
             self.shared.live_session().unwrap_or_default()
