@@ -14,6 +14,7 @@ mod media_keys;
 mod messages;
 #[cfg(test)]
 mod perf;
+mod spotify;
 mod state;
 mod store;
 pub mod toast;
@@ -65,11 +66,14 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let store = Arc::new(Store::open(&dir.join("tug.db"))?);
-            let shared = Arc::new(Shared::new(app.handle().clone(), store));
+            let shared = Arc::new(Shared::new(app.handle().clone(), store.clone()));
             let ble = ble::start(shared.clone());
             let _ = shared.map.set(map::service::start(shared.clone()));
             media_keys::start(shared.clone(), ble.clone());
-            app.manage(AppState { shared, ble });
+            // The Spotify connector: optional, set up by the owner in Settings. Album art is
+            // cached under the app-data dir; the refresh token goes to Credential Manager.
+            let spotify = Arc::new(spotify::Spotify::new(store, dir.clone()));
+            app.manage(AppState { shared, ble, spotify });
             // Nice to have, never a reason not to start.
             if let Err(e) = tray::install(app.handle()) {
                 log::warn!("tray icon unavailable: {e}");
@@ -149,6 +153,16 @@ pub fn run() {
             commands::show_toast,
             commands::copy_diagnostics,
             commands::open_logs_folder,
+            commands::spotify_status,
+            commands::spotify_set_client_id,
+            commands::spotify_connect,
+            commands::spotify_disconnect,
+            commands::spotify_playlists,
+            commands::spotify_play_playlist,
+            commands::spotify_player,
+            commands::spotify_set_repeat,
+            commands::spotify_set_shuffle,
+            commands::spotify_set_saved,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

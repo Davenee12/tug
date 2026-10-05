@@ -189,4 +189,19 @@ describe("call", () => {
     expect(parseActions("call nobody", people, dial)).toEqual([]);
     expect(parseActions("callback", people, dial)).toEqual([]);
   });
+
+  it("plays a Spotify playlist by fuzzy name, and 'play' alone is still media", () => {
+    const playlists = [
+      { uri: "spotify:playlist:1", name: "Deep Focus", owner: "Spotify", trackCount: 120 },
+      { uri: "spotify:playlist:2", name: "Morning Run", owner: "Dave", trackCount: 42 },
+    ];
+    expect(parseActions("play deep", people, { playlists })).toEqual([
+      { kind: "play-playlist", uri: "spotify:playlist:1", name: "Deep Focus", label: "Play Deep Focus", detail: "Spotify · 120 songs" },
+    ]);
+    // Bare "play" is the media play action, not a playlist search.
+    expect(parseActions("play", people, { playlists })).toEqual([{ kind: "media", command: "play", label: "Play" }]);
+    // No match, and no playlists loaded, yield nothing.
+    expect(parseActions("play nothingmatches", people, { playlists })).toEqual([]);
+    expect(parseActions("play deep", people, {})).toEqual([]);
+  });
 });

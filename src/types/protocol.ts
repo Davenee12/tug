@@ -229,3 +229,39 @@ export interface ToastPressed {
   kind: "open" | "read" | "replied" | "copied" | "calledBack";
   id: number;
 }
+
+// --- Spotify connector (mirrors src-tauri/src/spotify/{mod,model}.rs) ---
+
+/** Spotify connection state for Settings. */
+export interface SpotifyStatus {
+  connected: boolean;
+  /** The connected account's display name, when connected. */
+  account: string | null;
+  /** The Client ID the owner pasted (null until set). */
+  clientId: string | null;
+  /** The exact Redirect URI to register in the Spotify dashboard (no port). */
+  redirectUri: string;
+}
+
+/** One of the user's own or followed playlists. */
+export interface SpotifyPlaylist {
+  /** `spotify:playlist:…`, played as the `context_uri`. */
+  uri: string;
+  name: string;
+  owner: string | null;
+  trackCount: number;
+}
+
+/** The Spotify playback snapshot that augments Now Playing (repeat/shuffle/like/art). */
+export interface SpotifyPlayer {
+  isPlaying: boolean;
+  shuffle: boolean;
+  repeat: RepeatMode | null;
+  /** Whether the current track is in the library (for the Like button); null if unknown. */
+  saved: boolean | null;
+  /** Album art as a `data:` URI, when available. */
+  albumArt: string | null;
+  /** The playing track's URI (what Like saves/removes). */
+  trackUri: string | null;
+  deviceName: string | null;
+}
