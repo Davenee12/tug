@@ -100,9 +100,12 @@ pub struct IncomingMessage<'a> {
     pub body: &'a str,
     pub sent_at: Option<&'a str>,
     pub received_at: i64,
+    /// The phone lists it as unread.
+    pub unread_on_phone: bool,
 }
 
-const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address, c.name, m.body, m.sent_at, m.received_at, m.status
+// A name the phone sent with the message stands in until the number is a known contact.
+const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address, COALESCE(c.name, m.sender_name), m.body, m.sent_at, m.received_at, m.status
      FROM messages m LEFT JOIN contacts c ON c.address = m.address";
 
 fn map_row(r: &Row) -> Result<StoredMessage> {
@@ -159,9 +162,18 @@ impl Store {
             return Ok(None);
         }
         let inserted = conn.execute(
-            "INSERT OR IGNORE INTO messages (source, handle, direction, address, sender_name, body, sent_at, received_at, status)
-             VALUES (?1, ?2, 'in', ?3, ?4, ?5, ?6, ?7, 'received')",
-            params![m.source, m.handle, m.address, m.sender_name, m.body, m.sent_at, m.received_at],
+            "INSERT OR IGNORE INTO messages (source, handle, direction, address, sender_name, body, sent_at, received_at, status, unread_on_phone)
+             VALUES (?1, ?2, 'in', ?3, ?4, ?5, ?6, ?7, 'received', ?8)",
+            params![
+                m.source,
+                m.handle,
+                m.address,
+                m.sender_name,
+                m.body,
+                m.sent_at,
+                m.received_at,
+                m.unread_on_phone
+            ],
         )?;
         if inserted == 0 {
             return Ok(None);
@@ -169,6 +181,28 @@ impl Store {
         let id = conn.last_insert_rowid();
         conn.query_row(&format!("{SELECT} WHERE m.id = ?1"), [id], map_row)
             .map(Some)
+    }
+
+    /// Handles of the given incoming messages that the phone still lists as unread.
+    pub fn unread_on_phone(&self, source: &str, ids: &[i64]) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT handle FROM messages
+             WHERE id IN (SELECT value FROM json_each(?1)) AND source = ?2
+               AND direction = 'in' AND unread_on_phone = 1 AND handle IS NOT NULL",
+        )?;
+        let ids = serde_json::to_string(ids).expect("ids serialize");
+        let rows = stmt.query_map(params![ids, source], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    /// The phone now lists this message as read (marked by tug, or read on the phone).
+    pub fn set_read_on_phone(&self, source: &str, handle: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE messages SET unread_on_phone = 0 WHERE source = ?1 AND handle = ?2 AND unread_on_phone = 1",
+            params![source, handle],
+        )?;
+        Ok(())
     }
 
     /// Record a reply before sending it, so it shows immediately as pending.
@@ -289,22 +323,29 @@ impl Store {
     /// "ok" could swap names. Returns the newly learned contacts.
     pub fn learn_contacts(&self) -> Result<Vec<Contact>> {
         let conn = self.conn();
+        // Names as the UI shows them (format.ts cleanName): trimmed, with iOS's inline-reply
+        // suffix removed only at the end ("zoe replied to you", "zoe replied to your message").
         let mut stmt = conn.prepare(
-            "INSERT OR IGNORE INTO contacts (address, name)
+            "WITH titled AS (
+                 SELECT message, received_at,
+                        CASE
+                            WHEN t LIKE '% replied to your message' THEN rtrim(substr(t, 1, length(t) - 24))
+                            WHEN t LIKE '% replied to you' THEN rtrim(substr(t, 1, length(t) - 15))
+                            ELSE t
+                        END AS name
+                 FROM (SELECT message, received_at, trim(title) AS t FROM notifications WHERE app_id = ?1)
+             )
+             INSERT OR IGNORE INTO contacts (address, name)
              SELECT address, name FROM (
-                 SELECT m.address AS address,
-                        MIN(rtrim(replace(trim(n.title), ' replied to you', ''))) AS name,
-                        COUNT(DISTINCT rtrim(replace(trim(n.title), ' replied to you', ''))) AS names
+                 SELECT m.address AS address, MIN(n.name) AS name, COUNT(DISTINCT n.name) AS names
                  FROM messages m
-                 JOIN notifications n
-                   ON n.app_id = ?1 AND n.message = m.body AND rtrim(replace(trim(n.title), ' replied to you', '')) <> ''
-                  AND abs(n.received_at - m.received_at) <= ?2
+                 JOIN titled n
+                   ON n.message = m.body AND n.name <> '' AND abs(n.received_at - m.received_at) <= ?2
                  WHERE m.direction = 'in' AND m.body <> ''
                    AND m.address NOT IN (SELECT address FROM contacts)
                    AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
                         WHERE m2.direction = 'in' AND m2.body = m.body) = 1
-                   AND (SELECT COUNT(DISTINCT rtrim(replace(trim(n2.title), ' replied to you', ''))) FROM notifications n2
-                        WHERE n2.app_id = ?1 AND n2.message = m.body) = 1
+                   AND (SELECT COUNT(DISTINCT n2.name) FROM titled n2 WHERE n2.message = m.body) = 1
                  GROUP BY m.address
              )
              WHERE names = 1
@@ -335,6 +376,7 @@ mod tests {
             body,
             sent_at: Some("2026-10-04T19:11:17"),
             received_at: 1_000,
+            unread_on_phone: false,
         }
     }
 
@@ -425,6 +467,62 @@ mod tests {
         s.insert_incoming(&incoming("H1", "+13025550173", "Yes")).unwrap();
         let learned = s.learn_contacts().unwrap();
         assert_eq!(learned[0].name, "zoe 💜");
+    }
+
+    #[test]
+    fn reply_suffix_is_stripped_only_at_the_end() {
+        let s = Store::in_memory().unwrap();
+        // Used to come out as "Zoer message"; a name that merely contains the phrase stays whole.
+        notify(&s, 1, "Zoe Replied To Your Message ", "Yes", 990);
+        s.insert_incoming(&incoming("H1", "+13025550173", "Yes")).unwrap();
+        notify(&s, 2, "Replied to you Club", "Sure", 990);
+        s.insert_incoming(&incoming("H2", "+12145550186", "Sure")).unwrap();
+        let mut names: Vec<String> = s.learn_contacts().unwrap().into_iter().map(|c| c.name).collect();
+        names.sort();
+        assert_eq!(names, vec!["Replied to you Club", "Zoe"]);
+    }
+
+    #[test]
+    fn tracks_which_messages_are_still_unread_on_the_phone() {
+        let s = Store::in_memory().unwrap();
+        let unread = IncomingMessage {
+            unread_on_phone: true,
+            ..incoming("H1", "+13025550173", "are you up?")
+        };
+        let a = s.insert_incoming(&unread).unwrap().unwrap();
+        let b = s
+            .insert_incoming(&incoming("H2", "+13025550173", "already read"))
+            .unwrap()
+            .unwrap();
+        let out = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550173", "yes", 2_000)
+            .unwrap();
+        let ids = [a.id, b.id, out.id, 999];
+        assert_eq!(s.unread_on_phone(SOURCE_IPHONE_MAP, &ids).unwrap(), vec!["H1"]);
+        s.set_read_on_phone(SOURCE_IPHONE_MAP, "H1").unwrap();
+        assert!(
+            s.unread_on_phone(SOURCE_IPHONE_MAP, &ids).unwrap().is_empty(),
+            "marked once, not again"
+        );
+        assert!(s.unread_on_phone(SOURCE_IPHONE_MAP, &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn name_sent_with_the_message_shows_until_the_contact_is_known() {
+        let s = Store::in_memory().unwrap();
+        let m = IncomingMessage {
+            sender_name: Some("Zoe"),
+            ..incoming("H1", "+13025550173", "hi")
+        };
+        assert_eq!(
+            s.insert_incoming(&m).unwrap().unwrap().contact_name.as_deref(),
+            Some("Zoe")
+        );
+        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
+        assert_eq!(
+            s.recent_messages(10).unwrap()[0].contact_name.as_deref(),
+            Some("zoe 💜")
+        );
     }
 
     #[test]
