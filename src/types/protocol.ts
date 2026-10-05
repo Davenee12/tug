@@ -31,6 +31,8 @@ export interface DeviceStatus {
   lastErrorAt: number | null;
   /** The iPhone rejects this PC's notifications pairing (forgotten on the phone): pair again. */
   pairingStale: boolean;
+  /** iOS is holding the ANCS subscribe open until "Allow" is tapped on the phone: prompt for it. */
+  awaitingPhoneAllow: boolean;
   /** Why message access isn't available, when the user can fix it. */
   messagesError: string | null;
   /** Why the phone's contacts aren't available, when the user can fix it. */

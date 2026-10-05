@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
-import { CircleAlert, LoaderCircle, RefreshCw } from "lucide-vue-next";
+import { CircleAlert, LoaderCircle, RefreshCw, Smartphone } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import type { DiscoveredDevice } from "../types/protocol";
 
@@ -71,6 +71,14 @@ const advertisingLabel = computed(
       <CircleAlert :size="16" class="mt-0.5 shrink-0 text-error" />
       <span class="selectable min-w-0 flex-1">{{ s.lastError }}</span>
       <button v-if="s.pairingStale" class="btn-primary btn-sm shrink-0" @click="pairAgain">Pair again</button>
+    </div>
+
+    <!-- Fresh bond: iOS holds the subscribe open until "Allow" is tapped on the phone. -->
+    <div v-if="s.awaitingPhoneAllow" class="flex items-center gap-3 rounded-xl border border-hairline bg-canvas px-4 py-3">
+      <Smartphone :size="18" class="shrink-0 text-ink" />
+      <p class="min-w-0 flex-1 text-[13px] text-body">
+        Look at your iPhone and tap <strong class="font-medium text-body-strong">Allow</strong> to let this PC see your notifications.
+      </p>
     </div>
 
     <!-- Paired: device card -->

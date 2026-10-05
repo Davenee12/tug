@@ -411,6 +411,10 @@ const SHORTCUTS: Array<[string, string]> = [
               <LoaderCircle v-if="repairing" :size="13" class="animate-spin" /> Pair again
             </button>
           </div>
+          <div v-else-if="s.awaitingPhoneAllow" class="mt-6 flex items-center gap-3 rounded-xl bg-surface-card px-4 py-3">
+            <Smartphone :size="18" class="shrink-0 text-ink" />
+            <p class="min-w-0 flex-1 text-[13px] text-body">Look at your iPhone and tap <strong class="font-medium text-body-strong">Allow</strong> to let this PC see your notifications.</p>
+          </div>
           <p v-else-if="connecting" class="mt-6 flex items-center justify-center gap-2 text-[13px] text-muted">
             <LoaderCircle :size="14" class="animate-spin" /> Connecting to your iPhone…
           </p>

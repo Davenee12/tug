@@ -105,6 +105,10 @@ pub struct DeviceStatus {
     pub last_error_at: Option<i64>,
     /// The iPhone rejects this PC's notifications bond (forgotten on the phone): pair again.
     pub pairing_stale: bool,
+    /// On a fresh bond iOS holds the ANCS subscribe (CCCD write) open until the user taps
+    /// "Allow" on the phone. True while that write is in flight, so setup can say to look
+    /// at the iPhone instead of looking stuck.
+    pub awaiting_phone_allow: bool,
     /// Why message access isn't available, when the user can fix it (e.g. consent).
     pub messages_error: Option<String>,
     /// Why the phone's contacts aren't available, when the user can fix it.

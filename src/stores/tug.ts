@@ -56,6 +56,7 @@ const EMPTY_STATUS: DeviceStatus = {
   lastError: null,
   lastErrorAt: null,
   pairingStale: false,
+  awaitingPhoneAllow: false,
   messagesError: null,
   contactsError: null,
   textsPairing: "unknown",

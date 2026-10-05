@@ -91,6 +91,7 @@ const status: DeviceStatus = setup
       lastError: null,
       lastErrorAt: null,
       pairingStale: false,
+      awaitingPhoneAllow: false,
       messagesError: null,
       contactsError: null,
       textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
@@ -107,6 +108,7 @@ const status: DeviceStatus = setup
       lastError: params.has("lasterror") ? "Couldn't advertise to the iPhone: the radio is busy" : null,
       lastErrorAt: params.has("lasterror") ? now - 4 * min : null,
       pairingStale: false,
+      awaitingPhoneAllow: false,
       messagesError: null,
       contactsError: null,
       textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
@@ -209,11 +211,15 @@ function simulateConnect(id: string) {
   const send = () => void emit("device-status", { ...status, services: { ...status.services } });
   status.device = { id, name };
   status.connection = "connecting";
+  // On a fresh bond iOS holds the ANCS subscribe open until "Allow" is tapped: the UI should
+  // prompt to look at the phone during this window.
+  status.awaitingPhoneAllow = true;
   send();
   // The real order: connected, Share System Notifications switched on, then the Texts step's
   // Windows pairing (the phone asks for its switch), Show Notifications, Sync Contacts.
   setTimeout(() => {
     status.connection = "connected";
+    status.awaitingPhoneAllow = false;
     status.battery = 76;
     status.services = { ...status.services, media: true, battery: true };
     send();
