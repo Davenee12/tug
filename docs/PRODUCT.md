@@ -69,5 +69,3 @@ build) · Why.
 - First run still depends on the LightBlue app — the biggest gap between "project" and "product"
   (onboarding track on the roadmap).
 - Settings live in a side panel; a real Settings page is on the roadmap.
-- The iPhone's Messages unread dot can't be cleared from tug (iOS limitation) — say so once, kindly,
-  where it matters, instead of looking broken.

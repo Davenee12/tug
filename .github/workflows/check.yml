@@ -1,0 +1,39 @@
+# The same checks `npm run check` runs locally, on every PR and on main, on Windows
+# (tug is Windows-only: WinRT Bluetooth, NSIS installer).
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      # Tauri embeds the built frontend at compile time, so clippy/tests need dist/.
+      - run: npm run build
+
+      - run: npm run check

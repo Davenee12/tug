@@ -27,7 +27,7 @@ pub fn parse(xml: &str) -> Vec<ListedMessage> {
             rest = after;
             continue;
         }
-        let Some(end) = after.find('>') else { break };
+        let Some(end) = tag_end(after) else { break };
         let attrs = attributes(&after[..end]);
         let get = |k: &str| attrs.get(k).cloned().unwrap_or_default();
         if let Some(handle) = attrs.get("handle") {
@@ -44,6 +44,22 @@ pub fn parse(xml: &str) -> Vec<ListedMessage> {
         rest = &after[end..];
     }
     out
+}
+
+/// Index of the `>` that closes a tag, skipping any inside quoted attribute values:
+/// XML allows a raw `>` there (`subject="5 > 3"`), and stopping at it would lose every
+/// attribute after the subject, read status included.
+fn tag_end(s: &str) -> Option<usize> {
+    let mut quote = None;
+    for (i, c) in s.char_indices() {
+        match quote {
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == '>' => return Some(i),
+            Some(q) if c == q => quote = None,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// A listing `datetime` as phone-local ISO (`2026-10-04T18:30:12`). MAP allows a
@@ -141,6 +157,22 @@ mod tests {
         assert_eq!(msgs[1].subject, "Fish & chips 🍟");
         assert_eq!(msgs[1].sender_name, "Sam");
         assert!(msgs[1].read);
+    }
+
+    #[test]
+    fn a_raw_angle_bracket_in_a_subject_keeps_the_rest_of_the_message() {
+        let xml = r#"<MAP-msg-listing>
+  <msg handle="1" subject="5 > 3, trust me" datetime="20261004T183012" sender_addressing="+15559876543" read="yes"/>
+  <msg handle="2" subject='she said "> ok"' datetime="20261004T183100" read="no"/>
+</MAP-msg-listing>"#;
+        let msgs = parse(xml);
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].subject, "5 > 3, trust me");
+        assert_eq!(msgs[0].datetime, "20261004T183012");
+        assert_eq!(msgs[0].sender_addressing, "+15559876543");
+        assert!(msgs[0].read, "attributes after the subject survive");
+        assert_eq!(msgs[1].subject, "she said \"> ok\"");
+        assert!(!msgs[1].read);
     }
 
     #[test]

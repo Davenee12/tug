@@ -100,9 +100,33 @@ pub async fn characteristic(service: &GattDeviceService, uuid: GUID, name: &'sta
     Ok(chars.GetAt(0)?)
 }
 
-/// Register `on_value` for notifications and enable them on the peripheral.
-pub async fn subscribe(ch: &GattCharacteristic, on_value: impl Fn(Vec<u8>) + Send + 'static) -> Result<()> {
-    ch.ValueChanged(
+/// A live notification subscription. Dropping it unregisters the handler, so a setup
+/// that fails halfway, or is retried, can't leave stale handlers stacked on the
+/// characteristic delivering every value twice.
+#[must_use = "dropping a Subscription unregisters its handler"]
+pub struct Subscription {
+    ch: GattCharacteristic,
+    token: i64,
+}
+
+impl Subscription {
+    pub fn characteristic(&self) -> &GattCharacteristic {
+        &self.ch
+    }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        if let Err(e) = self.ch.RemoveValueChanged(self.token) {
+            log::debug!("removing a GATT notification handler failed: {e}");
+        }
+    }
+}
+
+/// Register `on_value` for notifications and enable them on the peripheral. The
+/// handler stays registered for as long as the returned `Subscription` lives.
+pub async fn subscribe(ch: &GattCharacteristic, on_value: impl Fn(Vec<u8>) + Send + 'static) -> Result<Subscription> {
+    let token = ch.ValueChanged(
         &TypedEventHandler::<GattCharacteristic, GattValueChangedEventArgs>::new(move |_, args| {
             if let Some(args) = args.as_ref() {
                 match args.CharacteristicValue().and_then(|b| from_buffer(&b)) {
@@ -113,7 +137,10 @@ pub async fn subscribe(ch: &GattCharacteristic, on_value: impl Fn(Vec<u8>) + Sen
             Ok(())
         }),
     )?;
-    enable_notify(ch).await
+    // Owned from here on: if enabling fails, dropping it removes the handler again.
+    let sub = Subscription { ch: ch.clone(), token };
+    enable_notify(ch).await?;
+    Ok(sub)
 }
 
 /// Write the CCCD on the peripheral to turn notifications on.
@@ -135,15 +162,24 @@ pub async fn notify_enabled(ch: &GattCharacteristic) -> Result<bool> {
         == GattClientCharacteristicConfigurationDescriptorValue::Notify)
 }
 
+/// Longest a single GATT read or write may take. Windows normally fails these promptly
+/// when the link drops, but a stuck one would park the whole actor (and with it the ANCS
+/// timeout, reconnects and the CCCD watchdog), so give up and treat it as unreachable.
+const GATT_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub async fn write(ch: &GattCharacteristic, bytes: &[u8]) -> Result<()> {
-    let res = ch
-        .WriteValueWithResultAndOptionAsync(&to_buffer(bytes)?, GattWriteOption::WriteWithResponse)?
-        .await?;
+    let op = ch.WriteValueWithResultAndOptionAsync(&to_buffer(bytes)?, GattWriteOption::WriteWithResponse)?;
+    let res = tokio::time::timeout(GATT_OP_TIMEOUT, op)
+        .await
+        .map_err(|_| BleError::Unreachable)??;
     check(res.Status()?, res.ProtocolError())
 }
 
 pub async fn read(ch: &GattCharacteristic) -> Result<Vec<u8>> {
-    let res = ch.ReadValueWithCacheModeAsync(BluetoothCacheMode::Uncached)?.await?;
+    let op = ch.ReadValueWithCacheModeAsync(BluetoothCacheMode::Uncached)?;
+    let res = tokio::time::timeout(GATT_OP_TIMEOUT, op)
+        .await
+        .map_err(|_| BleError::Unreachable)??;
     check(res.Status()?, res.ProtocolError())?;
     Ok(from_buffer(&res.Value()?)?)
 }
