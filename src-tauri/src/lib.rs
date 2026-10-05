@@ -5,6 +5,8 @@ mod ble;
 mod commands;
 pub mod map;
 mod messages;
+#[cfg(test)]
+mod perf;
 mod state;
 mod store;
 
@@ -68,6 +70,7 @@ pub fn run() {
             commands::get_contacts,
             commands::send_message,
             commands::refresh_messages,
+            commands::mark_read,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

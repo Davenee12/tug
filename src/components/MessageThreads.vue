@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { Info, Plus, RotateCcw, SendHorizontal } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import {
@@ -54,6 +54,31 @@ watch(
   () => selected.value?.key,
   (key) => {
     if (key && tug.view === "messages" && tug.newCount(key, selected.value!.notifications)) tug.markSeen(key);
+  },
+  { immediate: true },
+);
+
+// The open conversation is read: clear it on the phone (and so the Feed) and mark its texts
+// read there — on open, when new texts land in it, and when the window comes back into focus.
+// Only while tug is focused, so a text arriving in the background still waits for you.
+const focused = ref(document.hasFocus());
+const onFocus = () => (focused.value = true);
+const onBlur = () => (focused.value = false);
+onMounted(() => {
+  window.addEventListener("focus", onFocus);
+  window.addEventListener("blur", onBlur);
+});
+onUnmounted(() => {
+  window.removeEventListener("focus", onFocus);
+  window.removeEventListener("blur", onBlur);
+});
+watch(
+  () => [selected.value?.key, selected.value?.items.length, selected.value?.notifications.length, focused.value] as const,
+  () => {
+    const c = selected.value;
+    if (!c || !focused.value || tug.view !== "messages" || !c.items.length) return;
+    const ids = tug.messages.filter((m) => m.direction === "in" && c.addresses.includes(m.address)).map((m) => m.id);
+    tug.readConversation(c.notifications, ids);
   },
   { immediate: true },
 );
