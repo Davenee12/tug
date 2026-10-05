@@ -87,6 +87,8 @@ const status: DeviceStatus = setup
       pairingStale: false,
       messagesError: null,
       contactsError: null,
+      textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
+      textsDevice: setup ? null : "Dave's iPhone",
     }
   : {
       radio: "on",
@@ -100,6 +102,8 @@ const status: DeviceStatus = setup
       pairingStale: false,
       messagesError: null,
       contactsError: null,
+      textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
+      textsDevice: setup ? null : "Dave's iPhone",
     };
 
 const nowPlaying: NowPlaying = setup
@@ -184,6 +188,8 @@ function simulateConnect(id: string) {
   }, 2400);
   setTimeout(() => {
     status.messagesError = "the iPhone refused message access; turn on Show Notifications for this PC";
+    status.textsPairing = "ok";
+    status.textsDevice = "Dave's iPhone";
     send();
   }, 8000);
   setTimeout(() => {

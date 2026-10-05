@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { Bell, Check, CloudSun, Info, Minus, Plus, ShieldCheck, SlidersHorizontal, Smartphone, X } from "lucide-vue-next";
+import { api } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { stepZoom } from "../lib/zoom";
@@ -175,6 +176,28 @@ async function clearHistory() {
 
         <!-- iPhone -->
         <template v-else-if="current.id === 'iphone'">
+          <!-- Texts pairing missing, or broken (Windows' half no longer works): say what to do -->
+          <div
+            v-if="tug.status.device && (tug.status.textsPairing === 'missing' || tug.status.textsPairing === 'broken')"
+            class="mb-6 flex items-start gap-3 rounded-xl border border-accent-amber/40 bg-canvas px-4 py-3.5"
+          >
+            <div class="min-w-0 flex-1 text-[13px] text-body">
+              <p class="text-[14px] font-medium text-ink">
+                {{ tug.status.textsPairing === "broken" ? "Texts stopped connecting" : "Texts aren't set up" }}
+              </p>
+              <p v-if="tug.status.textsPairing === 'broken'" class="mt-1">
+                Windows' texts pairing with {{ tug.status.textsDevice ?? "your iPhone" }} no longer works (notifications are fine). In
+                Bluetooth settings, remove <strong class="font-medium text-body-strong">{{ tug.status.textsDevice ?? "your iPhone" }}</strong>, then
+                choose <strong class="font-medium text-body-strong">Add device › Bluetooth</strong> and pick your iPhone again.
+              </p>
+              <p v-else class="mt-1">
+                Reading and replying to texts needs a second pairing, made from this PC: with your iPhone's Settings › Bluetooth open, choose
+                <strong class="font-medium text-body-strong">Add device › Bluetooth</strong> here and pick your iPhone.
+              </p>
+            </div>
+            <button class="btn-secondary btn-sm shrink-0" @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
+          </div>
+
           <div v-if="tug.status.device" class="mb-6">
             <p class="caption-upper mb-2 px-1 text-muted">On your iPhone</p>
             <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
