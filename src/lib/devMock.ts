@@ -6,12 +6,14 @@
 //   http://localhost:1420/?setup      first run, nothing paired (scripted: pair, PIN, sharing, first notification)
 //   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
+//   http://localhost:1420/?call       a call rings 1.5 s after load (rings out after 30 s, as a missed call)
+//   http://localhost:1420/?nodial     Settings › iPhone › Calls check fails, like a blocked hands-free link
 //   http://localhost:1420/?norepeat   player doesn't list AdvanceRepeatMode: no loop button
 //   http://localhost:1420/?repeatignored   player lists it but ignores it: the "didn't change" toast
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, SmsMessage } from "../types/protocol";
+import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -53,12 +55,7 @@ function n(appId: string, appName: string | null, title: string, message: string
 const history: PhoneNotification[] = setup
   ? []
   : [
-      n("com.apple.mobilephone", "Phone", "Mum", "Incoming call", 0, {
-        category: "incomingCall",
-        flags: flags({ important: true, positiveAction: true }),
-        positiveLabel: "Answer",
-        negativeLabel: "Decline",
-      }),
+      n("com.apple.mobilephone", "Phone", "Mum", "Missed Call", 3, { category: "missedCall" }),
       n("com.apple.MobileSMS", "Messages", "Zoe", "omw, 10 mins 🚗", 1),
       n("com.apple.MobileSMS", "Messages", "Zoe", "did you see the photos I sent?", 4),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Are we still meeting at 5? I can grab a table if you're running late.", 2),
@@ -176,6 +173,22 @@ const messages: SmsMessage[] = setup
       sms("in", "omw, 10 mins 🚗", 1),
     ];
 
+// Recents (PBAP call history): phone-local times, newest first, as the iPhone sends them.
+const localIso = (agoMin: number) => {
+  const d = new Date(now - agoMin * min);
+  return new Date(d.getTime() - d.getTimezoneOffset() * min).toISOString().slice(0, 19);
+};
+const calls: CallRecord[] = setup
+  ? []
+  : [
+      { direction: "missed", name: "Mum", number: "+19725550123", at: localIso(3) },
+      { direction: "outgoing", name: "Zoe", number: ZOE, at: localIso(52) },
+      { direction: "incoming", name: null, number: "+12145550199", at: localIso(130) },
+      { direction: "missed", name: null, number: null, at: localIso(60 * 20) },
+      { direction: "incoming", name: "Jane Doe", number: "+14695550188", at: localIso(60 * 26) },
+      { direction: "outgoing", name: null, number: "+18005550100", at: localIso(60 * 50) },
+    ];
+
 const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
@@ -252,6 +265,19 @@ mockIPC(
       }
       case "list_messages":
         return messages;
+      case "get_calls":
+        return calls;
+      // Experimental hands-free dialing: works here, unless ?nodial shows the refusal.
+      case "dial":
+        return new Promise((resolve, reject) =>
+          setTimeout(
+            () =>
+              params.has("nodial")
+                ? reject("Windows won't share the iPhone's hands-free link with tug (Windows or Phone Link is probably using it)")
+                : resolve(null),
+            900,
+          ),
+        );
       case "get_contacts":
         return contacts;
       case "send_message": {
@@ -308,14 +334,16 @@ mockIPC(
       case "use_device":
         simulateConnect(String(a.id));
         return null;
-      case "perform_action":
-        // Like the iPhone: a negative action (Clear/Decline) removes the notification.
-        if (!a.positive) {
-          const target = history.find((x) => x.id === a.id);
+      case "perform_action": {
+        // Like the iPhone: a negative action (Clear/Decline) removes the notification, and so
+        // does answering a call (it stops ringing).
+        const target = history.find((x) => x.id === a.id);
+        if (!a.positive || target?.category === "incomingCall") {
           if (target) target.removedAt = Date.now();
           setTimeout(() => void emit("notification-removed", a.id), 150);
         }
         return null;
+      }
       default:
         return null;
     }
@@ -336,4 +364,32 @@ if (setup && params.has("btoff")) {
 
 if (params.has("pairing")) {
   setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913" }), 600);
+}
+
+// ?call: the phone rings. Answer or Decline takes it down (perform_action above); left alone,
+// it rings out after 30 s and comes back as a missed call, the way iOS reports it over ANCS.
+if (params.has("call")) {
+  const ring = n("com.apple.mobilephone", "Phone", "Jane Doe", "Incoming Call", 0, {
+    category: "incomingCall",
+    subtitle: "mobile",
+    flags: flags({ important: true, positiveAction: true }),
+    positiveLabel: "Answer",
+    negativeLabel: "Decline",
+  });
+  ring.id = 600;
+  setTimeout(() => {
+    ring.receivedAt = Date.now();
+    history.unshift(ring);
+    void emit("notification", ring);
+  }, 1500);
+  setTimeout(() => {
+    if (ring.removedAt != null) return;
+    ring.removedAt = Date.now();
+    void emit("notification-removed", ring.id);
+    const missed = n("com.apple.mobilephone", "Phone", "Jane Doe", "Missed Call", 0, { category: "missedCall" });
+    missed.id = 601;
+    missed.receivedAt = Date.now();
+    history.unshift(missed);
+    void emit("notification", missed);
+  }, 31500);
 }

@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Search, Settings2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { dayLabel, entryLatest, groupFeed, notificationTime, type FeedEntry } from "../lib/format";
+import CallsPanel from "./CallsPanel.vue";
 import FeedEntryRow from "./FeedEntryRow.vue";
 import MessageThreads from "./MessageThreads.vue";
 import WeatherCard from "./WeatherCard.vue";
@@ -28,6 +29,7 @@ const entryGroups = computed(() => {
 });
 
 const unreadMessages = computed(() => tug.unreadTexts);
+const TITLES: Record<string, string> = { feed: "Notifications", messages: "Messages", calls: "Calls" };
 
 // Infinite scroll through older history.
 const sentinel = ref<HTMLElement | null>(null);
@@ -53,7 +55,7 @@ const setUp = computed(() => tug.status.device != null);
 <template>
   <div class="flex h-full min-h-0 flex-col">
     <header class="flex items-center gap-4 border-b border-hairline px-8 pt-6 pb-4">
-      <h1 class="headline text-[36px] leading-none">{{ tug.view === "feed" ? "Notifications" : "Messages" }}</h1>
+      <h1 class="headline text-[36px] leading-none">{{ TITLES[tug.view] ?? "Notifications" }}</h1>
       <nav class="ml-2 flex gap-1">
         <button :class="['tab', tug.view === 'feed' && 'tab-active']" @click="tug.view = 'feed'">Feed</button>
         <button :class="['tab flex items-center gap-1.5', tug.view === 'messages' && 'tab-active']" @click="tug.view = 'messages'">
@@ -65,6 +67,7 @@ const setUp = computed(() => tug.status.device != null);
             {{ unreadMessages }}
           </span>
         </button>
+        <button :class="['tab', tug.view === 'calls' && 'tab-active']" @click="tug.view = 'calls'">Calls</button>
       </nav>
       <button
         class="ml-auto flex h-10 w-full max-w-72 items-center gap-2 rounded-lg border border-hairline bg-canvas px-3.5 text-left text-[14px] text-muted-soft active:bg-surface-soft"
@@ -94,6 +97,8 @@ const setUp = computed(() => tug.status.device != null);
     </div>
 
     <MessageThreads v-else-if="tug.view === 'messages'" />
+
+    <CallsPanel v-else-if="tug.view === 'calls'" />
 
     <div v-else class="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-10">
       <div v-if="weather.place !== 'off'" class="mx-auto w-full max-w-3xl px-3 pt-5">

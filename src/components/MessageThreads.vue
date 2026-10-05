@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Info, Plus, RotateCcw, SendHorizontal, X } from "lucide-vue-next";
+import { Info, Phone, Plus, RotateCcw, SendHorizontal, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import {
   clockTime,
@@ -258,11 +258,23 @@ function onKey(e: KeyboardEvent) {
     </nav>
 
     <section v-if="selected" class="flex min-w-0 flex-1 flex-col">
-      <header class="border-b border-hairline px-8 py-4">
-        <p class="headline text-[26px] leading-tight">{{ selected.contact }}</p>
-        <p class="text-[13px] text-muted">
-          {{ selected.appLabel }}<template v-if="selected.address"> · {{ formatAddress(selected.address) }}</template>
-        </p>
+      <header class="flex items-center gap-4 border-b border-hairline px-8 py-4">
+        <div class="min-w-0 flex-1">
+          <p class="headline truncate text-[26px] leading-tight">{{ selected.contact }}</p>
+          <p class="text-[13px] text-muted">
+            {{ selected.appLabel }}<template v-if="selected.address"> · {{ formatAddress(selected.address) }}</template>
+          </p>
+        </div>
+        <!-- Experimental: only once Settings has checked hands-free dialing works here. -->
+        <button
+          v-if="tug.canDial && replyTo && selected.appId === 'com.apple.MobileSMS'"
+          class="btn-secondary btn-sm shrink-0"
+          :disabled="tug.calling !== null"
+          :title="`Call ${selected.contact} on your iPhone (experimental)`"
+          @click="tug.call(replyTo, selected.contact)"
+        >
+          <Phone :size="13" /> {{ tug.calling === replyTo ? "Calling…" : "Call" }}
+        </button>
       </header>
 
       <div ref="scroller" class="flex-1 overflow-y-auto px-8 py-6">

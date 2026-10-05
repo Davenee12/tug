@@ -14,20 +14,9 @@ pub fn parse(raw: &str) -> Vec<PhonebookEntry> {
     let mut n_name: Option<String> = None;
     let mut numbers: Vec<String> = Vec::new();
     for line in unfold(raw) {
-        let Some((key_params, value)) = line.split_once(':') else {
+        let Some((key, _, value)) = property(&line) else {
             continue;
         };
-        let mut parts = key_params.split(';');
-        // Property names may carry a group prefix like "item1.TEL".
-        let key = parts
-            .next()
-            .unwrap_or("")
-            .rsplit('.')
-            .next()
-            .unwrap_or("")
-            .to_ascii_uppercase();
-        let params: Vec<String> = parts.map(|p| p.to_ascii_uppercase()).collect();
-        let value = decode(value, &params);
         match key.as_str() {
             "BEGIN" if value.eq_ignore_ascii_case("VCARD") => {
                 fn_name = None;
@@ -36,16 +25,7 @@ pub fn parse(raw: &str) -> Vec<PhonebookEntry> {
             }
             "FN" if !value.trim().is_empty() => fn_name = Some(value.trim().to_string()),
             "N" => {
-                // N:Family;Given;Middle;Prefix;Suffix → "Given Family"
-                let f: Vec<&str> = value.split(';').collect();
-                let name = [f.get(3), f.get(1), f.get(2), f.first(), f.get(4)]
-                    .into_iter()
-                    .flatten()
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                if !name.is_empty() {
+                if let Some(name) = structured_name(&value) {
                     n_name = Some(name);
                 }
             }
@@ -67,8 +47,38 @@ pub fn parse(raw: &str) -> Vec<PhonebookEntry> {
     out
 }
 
+/// One content line as (upper-cased name, upper-cased params, decoded value).
+/// Property names may carry a group prefix like "item1.TEL"; it's dropped.
+pub(super) fn property(line: &str) -> Option<(String, Vec<String>, String)> {
+    let (key_params, value) = line.split_once(':')?;
+    let mut parts = key_params.split(';');
+    let key = parts
+        .next()
+        .unwrap_or("")
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    let params: Vec<String> = parts.map(|p| p.to_ascii_uppercase()).collect();
+    let value = decode(value, &params);
+    Some((key, params, value))
+}
+
+/// `N:Family;Given;Middle;Prefix;Suffix` → "Given Family" (and whatever else is there).
+pub(super) fn structured_name(value: &str) -> Option<String> {
+    let f: Vec<&str> = value.split(';').collect();
+    let name = [f.get(3), f.get(1), f.get(2), f.first(), f.get(4)]
+        .into_iter()
+        .flatten()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!name.is_empty()).then_some(name)
+}
+
 /// Join folded lines (a line starting with space or tab continues the previous one).
-fn unfold(raw: &str) -> Vec<String> {
+pub(super) fn unfold(raw: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for line in raw.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l)) {
         if let (Some(rest), Some(prev)) = (line.strip_prefix([' ', '\t']), lines.last_mut()) {

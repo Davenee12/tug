@@ -9,6 +9,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::ams::NowPlaying;
+use crate::map::calls::CallRecord;
 use crate::map::health::TextsPairing;
 use crate::map::service::MapHandle;
 use crate::store::Store;
@@ -27,6 +28,7 @@ pub mod events {
     pub const CONTACTS: &str = "contacts";
     /// Tray click/Open with unread texts: the frontend opens the newest unread conversation.
     pub const OPEN_LATEST_CONVERSATION: &str = "open-latest-conversation";
+    pub const CALLS: &str = "calls";
 }
 
 /// Settings keys stored in SQLite.
@@ -156,6 +158,8 @@ pub struct Shared {
     pub store: Arc<Store>,
     status: Mutex<DeviceStatus>,
     now_playing: Mutex<NowPlaying>,
+    /// The phone's recent calls (PBAP), newest first. Not stored: the phone keeps the real list.
+    calls: Mutex<Vec<CallRecord>>,
     /// Current ANCS subscription id; rows from it can still take actions.
     live_session: Mutex<Option<String>>,
     /// Answer channel for a PIN-confirmation prompt that is waiting on the user.
@@ -178,6 +182,7 @@ impl Shared {
             store,
             status: Mutex::default(),
             now_playing: Mutex::default(),
+            calls: Mutex::default(),
             live_session: Mutex::default(),
             pairing_confirm: Mutex::default(),
             map: OnceLock::new(),
@@ -228,6 +233,23 @@ impl Shared {
         };
         if let Some(np) = snapshot {
             self.emit(events::NOW_PLAYING, np);
+        }
+    }
+
+    pub fn calls(&self) -> Vec<CallRecord> {
+        lock(&self.calls).clone()
+    }
+
+    /// Replace the recent calls and push them to the UI if they changed.
+    pub fn set_calls(&self, calls: Vec<CallRecord>) {
+        let changed = {
+            let mut current = lock(&self.calls);
+            let changed = *current != calls;
+            *current = calls;
+            changed.then(|| current.clone())
+        };
+        if let Some(calls) = changed {
+            self.emit(events::CALLS, calls);
         }
     }
 

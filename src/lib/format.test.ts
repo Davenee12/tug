@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { canClear, cleanName, groupConversations, groupFeed, highlight, initials, newestUnreadThread, snippet, threadKey } from "./format";
-import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
+import {
+  callName,
+  callTime,
+  canClear,
+  cleanName,
+  groupCalls,
+  groupConversations,
+  groupFeed,
+  highlight,
+  initials,
+  newestUnreadThread,
+  snippet,
+  threadKey,
+} from "./format";
+import type { CallRecord, Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const T0 = Date.parse("2026-10-05T12:00:00");
 const min = 60_000;
@@ -189,5 +202,42 @@ describe("canClear", () => {
     const ringing = note("Mum", "Incoming call", 0, { appId: "com.apple.mobilephone", category: "incomingCall", negativeLabel: "Decline" });
     expect(canClear(ringing)).toBe(false);
     expect(canClear({ ...ringing, category: "missedCall" })).toBe(true);
+  });
+});
+
+describe("recent calls", () => {
+  const call = (number: string | null, name: string | null, at: string | null, direction: CallRecord["direction"] = "incoming"): CallRecord => ({
+    direction,
+    name,
+    number,
+    at,
+  });
+
+  it("names a call by the contact first, then the phone's name, then the number", () => {
+    const nameFor = new Map([["+13025550142", "Zoe 💜 "]]);
+    expect(callName(call("+13025550142", "Zoey", null), nameFor)).toBe("Zoe 💜");
+    expect(callName(call("+12145550199", "Dave Smith", null), nameFor)).toBe("Dave Smith");
+    expect(callName(call("+12145550199", null, null), nameFor)).toBe("(214) 555-0199");
+    expect(callName(call(null, null, null), nameFor)).toBe("No caller ID");
+  });
+
+  it("groups by day, newest first, with untimed calls at the end", () => {
+    const now = new Date("2026-10-05T18:00:00");
+    const groups = groupCalls(
+      [
+        call("+1", null, "2026-10-05T09:30:00", "missed"),
+        call("+2", null, "2026-10-05T08:00:00"),
+        call("+3", null, "2026-10-04T21:00:00", "outgoing"),
+        call("+4", null, null),
+        call("+5", null, "not a time"),
+      ],
+      now,
+    );
+    expect(groups.map((g) => [g.label, g.calls.map((c) => c.number)])).toEqual([
+      ["Today", ["+1", "+2"]],
+      ["Yesterday", ["+3"]],
+      ["Earlier", ["+4", "+5"]],
+    ]);
+    expect(callTime(call("+1", null, "2026-10-04T18:15:00Z"))?.toISOString()).toBe("2026-10-04T18:15:00.000Z");
   });
 });
