@@ -312,11 +312,30 @@ pub fn open_url(url: String) -> Result<()> {
     if !is_http_url(&url) {
         return Err(format!("refusing to open non-web URL: {url}"));
     }
-    std::process::Command::new("explorer.exe")
-        .arg(&url)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    open_in_browser(&url)
+}
+
+/// Hand a web address to Windows to open in the default browser. Not `explorer.exe <url>`:
+/// on Dave's PC that opened File Explorer for addresses with a query (`?q=…`).
+#[cfg(windows)]
+fn open_in_browser(url: &str) -> Result<()> {
+    use windows::core::{w, HSTRING, PCWSTR};
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let file = HSTRING::from(url);
+    // SAFETY: plain FFI call; every pointer argument outlives the call.
+    let result = unsafe { ShellExecuteW(None, w!("open"), &file, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+    // ShellExecute reports success as a value above 32.
+    if result.0 as isize > 32 {
+        Ok(())
+    } else {
+        Err(format!("Windows couldn't open the link (code {})", result.0 as isize))
+    }
+}
+
+#[cfg(not(windows))]
+fn open_in_browser(_url: &str) -> Result<()> {
+    Err("Opening links is only supported on Windows".into())
 }
 
 /// Unread texts, for the tray tooltip and the taskbar dot.

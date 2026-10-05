@@ -22,28 +22,28 @@ const NO_WEB = new Set(["com.apple.MobileSMS", "com.apple.mobilephone", "com.app
 
 
 /**
- * Static landing pages, by iOS bundle id. Each is the page a person most likely wants after
- * tapping that app's notification — its inbox, notifications tab, or feed. Bundle ids are the
+ * Home pages, by iOS bundle id: Open goes to the app's front door, never a surprise page
+ * (Dave: an Amazon alert opening order history felt wrong). Gmail opens the inbox. Bundle ids are the
  * real App Store ones (several apps keep historical ids: X is still `com.atebits.Tweetie2`,
  * Snapchat `com.toyopagroup.picaboo`). Apps not listed here get no "Open" button.
  */
 const LANDING: Record<string, WebLink> = {
-  "com.linkedin.LinkedIn": { url: "https://www.linkedin.com/notifications/", label: "LinkedIn" },
-  "com.burbn.instagram": { url: "https://www.instagram.com/direct/inbox/", label: "Instagram" },
-  "com.facebook.Facebook": { url: "https://www.facebook.com/notifications", label: "Facebook" },
+  "com.linkedin.LinkedIn": { url: "https://www.linkedin.com/", label: "LinkedIn" },
+  "com.burbn.instagram": { url: "https://www.instagram.com/", label: "Instagram" },
+  "com.facebook.Facebook": { url: "https://www.facebook.com/", label: "Facebook" },
   "com.facebook.Messenger": { url: "https://www.messenger.com/", label: "Messenger" },
-  "com.atebits.Tweetie2": { url: "https://x.com/notifications", label: "X" },
+  "com.atebits.Tweetie2": { url: "https://x.com/", label: "X" },
   "com.microsoft.Office.Outlook": { url: "https://outlook.office.com/mail/", label: "Outlook" },
   "com.tinyspeck.chatlyio": { url: "https://app.slack.com/client", label: "Slack" },
-  "com.google.ios.youtube": { url: "https://www.youtube.com/feed/subscriptions", label: "YouTube" },
-  "com.reddit.Reddit": { url: "https://www.reddit.com/notifications/", label: "Reddit" },
-  "com.toyopagroup.picaboo": { url: "https://web.snapchat.com/", label: "Snapchat" },
+  "com.google.ios.youtube": { url: "https://www.youtube.com/", label: "YouTube" },
+  "com.reddit.Reddit": { url: "https://www.reddit.com/", label: "Reddit" },
+  "com.toyopagroup.picaboo": { url: "https://www.snapchat.com/", label: "Snapchat" },
   "net.whatsapp.WhatsApp": { url: "https://web.whatsapp.com/", label: "WhatsApp" },
-  "com.hammerandchisel.discord": { url: "https://discord.com/channels/@me", label: "Discord" },
-  "ph.telegra.Telegraph": { url: "https://web.telegram.org/a/", label: "Telegram" },
+  "com.hammerandchisel.discord": { url: "https://discord.com/app", label: "Discord" },
+  "ph.telegra.Telegraph": { url: "https://web.telegram.org/", label: "Telegram" },
   "com.google.calendar": { url: "https://calendar.google.com/", label: "Google Calendar" },
-  "com.amazon.Amazon": { url: "https://www.amazon.com/gp/css/order-history", label: "Amazon" },
-  "com.github.stormbreaker.prod": { url: "https://github.com/notifications", label: "GitHub" },
+  "com.amazon.Amazon": { url: "https://www.amazon.com/", label: "Amazon" },
+  "com.github.stormbreaker.prod": { url: "https://github.com/", label: "GitHub" },
   "com.spotify.client": { url: "https://open.spotify.com/", label: "Spotify" },
   "notion.id": { url: "https://www.notion.so/", label: "Notion" },
   "com.zhiliaoapp.musically": { url: "https://www.tiktok.com/", label: "TikTok" },
@@ -58,7 +58,10 @@ const LANDING: Record<string, WebLink> = {
 export function webLinkFor(n: PhoneNotification): WebLink | null {
   // The Google app's alerts (live scores, news) are about something: search for it.
   if (n.appId === GOOGLE_APP_ID) {
-    const topic = (n.subtitle || n.message.split(/\r?\n/)[0] || n.title).split(" · ")[0].replace(/\s+/g, " ").trim();
+    // iOS puts the topic in the title ("⏰ France vs Belgium") and generic text in the message
+    // ("Tap to add the live score…"): search the title, without its emoji.
+    const raw = n.title && n.title !== "Google" ? n.title : n.subtitle || n.message.split(/\r?\n/)[0];
+    const topic = raw.replace(/[^\p{L}\p{N}\s'&.,:+-]/gu, " ").replace(/\s+/g, " ").trim();
     return {
       url: topic ? `https://www.google.com/search?q=${encodeURIComponent(topic.slice(0, 120))}` : "https://www.google.com/",
       label: "Google",
