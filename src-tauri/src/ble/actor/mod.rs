@@ -131,6 +131,17 @@ struct Ancs {
     sweep_after: Option<Instant>,
 }
 
+impl Ancs {
+    /// A request was abandoned after its retries. For an app's name, forget that we
+    /// asked, so the app's next notification tries again instead of tug showing the raw
+    /// bundle id until it restarts.
+    fn gave_up_on(&mut self, r: &Request) {
+        if let Request::App(app_id) = r {
+            self.asked_apps.remove(app_id);
+        }
+    }
+}
+
 struct Media {
     _service: GattDeviceService,
     remote_command: GattCharacteristic,
@@ -452,7 +463,10 @@ impl Actor {
                 a.reassembler.reset();
                 a.resume = None;
                 match a.requests.fail_inflight() {
-                    Some(gave_up) => log::warn!("ANCS request {gave_up:?} timed out {MAX_ATTEMPTS} times; giving up"),
+                    Some(gave_up) => {
+                        log::warn!("ANCS request {gave_up:?} timed out {MAX_ATTEMPTS} times; giving up");
+                        a.gave_up_on(&gave_up);
+                    }
                     None => log::info!("ANCS request {req:?} timed out; retrying"),
                 }
             }

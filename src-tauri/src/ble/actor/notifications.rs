@@ -284,6 +284,7 @@ impl Actor {
                     a.reassembler.reset();
                     if let Some(gave_up) = a.requests.fail_inflight() {
                         log::warn!("giving up on ANCS request {gave_up:?} after {MAX_ATTEMPTS} attempts");
+                        a.gave_up_on(&gave_up);
                     }
                 }
             }

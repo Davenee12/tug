@@ -46,7 +46,16 @@ impl Actor {
                     s.last_error = None;
                 });
             }
-            Err(e) => self.fail_connect(e.to_string()),
+            Err(e) => {
+                // setup_ancs names the new session before subscribing; if setup then failed,
+                // nothing is subscribed under it, so notifications mustn't look live (their
+                // actions would go nowhere).
+                if let Some(l) = self.link.as_mut() {
+                    l.session_id = None;
+                }
+                self.shared.set_live_session(None);
+                self.fail_connect(e.to_string());
+            }
         }
     }
 
