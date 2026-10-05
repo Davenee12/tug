@@ -3,7 +3,7 @@
 
 import type { MediaCommand, PhoneNotification, SpotifyPlaylist } from "../types/protocol";
 import { cleanName, formatAddress, missedCallFor } from "./format";
-import { matchPlaylists } from "./spotify";
+import { matchPlaylists, playlistDetail } from "./spotify";
 
 export interface Person {
   name: string;
@@ -132,7 +132,7 @@ function playlistActions(rest: string, ctx: ActionContext): Action[] {
     uri: p.uri,
     name: p.name,
     label: `Play ${p.name}`,
-    detail: [p.owner, `${p.trackCount} song${p.trackCount === 1 ? "" : "s"}`].filter(Boolean).join(" · "),
+    detail: playlistDetail(p),
   }));
 }
 
