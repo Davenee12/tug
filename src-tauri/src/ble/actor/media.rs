@@ -127,7 +127,7 @@ impl Actor {
 
     /// Write one Remote Command. A successful write only means iOS handed it to the player,
     /// not that the player acted on it, so the log notes whether the player listed it.
-    pub(super) async fn send_media_command(&self, command: ams::RemoteCommand) -> Result<(), String> {
+    pub(super) async fn send_media_command(&mut self, command: ams::RemoteCommand) -> Result<(), String> {
         let np = self.shared.now_playing();
         let context = format!(
             "player {:?}, listed as supported: {}, repeat now: {:?}",
@@ -159,6 +159,10 @@ impl Actor {
                     command.id(),
                     describe_error(&e)
                 );
+                if e.is_closed() {
+                    self.relink("media controls were closed by Windows");
+                    return Err("Reconnecting to your iPhone. Try again in a moment.".into());
+                }
                 Err(e.to_string())
             }
         }
