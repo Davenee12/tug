@@ -100,6 +100,10 @@ mod worker {
     const LIST_MAX: u16 = 20;
     const CONTACTS_RESYNC: Duration = Duration::from_secs(6 * 60 * 60);
     const CONTACTS_RETRY: Duration = Duration::from_secs(10 * 60);
+    /// An empty phonebook usually means Sync Contacts is still off: it's often switched on
+    /// moments after messages connect, so look again soon, then back off.
+    const CONTACTS_EMPTY_RETRY: Duration = Duration::from_secs(60);
+    const CONTACTS_EMPTY_QUICK_TRIES: u32 = 10;
     const CONTACTS_PULL_TIMEOUT: Duration = Duration::from_secs(90);
 
     fn now_ms() -> i64 {
@@ -115,6 +119,7 @@ mod worker {
         /// Classic device the MAP session is on; contacts come from the same phone.
         device_id: Option<String>,
         next_contacts_sync: Instant,
+        empty_contact_pulls: u32,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -123,6 +128,7 @@ mod worker {
             session: None,
             device_id: None,
             next_contacts_sync: Instant::now(),
+            empty_contact_pulls: 0,
         };
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
@@ -211,7 +217,20 @@ mod worker {
                 .await
                 .unwrap_or(Err(MapError::Timeout));
             match pulled {
+                // The iPhone answers with an empty list, not a refusal, while Sync Contacts is
+                // off. Keep any names already saved and ask again rather than in 6 hours.
+                Ok(entries) if entries.is_empty() => {
+                    self.empty_contact_pulls += 1;
+                    log::info!("the iPhone shared no contacts (Sync Contacts off?), asking again soon");
+                    self.next_contacts_sync = Instant::now()
+                        + if self.empty_contact_pulls <= CONTACTS_EMPTY_QUICK_TRIES {
+                            CONTACTS_EMPTY_RETRY
+                        } else {
+                            CONTACTS_RETRY
+                        };
+                }
                 Ok(entries) => {
+                    self.empty_contact_pulls = 0;
                     let pairs: Vec<(String, String)> = entries
                         .iter()
                         .flat_map(|e| e.numbers.iter().map(move |n| (normalize(n), e.name.clone())))
