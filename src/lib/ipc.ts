@@ -35,6 +35,9 @@ export const api = {
   setAdvertising: (enabled: boolean) => invoke<void>("set_advertising", { enabled }),
   getSettings: () => invoke<Record<string, string>>("get_settings"),
   setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),
+  /** Whether tug starts with Windows (reads the actual registry entry). */
+  getAutostart: () => invoke<boolean>("get_autostart"),
+  setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
   listMessages: (limit: number) => invoke<SmsMessage[]>("list_messages", { limit }),
   getContacts: () => invoke<Contact[]>("get_contacts"),
   sendMessage: (address: string, text: string) => invoke<SmsMessage>("send_message", { address, text }),
