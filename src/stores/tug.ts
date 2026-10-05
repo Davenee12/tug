@@ -51,6 +51,7 @@ const EMPTY_NOW_PLAYING: NowPlaying = {
   artist: null,
   album: null,
   duration: null,
+  repeat: null,
   available: [],
 };
 

@@ -86,7 +86,8 @@ export type MediaCommand =
   | "nextTrack"
   | "previousTrack"
   | "volumeUp"
-  | "volumeDown";
+  | "volumeDown"
+  | "advanceRepeatMode";
 
 export interface NowPlaying {
   player: string | null;
@@ -100,8 +101,12 @@ export interface NowPlaying {
   artist: string | null;
   album: string | null;
   duration: number | null;
+  /** The player's repeat mode, when it reports one. */
+  repeat: RepeatMode | null;
   available: MediaCommand[];
 }
+
+export type RepeatMode = "off" | "one" | "all";
 
 export type Transport = "le" | "classic";
 

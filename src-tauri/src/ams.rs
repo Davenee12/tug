@@ -12,7 +12,10 @@ pub const ENTITY_UPDATE: u128 = 0x2F7CABCE_808D_411F_9A0C_BB92BA96C102;
 pub const ENTITY_ATTRIBUTE: u128 = 0xC6B2F38C_23AB_46D8_A6AB_A3A870BBD5D7;
 
 const ENTITY_PLAYER: u8 = 0;
+const ENTITY_QUEUE: u8 = 1;
 const ENTITY_TRACK: u8 = 2;
+
+const QUEUE_REPEAT_MODE: u8 = 3;
 
 const PLAYER_NAME: u8 = 0;
 const PLAYER_PLAYBACK_INFO: u8 = 1;
@@ -32,6 +35,8 @@ pub enum RemoteCommand {
     PreviousTrack,
     VolumeUp,
     VolumeDown,
+    /// Off → repeat all → repeat one → off, as the phone's own button.
+    AdvanceRepeatMode,
 }
 
 impl RemoteCommand {
@@ -44,6 +49,7 @@ impl RemoteCommand {
             Self::PreviousTrack => 4,
             Self::VolumeUp => 5,
             Self::VolumeDown => 6,
+            Self::AdvanceRepeatMode => 7,
         }
     }
 
@@ -56,6 +62,7 @@ impl RemoteCommand {
             4 => "previousTrack",
             5 => "volumeUp",
             6 => "volumeDown",
+            7 => "advanceRepeatMode",
             _ => return None,
         })
     }
@@ -69,16 +76,18 @@ impl RemoteCommand {
             "previousTrack" => Self::PreviousTrack,
             "volumeUp" => Self::VolumeUp,
             "volumeDown" => Self::VolumeDown,
+            "advanceRepeatMode" => Self::AdvanceRepeatMode,
             _ => return None,
         })
     }
 }
 
-/// Entity Update writes that register for player and track changes.
+/// Entity Update writes that register for player, queue and track changes.
 /// Each must be written separately.
-pub fn registrations() -> [Vec<u8>; 2] {
+pub fn registrations() -> [Vec<u8>; 3] {
     [
         vec![ENTITY_PLAYER, PLAYER_NAME, PLAYER_PLAYBACK_INFO, PLAYER_VOLUME],
+        vec![ENTITY_QUEUE, QUEUE_REPEAT_MODE],
         vec![ENTITY_TRACK, TRACK_ARTIST, TRACK_ALBUM, TRACK_TITLE, TRACK_DURATION],
     ]
 }
@@ -86,11 +95,12 @@ pub fn registrations() -> [Vec<u8>; 2] {
 /// Every (entity, attribute) tug shows. Entity Update only reports *changes*, so on
 /// connect each one is read through Entity Attribute (write the pair, then read)
 /// to pick up whatever is already playing.
-pub fn current_value_queries() -> [[u8; 2]; 7] {
+pub fn current_value_queries() -> [[u8; 2]; 8] {
     [
         [ENTITY_PLAYER, PLAYER_NAME],
         [ENTITY_PLAYER, PLAYER_PLAYBACK_INFO],
         [ENTITY_PLAYER, PLAYER_VOLUME],
+        [ENTITY_QUEUE, QUEUE_REPEAT_MODE],
         [ENTITY_TRACK, TRACK_TITLE],
         [ENTITY_TRACK, TRACK_ARTIST],
         [ENTITY_TRACK, TRACK_ALBUM],
@@ -109,6 +119,14 @@ pub enum PlaybackState {
     FastForwarding,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RepeatMode {
+    Off,
+    One,
+    All,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NowPlaying {
@@ -125,6 +143,8 @@ pub struct NowPlaying {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub duration: Option<f64>,
+    /// The player's repeat mode, when it reports one.
+    pub repeat: Option<RepeatMode>,
     /// Remote commands the current player accepts.
     pub available: Vec<&'static str>,
 }
@@ -161,6 +181,14 @@ impl NowPlaying {
                 self.elapsed_at = self.elapsed.map(|_| now_ms);
             }
             (ENTITY_PLAYER, PLAYER_VOLUME) => self.volume = value.parse().ok(),
+            (ENTITY_QUEUE, QUEUE_REPEAT_MODE) => {
+                self.repeat = match value.as_str() {
+                    "0" => Some(RepeatMode::Off),
+                    "1" => Some(RepeatMode::One),
+                    "2" => Some(RepeatMode::All),
+                    _ => None,
+                }
+            }
             (ENTITY_TRACK, TRACK_ARTIST) => self.artist = text(),
             (ENTITY_TRACK, TRACK_ALBUM) => self.album = text(),
             (ENTITY_TRACK, TRACK_TITLE) => self.title = text(),
@@ -243,6 +271,23 @@ mod tests {
         // A new playback report re-anchors.
         np.apply_entity_update(&update(0, 1, "1,1.0,72.6"), 31_500);
         assert_eq!((np.elapsed, np.elapsed_at), (Some(72.6), Some(31_500)));
+    }
+
+    #[test]
+    fn repeat_mode_follows_the_queue() {
+        let mut np = NowPlaying::default();
+        assert!(np.apply_entity_update(&update(1, 3, "2"), 0));
+        assert_eq!(np.repeat, Some(RepeatMode::All));
+        assert!(np.apply_entity_update(&update(1, 3, "1"), 0));
+        assert_eq!(np.repeat, Some(RepeatMode::One));
+        assert!(np.apply_entity_update(&update(1, 3, "0"), 0));
+        assert_eq!(np.repeat, Some(RepeatMode::Off));
+        // Other queue attributes (index, count, shuffle) aren't shown.
+        assert!(!np.apply_entity_update(&update(1, 0, "4"), 0));
+        assert_eq!(
+            RemoteCommand::parse("advanceRepeatMode").map(RemoteCommand::id),
+            Some(7)
+        );
     }
 
     #[test]
