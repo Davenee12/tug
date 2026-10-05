@@ -100,10 +100,10 @@ mod worker {
     const LIST_MAX: u16 = 20;
     const CONTACTS_RESYNC: Duration = Duration::from_secs(6 * 60 * 60);
     const CONTACTS_RETRY: Duration = Duration::from_secs(10 * 60);
-    /// An empty phonebook usually means Sync Contacts is still off: it's often switched on
-    /// moments after messages connect, so look again soon, then back off.
-    const CONTACTS_EMPTY_RETRY: Duration = Duration::from_secs(60);
-    const CONTACTS_EMPTY_QUICK_TRIES: u32 = 10;
+    /// An empty phonebook or a refusal means Sync Contacts is still off: it's often switched
+    /// on moments after messages connect, so look again soon, then back off.
+    const CONTACTS_UNSHARED_RETRY: Duration = Duration::from_secs(20);
+    const CONTACTS_UNSHARED_QUICK_TRIES: u32 = 15;
     const CONTACTS_PULL_TIMEOUT: Duration = Duration::from_secs(90);
 
     fn now_ms() -> i64 {
@@ -119,7 +119,7 @@ mod worker {
         /// Classic device the MAP session is on; contacts come from the same phone.
         device_id: Option<String>,
         next_contacts_sync: Instant,
-        empty_contact_pulls: u32,
+        unshared_contact_pulls: u32,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -128,7 +128,7 @@ mod worker {
             session: None,
             device_id: None,
             next_contacts_sync: Instant::now(),
-            empty_contact_pulls: 0,
+            unshared_contact_pulls: 0,
         };
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
@@ -204,6 +204,16 @@ mod worker {
             self.set_state(false, shown);
         }
 
+        /// When to ask again while contacts aren't shared yet: soon at first, then the usual retry.
+        fn soon(&mut self) -> Duration {
+            self.unshared_contact_pulls += 1;
+            if self.unshared_contact_pulls <= CONTACTS_UNSHARED_QUICK_TRIES {
+                CONTACTS_UNSHARED_RETRY
+            } else {
+                CONTACTS_RETRY
+            }
+        }
+
         /// Pull the phone's contacts (PBAP) now and then, for names and new chats.
         async fn sync_contacts_if_due(&mut self) {
             let Some(device_id) = self.device_id.clone() else {
@@ -220,17 +230,11 @@ mod worker {
                 // The iPhone answers with an empty list, not a refusal, while Sync Contacts is
                 // off. Keep any names already saved and ask again rather than in 6 hours.
                 Ok(entries) if entries.is_empty() => {
-                    self.empty_contact_pulls += 1;
                     log::info!("the iPhone shared no contacts (Sync Contacts off?), asking again soon");
-                    self.next_contacts_sync = Instant::now()
-                        + if self.empty_contact_pulls <= CONTACTS_EMPTY_QUICK_TRIES {
-                            CONTACTS_EMPTY_RETRY
-                        } else {
-                            CONTACTS_RETRY
-                        };
+                    self.next_contacts_sync = Instant::now() + self.soon();
                 }
                 Ok(entries) => {
-                    self.empty_contact_pulls = 0;
+                    self.unshared_contact_pulls = 0;
                     let pairs: Vec<(String, String)> = entries
                         .iter()
                         .flat_map(|e| e.numbers.iter().map(move |n| (normalize(n), e.name.clone())))
@@ -253,9 +257,12 @@ mod worker {
                 }
                 Err(e) => {
                     log::info!("contacts sync failed: {e}");
-                    let shown = matches!(e, MapError::ContactsConsent).then(|| e.to_string());
+                    let consent = matches!(e, MapError::ContactsConsent);
+                    let shown = consent.then(|| e.to_string());
                     self.shared.update_status(|s| s.contacts_error = shown);
-                    self.next_contacts_sync = Instant::now() + CONTACTS_RETRY;
+                    // A refusal is the switch still being off, like an empty list: during setup
+                    // it's usually flipped seconds later, so ask again soon.
+                    self.next_contacts_sync = Instant::now() + if consent { self.soon() } else { CONTACTS_RETRY };
                 }
             }
         }
