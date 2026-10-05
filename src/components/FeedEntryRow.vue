@@ -112,10 +112,10 @@ function open() {
     </div>
 
     <div v-if="ringing && !expanded" class="flex gap-2 px-3 pb-3 pl-14">
-      <button v-if="latest.flags.positiveAction" class="btn-primary btn-sm" @click="tug.performAction(latest.id, true)">
+      <button v-if="latest.flags.positiveAction" class="btn-primary btn-sm" @click="tug.respondToCall(latest, true)">
         {{ latest.positiveLabel || "Answer" }}
       </button>
-      <button v-if="latest.flags.negativeAction" class="btn-secondary btn-sm" @click="tug.performAction(latest.id, false)">
+      <button v-if="latest.flags.negativeAction" class="btn-secondary btn-sm" @click="tug.respondToCall(latest, false)">
         {{ latest.negativeLabel || "Decline" }}
       </button>
     </div>
