@@ -36,13 +36,17 @@ import type {
   PairingRequest,
   PhoneNotification,
   SearchResults,
+  SpotifyPlayer,
+  SpotifyPlaylist,
+  SpotifyStatus,
   ToastPressed,
   UiSettings,
 } from "../types/protocol";
+import { nextRepeat } from "../lib/spotify";
 
 const PAGE = 100;
 
-export type SettingsSection = "general" | "iphone" | "notifications" | "weather" | "privacy" | "about";
+export type SettingsSection = "general" | "iphone" | "notifications" | "spotify" | "weather" | "privacy" | "about";
 const SEEN_KEEP = 300;
 
 const EMPTY_STATUS: DeviceStatus = {
@@ -61,6 +65,7 @@ const EMPTY_STATUS: DeviceStatus = {
   contactsError: null,
   textsPairing: "unknown",
   textsDevice: null,
+  liveTexts: "off",
 };
 
 const EMPTY_NOW_PLAYING: NowPlaying = {
@@ -104,6 +109,17 @@ export const useTugStore = defineStore("tug", () => {
     filterUnknown: true,
     knownSenders: [],
   });
+
+  // --- Spotify connector ---
+  const spotify = ref<SpotifyStatus>({ connected: false, account: null, clientId: null, redirectUri: "http://127.0.0.1:8972/callback" });
+  /** The Spotify playback snapshot (repeat/shuffle/like/art), polled only while relevant. */
+  const spotifyPlayer = ref<SpotifyPlayer | null>(null);
+  /** The user's playlists, loaded on connect / first use and cached for Ctrl+K and the panel. */
+  const playlists = ref<SpotifyPlaylist[]>([]);
+  /** The Playlists panel (overlay) is open. */
+  const spotifyPanelOpen = ref(false);
+  /** Connect in progress (the browser is open waiting for sign-in). */
+  const spotifyConnecting = ref(false);
 
   /** Who counts as a known sender (contacts, numbers you've texted, ones you moved), for Filter unknown senders. */
   const senders = computed(() => senderIndex(contacts.value, outgoingAddresses(messages.value), settings.value.knownSenders));
@@ -167,6 +183,7 @@ export const useTugStore = defineStore("tug", () => {
   const showSetup = computed(() => setupRequested.value || setupActive.value);
   const flash = ref<{ kind: "error" | "info"; text: string; action?: { label: string; run: () => void } } | null>(null);
   let flashTimer: number | undefined;
+  let spotifyPoll: number | undefined;
 
   /** Middle-panel view, and the conversation open in Messages. */
   const view = ref<"feed" | "messages" | "calls" | "settings">("feed");
@@ -190,7 +207,9 @@ export const useTugStore = defineStore("tug", () => {
       ) ?? null,
   );
   /** Something is covering the main view, so whatever is behind it isn't being looked at. */
-  const overlayOpen = computed(() => searchOpen.value || pickerOpen.value || !!pairingRequest.value || !!ringing.value);
+  const overlayOpen = computed(
+    () => searchOpen.value || pickerOpen.value || spotifyPanelOpen.value || !!pairingRequest.value || !!ringing.value,
+  );
 
   function openSettings(section?: SettingsSection) {
     if (view.value !== "settings") viewBeforeSettings = view.value;
@@ -208,7 +227,8 @@ export const useTugStore = defineStore("tug", () => {
   const setupSharingShown = ref(false);
   let watchRenew: number | undefined;
   const pageVisible = ref(document.visibilityState === "visible");
-  document.addEventListener("visibilitychange", () => (pageVisible.value = document.visibilityState === "visible"));
+  // Registered in init() and removed in dispose(), so it's torn down with the rest (see teardown).
+  const onVisibilityChange = () => (pageVisible.value = document.visibilityState === "visible");
   // The switches get flipped on the phone, with tug on any screen or in the tray. So for the
   // first minutes after launch or pairing, check fast whenever one is still off, too.
   const FRESH_MS = 5 * 60 * 1000;
@@ -218,9 +238,10 @@ export const useTugStore = defineStore("tug", () => {
     () => status.value.device?.id,
     (id) => {
       if (!id) return;
+      // A fresh connection reopens the fast-check window; the renew interval below owns its own
+      // lifecycle (set when watching turns on, cleared on re-run and in dispose), so leave it be.
       fresh.value = true;
       window.clearTimeout(freshTimer);
-    window.clearInterval(watchRenew);
       freshTimer = window.setTimeout(() => (fresh.value = false), FRESH_MS);
     },
   );
@@ -674,6 +695,8 @@ export const useTugStore = defineStore("tug", () => {
   async function init() {
     if (started) return;
     started = true;
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    teardown.push(() => document.removeEventListener("visibilitychange", onVisibilityChange));
     teardown.push(
       installZoomShortcuts(
         () => zoom.value,
@@ -749,14 +772,21 @@ export const useTugStore = defineStore("tug", () => {
     nowPlaying.value = np;
     hasMore.value = first.length === PAGE;
     await attempt(loadSettings);
+    void loadSpotify();
   }
 
   function dispose() {
     for (const off of teardown) off();
     teardown = [];
+    // Everything with a lifetime gets cleared here, so init() can be called again cleanly (a
+    // remount or dev hot-reload) without a leaked timer firing or an interval double-polling.
     window.clearTimeout(toastSummary);
     window.clearTimeout(freshTimer);
+    window.clearInterval(spotifyPoll);
+    window.clearTimeout(flashTimer);
+    window.clearInterval(watchRenew);
     toastSummary = undefined;
+    watchRenew = undefined;
     started = false;
   }
 
@@ -814,11 +844,145 @@ export const useTugStore = defineStore("tug", () => {
     void setSetting("mutedApps", muted.includes(appId) ? muted.filter((a) => a !== appId) : [...muted, appId]);
   }
 
+  // --- Spotify connector ---------------------------------------------------------------
+  /** Whether to augment Now Playing with Spotify: connected, and Spotify is the AMS player. */
+  const spotifyActive = computed(() => spotify.value.connected && nowPlaying.value.player === "Spotify");
+
+  async function loadSpotify() {
+    const s = await attempt(api.spotifyStatus);
+    if (s) spotify.value = s;
+    if (spotify.value.connected) void loadPlaylists();
+  }
+
+  /** Load the user's playlists once (cached); pass force to reload after a (re)connect. */
+  async function loadPlaylists(force = false) {
+    if (!spotify.value.connected || (playlists.value.length && !force)) return;
+    const list = await attempt(api.spotifyPlaylists);
+    if (list) playlists.value = list;
+  }
+
+  async function setSpotifyClientId(id: string) {
+    const s = await attempt(() => api.spotifySetClientId(id));
+    if (s) spotify.value = s;
+  }
+
+  /** Run the OAuth flow (opens the browser). Resolves when the loopback redirect returns. */
+  async function connectSpotify(): Promise<boolean> {
+    if (!spotify.value.clientId) {
+      notify("error", "Add your Spotify Client ID first.");
+      return false;
+    }
+    spotifyConnecting.value = true;
+    notify("info", "Finish signing in to Spotify in your browser…");
+    try {
+      spotify.value = await api.spotifyConnect();
+      playlists.value = [];
+      void loadPlaylists(true);
+      notify("info", spotify.value.account ? `Connected to Spotify as ${spotify.value.account}.` : "Connected to Spotify.");
+      return true;
+    } catch (e) {
+      notify("error", errorMessage(e));
+      return false;
+    } finally {
+      spotifyConnecting.value = false;
+    }
+  }
+
+  async function disconnectSpotify() {
+    const s = await attempt(api.spotifyDisconnect);
+    if (s) spotify.value = s;
+    playlists.value = [];
+    spotifyPlayer.value = null;
+  }
+
+  /** Start a playlist on the iPhone (used by the panel and Ctrl+K). Never fails silently. */
+  async function playPlaylist(uri: string, name?: string): Promise<boolean> {
+    const ok = await attempt(() => api.spotifyPlayPlaylist(uri).then(() => true));
+    if (ok) notify("info", name ? `Playing ${name} on your iPhone.` : "Playing on your iPhone.");
+    return ok === true;
+  }
+
+  async function refreshSpotifyPlayer() {
+    if (!spotifyActive.value) return;
+    // A transient read failure shouldn't nag; the next poll tries again.
+    try {
+      spotifyPlayer.value = await api.spotifyPlayer();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Cycle Spotify repeat (off → all → one → off), optimistic with revert on failure. */
+  async function cycleSpotifyRepeat() {
+    const p = spotifyPlayer.value;
+    if (!p) return;
+    const previous = p.repeat;
+    const mode = nextRepeat(previous);
+    p.repeat = mode;
+    const ok = await attempt(() => api.spotifySetRepeat(mode).then(() => true));
+    if (ok !== true && spotifyPlayer.value) spotifyPlayer.value.repeat = previous;
+    else void refreshSpotifyPlayer();
+  }
+
+  async function toggleSpotifyShuffle() {
+    const p = spotifyPlayer.value;
+    if (!p) return;
+    const previous = p.shuffle;
+    p.shuffle = !previous;
+    const ok = await attempt(() => api.spotifySetShuffle(!previous).then(() => true));
+    if (ok !== true && spotifyPlayer.value) spotifyPlayer.value.shuffle = previous;
+    else void refreshSpotifyPlayer();
+  }
+
+  async function toggleSpotifyLike() {
+    const p = spotifyPlayer.value;
+    if (!p?.trackUri) return;
+    const previous = p.saved ?? false;
+    const want = !previous;
+    p.saved = want;
+    const uri = p.trackUri;
+    const ok = await attempt(() => api.spotifySetSaved(uri, want).then(() => true));
+    if (ok !== true && spotifyPlayer.value) spotifyPlayer.value.saved = previous;
+  }
+
+  // Poll /me/player lightly, only while tug is visible and Spotify is the active player.
+  const SPOTIFY_POLL_MS = 5000;
+  watch(
+    () => pageVisible.value && spotifyActive.value,
+    (on) => {
+      window.clearInterval(spotifyPoll);
+      if (on) {
+        void refreshSpotifyPlayer();
+        spotifyPoll = window.setInterval(() => void refreshSpotifyPlayer(), SPOTIFY_POLL_MS);
+      } else {
+        spotifyPlayer.value = null;
+      }
+    },
+    { immediate: true },
+  );
+
   return {
     setupSharingShown,
     status,
     statusKnown,
     nowPlaying,
+    // Spotify connector
+    spotify,
+    spotifyPlayer,
+    spotifyActive,
+    spotifyConnecting,
+    playlists,
+    spotifyPanelOpen,
+    loadSpotify,
+    loadPlaylists,
+    setSpotifyClientId,
+    connectSpotify,
+    disconnectSpotify,
+    playPlaylist,
+    refreshSpotifyPlayer,
+    cycleSpotifyRepeat,
+    toggleSpotifyShuffle,
+    toggleSpotifyLike,
     notifications,
     messages,
     contacts,

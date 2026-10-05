@@ -44,10 +44,13 @@ windows = { version = "0.62", features = [
   "Media_Playback",
   "Networking",
   "Networking_Sockets",
+  "Security_Cryptography",
   "Storage_Streams",
   "UI_Notifications",
   "Web_Http",
+  "Web_Http_Headers",
   "Win32_Foundation",
+  "Win32_Security_Credentials",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }

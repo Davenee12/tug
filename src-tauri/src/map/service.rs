@@ -113,13 +113,14 @@ mod worker {
     use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use tokio::sync::mpsc::UnboundedReceiver;
+    use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
     use tokio::time::Instant;
 
     use super::MapCommand;
     use crate::map::address::normalize;
-    use crate::map::health::{Attempt, Health, TextsPairing};
+    use crate::map::health::{Attempt, Health, LiveTexts, TextsPairing};
     use crate::map::listing;
+    use crate::map::mns::{self, Outgoing};
     use crate::map::obex::RSP_NOT_FOUND;
     use crate::map::pick::choose_device;
     use crate::map::session::{find_devices, pull_call_history, pull_contacts, MapDevice, MapError, MapSession};
@@ -127,11 +128,6 @@ mod worker {
     use crate::state::{events, keys, ConnectionState, Shared};
 
     const FIRST_SYNC_DELAY: Duration = Duration::from_secs(3);
-    const POLL_CONNECTED: Duration = Duration::from_secs(8);
-    const RETRY_DISCONNECTED: Duration = Duration::from_secs(30);
-    /// While the user watches the iPhone's switches, Show Message Notifications and Sync
-    /// Contacts are checked this often, so flipping one shows up in tug right away.
-    const WATCHING: Duration = Duration::from_secs(2);
     /// Contacts (a full PBAP pull) are retried no faster than this while watching.
     const CONTACTS_WATCHING: Duration = Duration::from_secs(10);
     /// How many of the newest inbox messages to look at each poll.
@@ -160,6 +156,15 @@ mod worker {
     /// How long to keep the hands-free link after dialing, so the call is under way before
     /// tug lets go of it.
     const DIAL_HOLD: Duration = Duration::from_secs(3);
+    /// Live texts count as "fresh" (letting the backstop poll relax) for this long after the last
+    /// event; if the phone goes quiet, the poll tightens back up to catch anything the MNS missed.
+    const LIVE_EVENT_FRESH: Duration = Duration::from_secs(60);
+    /// After registering, how long to wait for the phone to connect to our MNS before saying (once)
+    /// that live texts aren't working and we're polling only.
+    const MNS_CONNECT_GRACE: Duration = Duration::from_secs(30);
+    /// At most one "reopen message access" per this long after the MNS link drops, so a phone
+    /// that keeps dropping it can't make tug reconnect in a loop.
+    const MNS_REOPEN_GAP: Duration = Duration::from_secs(60);
 
     fn now_ms() -> i64 {
         SystemTime::now()
@@ -184,9 +189,27 @@ mod worker {
         texts_device: Option<String>,
         next_calls_sync: Instant,
         last_calls_pull: Option<Instant>,
+        /// The running MNS server (live texts), while a session is up and it started.
+        mns: Option<mns::MnsServer>,
+        /// Cloned into each MNS server so the phone's events reach the worker's select loop.
+        events_tx: UnboundedSender<mns::ServerMessage>,
+        /// Live-texts state mirrored into `DeviceStatus`.
+        live: LiveTexts,
+        /// When the last MNS event (or connect) arrived, for the fresh-enough-to-relax-the-poll check.
+        last_event_at: Option<Instant>,
+        /// When registration was sent, to notice a phone that never connects to the MNS.
+        mns_registered_at: Option<Instant>,
+        /// So the "phone never connected, polling only" line is logged once per session.
+        mns_grace_warned: bool,
+        /// When the last MNS drop made tug reopen message access (rate-limits that recovery).
+        mns_reopened_at: Option<Instant>,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
+        // The MNS server pushes the phone's events here; the worker selects on them alongside
+        // commands and the poll timer. Created up front so `events_rx` is always selectable even
+        // before a server exists.
+        let (events_tx, mut events_rx) = mpsc::unbounded_channel::<mns::ServerMessage>();
         let mut w = Worker {
             shared,
             session: None,
@@ -199,6 +222,13 @@ mod worker {
             texts_device: None,
             next_calls_sync: Instant::now(),
             last_calls_pull: None,
+            mns: None,
+            events_tx,
+            live: LiveTexts::Off,
+            last_event_at: None,
+            mns_registered_at: None,
+            mns_grace_warned: false,
+            mns_reopened_at: None,
         };
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
@@ -227,19 +257,16 @@ mod worker {
                         let _ = reply.send(w.dial(number.as_deref()).await);
                     }
                 },
+                // The phone pushed a live-texts event (or just connected to the MNS).
+                Some(msg) = events_rx.recv() => w.on_mns(msg).await,
                 _ = tokio::time::sleep_until(next) => w.refresh().await,
             }
             if Instant::now() >= next {
-                next = Instant::now()
-                    + if w.shared.watching() {
-                        WATCHING
-                    } else if w.session.is_some() {
-                        POLL_CONNECTED
-                    } else {
-                        RETRY_DISCONNECTED
-                    };
+                next = Instant::now() + mns::poll_after(w.shared.watching(), w.session.is_some(), w.live_fresh());
             }
         }
+        // Sender dropped (app exiting): deregister on the phone and stop advertising cleanly.
+        w.shutdown().await;
     }
 
     impl Worker {
@@ -341,19 +368,178 @@ mod worker {
                 self.device_id = Some(device.id.clone());
                 self.session = Some(session);
                 self.set_state(true, None);
+                // Live texts: advertise the MNS and register for notifications. Failure here only
+                // turns live texts off; the inbox poll keeps working.
+                self.start_live_texts().await;
             }
             Ok(self.session.as_mut().expect("session just set"))
+        }
+
+        /// Bring up live texts for the open session: advertise the MNS server, then (only once it
+        /// is advertising) ask the phone to start pushing notifications. Any failure is logged once
+        /// and leaves tug polling — an unpackaged-app RFCOMM server is unproven on iOS.
+        async fn start_live_texts(&mut self) {
+            if self.mns.is_some() {
+                return;
+            }
+            // Advertise first, so the phone has an SDP record to find the moment it's registered.
+            match mns::start(self.events_tx.clone()).await {
+                Ok(server) => {
+                    self.mns = Some(server);
+                    log::info!("live texts: MNS server started, SDP published (service 0x1133, MAP profile 1.1)");
+                }
+                Err(e) => {
+                    log::info!("live texts: couldn't start the MNS server ({e}); polling only");
+                    self.set_live(LiveTexts::Unavailable);
+                    return;
+                }
+            }
+            let Some(session) = self.session.as_mut() else {
+                return;
+            };
+            match session.set_notification_registration(true).await {
+                Ok(()) => {
+                    log::info!("live texts: notification registration sent; waiting for the iPhone to connect");
+                    self.mns_registered_at = Some(Instant::now());
+                    self.mns_grace_warned = false;
+                    self.set_live(LiveTexts::Starting);
+                }
+                Err(e) => {
+                    log::info!("live texts: the iPhone refused notification registration ({e}); polling only");
+                    self.mns = None; // dropping it stops advertising
+                    self.set_live(LiveTexts::Unavailable);
+                }
+            }
+        }
+
+        /// Tear live texts down (session dropped): stop advertising and forget the registration.
+        fn stop_live_texts(&mut self) {
+            if self.mns.take().is_some() {
+                log::info!("live texts: stopped (message access dropped)");
+            }
+            self.mns_registered_at = None;
+            self.last_event_at = None;
+            self.set_live(LiveTexts::Off);
+        }
+
+        fn set_live(&mut self, state: LiveTexts) {
+            if self.live != state {
+                self.live = state;
+                self.shared.update_status(|s| s.live_texts = state);
+            }
+        }
+
+        /// Whether live texts have been heard from recently enough to relax the backstop poll.
+        fn live_fresh(&self) -> bool {
+            self.live == LiveTexts::Active && self.last_event_at.is_some_and(|t| t.elapsed() < LIVE_EVENT_FRESH)
+        }
+
+        /// Deregister cleanly on shutdown (best-effort; the app is exiting).
+        async fn shutdown(&mut self) {
+            if self.mns.is_some() {
+                if let Some(session) = self.session.as_mut() {
+                    let _ = session.set_notification_registration(false).await;
+                }
+            }
+            self.stop_live_texts();
         }
 
         fn fail(&mut self, e: &MapError) {
             if self.session.take().is_some() {
                 log::info!("message access dropped: {e}");
             }
+            self.stop_live_texts();
             let shown = match e {
                 MapError::Consent | MapError::NoService => Some(e.to_string()),
                 _ => None,
             };
             self.set_state(false, shown);
+        }
+
+        /// Handle one message from the MNS server: the phone connecting, or an event report.
+        async fn on_mns(&mut self, msg: mns::ServerMessage) {
+            match msg {
+                mns::ServerMessage::Connected => {
+                    if self.live != LiveTexts::Active {
+                        log::info!("live texts: the iPhone connected to the notification server");
+                    }
+                    self.last_event_at = Some(Instant::now());
+                    self.set_live(LiveTexts::Active);
+                }
+                mns::ServerMessage::Disconnected => {
+                    // Seen on Jordan's iPhone: once registered, an open session's inbox listing
+                    // stopped showing new texts after the MNS link died, so the poll found
+                    // nothing until a fresh session. Reopen message access, which re-registers.
+                    let recent = self.mns_reopened_at.is_some_and(|t| t.elapsed() < MNS_REOPEN_GAP);
+                    if recent {
+                        log::info!("live texts: the iPhone dropped the notification link again; polling only");
+                        self.set_live(LiveTexts::Unavailable);
+                        return;
+                    }
+                    log::info!("live texts: the iPhone dropped the notification link; reopening message access");
+                    self.mns_reopened_at = Some(Instant::now());
+                    self.session = None;
+                    self.stop_live_texts();
+                    self.refresh().await;
+                }
+                mns::ServerMessage::Event(event) => {
+                    self.last_event_at = Some(Instant::now());
+                    self.set_live(LiveTexts::Active);
+                    log::debug!(
+                        "live texts: event {:?} handle {:?} folder {:?}",
+                        event.kind,
+                        event.handle,
+                        event.folder
+                    );
+                    match mns::event_action(&event) {
+                        mns::EventAction::Refresh => self.refresh().await,
+                        mns::EventAction::SendConfirmed { handle } => {
+                            self.confirm_send(handle.as_deref(), Status::Sent).await;
+                        }
+                        mns::EventAction::SendFailed { handle } => {
+                            self.confirm_send(handle.as_deref(), Status::Failed).await;
+                        }
+                        mns::EventAction::Ignore => {}
+                    }
+                }
+            }
+        }
+
+        /// Update the outgoing message a Sending{Success,Failure} report is about. The report's
+        /// handle may not equal the one PushMessage returned (and it carries no recipient), so the
+        /// match is handle-first then newest-unconfirmed; see `mns::choose_outgoing`.
+        async fn confirm_send(&mut self, handle: Option<&str>, status: Status) {
+            let store = self.shared.store.clone();
+            let candidates = match store.outgoing_unconfirmed(SOURCE_IPHONE_MAP) {
+                Ok(c) => c,
+                Err(e) => return log::warn!("reading unconfirmed sends failed: {e}"),
+            };
+            let outs: Vec<Outgoing> = candidates
+                .into_iter()
+                .map(|(id, handle, received_at)| Outgoing {
+                    id,
+                    handle,
+                    received_at,
+                })
+                .collect();
+            let Some(id) = mns::choose_outgoing(handle, &outs) else {
+                log::debug!("live texts: a send report ({status:?}) matched no pending message");
+                return;
+            };
+            match store.set_outgoing_status(id, status, None) {
+                Ok(m) => {
+                    log::info!(
+                        "live texts: a sent message is now {}",
+                        if status == Status::Sent {
+                            "confirmed sent"
+                        } else {
+                            "marked failed"
+                        }
+                    );
+                    self.shared.emit(events::MESSAGE, m);
+                }
+                Err(e) => log::warn!("updating sent status failed: {e}"),
+            }
         }
 
         /// When to ask again while contacts aren't shared yet: soon at first, then the usual retry.
@@ -521,6 +707,7 @@ mod worker {
                 self.sync_contacts_if_due().await;
                 self.sync_calls_if_due().await;
             }
+            self.check_mns_grace();
             match result {
                 Ok(0) => {}
                 Ok(n) => log::info!("{n} new message(s) from the iPhone"),
@@ -529,6 +716,23 @@ mod worker {
                     log::debug!("message sync failed: {e}");
                     self.fail(&e);
                 }
+            }
+        }
+
+        /// If registration went out but the phone still hasn't connected to the MNS, say so once
+        /// and mark live texts unavailable. The poll backstop keeps running regardless.
+        fn check_mns_grace(&mut self) {
+            if self.live != LiveTexts::Starting || self.mns_grace_warned {
+                return;
+            }
+            if self.mns_registered_at.is_some_and(|t| t.elapsed() >= MNS_CONNECT_GRACE) {
+                log::info!(
+                    "live texts: the iPhone hasn't connected to the MNS within {}s; polling only \
+                     (expected if iOS won't connect to an unpackaged app's RFCOMM server)",
+                    MNS_CONNECT_GRACE.as_secs()
+                );
+                self.mns_grace_warned = true;
+                self.set_live(LiveTexts::Unavailable);
             }
         }
 
