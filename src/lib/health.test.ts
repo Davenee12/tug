@@ -17,6 +17,7 @@ const CONNECTED: DeviceStatus = {
   awaitingPhoneAllow: false,
   messagesError: null,
   contactsError: null,
+  contactsShared: false,
   textsPairing: "ok",
   textsDevice: "iPhone",
   liveTexts: "off",

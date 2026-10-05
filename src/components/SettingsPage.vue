@@ -101,7 +101,7 @@ const SHORTCUTS: Array<[string, string[]]> = [
 ];
 
 // ---- iPhone: the three switches on the phone, checked live (shared pure logic) ----
-const checks = computed(() => phoneSwitches(tug.status, tug.contacts.length));
+const checks = computed(() => phoneSwitches(tug.status));
 
 // ---- iPhone: experimental calling, on only after the hands-free check passes ----
 const checkingCalls = ref(false);

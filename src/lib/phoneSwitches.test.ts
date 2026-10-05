@@ -17,19 +17,20 @@ const CONNECTED: DeviceStatus = {
   awaitingPhoneAllow: false,
   messagesError: null,
   contactsError: null,
+  contactsShared: true,
   textsPairing: "ok",
   textsDevice: "iPhone",
   liveTexts: "off",
 };
 
-function states(overrides: Partial<DeviceStatus>, contacts = 3): Record<string, SwitchState> {
-  const list = phoneSwitches({ ...CONNECTED, ...overrides }, contacts);
+function states(overrides: Partial<DeviceStatus>): Record<string, SwitchState> {
+  const list = phoneSwitches({ ...CONNECTED, ...overrides });
   return Object.fromEntries(list.map((x) => [x.key, x.state]));
 }
 
 describe("phoneSwitches", () => {
   it("names the three switches in order with exact labels", () => {
-    const list = phoneSwitches(CONNECTED, 3);
+    const list = phoneSwitches(CONNECTED);
     expect(list.map((x) => x.key)).toEqual(["notifications", "messages", "contacts"]);
     expect(list.map((x) => x.label)).toEqual(["Share System Notifications", "Show Notifications", "Sync Contacts"]);
     // Every switch points at where it lives on the phone.
@@ -42,7 +43,7 @@ describe("phoneSwitches", () => {
   });
 
   it("marks only required switches required", () => {
-    const list = phoneSwitches(CONNECTED, 3);
+    const list = phoneSwitches(CONNECTED);
     expect(list.find((x) => x.key === "notifications")!.required).toBe(true);
     expect(list.find((x) => x.key === "messages")!.required).toBe(false);
     expect(list.find((x) => x.key === "contacts")!.required).toBe(false);
@@ -73,10 +74,10 @@ describe("phoneSwitches", () => {
     expect(s.messages).toBe("unknown");
   });
 
-  it("marks Sync Contacts off on a refusal, unknown on an empty pull", () => {
-    expect(states({ contactsError: "the iPhone refused contact access" }, 0).contacts).toBe("off");
-    expect(states({}, 0).contacts).toBe("unknown");
-    expect(states({}, 5).contacts).toBe("on");
+  it("marks Sync Contacts off on a refusal, unknown until the phone shares, on when it does", () => {
+    expect(states({ contactsError: "the iPhone refused contact access", contactsShared: false }).contacts).toBe("off");
+    expect(states({ contactsShared: false }).contacts).toBe("unknown");
+    expect(states({ contactsShared: true }).contacts).toBe("on");
   });
 
   it("never guesses: a disconnected phone leaves every switch unknown", () => {
@@ -86,16 +87,15 @@ describe("phoneSwitches", () => {
         services: { notifications: false, media: false, battery: false, messages: false },
         messagesError: null,
         contactsError: null,
+        contactsShared: false,
       },
-      0,
     );
     expect(s).toEqual({ notifications: "unknown", messages: "unknown", contacts: "unknown" });
   });
 
   it("switchesOff lists exactly the switches that are off, with a fix", () => {
     const list = phoneSwitches(
-      { ...CONNECTED, services: { notifications: false, media: true, battery: true, messages: true }, contactsError: "no" },
-      0,
+      { ...CONNECTED, services: { notifications: false, media: true, battery: true, messages: true }, contactsError: "no", contactsShared: false },
     );
     const off = switchesOff(list);
     expect(off.map((x) => x.key)).toEqual(["notifications", "contacts"]);
