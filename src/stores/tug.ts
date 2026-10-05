@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
-import { appLabel, formatAddress, groupThreads, threadKey } from "../lib/format";
+import { appLabel, canClear, formatAddress, groupConversations, groupThreads, newestUnreadThread, threadKey } from "../lib/format";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
@@ -39,6 +39,8 @@ const EMPTY_STATUS: DeviceStatus = {
   pairingStale: false,
   messagesError: null,
   contactsError: null,
+  textsPairing: "unknown",
+  textsDevice: null,
 };
 
 const EMPTY_NOW_PLAYING: NowPlaying = {
@@ -52,6 +54,7 @@ const EMPTY_NOW_PLAYING: NowPlaying = {
   artist: null,
   album: null,
   duration: null,
+  repeat: null,
   available: [],
 };
 
@@ -68,7 +71,24 @@ export const useTugStore = defineStore("tug", () => {
   const hasMore = ref(true);
   const discovered = ref<DiscoveredDevice[]>([]);
   const pairingRequest = ref<PairingRequest | null>(null);
-  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [], closeToTray: true, dialing: false });
+  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [], closeToTray: true, appIcons: true, dialing: false });
+
+  /** App icons as data URIs by app id; null = the App Store has none (initials instead). */
+  const appIcons = ref<Record<string, string | null>>({});
+  const iconRequests = new Set<string>();
+  /** The app's real icon, asked for the first time it's needed (then cached on disk by the backend). */
+  function iconFor(appId: string): string | null {
+    if (!settings.value.appIcons) return null;
+    if (!(appId in appIcons.value) && !iconRequests.has(appId)) {
+      iconRequests.add(appId);
+      api
+        .appIcon(appId)
+        .then((uri) => (appIcons.value = { ...appIcons.value, [appId]: uri }))
+        // Offline or the lookup failed: initials for now, asked again next launch.
+        .catch(() => undefined);
+    }
+    return appIcons.value[appId] ?? null;
+  }
   const advertiseEnabled = ref(true);
   const zoom = ref(1);
   /** First-run setup finished (or skipped). Until then, with no iPhone paired, setup shows. */
@@ -252,7 +272,7 @@ export const useTugStore = defineStore("tug", () => {
 
   /** Clear every notification in a row that's still on the phone and clearable. */
   async function clearItems(items: PhoneNotification[], { quiet = false } = {}) {
-    const clearable = items.filter((n) => n.live && n.removedAt == null && n.flags.negativeAction);
+    const clearable = items.filter(canClear);
     let failure: unknown = null;
     // One that's already gone from the phone mustn't stop the rest from clearing.
     for (const n of clearable) {
@@ -341,6 +361,18 @@ export const useTugStore = defineStore("tug", () => {
     if (messageIds.length) api.markRead(messageIds).catch(() => undefined);
   }
 
+  /**
+   * Mark everything read at once: every conversation counts as seen in tug, and its texts
+   * are marked read and its notifications cleared on the phone — exactly as opening each would.
+   */
+  function markAllRead() {
+    for (const c of groupConversations(notifications.value, messages.value, contacts.value)) {
+      markSeen(c.key);
+      const ids = messages.value.filter((m) => m.direction === "in" && c.addresses.includes(m.address)).map((m) => m.id);
+      readConversation(c.notifications, ids);
+    }
+  }
+
   /** Take the ringing card down here; the phone keeps ringing (and the Feed row stays). */
   function hideCall(id: number) {
     if (!callsHandled.value.includes(id)) callsHandled.value = [...callsHandled.value.slice(-20), id];
@@ -426,6 +458,22 @@ export const useTugStore = defineStore("tug", () => {
     markSeen(key);
   }
 
+  /**
+   * Clicking the tray (or its Open) with unread texts: open the newest conversation that
+   * has unread, as if it were clicked, so it's read and cleared normally. The backend only
+   * emits this when there are unread; if nothing's unread by the time it arrives, do nothing
+   * and leave the user where they were. An overlay or Settings would hide the conversation,
+   * so close those first (but not a pairing dialog, which needs an answer).
+   */
+  function openLatestConversation() {
+    const key = newestUnreadThread(notifications.value, newCount);
+    if (!key) return;
+    searchOpen.value = false;
+    pickerOpen.value = false;
+    closeSettings();
+    openThread(key);
+  }
+
   async function loadSettings() {
     const raw = await api.getSettings();
     zoom.value = Number(raw["ui.zoom"]) || 1;
@@ -442,6 +490,7 @@ export const useTugStore = defineStore("tug", () => {
       doNotDisturb: raw["ui.doNotDisturb"] === "true",
       mutedApps: raw["ui.mutedApps"] ? (JSON.parse(raw["ui.mutedApps"]) as string[]) : [],
       closeToTray: raw["ui.closeToTray"] !== "false",
+      appIcons: raw["ui.appIcons"] !== "false",
       dialing: raw["ui.dialing"] === "true",
     };
     onboarded.value = raw["ui.onboarded"] === "1";
@@ -503,6 +552,7 @@ export const useTugStore = defineStore("tug", () => {
         on("calls", (list) => (calls.value = list)),
         on("pairing-request", (req) => (pairingRequest.value = req)),
         on("pairing-request-closed", () => (pairingRequest.value = null)),
+        on("open-latest-conversation", openLatestConversation),
       ])),
     );
     const [s, np, first, msgs, people, recent] = await Promise.all([
@@ -600,6 +650,7 @@ export const useTugStore = defineStore("tug", () => {
     discovered,
     pairingRequest,
     settings,
+    iconFor,
     advertiseEnabled,
     flash,
     view,
@@ -638,6 +689,7 @@ export const useTugStore = defineStore("tug", () => {
     startConversation,
     clearItems,
     readConversation,
+    markAllRead,
     copyCode,
     latestCode,
     deleteConversation,
@@ -653,7 +705,10 @@ export const useTugStore = defineStore("tug", () => {
       }
     },
     performAction: (id: number, positive: boolean) => attempt(() => api.performAction(id, positive)),
-    media: (command: MediaCommand) => attempt(() => api.mediaCommand(command)),
+    /** True once the phone accepted the write (which isn't the player acting on it). */
+    async media(command: MediaCommand): Promise<boolean> {
+      return (await attempt(() => api.mediaCommand(command).then(() => true))) === true;
+    },
     startDiscovery: () => attempt(api.startDiscovery),
     stopDiscovery: () => {
       discovered.value = [];

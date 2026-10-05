@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::ams::NowPlaying;
 use crate::map::calls::CallRecord;
+use crate::map::health::TextsPairing;
 use crate::map::service::MapHandle;
 use crate::store::Store;
 
@@ -25,6 +26,8 @@ pub mod events {
     pub const PAIRING_REQUEST_CLOSED: &str = "pairing-request-closed";
     pub const MESSAGE: &str = "message";
     pub const CONTACTS: &str = "contacts";
+    /// Tray click/Open with unread texts: the frontend opens the newest unread conversation.
+    pub const OPEN_LATEST_CONVERSATION: &str = "open-latest-conversation";
     pub const CALLS: &str = "calls";
 }
 
@@ -100,6 +103,10 @@ pub struct DeviceStatus {
     pub messages_error: Option<String>,
     /// Why the phone's contacts aren't available, when the user can fix it.
     pub contacts_error: Option<String>,
+    /// Whether the texts (Classic) pairing works, is missing, or needs making again.
+    pub texts_pairing: TextsPairing,
+    /// The phone Windows has paired for texts (what to remove when it needs re-pairing).
+    pub texts_device: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

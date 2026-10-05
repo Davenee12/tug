@@ -8,6 +8,8 @@
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
 //   http://localhost:1420/?call       a call rings 1.5 s after load (rings out after 30 s, as a missed call)
 //   http://localhost:1420/?nodial     Settings › iPhone › Calls check fails, like a blocked hands-free link
+//   http://localhost:1420/?norepeat   player doesn't list AdvanceRepeatMode: no loop button
+//   http://localhost:1420/?repeatignored   player lists it but ignores it: the "didn't change" toast
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
@@ -15,6 +17,8 @@ import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, NowPlaying, P
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
+const noRepeat = params.has("norepeat");
+const repeatIgnored = params.has("repeatignored");
 const now = Date.now();
 const min = 60_000;
 
@@ -84,6 +88,8 @@ const status: DeviceStatus = setup
       pairingStale: false,
       messagesError: null,
       contactsError: null,
+      textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
+      textsDevice: setup ? null : "Dave's iPhone",
     }
   : {
       radio: "on",
@@ -97,10 +103,12 @@ const status: DeviceStatus = setup
       pairingStale: false,
       messagesError: null,
       contactsError: null,
+      textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
+      textsDevice: setup ? null : "Dave's iPhone",
     };
 
 const nowPlaying: NowPlaying = setup
-  ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, available: [] }
+  ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, repeat: null, available: [] }
   : {
       player: "Spotify",
       state: "playing",
@@ -112,7 +120,17 @@ const nowPlaying: NowPlaying = setup
       artist: "Massive Attack",
       album: "Mezzanine",
       duration: 330,
-      available: ["play", "pause", "togglePlayPause", "nextTrack", "previousTrack", "volumeUp", "volumeDown"],
+      repeat: "off",
+      available: [
+        "play",
+        "pause",
+        "togglePlayPause",
+        "nextTrack",
+        "previousTrack",
+        "volumeUp",
+        "volumeDown",
+        ...(noRepeat ? [] : (["advanceRepeatMode"] as const)),
+      ],
     };
 
 // A connected keyboard listed first: setup must still offer only the iPhone.
@@ -197,6 +215,8 @@ function simulateConnect(id: string) {
   }, 2400);
   setTimeout(() => {
     status.messagesError = "the iPhone refused message access; turn on Show Notifications for this PC";
+    status.textsPairing = "ok";
+    status.textsDevice = "Dave's iPhone";
     send();
   }, 8000);
   setTimeout(() => {
@@ -271,6 +291,24 @@ mockIPC(
         return settings;
       case "set_setting":
         settings[a.key as string] = a.value as string;
+        return null;
+      case "app_icon": {
+        // Stand-in icons (the real ones come from the App Store): a coloured tile per app.
+        const id = String(a.appId ?? "");
+        const hue = [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+        const letter = (id.split(".").pop() ?? "?")[0].toUpperCase();
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="hsl(${hue} 65% 52%)"/><text x="32" y="43" font-family="Segoe UI" font-size="30" font-weight="700" fill="white" text-anchor="middle">${letter}</text></svg>`;
+        return `data:image/svg+xml;base64,${btoa(svg)}`;
+      }
+      case "media_command":
+        if (a.command === "advanceRepeatMode" && !repeatIgnored) {
+          nowPlaying.repeat = nowPlaying.repeat === "off" ? "all" : nowPlaying.repeat === "all" ? "one" : "off";
+          void emit("now-playing", { ...nowPlaying });
+        }
+        if (a.command === "previousTrack") {
+          Object.assign(nowPlaying, { elapsed: 0, elapsedAt: Date.now() });
+          void emit("now-playing", { ...nowPlaying });
+        }
         return null;
       case "place_lookup":
         return JSON.stringify({ city: "Dallas", principalSubdivision: "Texas", countryCode: "US" });

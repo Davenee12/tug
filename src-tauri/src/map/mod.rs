@@ -9,6 +9,7 @@
 pub mod address;
 pub mod bmessage;
 pub mod calls;
+pub mod health;
 pub mod listing;
 pub mod obex;
 pub mod service;
