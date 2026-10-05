@@ -49,6 +49,11 @@ import { nextRepeat } from "../lib/spotify";
 
 const PAGE = 100;
 
+/** What the backend says when Spotify can't see the iPhone (mirrors `model::NO_PHONE`). */
+const SPOTIFY_NO_PHONE = "Open Spotify on your iPhone.";
+/** How long to wait for Spotify to open on the iPhone before giving up. */
+const SPOTIFY_WAIT_MS = 60_000;
+
 export type SettingsSection = "general" | "iphone" | "notifications" | "connectors" | "weather" | "privacy" | "about";
 const SEEN_KEEP = 300;
 /** How many cleared-code message ids to remember (they expire from the Feed in minutes anyway). */
@@ -869,6 +874,7 @@ export const useTugStore = defineStore("tug", () => {
     // Everything with a lifetime gets cleared here, so init() can be called again cleanly (a
     // remount or dev hot-reload) without a leaked timer firing or an interval double-polling.
     window.clearTimeout(toastSummary);
+    spotifyWait++;
     window.clearTimeout(freshTimer);
     window.clearInterval(spotifyPoll);
     window.clearTimeout(flashTimer);
@@ -978,10 +984,53 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   /** Start a playlist on the iPhone (used by the panel and Ctrl+K). Never fails silently. */
+  /**
+   * Start a playlist on the iPhone. Spotify can only reach the phone while its Spotify app is
+   * open, so when it isn't, ask the person to open it and start the playlist as soon as the
+   * phone shows up (no second tap). Resolves true once playing or waiting, false on an error.
+   */
+  /** Bumped to cancel a pending "start when Spotify opens on the iPhone". */
+  let spotifyWait = 0;
   async function playPlaylist(uri: string, name?: string): Promise<boolean> {
-    const ok = await attempt(() => api.spotifyPlayPlaylist(uri).then(() => true));
-    if (ok) notify("info", name ? `Playing ${name} on your iPhone.` : "Playing on your iPhone.");
-    return ok === true;
+    const playing = () => notify("info", name ? `Playing ${name} on your iPhone.` : "Playing on your iPhone.");
+    const tryPlay = async (): Promise<"ok" | "no-phone" | string> => {
+      try {
+        await api.spotifyPlayPlaylist(uri);
+        return "ok";
+      } catch (e) {
+        const msg = errorMessage(e);
+        return msg === SPOTIFY_NO_PHONE ? "no-phone" : msg;
+      }
+    };
+    const first = await tryPlay();
+    if (first === "ok") {
+      playing();
+      return true;
+    }
+    if (first !== "no-phone") {
+      notify("error", first);
+      return false;
+    }
+    const waitId = ++spotifyWait;
+    notify("info", "Open Spotify on your iPhone. Your playlist starts as soon as it's open.", {
+      label: "Cancel",
+      run: () => {
+        if (spotifyWait === waitId) spotifyWait++;
+      },
+    });
+    void (async () => {
+      const deadline = Date.now() + SPOTIFY_WAIT_MS;
+      while (spotifyWait === waitId && Date.now() < deadline) {
+        await new Promise((r) => window.setTimeout(r, 2000));
+        if (spotifyWait !== waitId) return;
+        const result = await tryPlay();
+        if (spotifyWait !== waitId) return;
+        if (result === "ok") return playing();
+        if (result !== "no-phone") return notify("error", result);
+      }
+      if (spotifyWait === waitId) notify("error", "Couldn't reach Spotify on your iPhone. Open it and try again.");
+    })();
+    return true;
   }
 
   async function refreshSpotifyPlayer() {
