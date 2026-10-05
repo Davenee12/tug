@@ -60,6 +60,7 @@ const EMPTY_STATUS: DeviceStatus = {
   contactsError: null,
   textsPairing: "unknown",
   textsDevice: null,
+  liveTexts: "off",
 };
 
 const EMPTY_NOW_PLAYING: NowPlaying = {

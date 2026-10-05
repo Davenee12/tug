@@ -38,14 +38,17 @@ impl Direction {
     }
 }
 
-/// `received` for incoming; outgoing goes `pending` → `accepted` (taken by the
-/// iPhone for sending; not proof of delivery) or `failed`.
+/// `received` for incoming; outgoing goes `pending` → `accepted` (taken by the iPhone for
+/// sending; not proof of delivery) → `sent` (the phone's MAP `SendingSuccess` event confirmed
+/// it left), or `failed` (the push failed, or a `SendingFailure` event came back). Without live
+/// texts (`map::mns`) a send stops at `accepted`; the UI shows both as "Sent".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Status {
     Received,
     Pending,
     Accepted,
+    Sent,
     Failed,
 }
 
@@ -55,6 +58,7 @@ impl Status {
             Status::Received => "received",
             Status::Pending => "pending",
             Status::Accepted => "accepted",
+            Status::Sent => "sent",
             Status::Failed => "failed",
         }
     }
@@ -63,6 +67,7 @@ impl Status {
         match s {
             "pending" => Status::Pending,
             "accepted" => Status::Accepted,
+            "sent" => Status::Sent,
             "failed" => Status::Failed,
             _ => Status::Received,
         }
@@ -245,6 +250,19 @@ impl Store {
             }
         }
         conn.query_row(&format!("{SELECT} WHERE m.id = ?1"), [id], map_row)
+    }
+
+    /// Outgoing messages not yet confirmed sent (still `pending` or `accepted`), for matching a
+    /// MAP `Sending{Success,Failure}` event to the send it reports (see `map::mns::choose_outgoing`).
+    /// Returns `(id, handle, received_at)`.
+    pub fn outgoing_unconfirmed(&self, source: &str) -> Result<Vec<(i64, Option<String>, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, handle, received_at FROM messages
+             WHERE source = ?1 AND direction = 'out' AND status IN ('pending', 'accepted')",
+        )?;
+        let rows = stmt.query_map(params![source], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect()
     }
 
     /// Most recent messages, oldest first within the window.
@@ -767,6 +785,44 @@ mod tests {
             .unwrap();
         s.insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "b", 3_001)
             .unwrap();
+    }
+
+    #[test]
+    fn outgoing_unconfirmed_lists_pending_and_accepted_only() {
+        let s = Store::in_memory().unwrap();
+        let pending = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "a", 1_000)
+            .unwrap();
+        let accepted = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "b", 2_000)
+            .unwrap();
+        s.set_outgoing_status(accepted.id, Status::Accepted, Some("A1"))
+            .unwrap();
+        let confirmed = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "c", 3_000)
+            .unwrap();
+        s.set_outgoing_status(confirmed.id, Status::Sent, Some("A2")).unwrap();
+        let failed = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "d", 4_000)
+            .unwrap();
+        s.set_outgoing_status(failed.id, Status::Failed, None).unwrap();
+
+        let mut got = s.outgoing_unconfirmed(SOURCE_IPHONE_MAP).unwrap();
+        got.sort_by_key(|(id, ..)| *id);
+        assert_eq!(
+            got,
+            vec![(pending.id, None, 1_000), (accepted.id, Some("A1".into()), 2_000)]
+        );
+    }
+
+    #[test]
+    fn a_sent_status_round_trips() {
+        let s = Store::in_memory().unwrap();
+        let m = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "hi", 2_000)
+            .unwrap();
+        let m = s.set_outgoing_status(m.id, Status::Sent, Some("A9")).unwrap();
+        assert_eq!(m.status, Status::Sent);
     }
 
     #[test]

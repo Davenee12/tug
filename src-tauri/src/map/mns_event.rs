@@ -4,7 +4,7 @@
 //! Each report carries exactly one self-closing `<event …/>` element, e.g.
 //! `<MAP-event-report version="1.0"><event type="NewMessage" handle="…" folder="TELECOM/MSG/INBOX"
 //! msg_type="SMS_GSM"/></MAP-event-report>`, so the listing's attribute scanner is enough.
-//! Pure; the MNS server that receives these isn't built yet.
+//! Pure; the MNS server that receives these (`map::mns`) feeds the parsed events to the worker.
 
 use thiserror::Error;
 

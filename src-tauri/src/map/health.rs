@@ -23,6 +23,23 @@ pub enum Attempt {
     Other,
 }
 
+/// How live texts (MAP notifications, `map::mns`) are doing, for diagnostics and the health
+/// panel. Independent of the pairing: the pairing can be fine while live texts fall back to
+/// polling (an unpackaged-app RFCOMM server is unproven on iOS).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LiveTexts {
+    /// No MAP session, so nothing to register.
+    #[default]
+    Off,
+    /// MNS advertised and registration sent; waiting for the phone to connect.
+    Starting,
+    /// The phone has connected and is pushing events: texts land instantly.
+    Active,
+    /// The MNS server couldn't start (or the phone never connected); polling only.
+    Unavailable,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TextsPairing {
