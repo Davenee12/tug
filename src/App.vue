@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { CircleAlert } from "lucide-vue-next";
 import { useTugStore } from "./stores/tug";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
@@ -14,12 +14,15 @@ const tug = useTugStore();
 // The connection panel sits inline on wide windows and slides over on narrow ones.
 const WIDE = "(min-width: 1240px)";
 const wide = ref(window.matchMedia(WIDE).matches);
-const panelOpen = ref(false);
 // Inline while setting up or disconnected; once connected it tucks behind the gear
 // so the feed and conversations get the room.
 const panelInline = computed(() => wide.value && tug.status.connection !== "connected");
 const mq = window.matchMedia(WIDE);
 const onMq = (e: MediaQueryListEvent) => (wide.value = e.matches);
+// Once the panel sits inline it no longer covers anything.
+watch(panelInline, (inline) => {
+  if (inline) tug.panelOpen = false;
+});
 
 // Ctrl+K: search from anywhere. Ctrl+N: new message (not while typing in a field).
 function onShortcut(e: KeyboardEvent) {
@@ -59,16 +62,16 @@ onUnmounted(() => {
     <DeviceRail class="w-[288px] shrink-0" />
 
     <main class="min-w-0 flex-1">
-      <FeedPanel :panel-inline="panelInline" @open-panel="panelOpen = true" />
+      <FeedPanel :panel-inline="panelInline" @open-panel="tug.panelOpen = true" />
     </main>
 
     <ConnectionPanel v-if="panelInline" class="w-[360px] shrink-0 border-l border-hairline" :closable="false" />
     <template v-else>
       <Transition enter-from-class="opacity-0" leave-to-class="opacity-0" enter-active-class="transition-opacity" leave-active-class="transition-opacity">
-        <div v-if="panelOpen" class="fixed inset-0 z-30 bg-ink/20" @click="panelOpen = false" />
+        <div v-if="tug.panelOpen" class="fixed inset-0 z-30 bg-ink/20" @click="tug.panelOpen = false" />
       </Transition>
       <Transition enter-from-class="translate-x-full" leave-to-class="translate-x-full" enter-active-class="transition-transform" leave-active-class="transition-transform">
-        <ConnectionPanel v-if="panelOpen" class="fixed inset-y-0 right-0 z-40 w-[380px] border-l border-hairline" closable @close="panelOpen = false" />
+        <ConnectionPanel v-if="tug.panelOpen" class="fixed inset-y-0 right-0 z-40 w-[380px] border-l border-hairline" closable @close="tug.panelOpen = false" />
       </Transition>
     </template>
 

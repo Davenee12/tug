@@ -74,6 +74,10 @@ export const useTugStore = defineStore("tug", () => {
   const pickerOpen = ref(false);
   /** Universal search (Ctrl+K or the search box). */
   const searchOpen = ref(false);
+  /** The connection/settings panel sliding over the window (narrow layouts). */
+  const panelOpen = ref(false);
+  /** Something is covering the main view, so whatever is behind it isn't being looked at. */
+  const overlayOpen = computed(() => searchOpen.value || pickerOpen.value || panelOpen.value || !!pairingRequest.value);
   /** An item to scroll to and highlight after navigating from search: `m<id>` or `n<id>`. */
   const focusItem = ref<string | null>(null);
 
@@ -342,6 +346,8 @@ export const useTugStore = defineStore("tug", () => {
     composeTo,
     pickerOpen,
     searchOpen,
+    panelOpen,
+    overlayOpen,
     focusItem,
     seen,
     connected,

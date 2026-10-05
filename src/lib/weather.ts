@@ -92,6 +92,9 @@ export function outlook(f: Forecast): string | null {
 
 const round = (n: number) => Math.round(n * 100) / 100;
 
+/** A hung request must not leave the card stuck on "loading" (and Retry doing nothing). */
+const TIMEOUT_MS = 15_000;
+
 export async function fetchForecast(p: Place): Promise<Forecast> {
   const q = new URLSearchParams({
     latitude: String(round(p.latitude)),
@@ -102,7 +105,7 @@ export async function fetchForecast(p: Place): Promise<Forecast> {
     timezone: "auto",
     forecast_days: "7",
   });
-  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${q}`);
+  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${q}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
   if (!res.ok) throw new Error(`Forecast unavailable (${res.status})`);
   return parseForecast(await res.json(), Date.now());
 }
@@ -145,7 +148,7 @@ export function parseForecast(j: any, fetchedAt: number): Forecast {
 
 export async function searchPlaces(query: string): Promise<Place[]> {
   const q = new URLSearchParams({ name: query.trim(), count: "5", language: "en", format: "json" });
-  const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?${q}`);
+  const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?${q}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
   if (!res.ok) throw new Error(`City search unavailable (${res.status})`);
   const j = await res.json();
   return ((j.results ?? []) as any[]).map((r) => ({
@@ -167,7 +170,7 @@ export async function nameFor(latitude: number, longitude: number): Promise<stri
     longitude: String(round(longitude)),
     localityLanguage: "en",
   });
-  const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?${q}`);
+  const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?${q}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
   if (!res.ok) return null;
   return placeName(await res.json());
 }

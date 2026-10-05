@@ -51,7 +51,10 @@ const bar = (low: number, high: number) => ({
   left: `${((low - range.value.lo) / range.value.span) * 100}%`,
   width: `${Math.max(((high - low) / range.value.span) * 100, 4)}%`,
 });
-const nowDot = computed(() => (f.value ? `${((f.value.now.temp - range.value.lo) / range.value.span) * 100}%` : "0"));
+// Clamped: right now can be colder or warmer than any day's forecast low or high.
+const nowDot = computed(() =>
+  f.value ? `${Math.min(100, Math.max(0, ((f.value.now.temp - range.value.lo) / range.value.span) * 100))}%` : "0",
+);
 
 // The place's clock, ticking on the minute.
 const now = ref(new Date());
