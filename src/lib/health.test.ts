@@ -19,6 +19,7 @@ const CONNECTED: DeviceStatus = {
   contactsError: null,
   textsPairing: "ok",
   textsDevice: "iPhone",
+  liveTexts: "off",
 };
 
 function health(overrides: Partial<DeviceStatus>, counts = { contacts: 3, calls: 4 }) {

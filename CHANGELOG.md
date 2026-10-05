@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Spotify connector (opt-in):** connect your own free Spotify app in Settings › Spotify to get
+  what the iPhone's media link can't do for Spotify — working **repeat and shuffle**, a **Like**
+  button, **album art** on Now Playing, and your **playlists** to start on your iPhone. Open the
+  Playlists panel from the Now Playing card, or press Ctrl+K and type "play &lt;playlist&gt;".
+  Sign-in uses OAuth with PKCE through your browser (no client secret); the refresh token is kept in
+  Windows Credential Manager, never in plaintext, and the account name and tokens never appear in
+  diagnostics. Development-mode apps need the owner to have Spotify Premium and allow up to 5 users.
+
 ## v0.5.7 — 2026-10-05
 
 tug feels built into Windows, plus a full stabilization pass. Media keys verified on Dave's iPhone;

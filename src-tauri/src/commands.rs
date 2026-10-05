@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::ams::{NowPlaying, RemoteCommand};
+use crate::ams::{NowPlaying, RemoteCommand, RepeatMode};
 use crate::ble::{BleHandle, Command};
 use crate::map::calls::CallRecord;
 use crate::messages::{Contact, StoredMessage};
+use crate::spotify::{Playlist, Spotify, SpotifyPlayer, SpotifyStatus};
 use crate::state::{DeviceStatus, Shared};
 use crate::store::StoredNotification;
 use serde::Serialize;
@@ -16,6 +17,7 @@ use serde::Serialize;
 pub struct AppState {
     pub shared: Arc<Shared>,
     pub ble: BleHandle,
+    pub spotify: Arc<Spotify>,
 }
 
 type Result<T> = std::result::Result<T, String>;
@@ -325,7 +327,7 @@ pub fn open_url(url: String) -> Result<()> {
 /// Hand a web address to Windows to open in the default browser. Not `explorer.exe <url>`:
 /// on Dave's PC that opened File Explorer for addresses with a query (`?q=…`).
 #[cfg(windows)]
-fn open_in_browser(url: &str) -> Result<()> {
+pub(crate) fn open_in_browser(url: &str) -> Result<()> {
     use windows::core::{w, HSTRING, PCWSTR};
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -341,7 +343,7 @@ fn open_in_browser(url: &str) -> Result<()> {
 }
 
 #[cfg(not(windows))]
-fn open_in_browser(_url: &str) -> Result<()> {
+pub(crate) fn open_in_browser(_url: &str) -> Result<()> {
     Err("Opening links is only supported on Windows".into())
 }
 
@@ -494,6 +496,109 @@ pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<()> {
     } else {
         manager.disable().map_err(|e| e.to_string())
     }
+}
+
+// ---- Spotify connector (see src-tauri/src/spotify) ----
+//
+// AMS can't give Spotify repeat/shuffle, Like or album art; when the owner connects their own
+// Spotify app these augment Now Playing. All HTTP runs on a blocking thread (WinRT, like
+// `app_icon`); the command layer just hands off and maps join errors.
+
+/// Spotify connection state for Settings (connected, account, Client ID, redirect URI).
+#[tauri::command]
+pub fn spotify_status(state: State<'_, AppState>) -> SpotifyStatus {
+    state.spotify.status()
+}
+
+/// Save (or clear) the Spotify Client ID. Changing it disconnects the old app's tokens.
+#[tauri::command]
+pub fn spotify_set_client_id(state: State<'_, AppState>, client_id: String) -> Result<SpotifyStatus> {
+    state.spotify.set_client_id(&client_id)
+}
+
+/// Run the OAuth (PKCE) connect flow: opens the browser, waits for the loopback redirect.
+#[tauri::command]
+pub async fn spotify_connect(state: State<'_, AppState>) -> Result<SpotifyStatus> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.connect())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn spotify_disconnect(state: State<'_, AppState>) -> Result<SpotifyStatus> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.disconnect().map(|()| sp.status()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The user's own and followed playlists (paginated), for the Playlists panel and Ctrl+K.
+#[tauri::command]
+pub async fn spotify_playlists(state: State<'_, AppState>) -> Result<Vec<Playlist>> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.playlists())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// A playlist cover as a `data:` URI (fetched and cached by tug; only Spotify image hosts).
+#[tauri::command]
+pub async fn spotify_cover(state: State<'_, AppState>, url: String) -> Result<Option<String>> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.cover(&url))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Play a playlist on the iPhone (chosen from Spotify's device list, preferring the paired phone).
+#[tauri::command]
+pub async fn spotify_play_playlist(state: State<'_, AppState>, uri: String) -> Result<()> {
+    let sp = state.spotify.clone();
+    let phone = state.shared.status().device.map(|d| d.name);
+    tauri::async_runtime::spawn_blocking(move || sp.play_playlist(&uri, phone.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The Spotify playback snapshot (repeat/shuffle/saved/album art) for the Now Playing card.
+#[tauri::command]
+pub async fn spotify_player(state: State<'_, AppState>) -> Result<Option<SpotifyPlayer>> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.player())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn spotify_set_repeat(state: State<'_, AppState>, mode: String) -> Result<()> {
+    let mode = match mode.as_str() {
+        "off" => RepeatMode::Off,
+        "one" => RepeatMode::One,
+        "all" => RepeatMode::All,
+        other => return Err(format!("unknown repeat mode {other}")),
+    };
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.set_repeat(mode))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn spotify_set_shuffle(state: State<'_, AppState>, on: bool) -> Result<()> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.set_shuffle(on))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Like (save) or un-like (remove) a track in the user's Spotify library.
+#[tauri::command]
+pub async fn spotify_set_saved(state: State<'_, AppState>, uri: String, saved: bool) -> Result<()> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.set_saved(&uri, saved))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

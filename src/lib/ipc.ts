@@ -14,6 +14,10 @@ import type {
   NowPlaying,
   PairingRequest,
   PhoneNotification,
+  RepeatMode,
+  SpotifyPlayer,
+  SpotifyPlaylist,
+  SpotifyStatus,
   ToastPressed,
   ToastSpec,
 } from "../types/protocol";
@@ -70,6 +74,19 @@ export const api = {
   dial: (number: string | null) => invoke<void>("dial", { number }),
   /** A Windows pop-up with buttons (falls back to a plain one in the backend). */
   showToast: (spec: ToastSpec) => invoke<void>("show_toast", { spec }),
+  // --- Spotify connector ---
+  spotifyStatus: () => invoke<SpotifyStatus>("spotify_status"),
+  spotifySetClientId: (clientId: string) => invoke<SpotifyStatus>("spotify_set_client_id", { clientId }),
+  /** Opens the browser for OAuth; resolves once the loopback redirect comes back. */
+  spotifyConnect: () => invoke<SpotifyStatus>("spotify_connect"),
+  spotifyDisconnect: () => invoke<SpotifyStatus>("spotify_disconnect"),
+  spotifyPlaylists: () => invoke<SpotifyPlaylist[]>("spotify_playlists"),
+  spotifyCover: (url: string) => invoke<string | null>("spotify_cover", { url }),
+  spotifyPlayPlaylist: (uri: string) => invoke<void>("spotify_play_playlist", { uri }),
+  spotifyPlayer: () => invoke<SpotifyPlayer | null>("spotify_player"),
+  spotifySetRepeat: (mode: RepeatMode) => invoke<void>("spotify_set_repeat", { mode }),
+  spotifySetShuffle: (on: boolean) => invoke<void>("spotify_set_shuffle", { on }),
+  spotifySetSaved: (uri: string, saved: boolean) => invoke<void>("spotify_set_saved", { uri, saved }),
 };
 
 interface EventPayloads {

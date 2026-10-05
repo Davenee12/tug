@@ -1,8 +1,9 @@
 // Ctrl+K actions: a few verbs typed into search, so common things become keystrokes.
 // "text tay running late", "pause", "copy code", "clear all", "new message". Pure, so it's tested.
 
-import type { MediaCommand, PhoneNotification } from "../types/protocol";
+import type { MediaCommand, PhoneNotification, SpotifyPlaylist } from "../types/protocol";
 import { cleanName, formatAddress, missedCallFor } from "./format";
+import { matchPlaylists, playlistDetail } from "./spotify";
 
 export interface Person {
   name: string;
@@ -36,6 +37,8 @@ export interface ActionContext {
   canDial?: boolean;
   /** Notifications, to find a missed call "call tay" can call back from without hands-free. */
   notifications?: PhoneNotification[];
+  /** The user's Spotify playlists, for "play <name>" (empty/absent when not connected). */
+  playlists?: SpotifyPlaylist[];
 }
 
 export type Action =
@@ -45,6 +48,7 @@ export type Action =
   /** "call tay" before calling from tug has been checked: points to where to turn it on. */
   | { kind: "call-setup"; label: string }
   | { kind: "media"; command: MediaCommand; label: string }
+  | { kind: "play-playlist"; uri: string; name: string; label: string; detail: string }
   | { kind: "copy-code"; code: string | null; from: PhoneNotification[]; label: string }
   | { kind: "clear-all"; items: PhoneNotification[]; label: string }
   | { kind: "mark-all-read"; count: number; label: string }
@@ -74,6 +78,7 @@ const DND = /^(?:do not disturb|dnd)(?:\s+(on|off))?$/i;
 
 const SEND = /^(?:text|msg|message|tell|send)\s+(.+)$/i;
 const CALL = /^(?:call|ring|phone)\s+(.+)$/i;
+const PLAY = /^play\s+(.+)$/i;
 
 /** Lowercase, drop emoji/symbols, collapse spaces: "tay 🤎" → "tay". */
 function key(s: string): string {
@@ -115,7 +120,20 @@ export function parseActions(query: string, people: Person[], ctx: ActionContext
   if (m) out.push(...sendActions(m[1], people));
   const c = CALL.exec(q);
   if (c) out.push(...callActions(c[1], people, ctx));
+  const pl = PLAY.exec(q);
+  if (pl) out.push(...playlistActions(pl[1], ctx));
   return out;
+}
+
+/** "play deep focus": start a Spotify playlist on the iPhone, fuzzy-matched by name. */
+function playlistActions(rest: string, ctx: ActionContext): Action[] {
+  return matchPlaylists(rest, ctx.playlists ?? []).map((p): Action => ({
+    kind: "play-playlist",
+    uri: p.uri,
+    name: p.name,
+    label: `Play ${p.name}`,
+    detail: playlistDetail(p),
+  }));
 }
 
 /**

@@ -41,9 +41,13 @@ export interface DeviceStatus {
   textsPairing: TextsPairing;
   /** The phone Windows has paired for texts (what to remove when it needs re-pairing). */
   textsDevice: string | null;
+  /** Live texts (MAP notifications): off, starting, active, or fell back to polling. */
+  liveTexts: LiveTexts;
 }
 
 export type TextsPairing = "unknown" | "missing" | "broken" | "ok";
+
+export type LiveTexts = "off" | "starting" | "active" | "unavailable";
 
 export type Category =
   | "other"
@@ -157,8 +161,12 @@ export interface SmsMessage {
   /** Phone-local ISO time, when the phone reported one. */
   sentAt: string | null;
   receivedAt: number;
-  /** Outgoing: pending → accepted (taken by the iPhone; not proof of delivery) or failed. */
-  status: "received" | "pending" | "accepted" | "failed";
+  /**
+   * Outgoing: pending → accepted (taken by the iPhone; not proof of delivery) → sent (a MAP
+   * SendingSuccess event confirmed it left), or failed. Without live texts a send stops at
+   * accepted; the UI shows both accepted and sent as "Sent".
+   */
+  status: "received" | "pending" | "accepted" | "sent" | "failed";
 }
 
 export interface Contact {
@@ -232,4 +240,43 @@ export interface ToastSpec {
 export interface ToastPressed {
   kind: "open" | "read" | "replied" | "copied" | "calledBack";
   id: number;
+}
+
+// --- Spotify connector (mirrors src-tauri/src/spotify/{mod,model}.rs) ---
+
+/** Spotify connection state for Settings. */
+export interface SpotifyStatus {
+  connected: boolean;
+  /** The connected account's display name, when connected. */
+  account: string | null;
+  /** The Client ID the owner pasted (null until set). */
+  clientId: string | null;
+  /** The exact Redirect URI to register in the Spotify dashboard. */
+  redirectUri: string;
+}
+
+/** One of the user's own or followed playlists. */
+export interface SpotifyPlaylist {
+  /** `spotify:playlist:…`, played as the `context_uri`. */
+  uri: string;
+  name: string;
+  owner: string | null;
+  /** Null when Spotify doesn't say (playlists the user doesn't own). */
+  trackCount: number | null;
+  /** Small cover image URL; shown via `spotifyCover`, never loaded by the webview directly. */
+  imageUrl: string | null;
+}
+
+/** The Spotify playback snapshot that augments Now Playing (repeat/shuffle/like/art). */
+export interface SpotifyPlayer {
+  isPlaying: boolean;
+  shuffle: boolean;
+  repeat: RepeatMode | null;
+  /** Whether the current track is in the library (for the Like button); null if unknown. */
+  saved: boolean | null;
+  /** Album art as a `data:` URI, when available. */
+  albumArt: string | null;
+  /** The playing track's URI (what Like saves/removes). */
+  trackUri: string | null;
+  deviceName: string | null;
 }
