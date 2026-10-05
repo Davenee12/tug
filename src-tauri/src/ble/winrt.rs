@@ -104,7 +104,11 @@ fn check(status: GattCommunicationStatus, protocol_error: windows::core::Result<
 /// First GATT service with `uuid`, going to the device rather than the cache so
 /// a fresh link (or a fresh bond) is reflected.
 pub async fn service(device: &BluetoothLEDevice, uuid: GUID) -> Result<Option<GattDeviceService>> {
-    let res = bounded(device.GetGattServicesForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?).await?;
+    let res = bounded_for(
+        DISCOVERY_TIMEOUT,
+        device.GetGattServicesForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?,
+    )
+    .await?;
     check(res.Status()?, res.ProtocolError())?;
     let services = res.Services()?;
     Ok(if services.Size()? > 0 {
@@ -115,7 +119,11 @@ pub async fn service(device: &BluetoothLEDevice, uuid: GUID) -> Result<Option<Ga
 }
 
 pub async fn characteristic(service: &GattDeviceService, uuid: GUID, name: &'static str) -> Result<GattCharacteristic> {
-    let res = bounded(service.GetCharacteristicsForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?).await?;
+    let res = bounded_for(
+        DISCOVERY_TIMEOUT,
+        service.GetCharacteristicsForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?,
+    )
+    .await?;
     check(res.Status()?, res.ProtocolError())?;
     let chars = res.Characteristics()?;
     if chars.Size()? == 0 {
@@ -169,9 +177,13 @@ pub async fn subscribe(ch: &GattCharacteristic, on_value: impl Fn(Vec<u8>) + Sen
 
 /// Write the CCCD on the peripheral to turn notifications on.
 pub async fn enable_notify(ch: &GattCharacteristic) -> Result<()> {
-    let res = bounded(ch.WriteClientCharacteristicConfigurationDescriptorWithResultAsync(
-        GattClientCharacteristicConfigurationDescriptorValue::Notify,
-    )?)
+    // On a fresh bond iOS holds this write open until "Allow" is tapped on the phone.
+    let res = bounded_for(
+        SUBSCRIBE_TIMEOUT,
+        ch.WriteClientCharacteristicConfigurationDescriptorWithResultAsync(
+            GattClientCharacteristicConfigurationDescriptorValue::Notify,
+        )?,
+    )
     .await?;
     check(res.Status()?, res.ProtocolError())
 }
@@ -194,7 +206,24 @@ const GATT_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// discovery, CCCD reads/writes and opening the device can hang just like reads and writes
 /// when the phone drops mid-way, and every one of them runs on the actor's loop.
 pub async fn bounded<T>(op: impl std::future::IntoFuture<Output = windows::core::Result<T>>) -> Result<T> {
-    Ok(tokio::time::timeout(GATT_OP_TIMEOUT, op)
+    bounded_for(GATT_OP_TIMEOUT, op).await
+}
+
+/// Opening the device and discovering services. Uncached discovery right after pairing
+/// takes well over 10 s on an iPhone; giving up sooner tore the whole link down (texts
+/// with it) and retried forever.
+pub const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Subscribing (CCCD write). After a new pairing iOS asks "Allow notifications?" and only
+/// answers this write once it's tapped, so leave a person time to see and tap it.
+const SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// `bounded` with its own limit, for steps that legitimately take longer.
+pub async fn bounded_for<T>(
+    limit: std::time::Duration,
+    op: impl std::future::IntoFuture<Output = windows::core::Result<T>>,
+) -> Result<T> {
+    Ok(tokio::time::timeout(limit, op)
         .await
         .map_err(|_| BleError::Unreachable)??)
 }
