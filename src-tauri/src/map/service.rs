@@ -162,6 +162,9 @@ mod worker {
     /// After registering, how long to wait for the phone to connect to our MNS before saying (once)
     /// that live texts aren't working and we're polling only.
     const MNS_CONNECT_GRACE: Duration = Duration::from_secs(30);
+    /// At most one "reopen message access" per this long after the MNS link drops, so a phone
+    /// that keeps dropping it can't make tug reconnect in a loop.
+    const MNS_REOPEN_GAP: Duration = Duration::from_secs(60);
 
     fn now_ms() -> i64 {
         SystemTime::now()
@@ -198,6 +201,8 @@ mod worker {
         mns_registered_at: Option<Instant>,
         /// So the "phone never connected, polling only" line is logged once per session.
         mns_grace_warned: bool,
+        /// When the last MNS drop made tug reopen message access (rate-limits that recovery).
+        mns_reopened_at: Option<Instant>,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -223,6 +228,7 @@ mod worker {
             last_event_at: None,
             mns_registered_at: None,
             mns_grace_warned: false,
+            mns_reopened_at: None,
         };
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
@@ -439,6 +445,22 @@ mod worker {
                     }
                     self.last_event_at = Some(Instant::now());
                     self.set_live(LiveTexts::Active);
+                }
+                mns::ServerMessage::Disconnected => {
+                    // Seen on Dave's iPhone: once registered, an open session's inbox listing
+                    // stopped showing new texts after the MNS link died, so the poll found
+                    // nothing until a fresh session. Reopen message access, which re-registers.
+                    let recent = self.mns_reopened_at.is_some_and(|t| t.elapsed() < MNS_REOPEN_GAP);
+                    if recent {
+                        log::info!("live texts: the iPhone dropped the notification link again; polling only");
+                        self.set_live(LiveTexts::Unavailable);
+                        return;
+                    }
+                    log::info!("live texts: the iPhone dropped the notification link; reopening message access");
+                    self.mns_reopened_at = Some(Instant::now());
+                    self.session = None;
+                    self.stop_live_texts();
+                    self.refresh().await;
                 }
                 mns::ServerMessage::Event(event) => {
                     self.last_event_at = Some(Instant::now());
