@@ -7,6 +7,9 @@ import type { DiscoveredDevice } from "../types/protocol";
 // The paired iPhone, or the steps to pair one. Shared by first-run setup (the inline
 // Connection panel) and Settings › iPhone.
 const tug = useTugStore();
+// Keyboards, mice and headphones are never the phone: keep them out of the list.
+const devices = computed(() => tug.discovered.filter((d) => d.kind !== "accessory"));
+const hidden = computed(() => tug.discovered.length - devices.value.length);
 const s = computed(() => tug.status);
 const scanning = ref(false);
 const busyId = ref<string | null>(null);
@@ -50,6 +53,10 @@ async function forget() {
   await tug.forget();
 }
 
+// The phone forgot this PC: no confirm needed, the old pairing is already useless.
+// Forgetting starts a scan (the watch above), so the iPhone can be paired again right away.
+const pairAgain = () => void tug.forget();
+
 const advertisingLabel = computed(
   () => ({ off: "Off", starting: "Starting…", on: "On", error: "Failed" })[s.value.advertising],
 );
@@ -62,7 +69,8 @@ const advertisingLabel = computed(
       class="flex gap-2.5 rounded-xl border border-error/30 bg-canvas px-4 py-3 text-[13px] text-body-strong"
     >
       <CircleAlert :size="16" class="mt-0.5 shrink-0 text-error" />
-      <span class="selectable">{{ s.lastError }}</span>
+      <span class="selectable min-w-0 flex-1">{{ s.lastError }}</span>
+      <button v-if="s.pairingStale" class="btn-primary btn-sm shrink-0" @click="pairAgain">Pair again</button>
     </div>
 
     <!-- Paired: device card -->
@@ -138,7 +146,7 @@ const advertisingLabel = computed(
 
       <ul class="mt-3 flex flex-col gap-2">
         <li
-          v-for="d in tug.discovered"
+          v-for="d in devices"
           :key="d.id"
           :class="['flex items-center gap-3 rounded-xl border bg-canvas px-4 py-3', d.connected ? 'border-accent-teal/60' : 'border-hairline']"
         >
@@ -160,12 +168,15 @@ const advertisingLabel = computed(
           </button>
         </li>
         <li
-          v-if="scanning && tug.discovered.length === 0"
+          v-if="scanning && devices.length === 0"
           class="rounded-xl border border-dashed border-hairline px-4 py-6 text-center text-[13px] text-muted-soft"
         >
           Looking for devices…
         </li>
       </ul>
+      <p v-if="hidden" class="mt-2 text-[12px] text-muted-soft">
+        Not showing {{ hidden }} {{ hidden === 1 ? "accessory" : "accessories" }} (keyboards, headphones and the like).
+      </p>
     </section>
   </div>
 </template>

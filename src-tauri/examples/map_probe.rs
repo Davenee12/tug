@@ -94,7 +94,20 @@ fn main() {
             Err(e) => println!("UpdateInbox: {e} (continuing)"),
         }
 
-        match session.list("inbox", 10).await {
+        // How far back the phone lets us page (ListStartOffset), newest first.
+        for offset in [0u16, 10, 20, 50] {
+            match session.list("inbox", 50, offset).await {
+                Ok(msgs) => println!(
+                    "inbox page at offset {offset}: {} message(s), {} .. {}",
+                    msgs.len(),
+                    msgs.first().map(|m| m.datetime.as_str()).unwrap_or("-"),
+                    msgs.last().map(|m| m.datetime.as_str()).unwrap_or("-"),
+                ),
+                Err(e) => println!("inbox page at offset {offset}: {e}"),
+            }
+        }
+
+        match session.list("inbox", 10, 0).await {
             Ok(msgs) => {
                 println!("inbox: {} message(s)", msgs.len());
                 for m in &msgs {
@@ -132,7 +145,7 @@ fn main() {
                 Err(e) => println!("SetMessageStatus {handle} read={read}: {e}"),
             }
             // What the phone now reports for that message.
-            match session.list("inbox", 10).await {
+            match session.list("inbox", 10, 0).await {
                 Ok(msgs) => match msgs.iter().find(|m| &m.handle == handle) {
                     Some(m) => println!("after: {} read={}", m.handle, m.read),
                     None => println!("after: {handle} no longer in the inbox window"),
@@ -141,7 +154,7 @@ fn main() {
             }
         }
 
-        match session.list("sent", 5).await {
+        match session.list("sent", 5, 0).await {
             Ok(msgs) => println!("sent folder: {} message(s)", msgs.len()),
             Err(e) => println!("list sent: {e}"),
         }

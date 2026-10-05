@@ -1,8 +1,35 @@
 # Changelog
 
-## Unreleased (Sprint 5)
+## v0.5.5 — 2026-10-05
+
+Setup, settings and everyday shortcuts (Sprints 5–7), plus fixes from a full fresh-install test.
+
+### New
+- **First-run setup.** A step-by-step setup that explains before it asks, skips what's already fine
+  and lights up as you go: Bluetooth checks, connecting your iPhone, **Share System Notifications**,
+  then **Bring your texts over** (pairing for texts from Windows, with Show Notifications and Sync
+  Contacts lighting up live), a first notification, and a few personal touches.
+- **Settings page** (gear or **Ctrl+,**): General, iPhone, Notifications, Weather, Data & privacy and
+  About, all in one place.
+- **One-time codes.** A **Copy** chip on texts and notifications with a verification code; one click
+  copies it and clears the notification on the phone. **Ctrl+Shift+C** copies the newest code.
+- **Delete a conversation** from tug, with **Undo**. Nothing changes on the phone.
+- **Ctrl+K actions.** Type `text zoe running late`, `play`, `next`, `settings` and more. When a name
+  fits several people, tug asks instead of guessing.
+- **Tray icon and taskbar dot.** tug keeps running in the tray when you close it (switchable), shows
+  unread texts on its taskbar button, and Quit lives in the tray menu.
 
 ### Fixed
+- **Setup never offers a keyboard, mouse or headphones as your iPhone.** Devices are told apart by
+  what they report about themselves, then by name; anything unclear is asked about, not picked.
+- **"Pair again"** appears when your iPhone has forgotten this PC, instead of tug retrying forever.
+- **The phone's switches register in seconds.** While a switch is still off (first minutes after
+  starting or pairing, or with setup or Settings open), tug checks every 2 seconds.
+- **Sync Contacts switched on a little late** no longer means hours without names.
+- **"Use my location"** names the place ("Portland, Oregon") instead of "Your location".
+- Clearing a stack of notifications no longer stops at the first one the phone has already dropped.
+- tug looks further back through your inbox on first sync, as far as the phone allows.
+- Reconnects back off at the edge of Bluetooth range instead of retrying every few seconds.
 - **Opening the new-message picker no longer clears another conversation on the phone.** The
   phone only clears for a conversation you clicked into, while nothing (search, the picker,
   settings) covers it.
@@ -21,6 +48,8 @@
 - GitHub Actions runs the full check suite on every PR and on main (Windows).
 - `ble/actor.rs` split into six focused modules (a pure move, verified function by function).
 - GATT notification handlers unregister themselves; GATT reads/writes time out after 10 s.
+- Schema v5 (`hidden_at`) for deleted conversations. Discovered devices carry a `kind`; status carries
+  `pairingStale`. Reverse geocoding runs natively (`place_lookup`); `set_watching` drives fast checks.
 
 ## v0.5.4 — 2026-10-05
 
