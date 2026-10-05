@@ -30,8 +30,10 @@ const DIRECTION: Record<CallDirection, { label: string; icon: typeof Phone; tone
 
 const name = (c: CallRecord) => callName(c, nameFor.value);
 const route = (c: CallRecord) => tug.callRoute(name(c), c.number);
+// Every row with a number can be clicked: it calls when tug can, and says why when it can't
+// (rows that look tappable but do nothing were confusing).
 function callFrom(c: CallRecord) {
-  if (route(c)) void tug.callPerson(name(c), c.number);
+  if (c.number) void tug.callPerson(name(c), c.number);
 }
 // The number goes under the name only when the name isn't the number already.
 const showNumber = (c: CallRecord) => !!c.number && name(c) !== formatAddress(c.number);
@@ -65,8 +67,8 @@ const emptyHint = computed(() => {
           <li
             v-for="(c, i) in g.calls"
             :key="`${c.at}-${c.number}-${i}`"
-            :class="['group flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-surface-soft', route(c) ? 'cursor-pointer' : '']"
-            :title="route(c) ? `Call ${name(c)}${route(c) === 'back' ? ' back' : ''} on your iPhone` : undefined"
+            :class="['group flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-surface-soft', c.number ? 'cursor-pointer' : '']"
+            :title="c.number ? `Call ${name(c)}${route(c) === 'back' ? ' back' : ''} on your iPhone` : undefined"
             @click="callFrom(c)"
           >
             <span
@@ -96,8 +98,7 @@ const emptyHint = computed(() => {
                 <MessageSquare :size="15" />
               </button>
               <button
-                v-if="route(c)"
-                class="btn-secondary btn-sm shrink-0"
+                :class="['btn-secondary btn-sm shrink-0', route(c) ? '' : 'text-muted']"
                 :disabled="tug.calling !== null"
                 :title="`Call ${name(c)} on your iPhone`"
                 @click.stop="callFrom(c)"

@@ -452,7 +452,10 @@ export const useTugStore = defineStore("tug", () => {
       return true;
     }
     if (canDial.value && address) return call(address, name);
-    notify("error", `tug can call ${cleanName(name)} back from a missed call; calling anyone else needs the hands-free check in Settings › iPhone.`);
+    notify(
+      "error",
+      `tug can't call ${cleanName(name)} yet: Windows is holding your iPhone's calling connection. Missed calls still on your phone can be called back.`,
+    );
     return false;
   }
 
