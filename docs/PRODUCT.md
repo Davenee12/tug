@@ -59,6 +59,16 @@ after onboarding/settings.
 - **Send later** — rare need, and it only works while the PC is on. Not worth the edge cases.
 - **Pinned people** — the conversation list is already sorted by recency; revisit only if usage shows a need.
 - **A widget platform / marketplace** — build the glance strip first; an ecosystem needs evidence.
+- **Older text history and your own sent texts on a new install** — not possible over Bluetooth: the
+  iPhone shares only its 10 newest incoming texts and an empty Sent folder (checked 2026-10-05 with
+  `map_probe`). tug keeps history from the moment it's set up; conversations fill in as people text.
+
+## Pairing facts learned on hardware (2026-10-05)
+- Notifications (LE, via LightBlue) and texts (Classic, Windows › Add device) are two pairings. Pair
+  notifications **first**, then texts: the other order broke the texts pairing in 2 of 3 runs. The setup
+  wizard follows this order.
+- The iPhone only shows Show Message Notifications / Sync Contacts after tug has asked for them, so tug
+  checks every 2 s while they're pending (first 5 minutes, or while setup/Settings is open).
 
 ## Proposal format (for new ideas)
 💡 **Name** · Problem · Why now · User value · Experience · Complexity · Product fit · Delight ·
