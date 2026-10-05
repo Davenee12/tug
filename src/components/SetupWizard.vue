@@ -149,8 +149,8 @@ const texts = computed(() => [
   { label: "Sync Contacts", why: "Names instead of numbers", on: tug.contacts.length > 0 && !s.value.contactsError, required: false },
 ]);
 const textsDone = computed(() => texts.value.every((x) => x.on));
-/** The phone answers for texts (connected, or asking for its switch): the Classic pairing exists. */
-const textsPaired = computed(() => s.value.services.messages || !!s.value.messagesError);
+/** The phone answers for texts (connected, or asking for its switch): the Classic pairing works. */
+const textsPaired = computed(() => s.value.services.messages || s.value.textsPairing === "ok");
 
 let shareTimer: number | undefined;
 watch(
@@ -415,6 +415,10 @@ const SHORTCUTS: Array<[string, string]> = [
           <template v-if="!textsPaired">
             <p class="mt-2 text-[15px] text-muted">
               Reading and replying to texts uses a second Bluetooth connection, made from this PC. Optional, about a minute.
+            </p>
+            <p v-if="s.textsPairing === 'broken'" class="mt-4 rounded-xl bg-surface-card px-4 py-3 text-[13px] text-body">
+              Windows has an older texts pairing with {{ s.textsDevice ?? "your iPhone" }} that's stopped working. Remove it in Bluetooth settings
+              first, then add your iPhone again.
             </p>
             <ol class="mt-8 flex flex-col gap-4 text-[14px] text-body">
               <li class="flex gap-3">

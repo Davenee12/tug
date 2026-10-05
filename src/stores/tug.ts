@@ -38,6 +38,8 @@ const EMPTY_STATUS: DeviceStatus = {
   pairingStale: false,
   messagesError: null,
   contactsError: null,
+  textsPairing: "unknown",
+  textsDevice: null,
 };
 
 const EMPTY_NOW_PLAYING: NowPlaying = {
