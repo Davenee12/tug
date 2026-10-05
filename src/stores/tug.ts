@@ -81,6 +81,7 @@ const EMPTY_STATUS: DeviceStatus = {
   awaitingPhoneAllow: false,
   messagesError: null,
   contactsError: null,
+  contactsShared: false,
   textsPairing: "unknown",
   textsDevice: null,
   liveTexts: "off",

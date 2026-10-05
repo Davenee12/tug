@@ -28,11 +28,10 @@ export interface PhoneSwitch {
 const WHERE = "Settings › Bluetooth › ⓘ next to this PC";
 
 /**
- * The three switches with their live state. `contacts` is the number of synced contacts (the
- * status snapshot doesn't carry it). Notifications can only be judged once the phone is
+ * The three switches with their live state. Notifications can only be judged once the phone is
  * connected; texts and contacts rely on the message/contacts signals the worker records.
  */
-export function phoneSwitches(s: DeviceStatus, contacts: number): PhoneSwitch[] {
+export function phoneSwitches(s: DeviceStatus): PhoneSwitch[] {
   const connected = s.connection === "connected";
   return [
     {
@@ -60,10 +59,10 @@ export function phoneSwitches(s: DeviceStatus, contacts: number): PhoneSwitch[] 
       label: "Sync Contacts",
       why: "Names instead of numbers",
       required: false,
-      // A refusal is a clear "off"; a successful pull with people in it is "on"; an empty pull
-      // reads as unknown rather than off, since it also happens for a moment before the switch
-      // is flipped.
-      state: s.contactsError ? "off" : contacts > 0 ? "on" : "unknown",
+      // A refusal is a clear "off"; the phone sharing contacts on this connection is "on" (not
+      // contacts saved from before, which said "on" while the switch was off); an empty pull
+      // reads as unknown, since it also happens for a moment before the switch is flipped.
+      state: s.contactsError ? "off" : s.contactsShared ? "on" : "unknown",
       where: WHERE,
       fix: "Turn it on so tug shows names instead of numbers.",
     },
