@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { Info, Search, X } from "lucide-vue-next";
+import { Info, Phone, Search, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
 import { cleanName, formatAddress, groupConversations } from "../lib/format";
@@ -76,6 +76,11 @@ function close() {
   tug.pickerOpen = false;
 }
 
+function callFromPicker(o: Option) {
+  close();
+  void tug.call(o.address, o.name);
+}
+
 function pick(o: Option | undefined) {
   if (!o) return;
   tug.startConversation(o.address, o.name);
@@ -145,18 +150,24 @@ const sectionLabel = (s: Option["section"]) => ({ Recent: "Recent", Contacts: "A
       <ul ref="list" class="min-h-0 flex-1 overflow-y-auto border-t border-hairline-soft px-2 py-2">
         <template v-for="(o, i) in options" :key="o.key">
           <li v-if="showHeader(i)" class="caption-upper px-3 pt-3 pb-1 text-muted-soft">{{ sectionLabel(o.section) }}</li>
-          <li>
-            <button
-              :data-index="i"
-              :class="['flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left', i === active ? 'bg-surface-card' : '']"
-              @mousemove="active = i"
-              @click="pick(o)"
-            >
-              <AppAvatar app-id="com.apple.MobileSMS" :label="o.name" size="sm" />
+          <li :class="['flex items-center rounded-lg', i === active ? 'bg-surface-card' : '']" @mousemove="active = i">
+            <button :data-index="i" class="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left" @click="pick(o)">
+              <AppAvatar app-id="com.apple.MobileSMS" :label="o.name" person size="sm" />
               <span class="min-w-0 flex-1">
                 <span class="block truncate text-[14px] font-medium text-ink">{{ o.name }}</span>
                 <span class="block truncate font-mono text-[12px] text-muted-soft">{{ formatAddress(o.address) }}</span>
               </span>
+            </button>
+            <!-- Experimental: only once Settings has checked hands-free dialing works here. -->
+            <button
+              v-if="tug.canDial && !o.address.includes('@')"
+              class="mr-2 shrink-0 rounded-md p-1.5 text-muted-soft hover:bg-surface-cream-strong hover:text-ink"
+              :aria-label="`Call ${o.name}`"
+              :title="`Call ${o.name} on your iPhone (experimental)`"
+              :disabled="tug.calling !== null"
+              @click="callFromPicker(o)"
+            >
+              <Phone :size="15" />
             </button>
           </li>
         </template>

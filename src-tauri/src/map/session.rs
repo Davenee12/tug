@@ -1,5 +1,6 @@
 //! OBEX sessions with the iPhone over WinRT RFCOMM `StreamSocket`s (WinRT resolves
-//! each service's RFCOMM channel from SDP): MAP for messages, PBAP for contacts.
+//! each service's RFCOMM channel from SDP): MAP for messages, PBAP for contacts and
+//! call history.
 
 use std::time::Duration;
 
@@ -12,6 +13,7 @@ use windows::Networking::Sockets::{SocketProtectionLevel, StreamSocket};
 use windows::Storage::Streams::{DataReader, DataWriter, InputStreamOptions};
 
 use super::bmessage::{self, BMessage};
+use super::calls::{self, CallDirection, CallRecord};
 use super::listing::{self, ListedMessage};
 use super::obex::{self, Header, ObexError, Response};
 use super::vcard::{self, PhonebookEntry};
@@ -51,6 +53,8 @@ const PB_FORMAT: u8 = 0x07;
 const PB_FORMAT_VCARD30: u8 = 0x01;
 /// PropertySelector bits: VERSION, FN, N, TEL.
 const PB_PROPERTIES: u64 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 7);
+/// The same plus X-IRMC-CALL-DATETIME (bit 28), which carries a call's direction and time.
+const PB_CALL_PROPERTIES: u64 = PB_PROPERTIES | (1 << 28);
 
 #[derive(Debug, Error)]
 pub enum MapError {
@@ -426,4 +430,49 @@ pub async fn pull_contacts(device_id: &str) -> Result<Vec<PhonebookEntry>> {
     let result = link.get("PullPhoneBook", headers).await;
     link.disconnect().await;
     Ok(vcard::parse(&String::from_utf8_lossy(&result?)))
+}
+
+/// Pull the newest `max` calls over PBAP: the combined list (`telecom/cch.vcf`), or, from a
+/// phone that doesn't keep one, incoming, outgoing and missed merged. Gated by the same Sync
+/// Contacts switch as the phonebook.
+pub async fn pull_call_history(device_id: &str, max: u16) -> Result<Vec<CallRecord>> {
+    let mut link = ObexLink::connect(device_id, PSE_UUID, &PBAP_TARGET, MapError::ContactsConsent).await?;
+    let result = async {
+        match pull_calls(&mut link, "cch", max).await {
+            Ok(raw) => Ok(calls::parse(&raw, None)),
+            // Not Found / Bad Request / Not Implemented: no combined list on this phone.
+            Err(MapError::Obex { code, .. }) => {
+                log::info!("no combined call history (OBEX {code:#04x}); reading the three lists");
+                let mut lists = Vec::new();
+                for (name, direction) in [
+                    ("ich", CallDirection::Incoming),
+                    ("och", CallDirection::Outgoing),
+                    ("mch", CallDirection::Missed),
+                ] {
+                    let raw = pull_calls(&mut link, name, max).await?;
+                    lists.push(calls::parse(&raw, Some(direction)));
+                }
+                Ok(calls::merge(lists, max as usize))
+            }
+            Err(e) => Err(e),
+        }
+    }
+    .await;
+    link.disconnect().await;
+    result
+}
+
+async fn pull_calls(link: &mut ObexLink, list: &str, max: u16) -> Result<String> {
+    let headers = vec![
+        link.conn(),
+        Header::type_("x-bt/phonebook"),
+        Header::Name(Some(format!("telecom/{list}.vcf"))),
+        obex::app_params(&[
+            (PB_FORMAT, &[PB_FORMAT_VCARD30]),
+            (PB_PROPERTY_SELECTOR, &PB_CALL_PROPERTIES.to_be_bytes()),
+            (PB_MAX_LIST_COUNT, &max.to_be_bytes()),
+        ]),
+    ];
+    let raw = link.get("PullPhoneBook", headers).await?;
+    Ok(String::from_utf8_lossy(&raw).into_owned())
 }
