@@ -220,8 +220,13 @@ impl Actor {
         Ok(())
     }
 
+    /// Start over: drop and unpair both bonds tug knows about — the notifications (LE) device
+    /// and the remembered texts (Classic) device — and clear the remembered ids, so a phone the
+    /// user replaced (or that forgot this PC) leaves nothing stale behind for the next pairing.
     pub(super) async fn forget(&mut self) -> Result<(), String> {
-        let id = self.device_id.take();
+        let le_id = self.device_id.take();
+        // Read the texts device id before deleting the setting, so we can unpair it too.
+        let texts_id = self.shared.store.setting(keys::TEXTS_DEVICE_ID).ok().flatten();
         self.drop_link();
         let store = &self.shared.store;
         let _ = store.delete_setting(keys::DEVICE_ID);
@@ -233,16 +238,38 @@ impl Actor {
             s.connection = ConnectionState::NoDevice;
             s.last_error = None;
             s.pairing_stale = false;
+            s.awaiting_phone_allow = false;
+            s.texts_pairing = crate::map::health::TextsPairing::Unknown;
+            s.texts_device = None;
+            s.messages_error = None;
+            s.contacts_error = None;
+            s.services = Services::default();
         });
-        if let Some(id) = id {
-            // Best effort: a stale Windows bond makes re-pairing fail silently.
-            if let Ok(info) = async { DeviceInformation::CreateFromIdAsync(&HSTRING::from(id))?.await }.await {
-                if let Ok(op) = info.Pairing().and_then(|p| p.UnpairAsync()) {
-                    let _ = op.await;
-                }
-            }
+        // Best effort: a stale Windows bond makes re-pairing fail silently. The Classic (texts)
+        // bond and the LE (notifications) bond are separate Windows pairings; remove both.
+        for id in [le_id, texts_id].into_iter().flatten() {
+            unpair_device(&id).await;
         }
         Ok(())
+    }
+}
+
+/// Remove one Windows Bluetooth bond by device id. Best effort and fully bounded, so a phone
+/// that's away (CreateFromIdAsync or UnpairAsync hanging) can't park the actor loop.
+pub(super) async fn unpair_device(id: &str) {
+    let op = match DeviceInformation::CreateFromIdAsync(&HSTRING::from(id)) {
+        Ok(op) => op,
+        Err(e) => return log::debug!("unpair {id}: {}", e.message()),
+    };
+    let info = match winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op).await {
+        Ok(info) => info,
+        Err(e) => return log::debug!("unpair {id}: {e}"),
+    };
+    if let Ok(op) = info.Pairing().and_then(|p| p.UnpairAsync()) {
+        match winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op).await {
+            Ok(status) => log::info!("unpaired {id}: {:?}", status.Status()),
+            Err(e) => log::debug!("unpair {id}: {e}"),
+        }
     }
 }
 

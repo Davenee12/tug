@@ -44,6 +44,13 @@ const ACCESSORY_WORDS: &[&str] = &[
     "airtag",
 ];
 
+/// Whether a name from a Bluetooth NameChanged event is worth adopting. iOS briefly reports
+/// junk mid-rename (Dave's phone flashed up as "4" once), and a one- or two-character name is
+/// never a real iPhone name; keep the last good one instead of following it.
+pub fn plausible_device_name(name: &str) -> bool {
+    name.trim().chars().count() >= 3
+}
+
 pub fn classify(name: &str, appearance: Option<u16>, cod_major: Option<u32>) -> DeviceKind {
     let name = name.to_lowercase();
     let category = appearance.map(|a| a >> 6).filter(|&c| c != 0);
@@ -88,6 +95,19 @@ mod tests {
         // Class 4: audio/video. 0x00C0: watch.
         assert_eq!(classify("Thing", None, Some(4)), DeviceKind::Accessory);
         assert_eq!(classify("Thing", Some(0x00C0), None), DeviceKind::Accessory);
+    }
+
+    #[test]
+    fn implausible_short_names_are_rejected() {
+        // iOS flashed "4" mid-rename; one- and two-character names are never a real iPhone.
+        assert!(!plausible_device_name("4"));
+        assert!(!plausible_device_name("ab"));
+        assert!(!plausible_device_name("  x "));
+        assert!(!plausible_device_name(""));
+        // Real names (and a trimmed three-plus) are kept.
+        assert!(plausible_device_name("Dave's iPhone"));
+        assert!(plausible_device_name("iPhone"));
+        assert!(plausible_device_name(" Pro "));
     }
 
     #[test]

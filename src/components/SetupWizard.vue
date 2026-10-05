@@ -6,6 +6,7 @@ import { useWeatherStore } from "../stores/weather";
 import { useFocusTrap } from "../lib/focusTrap";
 import PhoneSwitches from "./PhoneSwitches.vue";
 import { phoneSwitches } from "../lib/phoneSwitches";
+import { pairingProblem } from "../lib/pairings";
 import { api, errorMessage } from "../lib/ipc";
 import { friendlyLocateError } from "../lib/locating";
 import { useLocating } from "../lib/useLocating";
@@ -117,6 +118,27 @@ async function pairAgain() {
   repairing.value = false;
   go("connect");
 }
+
+// Windows ended up with more than one iPhone bond (an old one and a new one), or the phone that's
+// paired now isn't the one tug remembers. One clear "Start over" unpairs both bonds tug knows
+// about and returns to the first step. Confirmed first, because unpairing is irreversible.
+const problem = computed(() => pairingProblem(tug.discovered, s.value.device?.id ?? null));
+const confirmStartOver = ref(false);
+let startOverTimer: number | undefined;
+const startingOver = ref(false);
+async function startOver() {
+  if (!confirmStartOver.value) {
+    confirmStartOver.value = true;
+    window.clearTimeout(startOverTimer);
+    startOverTimer = window.setTimeout(() => (confirmStartOver.value = false), 4000);
+    return;
+  }
+  confirmStartOver.value = false;
+  startingOver.value = true;
+  await tug.forget();
+  startingOver.value = false;
+  go("welcome");
+}
 // Windows asks for the PIN → its own screen; once paired, the device watcher moves on.
 watch(
   () => tug.pairingRequest,
@@ -215,6 +237,7 @@ onUnmounted(() => {
   tug.setupSharingShown = false;
   window.clearTimeout(btTimer);
   window.clearTimeout(shareTimer);
+  window.clearTimeout(startOverTimer);
   if (step.value === "connect") void tug.stopDiscovery();
 });
 
@@ -329,6 +352,20 @@ const SHORTCUTS: Array<[string, string]> = [
                 <li class="flex items-center justify-between px-2 py-1.5"><span class="text-body">Unnamed</span><span class="font-mono text-muted-soft">−88</span></li>
               </ul>
             </div>
+          </div>
+
+          <!-- More than one iPhone paired, or the wrong one: offer one clean Start over. -->
+          <div v-if="problem" class="mt-8 flex flex-col gap-2 rounded-xl border border-hairline bg-surface-card px-4 py-3">
+            <p class="text-[13px] text-body">
+              <template v-if="problem === 'duplicates'">More than one iPhone is paired with this PC, so tug can't tell which to use.</template>
+              <template v-else>The iPhone paired now isn't the one tug remembers.</template>
+              Start over clears the pairings tug made and begins again. Also tap <strong class="font-medium text-body-strong">Forget This Device</strong>
+              for this PC under Settings › Bluetooth on the iPhone.
+            </p>
+            <button class="btn-secondary btn-sm self-start" :disabled="startingOver" @click="startOver">
+              <LoaderCircle v-if="startingOver" :size="13" class="animate-spin" />
+              {{ confirmStartOver ? "Tap again to start over" : "Start over" }}
+            </button>
           </div>
 
           <div class="mt-8 rounded-xl bg-surface-card p-4">

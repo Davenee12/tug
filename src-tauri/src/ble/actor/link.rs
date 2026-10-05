@@ -34,7 +34,9 @@ impl Actor {
     pub(super) fn set_device_name(&mut self, name: &str) {
         let name = name.trim();
         let current = self.shared.status().device.map(|d| d.name);
-        if name.is_empty() || current.as_deref() == Some(name) {
+        // iOS reports junk mid-rename (a "4" once); a one- or two-char name is never a real
+        // iPhone, so keep the last good one instead of following it onto the wrong label.
+        if !crate::device_kind::plausible_device_name(name) || current.as_deref() == Some(name) {
             return;
         }
         log::info!("the iPhone is now called {name}");
