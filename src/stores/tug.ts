@@ -3,11 +3,25 @@ import { computed, ref, watch } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
-import { appLabel, canClear, cleanName, formatAddress, groupConversations, groupThreads, missedCallFor, newestUnreadThread, threadKey } from "../lib/format";
+import {
+  appLabel,
+  canClear,
+  cleanName,
+  formatAddress,
+  groupConversations,
+  groupThreads,
+  missedCallFor,
+  newestUnreadThread,
+  threadKey,
+  type Conversation,
+  type Thread,
+} from "../lib/format";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
 import { copyText } from "../lib/clipboard";
+import { normalizeAddress } from "../lib/address";
+import { isKnownConversation, outgoingAddresses, senderIndex, senderMayToast, threadCounts } from "../lib/senders";
 import type {
   CallRecord,
   Contact,
@@ -71,7 +85,24 @@ export const useTugStore = defineStore("tug", () => {
   const hasMore = ref(true);
   const discovered = ref<DiscoveredDevice[]>([]);
   const pairingRequest = ref<PairingRequest | null>(null);
-  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [], closeToTray: true, appIcons: true, dialing: false });
+  const settings = ref<UiSettings>({
+    toasts: true,
+    doNotDisturb: false,
+    mutedApps: [],
+    closeToTray: true,
+    appIcons: true,
+    dialing: false,
+    filterUnknown: true,
+    knownSenders: [],
+  });
+
+  /** Who counts as a known sender (contacts, numbers you've texted, ones you moved), for Filter unknown senders. */
+  const senders = computed(() => senderIndex(contacts.value, outgoingAddresses(messages.value), settings.value.knownSenders));
+  /** With the filter off, everyone is treated as known, exactly as before it existed. */
+  function isKnown(c: Pick<Conversation, "appId" | "contact" | "addresses">): boolean {
+    return !settings.value.filterUnknown || isKnownConversation(c, senders.value);
+  }
+  const countsTowardUnread = (t: Thread) => !settings.value.filterUnknown || threadCounts(t, senders.value);
 
   /** App icons as data URIs by app id; null = the App Store has none (initials instead). */
   const appIcons = ref<Record<string, string | null>>({});
@@ -226,6 +257,8 @@ export const useTugStore = defineStore("tug", () => {
     const s = settings.value;
     if (!s.toasts || s.doNotDisturb || n.flags.silent || n.flags.preExisting) return;
     if (s.mutedApps.includes(n.appId)) return;
+    // Unknown senders wait quietly in their own list, unless the text carries a one-time code.
+    if (s.filterUnknown && !senderMayToast(n, senders.value)) return;
     if (toastPermission === null) {
       toastPermission = (await isPermissionGranted()) || (await requestPermission()) === "granted";
     }
@@ -250,9 +283,9 @@ export const useTugStore = defineStore("tug", () => {
     return n.removedAt == null && n.receivedAt > (seen.value[key] ?? seenSince.value);
   }
 
-  /** New texts across conversations: the Messages tab badge, the tray and the taskbar dot. */
+  /** New texts across conversations: the Messages tab badge, the tray and the taskbar dot. Unknown senders don't count. */
   const unreadTexts = computed(() =>
-    groupThreads(notifications.value).reduce((sum, t) => sum + newCount(t.key, t.items), 0),
+    groupThreads(notifications.value).reduce((sum, t) => sum + (countsTowardUnread(t) ? newCount(t.key, t.items) : 0), 0),
   );
   watch(unreadTexts, (n) => void api.setUnread(n).catch(() => undefined), { immediate: true });
 
@@ -500,7 +533,7 @@ export const useTugStore = defineStore("tug", () => {
    * so close those first (but not a pairing dialog, which needs an answer).
    */
   function openLatestConversation() {
-    const key = newestUnreadThread(notifications.value, newCount);
+    const key = newestUnreadThread(notifications.value, newCount, countsTowardUnread);
     if (!key) return;
     searchOpen.value = false;
     pickerOpen.value = false;
@@ -526,6 +559,8 @@ export const useTugStore = defineStore("tug", () => {
       closeToTray: raw["ui.closeToTray"] !== "false",
       appIcons: raw["ui.appIcons"] !== "false",
       dialing: raw["ui.dialing"] === "true",
+      filterUnknown: raw["ui.filterUnknown"] !== "false",
+      knownSenders: raw["ui.knownSenders"] ? (JSON.parse(raw["ui.knownSenders"]) as string[]) : [],
     };
     onboarded.value = raw["ui.onboarded"] === "1";
   }
@@ -661,6 +696,14 @@ export const useTugStore = defineStore("tug", () => {
     void attempt(() => api.setSetting("ui.zoom", String(factor)));
   }
 
+  /** "Move to conversations": these numbers count as known from now on (saved in `ui.knownSenders`). */
+  function moveToConversations(c: Pick<Conversation, "contact" | "addresses">) {
+    const add = c.addresses.length ? c.addresses : [c.contact];
+    const next = [...new Set([...settings.value.knownSenders, ...add.map(normalizeAddress)])];
+    void setSetting("knownSenders", next);
+    notify("info", `Moved ${c.contact} to your conversations`);
+  }
+
   function toggleMuted(appId: string) {
     const muted = settings.value.mutedApps;
     void setSetting("mutedApps", muted.includes(appId) ? muted.filter((a) => a !== appId) : [...muted, appId]);
@@ -718,6 +761,8 @@ export const useTugStore = defineStore("tug", () => {
     searchAll,
     setSetting,
     toggleMuted,
+    isKnown,
+    moveToConversations,
     notify,
     isNew,
     newCount,
