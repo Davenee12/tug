@@ -9,6 +9,34 @@ import type { DiscoveredDevice } from "../types/protocol";
 /** What's wrong with the current pairing, if anything. */
 export type PairingProblem = "duplicates" | "remembered-missing" | null;
 
+/** The discovered devices split into what setup should offer. */
+export interface DeviceLists {
+  /** iPhones to offer with a primary Pair/Use action, likeliest first. */
+  phones: DiscoveredDevice[];
+  /** Unknown devices (which could be a nameless just-connected iPhone): a quiet fallback list. */
+  others: DiscoveredDevice[];
+  /** How many accessories (keyboards, headphones) were hidden entirely. */
+  hiddenAccessories: number;
+}
+
+/**
+ * Split the discovered Bluetooth LE devices into what the setup step should show. The phone is
+ * offered up front whenever Windows classifies it as one (named "… iPhone", or by LE Appearance)
+ * — it does NOT have to be connected to this PC first, which is the old LightBlue assumption that
+ * left the wizard's list empty. Pure, so the filter is unit-tested without a phone.
+ */
+export function setupDeviceLists(discovered: DiscoveredDevice[]): DeviceLists {
+  const le = discovered.filter((d) => d.transport === "le");
+  // Connected first, then by name, so a phone actively linked to the PC sits at the top.
+  const order = (a: DiscoveredDevice, b: DiscoveredDevice) =>
+    Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name);
+  return {
+    phones: le.filter((d) => d.kind === "phone").sort(order),
+    others: le.filter((d) => d.kind === "unknown").sort(order),
+    hiddenAccessories: le.filter((d) => d.kind === "accessory").length,
+  };
+}
+
 /** Lower-cased, trimmed name, or null when there isn't a real one yet ("Unnamed device"). */
 function realName(d: DiscoveredDevice): string | null {
   const n = d.name.trim().toLowerCase();
@@ -51,4 +79,18 @@ export function pairingProblem(discovered: DiscoveredDevice[], rememberedId: str
   if (rememberedId && !discovered.some((d) => d.id === rememberedId)) return "remembered-missing";
   if (hasDuplicateIphones(discovered)) return "duplicates";
   return null;
+}
+
+/**
+ * A device went from unpaired to paired without tug starting the pairing — Windows' own system
+ * dialog did it (phone-initiated, e.g. the user tapped this PC in the iPhone's Bluetooth list).
+ * An unpackaged app can't intercept that, so the code shows in Windows, not in tug; the UI uses
+ * this to point the user at Windows' prompt instead of leaving them hunting for a code.
+ */
+export function startedOutsideTug(
+  wasPaired: boolean | undefined,
+  nowPaired: boolean,
+  tugInitiated: boolean,
+): boolean {
+  return wasPaired === false && nowPaired && !tugInitiated;
 }
