@@ -100,6 +100,8 @@ pub struct DeviceStatus {
     pub battery: Option<u8>,
     pub services: Services,
     pub last_error: Option<String>,
+    /// Unix ms when `last_error` last changed to its current value, so the UI can say "2m ago".
+    pub last_error_at: Option<i64>,
     /// The iPhone rejects this PC's notifications bond (forgotten on the phone): pair again.
     pub pairing_stale: bool,
     /// Why message access isn't available, when the user can fix it (e.g. consent).
@@ -180,6 +182,14 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Wall-clock time in Unix milliseconds (for stamping when an error happened).
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 impl Shared {
     pub fn new(app: AppHandle, store: Arc<Store>) -> Self {
         Self {
@@ -221,6 +231,10 @@ impl Shared {
             let mut s = lock(&self.status);
             let before = s.clone();
             f(&mut s);
+            // Stamp when the error text changes, so the UI can show how long ago it happened.
+            if s.last_error != before.last_error {
+                s.last_error_at = s.last_error.is_some().then(now_ms);
+            }
             (*s != before).then(|| s.clone())
         };
         if let Some(s) = snapshot {

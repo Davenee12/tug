@@ -51,6 +51,7 @@ const EMPTY_STATUS: DeviceStatus = {
   battery: null,
   services: { notifications: false, media: false, battery: false, messages: false },
   lastError: null,
+  lastErrorAt: null,
   pairingStale: false,
   messagesError: null,
   contactsError: null,
