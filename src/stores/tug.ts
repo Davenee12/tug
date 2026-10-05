@@ -113,6 +113,21 @@ export const useTugStore = defineStore("tug", () => {
   /** App icons as data URIs by app id; null = the App Store has none (initials instead). */
   const appIcons = ref<Record<string, string | null>>({});
   const iconRequests = new Set<string>();
+  /** App websites by app id (from the App Store), for "Open" on apps without a known page. */
+  const appWebsites = ref<Record<string, string | null>>({});
+  const websiteRequests = new Set<string>();
+  function websiteFor(appId: string): string | null {
+    if (!settings.value.appIcons) return null;
+    if (!(appId in appWebsites.value) && !websiteRequests.has(appId)) {
+      websiteRequests.add(appId);
+      api
+        .appWebsite(appId)
+        .then((url) => (appWebsites.value = { ...appWebsites.value, [appId]: url }))
+        .catch(() => undefined);
+    }
+    return appWebsites.value[appId] ?? null;
+  }
+
   /** The app's real icon, asked for the first time it's needed (then cached on disk by the backend). */
   function iconFor(appId: string): string | null {
     if (!settings.value.appIcons) return null;
@@ -795,6 +810,7 @@ export const useTugStore = defineStore("tug", () => {
     pairingRequest,
     settings,
     iconFor,
+    websiteFor,
     advertiseEnabled,
     autostartEnabled,
     flash,
