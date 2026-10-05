@@ -27,6 +27,8 @@ export interface DeviceStatus {
   battery: number | null;
   services: Services;
   lastError: string | null;
+  /** Unix ms when `lastError` last changed to its current value (for "2m ago"). */
+  lastErrorAt: number | null;
   /** The iPhone rejects this PC's notifications pairing (forgotten on the phone): pair again. */
   pairingStale: boolean;
   /** Why message access isn't available, when the user can fix it. */

@@ -6,6 +6,7 @@ mod ble;
 mod clipboard;
 mod commands;
 mod device_kind;
+mod diagnostics;
 pub mod hfp;
 mod location;
 pub mod map;
@@ -143,6 +144,8 @@ pub fn run() {
             commands::get_calls,
             commands::refresh_calls,
             commands::dial,
+            commands::copy_diagnostics,
+            commands::open_logs_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

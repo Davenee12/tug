@@ -89,6 +89,7 @@ const status: DeviceStatus = setup
       battery: null,
       services: { notifications: false, media: false, battery: false, messages: false },
       lastError: null,
+      lastErrorAt: null,
       pairingStale: false,
       messagesError: null,
       contactsError: null,
@@ -103,7 +104,8 @@ const status: DeviceStatus = setup
       connection: "connected",
       battery: 76,
       services: { notifications: true, media: true, battery: true, messages: true },
-      lastError: null,
+      lastError: params.has("lasterror") ? "Couldn't advertise to the iPhone: the radio is busy" : null,
+      lastErrorAt: params.has("lasterror") ? now - 4 * min : null,
       pairingStale: false,
       messagesError: null,
       contactsError: null,
@@ -295,6 +297,35 @@ mockIPC(
         setTimeout(() => void emit("message", { ...m, status: "accepted" }), 700);
         return m;
       }
+      // A stand-in report so Settings › Copy diagnostics works in the browser. The real one is
+      // built and redacted in Rust (src-tauri/src/diagnostics.rs).
+      case "copy_diagnostics": {
+        const report = [
+          "tug diagnostics",
+          "===============",
+          "",
+          "app version:     0.5.7 (dev mock)",
+          "windows version: Microsoft Windows [Version 10.0.26200.0000]",
+          `bluetooth:       ${status.radio === "on" ? "radio on" : "radio off"}, peripheral role supported`,
+          "",
+          "device status",
+          "-------------",
+          JSON.stringify({ ...status, device: status.device, textsDevice: status.textsDevice }, null, 2),
+          "",
+          "settings",
+          "--------",
+          ...Object.entries(settings).map(([k, v]) => `${k}: ${v}`),
+          "",
+          "recent log (2 lines)",
+          "----------",
+          "2026-10-05T10:11:12 [INFO] connected to [number]",
+          "2026-10-05T10:11:13 [INFO] message from [number] to [email] saved",
+        ].join("\n");
+        void navigator.clipboard?.writeText(report).catch(() => undefined);
+        return report;
+      }
+      case "open_logs_folder":
+        return null;
       case "get_settings":
         return settings;
       case "set_setting":
