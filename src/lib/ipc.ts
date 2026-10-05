@@ -40,6 +40,10 @@ export const api = {
   sendMessage: (address: string, text: string) => invoke<SmsMessage>("send_message", { address, text }),
   refreshMessages: () => invoke<void>("refresh_messages"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
+  /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */
+  copyDiagnostics: () => invoke<string>("copy_diagnostics"),
+  /** Open tug's log folder in Explorer. */
+  openLogsFolder: () => invoke<void>("open_logs_folder"),
   setUnread: (count: number) => invoke<void>("set_unread", { count }),
   openWindowsSettings: (page: "bluetooth" | "location" | "notifications") => invoke<void>("open_windows_settings", { page }),
   setHidden: (notificationIds: number[], messageIds: number[], hidden: boolean) =>

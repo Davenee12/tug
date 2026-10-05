@@ -281,6 +281,80 @@ pub fn copy_text(text: String) -> Result<()> {
     crate::clipboard::set_text(&text)
 }
 
+/// Settings safe to print in a support report: scalar on/off flags, never the "seen"
+/// conversation map (its keys embed contact names) or anything carrying message content.
+const DIAGNOSTIC_SETTINGS: &[&str] = &[
+    "advertise",
+    "ui.toasts",
+    "ui.doNotDisturb",
+    "ui.closeToTray",
+    "ui.appIcons",
+    "ui.dialing",
+    "ui.zoom",
+    "ui.onboarded",
+    "ui.seenSince",
+];
+
+/// Build the "Copy diagnostics" report and put it on the clipboard, returning it too so the UI
+/// can confirm. Sync for the same STA reason as `copy_text`. Message bodies, phone numbers,
+/// contact names and emails never reach it: the status snapshot carries none, the settings are
+/// an allowlist, and the log tail is redacted line by line.
+#[tauri::command]
+pub fn copy_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<String> {
+    use crate::diagnostics::{self, Report};
+    use tauri::Manager;
+
+    let status = state.shared.status();
+    let status_json = serde_json::to_string_pretty(&status).map_err(|e| e.to_string())?;
+    let bluetooth = diagnostics::bluetooth_summary(&status);
+    let windows_version = diagnostics::os_version();
+
+    let raw = state.shared.store.settings().map_err(|e| e.to_string())?;
+    let mut settings: Vec<(String, String)> = DIAGNOSTIC_SETTINGS
+        .iter()
+        .filter_map(|k| raw.get(*k).map(|v| (k.to_string(), v.clone())))
+        .collect();
+    // Muted apps as a count only (the bundle ids themselves aren't sensitive, but the count is
+    // all support needs).
+    if let Some(v) = raw.get("ui.mutedApps") {
+        let count = serde_json::from_str::<Vec<String>>(v).map(|a| a.len()).unwrap_or(0);
+        settings.push(("ui.mutedApps".to_string(), format!("{count} muted")));
+    }
+
+    let log_lines = app
+        .path()
+        .app_log_dir()
+        .map(|dir| diagnostics::recent_log_lines(&dir, diagnostics::LOG_TAIL_LINES))
+        .unwrap_or_default();
+
+    let app_version = app.package_info().version.to_string();
+    let report = Report {
+        app_version: &app_version,
+        windows_version: &windows_version,
+        bluetooth: &bluetooth,
+        status_json: &status_json,
+        settings: &settings,
+        log_lines: &log_lines,
+    }
+    .render();
+
+    crate::clipboard::set_text(&report)?;
+    Ok(report)
+}
+
+/// Open tug's log folder in Explorer, so the owner can attach the files to a support message.
+#[tauri::command]
+pub fn open_logs_folder(app: tauri::AppHandle) -> Result<()> {
+    use tauri::Manager;
+    let dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::process::Command::new("explorer.exe")
+        .arg(&dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn refresh_messages(state: State<'_, AppState>) {
     if let Some(map) = state.shared.map.get() {
