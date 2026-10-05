@@ -3,7 +3,8 @@
 // main.ts only when Tauri isn't present; never included in `tauri build`.
 //
 //   http://localhost:1420/            connected iPhone with sample history
-//   http://localhost:1420/?setup      first run, nothing paired
+//   http://localhost:1420/?setup      first run, nothing paired (scripted: pair, PIN, sharing, first notification)
+//   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
 
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -155,6 +156,39 @@ const messages: SmsMessage[] = setup
 
 const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
 
+// ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
+// Pair → PIN → connected → the iPhone's three switches come on one by one → a first
+// notification arrives.
+let finishPairing: ((ok: boolean) => void) | null = null;
+function simulateConnect(id: string) {
+  const name = discovered.find((d) => d.id === id)?.name ?? "iPhone";
+  const send = () => void emit("device-status", { ...status, services: { ...status.services } });
+  status.device = { id, name };
+  status.connection = "connecting";
+  send();
+  setTimeout(() => {
+    status.connection = "connected";
+    status.battery = 76;
+    status.services = { ...status.services, notifications: true, media: true, battery: true };
+    send();
+  }, 900);
+  setTimeout(() => {
+    status.services = { ...status.services, messages: true };
+    send();
+  }, 2400);
+  setTimeout(() => {
+    contacts.push({ address: ZOE, name: "Zoe" }, { address: "+12145550199", name: "Priya" });
+    void emit("contacts", [...contacts]);
+  }, 3400);
+  setTimeout(() => {
+    const first = n("com.apple.MobileSMS", "Messages", "Zoe", "hey! is this thing on? 👋", 0);
+    first.id = 500;
+    first.receivedAt = Date.now();
+    history.unshift(first);
+    void emit("notification", first);
+  }, 9000);
+}
+
 mockIPC(
   (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
@@ -202,6 +236,23 @@ mockIPC(
       case "start_discovery":
         setTimeout(() => void emit("discovered-devices", discovered), 400);
         return null;
+      case "pair_device":
+        // Like Windows: the PIN shows on both screens; the call returns once it's answered.
+        setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913" }), 300);
+        return new Promise<null>((resolve, reject) => {
+          finishPairing = (ok) => (ok ? resolve(null) : reject("Pairing was cancelled"));
+        }).then(() => {
+          simulateConnect(String(a.id));
+          return null;
+        });
+      case "confirm_pairing":
+        setTimeout(() => void emit("pairing-request-closed", null), 0);
+        finishPairing?.(Boolean(a.accept));
+        finishPairing = null;
+        return null;
+      case "use_device":
+        simulateConnect(String(a.id));
+        return null;
       case "perform_action":
         // Like the iPhone: a negative action (Clear/Decline) removes the notification.
         if (!a.positive) {
@@ -216,6 +267,17 @@ mockIPC(
   },
   { shouldMockEvents: true },
 );
+
+// ?setup&btoff: Bluetooth starts off and comes on after a few seconds (setup's first check).
+if (setup && params.has("btoff")) {
+  status.radio = "off";
+  status.advertising = "off";
+  setTimeout(() => {
+    status.radio = "on";
+    status.advertising = "on";
+    void emit("device-status", { ...status });
+  }, 20000);
+}
 
 if (params.has("pairing")) {
   setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913" }), 600);
