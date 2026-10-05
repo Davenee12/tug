@@ -399,6 +399,10 @@ mockIPC(
         }
         return null;
       }
+      // Windows pop-ups don't exist in a browser; log what tug would have shown.
+      case "show_toast":
+        console.info("[devMock] pop-up", a.spec);
+        return null;
       default:
         return null;
     }

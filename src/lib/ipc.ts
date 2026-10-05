@@ -14,6 +14,8 @@ import type {
   NowPlaying,
   PairingRequest,
   PhoneNotification,
+  ToastPressed,
+  ToastSpec,
 } from "../types/protocol";
 
 export const api = {
@@ -63,6 +65,8 @@ export const api = {
   refreshCalls: () => invoke<void>("refresh_calls"),
   /** Experimental hands-free dialing; with no number, only checks the link can be opened. */
   dial: (number: string | null) => invoke<void>("dial", { number }),
+  /** A Windows pop-up with buttons (falls back to a plain one in the backend). */
+  showToast: (spec: ToastSpec) => invoke<void>("show_toast", { spec }),
 };
 
 interface EventPayloads {
@@ -78,6 +82,7 @@ interface EventPayloads {
   contacts: Contact[];
   "open-latest-conversation": null;
   calls: CallRecord[];
+  "toast-pressed": ToastPressed;
 }
 
 export function on<E extends keyof EventPayloads>(

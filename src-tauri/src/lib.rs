@@ -16,6 +16,7 @@ mod messages;
 mod perf;
 mod state;
 mod store;
+pub mod toast;
 mod tray;
 
 use std::sync::Arc;
@@ -144,9 +145,16 @@ pub fn run() {
             commands::get_calls,
             commands::refresh_calls,
             commands::dial,
+            commands::show_toast,
             commands::copy_diagnostics,
             commands::open_logs_folder,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
+            if let tauri::RunEvent::Exit = event {
+                toast::withdraw_all(app);
+            }
+        });
 }
