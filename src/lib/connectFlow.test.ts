@@ -1,0 +1,124 @@
+import { describe, expect, it } from "vitest";
+import { connectDone, connectStep, nextShowConnect, optionalNudge } from "./connectFlow";
+import type { DeviceStatus, PairingRequest } from "../types/protocol";
+
+// A fully connected, everything-on phone; tests override only what they exercise.
+const CONNECTED: DeviceStatus = {
+  radio: "on",
+  peripheralSupported: true,
+  advertising: "on",
+  device: { id: "x", name: "Jordan's iPhone" },
+  connection: "connected",
+  battery: 76,
+  services: { notifications: true, media: true, battery: true, messages: true },
+  lastError: null,
+  lastErrorAt: null,
+  pairingStale: false,
+  awaitingPhoneAllow: false,
+  messagesError: null,
+  contactsError: null,
+  contactsShared: true,
+  textsPairing: "ok",
+  textsDevice: "Jordan's iPhone",
+  liveTexts: "off",
+};
+
+/** Nothing paired yet, the way the backend reports it on a fresh install. */
+const FRESH: DeviceStatus = {
+  ...CONNECTED,
+  device: null,
+  connection: "noDevice",
+  battery: null,
+  services: { notifications: false, media: false, battery: false, messages: false },
+  contactsShared: false,
+  textsPairing: "missing",
+  textsDevice: null,
+};
+
+const REQUEST: PairingRequest = { deviceName: "Jordan's iPhone", pin: "482 913", confirmOnPhone: false };
+
+describe("connectStep", () => {
+  it("looks for an iPhone when nothing is paired and no pairing is underway", () => {
+    expect(connectStep(FRESH, null)).toBe("find");
+  });
+
+  it("shows the pairing phase while a pairing request is in flight", () => {
+    expect(connectStep(FRESH, REQUEST)).toBe("pairing");
+  });
+
+  it("asks for Allow once paired while iOS holds the connection open", () => {
+    const s = { ...FRESH, device: { id: "a", name: "Jordan's iPhone" }, connection: "connecting" as const, awaitingPhoneAllow: true };
+    expect(connectStep(s, null)).toBe("allow");
+  });
+
+  it("shows the switches while paired and connecting, before notifications are on", () => {
+    const s = { ...FRESH, device: { id: "a", name: "Jordan's iPhone" }, connection: "connected" as const };
+    expect(connectStep(s, null)).toBe("switches");
+  });
+
+  it("is done once notifications are working, even mid-pairing-dialog", () => {
+    expect(connectStep(CONNECTED, null)).toBe("done");
+    expect(connectStep(CONNECTED, REQUEST)).toBe("done");
+  });
+});
+
+describe("connectDone", () => {
+  it("needs both a live connection and the notifications service", () => {
+    expect(connectDone(CONNECTED)).toBe(true);
+    expect(connectDone({ ...CONNECTED, services: { ...CONNECTED.services, notifications: false } })).toBe(false);
+    expect(connectDone({ ...CONNECTED, connection: "connecting" })).toBe(false);
+  });
+});
+
+describe("nextShowConnect", () => {
+  it("engages on a fresh install once the real status is known", () => {
+    expect(nextShowConnect(false, true, FRESH)).toBe(true);
+  });
+
+  it("never engages before the real status arrives (the placeholder has no device)", () => {
+    expect(nextShowConnect(false, false, FRESH)).toBe(false);
+  });
+
+  it("leaves an upgrader's reconnecting phone on the Feed (device present, not done)", () => {
+    const reconnecting = { ...CONNECTED, connection: "connecting" as const, services: { ...CONNECTED.services, notifications: false } };
+    expect(nextShowConnect(false, true, reconnecting)).toBe(false);
+  });
+
+  it("holds the panel up through pairing and the switches until notifications work", () => {
+    const paired = { ...FRESH, device: { id: "a", name: "Jordan's iPhone" }, connection: "connecting" as const };
+    expect(nextShowConnect(true, true, paired)).toBe(true);
+  });
+
+  it("yields to the Feed the moment notifications are working", () => {
+    expect(nextShowConnect(true, true, CONNECTED)).toBe(false);
+  });
+
+  it("re-engages after Start over clears the device", () => {
+    expect(nextShowConnect(false, true, FRESH)).toBe(true);
+  });
+});
+
+describe("optionalNudge", () => {
+  it("is empty until notifications are working", () => {
+    expect(optionalNudge(FRESH)).toEqual([]);
+    const connecting = { ...CONNECTED, connection: "connecting" as const, services: { ...CONNECTED.services, notifications: false } };
+    expect(optionalNudge(connecting)).toEqual([]);
+  });
+
+  it("names the optional switches that are off, never the required notifications one", () => {
+    const s = {
+      ...CONNECTED,
+      services: { ...CONNECTED.services, messages: false },
+      messagesError: "the iPhone refused message access; turn on Show Notifications for this PC",
+      contactsError: "the iPhone refused contact access",
+      contactsShared: false,
+    };
+    const nudge = optionalNudge(s);
+    expect(nudge.map((x) => x.key)).toEqual(["messages", "contacts"]);
+    expect(nudge.every((x) => !x.required)).toBe(true);
+  });
+
+  it("is empty when every optional switch is already on", () => {
+    expect(optionalNudge(CONNECTED)).toEqual([]);
+  });
+});
