@@ -18,6 +18,7 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
@@ -31,6 +32,7 @@ windows = { version = "0.62", features = [
   "ApplicationModel_DataTransfer",
   "Foundation",
   "Foundation_Collections",
+  "Data_Xml_Dom",
   "Devices_Bluetooth",
   "Devices_Bluetooth_Advertisement",
   "Devices_Bluetooth_GenericAttributeProfile",
@@ -38,9 +40,12 @@ windows = { version = "0.62", features = [
   "Devices_Enumeration",
   "Devices_Geolocation",
   "Devices_Radios",
+  "Media",
+  "Media_Playback",
   "Networking",
   "Networking_Sockets",
   "Storage_Streams",
+  "UI_Notifications",
   "Web_Http",
 ] }
 windows-collections = "0.3"

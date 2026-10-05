@@ -268,10 +268,56 @@ pub fn open_windows_settings(page: String) -> Result<()> {
         .map_err(|e| e.to_string())
 }
 
+/// True when `url` is a plain http(s) URL with a host: the only thing `open_url` will launch.
+/// Pure (no I/O) so it can be unit-tested; see the tests at the bottom of this file. We parse
+/// by hand rather than add a URL crate — the check only needs scheme + host and to refuse
+/// anything that could be a non-web URI (`file:`, `javascript:`, `ms-settings:`) or carry shell
+/// metacharacters to `explorer.exe`.
+pub fn is_http_url(url: &str) -> bool {
+    // Nothing weird that a shell or the OS could reinterpret.
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    let rest = match url.split_once("://") {
+        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") => rest,
+        _ => return false,
+    };
+    // Authority is up to the first path/query/fragment delimiter.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Drop any userinfo (after the last '@') and port (after ':'); a host must remain.
+    let host_port = authority.rsplit('@').next().unwrap_or("");
+    let host = host_port.split(':').next().unwrap_or("");
+    !host.is_empty()
+}
+
+/// Open an http(s) link in the default browser (the "Open in browser" action on a notification).
+/// Validated first so the webview can't ask us to launch a `file:`/`javascript:`/settings URI;
+/// uses the same shell launch as `open_windows_settings`.
+#[tauri::command]
+pub fn open_url(url: String) -> Result<()> {
+    if !is_http_url(&url) {
+        return Err(format!("refusing to open non-web URL: {url}"));
+    }
+    std::process::Command::new("explorer.exe")
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Unread texts, for the tray tooltip and the taskbar dot.
 #[tauri::command]
 pub fn set_unread(app: tauri::AppHandle, count: u32) -> Result<()> {
     crate::tray::set_unread(&app, count).map_err(|e| e.to_string())
+}
+
+/// Pop up a phone notification with the actions the frontend found for it (reply, mark
+/// read, copy code, call back, clear). The frontend has already decided it should show
+/// (toasts on, not do-not-disturb, app not muted, within the rate limit). Falls back to a
+/// plain pop-up if Windows won't take the actionable one.
+#[tauri::command]
+pub fn show_toast(app: tauri::AppHandle, spec: crate::toast::ToastSpec) {
+    crate::toast::show(&app, spec);
 }
 
 /// Copy text to the clipboard. Sync on purpose: Tauri runs sync commands on the main
@@ -279,6 +325,89 @@ pub fn set_unread(app: tauri::AppHandle, count: u32) -> Result<()> {
 #[tauri::command]
 pub fn copy_text(text: String) -> Result<()> {
     crate::clipboard::set_text(&text)
+}
+
+/// Settings safe to print in a support report: scalar on/off flags, never the "seen"
+/// conversation map (its keys embed contact names) or anything carrying message content.
+const DIAGNOSTIC_SETTINGS: &[&str] = &[
+    "advertise",
+    "ui.toasts",
+    "ui.doNotDisturb",
+    "ui.closeToTray",
+    "ui.appIcons",
+    "ui.dialing",
+    "ui.zoom",
+    "ui.onboarded",
+    "ui.seenSince",
+];
+
+/// Build the "Copy diagnostics" report and put it on the clipboard, returning it too so the UI
+/// can confirm. Sync for the same STA reason as `copy_text`. Message bodies, phone numbers,
+/// contact names and emails never reach it: the status snapshot carries none, the settings are
+/// an allowlist, and the log tail is redacted line by line.
+#[tauri::command]
+pub fn copy_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<String> {
+    use crate::diagnostics::{self, Report};
+    use tauri::Manager;
+
+    let status = state.shared.status();
+    // The phone's name often names a person ("Dave James's iPhone"): keep it out of the report.
+    let phone_names: Vec<String> = status
+        .device
+        .iter()
+        .map(|d| d.name.clone())
+        .chain(status.texts_device.clone())
+        .collect();
+    let status_json =
+        serde_json::to_string_pretty(&diagnostics::anonymize_status(&status)).map_err(|e| e.to_string())?;
+    let bluetooth = diagnostics::bluetooth_summary(&status);
+    let windows_version = diagnostics::os_version();
+
+    let raw = state.shared.store.settings().map_err(|e| e.to_string())?;
+    let mut settings: Vec<(String, String)> = DIAGNOSTIC_SETTINGS
+        .iter()
+        .filter_map(|k| raw.get(*k).map(|v| (k.to_string(), v.clone())))
+        .collect();
+    // Muted apps as a count only (the bundle ids themselves aren't sensitive, but the count is
+    // all support needs).
+    if let Some(v) = raw.get("ui.mutedApps") {
+        let count = serde_json::from_str::<Vec<String>>(v).map(|a| a.len()).unwrap_or(0);
+        settings.push(("ui.mutedApps".to_string(), format!("{count} muted")));
+    }
+
+    let log_lines = app
+        .path()
+        .app_log_dir()
+        .map(|dir| diagnostics::recent_log_lines(&dir, diagnostics::LOG_TAIL_LINES))
+        .unwrap_or_default();
+
+    let app_version = app.package_info().version.to_string();
+    let report = Report {
+        app_version: &app_version,
+        windows_version: &windows_version,
+        bluetooth: &bluetooth,
+        status_json: &status_json,
+        settings: &settings,
+        log_lines: &log_lines,
+        phone_names: &phone_names,
+    }
+    .render();
+
+    crate::clipboard::set_text(&report)?;
+    Ok(report)
+}
+
+/// Open tug's log folder in Explorer, so the owner can attach the files to a support message.
+#[tauri::command]
+pub fn open_logs_folder(app: tauri::AppHandle) -> Result<()> {
+    use tauri::Manager;
+    let dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::process::Command::new("explorer.exe")
+        .arg(&dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -304,4 +433,68 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
         return Err(format!("{key} is not a UI setting"));
     }
     state.shared.store.set_setting(&key, &value).map_err(|e| e.to_string())
+}
+
+/// Whether tug starts with Windows. The registry entry (via the autostart plugin) is the
+/// source of truth, so the Settings switch reads this rather than a stored preference.
+#[tauri::command]
+pub fn get_autostart(app: tauri::AppHandle) -> Result<bool> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// Turn "start with Windows" on or off. On writes an entry that launches tug with
+/// `--minimized`, so it comes up hidden in the tray.
+#[tauri::command]
+pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<()> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_http_url;
+
+    #[test]
+    fn accepts_http_and_https_with_a_host() {
+        assert!(is_http_url("https://mail.google.com/mail/u/0/#inbox"));
+        assert!(is_http_url("http://example.com"));
+        assert!(is_http_url("https://x.com/notifications"));
+        assert!(is_http_url("https://host:8443/path?q=1#frag"));
+        assert!(is_http_url("HTTPS://Example.com")); // scheme is case-insensitive
+                                                     // A percent-encoded Gmail search is a real query we build.
+        assert!(is_http_url(
+            "https://mail.google.com/mail/u/0/#search/from%3A%22Jane%20Doe%22"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_web_schemes() {
+        assert!(!is_http_url("file:///C:/Windows/System32/calc.exe"));
+        assert!(!is_http_url("javascript:alert(1)"));
+        assert!(!is_http_url("ms-settings:bluetooth"));
+        assert!(!is_http_url("ftp://example.com"));
+        assert!(!is_http_url("mailto:someone@example.com"));
+        assert!(!is_http_url("example.com")); // no scheme
+    }
+
+    #[test]
+    fn rejects_missing_host() {
+        assert!(!is_http_url("https://"));
+        assert!(!is_http_url("http:///just/a/path"));
+        assert!(!is_http_url("https://user@"));
+    }
+
+    #[test]
+    fn rejects_whitespace_and_control_chars() {
+        assert!(!is_http_url("https://example.com/a b"));
+        assert!(!is_http_url("https://example.com /x")); // would split into a second arg
+        assert!(!is_http_url("https://exa\nmple.com"));
+        assert!(!is_http_url("https://example.com\t"));
+    }
 }
