@@ -3,7 +3,9 @@ import { computed, nextTick, ref, watch } from "vue";
 import { ChevronRight, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { notificationTime, relativeTime, type FeedEntry } from "../lib/format";
+import { findCode } from "../lib/codes";
 import AppAvatar from "./AppAvatar.vue";
+import CodeChip from "./CodeChip.vue";
 import NotificationItem from "./NotificationItem.vue";
 
 const props = defineProps<{ entry: FeedEntry }>();
@@ -25,6 +27,8 @@ const when = computed(() => relativeTime(notificationTime(latest.value)));
 // A ringing call needs its buttons without expanding anything.
 const ringing = computed(() => latest.value.category === "incomingCall" && latest.value.live);
 const clearable = computed(() => items.value.some((n) => n.live && n.flags.negativeAction));
+// A verification code in the newest notification: copy it right from the row.
+const code = computed(() => findCode(latest.value.message || latest.value.subtitle));
 
 const rowEl = ref<HTMLElement | null>(null);
 const flashed = ref(false);
@@ -82,6 +86,7 @@ function open() {
         </span>
         <span :class="['mt-0.5 block truncate text-[13px]', fresh ? 'text-body-strong' : 'text-muted']">{{ preview }}</span>
       </span>
+      <CodeChip v-if="code" :code="code.code" :from="[latest]" />
       <span
         v-if="fresh"
         class="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-ink px-1.5 text-[11px] font-semibold text-on-dark"
