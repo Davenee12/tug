@@ -166,8 +166,9 @@ impl Store {
                 .query_row(
                     "SELECT id FROM notifications
                      WHERE app_id = ?1 AND posted_at IS ?2 AND title = ?3 AND subtitle = ?4 AND message = ?5
+                       AND session != ?6
                      ORDER BY id DESC LIMIT 1",
-                    params![a.app_id, a.date, a.title, a.subtitle, a.message],
+                    params![a.app_id, a.date, a.title, a.subtitle, a.message, n.session],
                     |r| r.get(0),
                 )
                 .optional()?,
@@ -436,6 +437,24 @@ mod tests {
         assert_eq!(first.id, again.id);
         assert!(again.live);
         assert_eq!(s.recent(10, None, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn two_identical_notifications_both_survive_a_reconnect() {
+        let s = Store::in_memory().unwrap();
+        let a = attrs("com.example.promo", "Sale", "50% off today");
+        let first = insert(&s, "s1", 1, EventFlags::default(), &a);
+        let second = insert(&s, "s1", 2, EventFlags::default(), &a);
+        assert_ne!(first.id, second.id);
+        // Reconnect: iOS replays both as pre-existing with new UIDs.
+        let pre = EventFlags {
+            pre_existing: true,
+            ..Default::default()
+        };
+        let r1 = insert(&s, "s2", 10, pre, &a);
+        let r2 = insert(&s, "s2", 11, pre, &a);
+        assert_ne!(r1.id, r2.id, "each replay binds to its own row");
+        assert!(s.sweep_stale("s2", 9_000).unwrap().is_empty(), "neither is swept");
     }
 
     #[test]

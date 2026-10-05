@@ -116,6 +116,10 @@ pub struct NowPlaying {
     pub state: PlaybackState,
     pub rate: Option<f64>,
     pub elapsed: Option<f64>,
+    /// Unix ms when the phone reported `elapsed`. Progress is computed from this,
+    /// not from when *any* attribute last changed — otherwise a volume change
+    /// would make the progress bar jump back to the last reported position.
+    pub elapsed_at: Option<i64>,
     pub volume: Option<f64>,
     pub title: Option<String>,
     pub artist: Option<String>,
@@ -128,15 +132,15 @@ pub struct NowPlaying {
 impl NowPlaying {
     /// Apply one Entity Update notification: `[entity][attr][flags][utf8 value]`.
     /// Returns true if anything changed.
-    pub fn apply_entity_update(&mut self, b: &[u8]) -> bool {
+    pub fn apply_entity_update(&mut self, b: &[u8], now_ms: i64) -> bool {
         if b.len() < 3 {
             return false;
         }
-        self.apply_attribute(b[0], b[1], &b[3..])
+        self.apply_attribute(b[0], b[1], &b[3..], now_ms)
     }
 
     /// Apply one attribute value, from an Entity Update or an Entity Attribute read.
-    pub fn apply_attribute(&mut self, entity: u8, attribute: u8, raw: &[u8]) -> bool {
+    pub fn apply_attribute(&mut self, entity: u8, attribute: u8, raw: &[u8], now_ms: i64) -> bool {
         let value = String::from_utf8_lossy(raw).into_owned();
         let text = || Some(value.clone()).filter(|s| !s.is_empty());
         let before = self.clone();
@@ -154,6 +158,7 @@ impl NowPlaying {
                 };
                 self.rate = parts.next().and_then(|s| s.parse().ok());
                 self.elapsed = parts.next().and_then(|s| s.parse().ok());
+                self.elapsed_at = self.elapsed.map(|_| now_ms);
             }
             (ENTITY_PLAYER, PLAYER_VOLUME) => self.volume = value.parse().ok(),
             (ENTITY_TRACK, TRACK_ARTIST) => self.artist = text(),
@@ -187,12 +192,12 @@ mod tests {
     #[test]
     fn applies_player_and_track_updates() {
         let mut np = NowPlaying::default();
-        assert!(np.apply_entity_update(&update(0, 0, "Spotify")));
-        assert!(np.apply_entity_update(&update(0, 1, "1,1.0,42.5")));
-        assert!(np.apply_entity_update(&update(0, 2, "0.75")));
-        assert!(np.apply_entity_update(&update(2, 2, "Teardrop")));
-        assert!(np.apply_entity_update(&update(2, 0, "Massive Attack")));
-        assert!(np.apply_entity_update(&update(2, 3, "330.1")));
+        assert!(np.apply_entity_update(&update(0, 0, "Spotify"), 0));
+        assert!(np.apply_entity_update(&update(0, 1, "1,1.0,42.5"), 0));
+        assert!(np.apply_entity_update(&update(0, 2, "0.75"), 0));
+        assert!(np.apply_entity_update(&update(2, 2, "Teardrop"), 0));
+        assert!(np.apply_entity_update(&update(2, 0, "Massive Attack"), 0));
+        assert!(np.apply_entity_update(&update(2, 3, "330.1"), 0));
         assert_eq!(np.player.as_deref(), Some("Spotify"));
         assert_eq!(np.state, PlaybackState::Playing);
         assert_eq!(np.elapsed, Some(42.5));
@@ -200,7 +205,7 @@ mod tests {
         assert_eq!(np.title.as_deref(), Some("Teardrop"));
         assert_eq!(np.duration, Some(330.1));
         assert!(
-            !np.apply_entity_update(&update(2, 2, "Teardrop")),
+            !np.apply_entity_update(&update(2, 2, "Teardrop"), 0),
             "same value is not a change"
         );
     }
@@ -215,7 +220,7 @@ mod tests {
                 (2, 3) => b"200",
                 _ => b"x",
             };
-            np.apply_attribute(e, a, value);
+            np.apply_attribute(e, a, value, 0);
         }
         assert_eq!(np.state, PlaybackState::Playing);
         assert_eq!(np.volume, Some(0.5));
@@ -224,12 +229,29 @@ mod tests {
     }
 
     #[test]
+    fn volume_change_does_not_move_the_playback_position() {
+        let mut np = NowPlaying::default();
+        np.apply_entity_update(&update(0, 1, "1,1.0,42.5"), 1_000);
+        assert_eq!((np.elapsed, np.elapsed_at), (Some(42.5), Some(1_000)));
+        // Pressing volume 30 s later reports only the volume.
+        assert!(np.apply_entity_update(&update(0, 2, "0.9"), 31_000));
+        assert_eq!(
+            (np.elapsed, np.elapsed_at),
+            (Some(42.5), Some(1_000)),
+            "position anchor unchanged"
+        );
+        // A new playback report re-anchors.
+        np.apply_entity_update(&update(0, 1, "1,1.0,72.6"), 31_500);
+        assert_eq!((np.elapsed, np.elapsed_at), (Some(72.6), Some(31_500)));
+    }
+
+    #[test]
     fn empty_value_clears_text() {
         let mut np = NowPlaying {
             title: Some("x".into()),
             ..Default::default()
         };
-        np.apply_entity_update(&update(2, 2, ""));
+        np.apply_entity_update(&update(2, 2, ""), 0);
         assert_eq!(np.title, None);
     }
 

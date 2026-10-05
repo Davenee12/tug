@@ -31,6 +31,8 @@ pub const PBAP_TARGET: [u8; 16] = [
 
 const OP_PUT: u8 = 0x02;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
+/// Device lookup + RFCOMM connect + OBEX CONNECT, end to end.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 // MAP application parameter tags.
 const AP_MAX_LIST_COUNT: u8 = 0x01;
@@ -86,6 +88,12 @@ fn service_id(uuid: u128) -> windows::core::Result<RfcommServiceId> {
 
 /// Paired Classic devices that advertise a Message Access Server.
 pub async fn find_devices() -> Result<Vec<MapDevice>> {
+    tokio::time::timeout(CONNECT_TIMEOUT, find_devices_inner())
+        .await
+        .map_err(|_| MapError::Timeout)?
+}
+
+async fn find_devices_inner() -> Result<Vec<MapDevice>> {
     let selector = BluetoothDevice::GetDeviceSelectorFromPairingState(true)?;
     let infos = DeviceInformation::FindAllAsyncAqsFilter(&selector)?.await?;
     let mut out = Vec::new();
@@ -121,6 +129,20 @@ impl ObexLink {
     /// answers the first CONNECT with Forbidden, which is what makes iOS show its
     /// consent toggle; the caller maps that to the right consent error.
     async fn connect(device_id: &str, service_uuid: u128, target: &[u8; 16], forbidden: MapError) -> Result<Self> {
+        tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            Self::connect_inner(device_id, service_uuid, target, forbidden),
+        )
+        .await
+        .map_err(|_| MapError::Timeout)?
+    }
+
+    async fn connect_inner(
+        device_id: &str,
+        service_uuid: u128,
+        target: &[u8; 16],
+        forbidden: MapError,
+    ) -> Result<Self> {
         let device = BluetoothDevice::FromIdAsync(&HSTRING::from(device_id))?.await?;
         let services = device
             .GetRfcommServicesForIdWithCacheModeAsync(&service_id(service_uuid)?, BluetoothCacheMode::Uncached)?
@@ -197,11 +219,15 @@ impl ObexLink {
         }
     }
 
+    /// Send a request and read its response, bounded as a whole: a stalled write
+    /// (full socket buffer, half-dead link) must time out just like a silent peer.
     async fn exchange(&mut self, packet: &[u8], connect: bool) -> Result<Response> {
-        self.send(packet).await?;
-        let raw = tokio::time::timeout(RESPONSE_TIMEOUT, self.read_packet())
-            .await
-            .map_err(|_| MapError::Timeout)??;
+        let raw = tokio::time::timeout(RESPONSE_TIMEOUT, async {
+            self.send(packet).await?;
+            self.read_packet().await
+        })
+        .await
+        .map_err(|_| MapError::Timeout)??;
         Ok(obex::parse_response(&raw, connect)?)
     }
 

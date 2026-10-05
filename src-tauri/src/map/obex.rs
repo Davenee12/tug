@@ -43,6 +43,8 @@ pub enum ObexError {
     Truncated,
     #[error("OBEX header {0:#04x} is malformed")]
     BadHeader(u8),
+    #[error("OBEX packet declares impossible length {0}")]
+    BadLength(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +170,10 @@ pub fn packet_len(prefix: &[u8]) -> Option<usize> {
 /// which carries version/flags/max-packet before the headers.
 pub fn parse_response(b: &[u8], connect: bool) -> Result<Response, ObexError> {
     let len = packet_len(b).ok_or(ObexError::Truncated)?;
+    // Every packet has at least opcode + length; a smaller declared length is corrupt.
+    if len < 3 {
+        return Err(ObexError::BadLength(len));
+    }
     if b.len() < len {
         return Err(ObexError::Truncated);
     }
@@ -291,6 +297,20 @@ mod tests {
             parse_response(&[RSP_FORBIDDEN, 0, 3], true).unwrap().code,
             RSP_FORBIDDEN
         );
+    }
+
+    #[test]
+    fn rejects_declared_length_below_header_instead_of_panicking() {
+        for len in 0..3u8 {
+            assert_eq!(
+                parse_response(&[0xA0, 0, len], false),
+                Err(ObexError::BadLength(len as usize))
+            );
+            assert_eq!(
+                parse_response(&[0xA0, 0, len], true),
+                Err(ObexError::BadLength(len as usize))
+            );
+        }
     }
 
     #[test]

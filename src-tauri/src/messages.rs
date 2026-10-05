@@ -13,6 +13,15 @@ pub const SOURCE_IPHONE_MAP: &str = "iphone-map";
 /// tug learns which contact name belongs to which number.
 const MESSAGES_APP: &str = "com.apple.MobileSMS";
 
+/// A notification and a MAP message are the same text only if they arrived this
+/// close together (the notification triggers the MAP fetch).
+const LEARN_WINDOW_MS: i64 = 10 * 60 * 1000;
+
+/// Handles are stable across sessions (verified on hardware), so content-based
+/// dedupe only guards against a phone re-listing an old message under a new
+/// handle. A row stored this recently is a different message, not a re-listing.
+const RELIST_GUARD_MS: i64 = 60 * 1000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Direction {
@@ -131,16 +140,21 @@ impl Store {
     /// Store an incoming message; `None` if this handle was already stored.
     pub fn insert_incoming(&self, m: &IncomingMessage) -> Result<Option<StoredMessage>> {
         let conn = self.conn();
-        // Guard against the phone re-issuing handles across sessions: the same
-        // sender, text and phone timestamp is the same message.
-        let duplicate = conn
-            .query_row(
-                "SELECT 1 FROM messages WHERE source = ?1 AND direction = 'in' AND address = ?2 AND body = ?3 AND sent_at IS ?4",
-                params![m.source, m.address, m.body, m.sent_at],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some();
+        // Guard against the phone re-listing an *old* message under a new handle:
+        // same sender, text and phone timestamp, stored a while ago. Two genuinely
+        // identical texts ("ok", "ok") arrive close together and are both kept, and
+        // without a phone timestamp there's nothing reliable to compare.
+        let duplicate = m.sent_at.is_some()
+            && conn
+                .query_row(
+                    "SELECT 1 FROM messages
+                     WHERE source = ?1 AND direction = 'in' AND address = ?2 AND body = ?3 AND sent_at = ?4
+                       AND received_at < ?5",
+                    params![m.source, m.address, m.body, m.sent_at, m.received_at - RELIST_GUARD_MS],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
         if duplicate {
             return Ok(None);
         }
@@ -227,21 +241,34 @@ impl Store {
     }
 
     /// Learn names for addresses that have none yet, by finding a Messages
-    /// notification with exactly the same text as an incoming message. Returns
-    /// the newly learned contacts.
+    /// notification with the same text as an incoming message, arriving close in
+    /// time. Only unambiguous matches count: the text must have come from exactly
+    /// one sender and match exactly one name — otherwise two people who both sent
+    /// "ok" could swap names. Returns the newly learned contacts.
     pub fn learn_contacts(&self) -> Result<Vec<Contact>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "INSERT OR IGNORE INTO contacts (address, name)
-             SELECT m.address, trim(n.title)
-             FROM messages m
-             JOIN notifications n ON n.app_id = ?1 AND n.message = m.body AND trim(n.title) <> ''
-             WHERE m.direction = 'in' AND m.body <> ''
-               AND m.address NOT IN (SELECT address FROM contacts)
-             GROUP BY m.address
+             SELECT address, name FROM (
+                 SELECT m.address AS address,
+                        MIN(trim(n.title)) AS name,
+                        COUNT(DISTINCT trim(n.title)) AS names
+                 FROM messages m
+                 JOIN notifications n
+                   ON n.app_id = ?1 AND n.message = m.body AND trim(n.title) <> ''
+                  AND abs(n.received_at - m.received_at) <= ?2
+                 WHERE m.direction = 'in' AND m.body <> ''
+                   AND m.address NOT IN (SELECT address FROM contacts)
+                   AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
+                        WHERE m2.direction = 'in' AND m2.body = m.body) = 1
+                   AND (SELECT COUNT(DISTINCT trim(n2.title)) FROM notifications n2
+                        WHERE n2.app_id = ?1 AND n2.message = m.body) = 1
+                 GROUP BY m.address
+             )
+             WHERE names = 1
              RETURNING address, name",
         )?;
-        let rows = stmt.query_map([MESSAGES_APP], |r| {
+        let rows = stmt.query_map(params![MESSAGES_APP, LEARN_WINDOW_MS], |r| {
             Ok(Contact {
                 address: r.get(0)?,
                 name: r.get(1)?,
@@ -269,6 +296,86 @@ mod tests {
         }
     }
 
+    fn notify(s: &Store, uid: u32, title: &str, message: &str, at: i64) {
+        let attrs = NotificationAttributes {
+            app_id: MESSAGES_APP.into(),
+            title: title.into(),
+            message: message.into(),
+            ..Default::default()
+        };
+        s.upsert_notification(&NewNotification {
+            session: "s1",
+            uid,
+            category: Category::Social,
+            flags: EventFlags::default(),
+            attrs: &attrs,
+            received_at: at,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn identical_texts_close_together_are_both_kept() {
+        let s = Store::in_memory().unwrap();
+        // Two "ok"s in the same clock second: different handles, both real.
+        assert!(s
+            .insert_incoming(&incoming("H1", "+13025550100", "ok"))
+            .unwrap()
+            .is_some());
+        let mut second = incoming("H2", "+13025550100", "ok");
+        second.received_at = 1_005;
+        assert!(
+            s.insert_incoming(&second).unwrap().is_some(),
+            "second identical text kept"
+        );
+        // Without a phone timestamp there's nothing to compare: rely on handles.
+        let mut undated = incoming("H3", "+13025550100", "ok");
+        undated.sent_at = None;
+        assert!(s.insert_incoming(&undated).unwrap().is_some());
+    }
+
+    #[test]
+    fn old_message_relisted_under_a_new_handle_is_ignored() {
+        let s = Store::in_memory().unwrap();
+        s.insert_incoming(&incoming("H1", "+13025550100", "see you at 5"))
+            .unwrap();
+        let mut relisted = incoming("H9", "+13025550100", "see you at 5");
+        relisted.received_at = 1_000 + 2 * RELIST_GUARD_MS;
+        assert!(s.insert_incoming(&relisted).unwrap().is_none());
+    }
+
+    #[test]
+    fn does_not_learn_a_name_when_two_people_sent_the_same_text() {
+        let s = Store::in_memory().unwrap();
+        notify(&s, 1, "Alice", "ok", 950);
+        notify(&s, 2, "Bob", "ok", 960);
+        s.insert_incoming(&incoming("H1", "+13015550101", "ok")).unwrap();
+        s.insert_incoming(&incoming("H2", "+13025550102", "ok")).unwrap();
+        assert!(s.learn_contacts().unwrap().is_empty(), "ambiguous: never guess");
+    }
+
+    #[test]
+    fn does_not_learn_from_a_text_another_sender_also_sent() {
+        let s = Store::in_memory().unwrap();
+        // Only Bob's notification is on record, but Alice sent the same text too.
+        notify(&s, 2, "Bob", "happy birthday!", 960);
+        s.insert_incoming(&incoming("H1", "+13015550101", "happy birthday!"))
+            .unwrap();
+        s.insert_incoming(&incoming("H2", "+13025550102", "happy birthday!"))
+            .unwrap();
+        assert!(s.learn_contacts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn does_not_learn_from_a_match_far_apart_in_time() {
+        let s = Store::in_memory().unwrap();
+        notify(&s, 1, "Alice", "running late", 1_000);
+        let mut m = incoming("H1", "+13015550101", "running late");
+        m.received_at = 1_000 + LEARN_WINDOW_MS + 1;
+        s.insert_incoming(&m).unwrap();
+        assert!(s.learn_contacts().unwrap().is_empty());
+    }
+
     #[test]
     fn incoming_is_deduplicated_by_handle() {
         let s = Store::in_memory().unwrap();
@@ -280,12 +387,6 @@ mod tests {
             .insert_incoming(&incoming("H1", "+13025550100", "hi"))
             .unwrap()
             .is_none());
-        assert!(
-            s.insert_incoming(&incoming("H9", "+13025550100", "hi"))
-                .unwrap()
-                .is_none(),
-            "same message under a new handle"
-        );
         assert!(s.has_message(SOURCE_IPHONE_MAP, "H1").unwrap());
         assert!(!s.has_message(SOURCE_IPHONE_MAP, "H2").unwrap());
     }

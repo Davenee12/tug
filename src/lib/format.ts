@@ -188,8 +188,14 @@ export interface Conversation {
   appId: string;
   appLabel: string;
   contact: string;
-  /** Where replies go; known once message access has seen this person. */
+  /**
+   * Default reply number. With several numbers under one name it's the one that
+   * most recently texted you — shown and changeable in the UI, never silent —
+   * and null when there's nothing to go on but an ambiguous contact name.
+   */
   address: string | null;
+  /** Every number seen for this conversation, most recent first. */
+  addresses: string[];
   /** Oldest first. */
   items: ConversationItem[];
   latest: ConversationItem;
@@ -216,14 +222,32 @@ export function groupConversations(
   contacts: Contact[],
 ): Conversation[] {
   const nameFor = new Map(contacts.map((c) => [c.address, c.name]));
-  const addressFor = new Map(contacts.map((c) => [cleanName(c.name).toLowerCase(), c.address]));
+  // One name can have several numbers (one person with two phones, or two people
+  // with the same name), so keep them all.
+  const numbersFor = new Map<string, string[]>();
+  for (const c of contacts) {
+    const k = cleanName(c.name).toLowerCase();
+    const list = numbersFor.get(k) ?? [];
+    if (!list.includes(c.address)) list.push(c.address);
+    numbersFor.set(k, list);
+  }
   const convs = new Map<string, Conversation>();
   const get = (appId: string, label: string, contact: string): Conversation => {
     const key = threadKey({ appId, title: contact });
     let c = convs.get(key);
     if (!c) {
       const placeholder = { kind: "message", id: "", at: new Date(0), body: "" } as unknown as ConversationItem;
-      c = { key, appId, appLabel: label, contact, address: null, items: [], latest: placeholder, notifications: [] };
+      c = {
+        key,
+        appId,
+        appLabel: label,
+        contact,
+        address: null,
+        addresses: [],
+        items: [],
+        latest: placeholder,
+        notifications: [],
+      };
       convs.set(key, c);
     }
     return c;
@@ -232,26 +256,48 @@ export function groupConversations(
   for (const m of messages) {
     const name = cleanName(m.contactName ?? nameFor.get(m.address) ?? formatAddress(m.address));
     const c = get(MESSAGES_APP, "Messages", name);
-    c.address = m.address;
     c.items.push({ kind: "message", id: `m${m.id}`, at: messageTime(m), body: m.body, m });
   }
+  // Each fetched message can stand in for at most one notification, so two
+  // genuinely identical texts ("ok", "ok") both show.
+  const absorbed = new Set<string>();
   for (const n of notifications) {
     if (!isConversation(n)) continue;
     const c = get(n.appId, appLabel(n), cleanName(n.title));
-    if (n.appId === MESSAGES_APP) c.address ??= addressFor.get(cleanName(n.title).toLowerCase()) ?? null;
     c.notifications.push(n);
     const at = notificationTime(n);
     const body = n.message || n.subtitle;
-    const duplicate = c.items.some(
-      (i) => i.kind === "message" && i.m.direction === "in" && i.body.trim() === body.trim() && Math.abs(i.at.getTime() - at.getTime()) < SAME_MESSAGE_MS,
+    const twin = c.items.find(
+      (i) =>
+        i.kind === "message" &&
+        i.m.direction === "in" &&
+        !absorbed.has(i.id) &&
+        i.body.trim() === body.trim() &&
+        Math.abs(i.at.getTime() - at.getTime()) < SAME_MESSAGE_MS,
     );
-    if (!duplicate) c.items.push({ kind: "notification", id: `n${n.id}`, at, body, n });
+    if (twin) absorbed.add(twin.id);
+    else c.items.push({ kind: "notification", id: `n${n.id}`, at, body, n });
   }
 
   const out = [...convs.values()].filter((c) => c.items.length > 0);
   for (const c of out) {
     c.items.sort((a, b) => a.at.getTime() - b.at.getTime());
     c.latest = c.items[c.items.length - 1];
+    if (c.appId === MESSAGES_APP) resolveNumbers(c, numbersFor.get(cleanName(c.contact).toLowerCase()) ?? []);
   }
   return out.sort((a, b) => b.latest.at.getTime() - a.latest.at.getTime());
+}
+
+/** Fill `addresses` (most recent first) and pick a default reply number, if one is safe. */
+function resolveNumbers(c: Conversation, contactNumbers: string[]) {
+  const messages = c.items.flatMap((i) => (i.kind === "message" ? [i.m] : [])).reverse();
+  const seen = messages.map((m) => m.address);
+  c.addresses = [...new Set([...seen, ...contactNumbers])];
+  if (c.addresses.length <= 1) {
+    c.address = c.addresses[0] ?? null;
+    return;
+  }
+  // Several numbers: default to whoever texted most recently; with no messages to
+  // go on, don't guess.
+  c.address = messages.find((m) => m.direction === "in")?.address ?? messages[0]?.address ?? null;
 }
