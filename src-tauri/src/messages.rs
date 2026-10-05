@@ -304,16 +304,45 @@ impl Store {
         let tx = conn.transaction()?;
         let mut n = 0;
         {
+            // A renamed contact keeps their old name as an alias, so history under it stays theirs.
+            let mut remember = tx.prepare(
+                "INSERT OR IGNORE INTO contact_aliases (address, alias)
+                 SELECT address, name FROM contacts WHERE address = ?1 AND name <> ?2",
+            )?;
+            let mut forget = tx.prepare("DELETE FROM contact_aliases WHERE address = ?1 AND alias = ?2")?;
             let mut stmt = tx.prepare(
                 "INSERT INTO contacts (address, name) VALUES (?1, ?2)
                  ON CONFLICT (address) DO UPDATE SET name = excluded.name",
             )?;
             for (address, name) in entries {
+                remember.execute(params![address, name])?;
+                forget.execute(params![address, name])?;
                 n += stmt.execute(params![address, name])?;
             }
         }
         tx.commit()?;
         Ok(n)
+    }
+
+    /// Learn old names of known contacts from history: a Messages notification whose text
+    /// matches a message from that contact (same rules as `learn_contacts`: the text came
+    /// from exactly one sender, close in time) but whose name differs from the contact's
+    /// current one. Covers renames that happened before tug kept aliases. Returns how
+    /// many were learned.
+    pub fn learn_aliases(&self) -> Result<usize> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO contact_aliases (address, alias)
+             SELECT DISTINCT m.address, clean_name(n.title)
+             FROM messages m
+             JOIN contacts c ON c.address = m.address
+             JOIN notifications n
+               ON n.app_id = ?1 AND n.message = m.body AND abs(n.received_at - m.received_at) <= ?2
+             WHERE m.direction = 'in' AND m.body <> ''
+               AND clean_name(n.title) <> '' AND lower(clean_name(n.title)) <> lower(c.name)
+               AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
+                    WHERE m2.direction = 'in' AND m2.body = m.body) = 1",
+            params![MESSAGES_APP, LEARN_WINDOW_MS],
+        )
     }
 
     /// Learn names for addresses that have none yet, by finding a Messages
@@ -323,17 +352,10 @@ impl Store {
     /// "ok" could swap names. Returns the newly learned contacts.
     pub fn learn_contacts(&self) -> Result<Vec<Contact>> {
         let conn = self.conn();
-        // Names as the UI shows them (format.ts cleanName): trimmed, with iOS's inline-reply
-        // suffix removed only at the end ("zoe replied to you", "zoe replied to your message").
+        // Names as the UI shows them (clean_name mirrors format.ts cleanName).
         let mut stmt = conn.prepare(
             "WITH titled AS (
-                 SELECT message, received_at,
-                        CASE
-                            WHEN t LIKE '% replied to your message' THEN rtrim(substr(t, 1, length(t) - 24))
-                            WHEN t LIKE '% replied to you' THEN rtrim(substr(t, 1, length(t) - 15))
-                            ELSE t
-                        END AS name
-                 FROM (SELECT message, received_at, trim(title) AS t FROM notifications WHERE app_id = ?1)
+                 SELECT message, received_at, clean_name(title) AS name FROM notifications WHERE app_id = ?1
              )
              INSERT OR IGNORE INTO contacts (address, name)
              SELECT address, name FROM (
@@ -480,6 +502,72 @@ mod tests {
         let mut names: Vec<String> = s.learn_contacts().unwrap().into_iter().map(|c| c.name).collect();
         names.sort();
         assert_eq!(names, vec!["Replied to you Club", "Zoe"]);
+    }
+
+    fn titles(s: &Store) -> Vec<String> {
+        s.recent(50, None, None).unwrap().into_iter().map(|n| n.title).collect()
+    }
+
+    #[test]
+    fn renaming_a_contact_keeps_their_history_together() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
+        notify(&s, 1, "zoe 💜", "omw", 1_000);
+        notify(&s, 2, "zoe 💜 replied to you", "Yes", 2_000);
+        // Dave takes the heart off her name on the phone; the next contacts sync brings it over.
+        s.save_phonebook(&[("+13025550173".into(), "zoe".into())]).unwrap();
+        notify(&s, 3, "zoe", "hi again", 3_000);
+        assert_eq!(
+            titles(&s),
+            vec!["zoe", "zoe", "zoe"],
+            "old notifications show the current name"
+        );
+        // Renaming back: "zoe" becomes the old name, and "zoe 💜" is current again (titles
+        // that need no rewriting come back as iOS sent them; the UI cleans the reply suffix).
+        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
+        assert_eq!(titles(&s), vec!["zoe 💜", "zoe 💜 replied to you", "zoe 💜"]);
+    }
+
+    #[test]
+    fn learns_old_names_from_history() {
+        let s = Store::in_memory().unwrap();
+        // Renamed before tug kept aliases: the contact is already "zoe", history says "zoe 💜".
+        s.save_phonebook(&[("+13025550173".into(), "zoe".into())]).unwrap();
+        notify(&s, 1, "zoe 💜", "dinner at 7?", 990);
+        s.insert_incoming(&incoming("H1", "+13025550173", "dinner at 7?"))
+            .unwrap();
+        assert_eq!(s.learn_aliases().unwrap(), 1);
+        assert_eq!(s.learn_aliases().unwrap(), 0, "learned once");
+        assert_eq!(titles(&s), vec!["zoe"]);
+    }
+
+    #[test]
+    fn old_names_never_take_over_someone_elses() {
+        let s = Store::in_memory().unwrap();
+        // Sam used to be called "Alex"; there's also a different, current Alex.
+        s.save_phonebook(&[("+15550000001".into(), "Alex".into())]).unwrap();
+        s.save_phonebook(&[
+            ("+15550000001".into(), "Sam".into()),
+            ("+15550000002".into(), "Alex".into()),
+        ])
+        .unwrap();
+        notify(&s, 1, "Alex", "hey", 1_000);
+        assert_eq!(titles(&s), vec!["Alex"], "a current Alex keeps the name");
+
+        // Two people who both used to be "Jo": ambiguous, so leave it as iOS showed it.
+        let t = Store::in_memory().unwrap();
+        t.save_phonebook(&[
+            ("+15550000003".into(), "Jo".into()),
+            ("+15550000004".into(), "Jo".into()),
+        ])
+        .unwrap();
+        t.save_phonebook(&[
+            ("+15550000003".into(), "Jo A".into()),
+            ("+15550000004".into(), "Jo B".into()),
+        ])
+        .unwrap();
+        notify(&t, 1, "Jo", "hi", 1_000);
+        assert_eq!(titles(&t), vec!["Jo"]);
     }
 
     #[test]
