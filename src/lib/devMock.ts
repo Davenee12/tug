@@ -183,6 +183,9 @@ const messages: SmsMessage[] = setup
       sms("in", "omw, 10 mins 🚗", 1),
       // The spammer's earlier text, read over MAP: same conversation as their notification.
       sms("in", "Final notice: your car warranty is about to expire. Call now.", 60 * 3, "+15550132244", null),
+      // A code that arrived as a text with no notification (the iPhone showed no banner): it shows
+      // in the Feed with Copy code, even though the short code is an unknown sender.
+      sms("in", "480579 is your Amazon OTP. Do not share it with anyone.", 2, "98626", null),
     ];
 
 // Recents (PBAP call history): phone-local times, newest first, as the iPhone sends them.

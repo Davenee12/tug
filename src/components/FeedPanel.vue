@@ -3,8 +3,10 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { Search, Settings2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { dayLabel, entryLatest, groupFeed, notificationTime, type FeedEntry } from "../lib/format";
+import type { CodeEntry } from "../lib/codeFeed";
 import { preservedScrollTop } from "../lib/scroll";
 import CallsPanel from "./CallsPanel.vue";
+import CodeFeedRow from "./CodeFeedRow.vue";
 import FeedEntryRow from "./FeedEntryRow.vue";
 import MessageThreads from "./MessageThreads.vue";
 import WeatherCard from "./WeatherCard.vue";
@@ -17,14 +19,30 @@ onMounted(() => void weather.init());
 onUnmounted(() => weather.dispose());
 
 // The feed is what's still waiting: anything cleared (here, on the phone or the
-// watch) leaves it. History stays in Messages and in search.
+// watch) leaves it. History stays in Messages and in search. Notification rows and code-text rows
+// (codes that arrived as texts with no notification) are interleaved by time, newest first.
+type Row =
+  | { kind: "entry"; key: string; at: number; entry: FeedEntry }
+  | { kind: "code"; key: string; at: number; code: CodeEntry };
+
+const rows = computed<Row[]>(() => {
+  const list: Row[] = groupFeed(tug.notifications.filter((n) => n.removedAt == null)).map((entry) => ({
+    kind: "entry",
+    key: entry.key,
+    at: notificationTime(entryLatest(entry)).getTime(),
+    entry,
+  }));
+  for (const code of tug.codeFeed) list.push({ kind: "code", key: code.key, at: code.at, code });
+  return list.sort((a, b) => b.at - a.at);
+});
+
 const entryGroups = computed(() => {
-  const out: { label: string; entries: FeedEntry[] }[] = [];
-  for (const e of groupFeed(tug.notifications.filter((n) => n.removedAt == null))) {
-    const label = dayLabel(notificationTime(entryLatest(e)));
+  const out: { label: string; rows: Row[] }[] = [];
+  for (const r of rows.value) {
+    const label = dayLabel(new Date(r.at));
     const last = out.at(-1);
-    if (last?.label === label) last.entries.push(e);
-    else out.push({ label, entries: [e] });
+    if (last?.label === label) last.rows.push(r);
+    else out.push({ label, rows: [r] });
   }
   return out;
 });
@@ -35,7 +53,7 @@ const entryGroups = computed(() => {
 // stay at the top if they were at the top (so the newest is seen), otherwise keep the rows under
 // their eye still. Paging older history in at the bottom isn't a top change, so it's left be.
 const feedScroller = ref<HTMLElement | null>(null);
-const firstKey = (groups: { entries: FeedEntry[] }[]): string | undefined => groups[0]?.entries[0]?.key;
+const firstKey = (groups: { rows: Row[] }[]): string | undefined => groups[0]?.rows[0]?.key;
 watch(entryGroups, async (next, prev) => {
   const el = feedScroller.value;
   if (!el) return;
@@ -145,7 +163,10 @@ const setUp = computed(() => tug.status.device != null);
         <section v-for="g in entryGroups" :key="g.label">
           <h2 class="caption-upper sticky top-0 z-10 bg-canvas/95 px-3 pt-5 pb-2 text-muted backdrop-blur-sm">{{ g.label }}</h2>
           <div class="flex flex-col gap-0.5">
-            <FeedEntryRow v-for="e in g.entries" :key="e.key" :entry="e" />
+            <template v-for="r in g.rows" :key="r.key">
+              <CodeFeedRow v-if="r.kind === 'code'" :entry="r.code" />
+              <FeedEntryRow v-else :entry="r.entry" />
+            </template>
           </div>
         </section>
       </div>

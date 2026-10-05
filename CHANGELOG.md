@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### New
+- **Codes that arrive as texts show in the Feed.** When a verification code comes in as a text with
+  no notification behind it (the iPhone showed no banner — common for short codes and unknown
+  senders), it now appears in the Feed with the sender, the message and a **Copy code** button, so
+  you don't have to dig it out of Messages. The row opens the conversation; **Clear** hides it
+  (the text stays in Messages). A code text arriving live also raises the Windows pop-up with Copy
+  code when no notification did. No duplicate row when a notification already carried the same code.
 - **Spotify connector (opt-in):** connect your own free Spotify app in Settings › Spotify to get
   what the iPhone's media link can't do for Spotify — working **repeat and shuffle**, a **Like**
   button, **album art** on Now Playing, and your **playlists** to start on your iPhone. Open the
