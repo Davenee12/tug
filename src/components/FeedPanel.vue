@@ -96,12 +96,12 @@ const setUp = computed(() => tug.status.device != null);
 
     <div v-else class="min-h-0 flex-1 overflow-y-auto px-5 pb-10">
       <div v-if="entryGroups.length === 0" class="flex h-full items-center justify-center">
-        <div class="max-w-sm text-center">
+        <div class="max-w-lg text-center">
           <p class="headline text-[28px]">{{ tug.notifications.length ? "You're all caught up" : "Quiet for now" }}</p>
           <p class="mt-2 text-[14px] text-muted">
             {{
               tug.notifications.length
-                ? "Cleared notifications live on in Messages and search (Ctrl K)."
+                ? "Cleared notifications live on in Messages and search (Ctrl K)."
                 : tug.connected
                   ? "New notifications from your iPhone will land here."
                   : "Notifications appear here once your iPhone connects."
