@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Search, Settings2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { dayLabel, entryLatest, groupFeed, groupThreads, notificationTime, type FeedEntry } from "../lib/format";
+import { dayLabel, entryLatest, groupFeed, notificationTime, type FeedEntry } from "../lib/format";
 import FeedEntryRow from "./FeedEntryRow.vue";
 import MessageThreads from "./MessageThreads.vue";
 import WeatherCard from "./WeatherCard.vue";
@@ -29,9 +29,7 @@ const entryGroups = computed(() => {
   return out;
 });
 
-const unreadMessages = computed(() =>
-  groupThreads(tug.notifications).reduce((sum, t) => sum + tug.newCount(t.key, t.items), 0),
-);
+const unreadMessages = computed(() => tug.unreadTexts);
 
 // Infinite scroll through older history.
 const sentinel = ref<HTMLElement | null>(null);

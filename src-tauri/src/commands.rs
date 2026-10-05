@@ -195,6 +195,12 @@ pub fn set_hidden(
         .map_err(|e| e.to_string())
 }
 
+/// Unread texts, for the tray tooltip and the taskbar dot.
+#[tauri::command]
+pub fn set_unread(app: tauri::AppHandle, count: u32) -> Result<()> {
+    crate::tray::set_unread(&app, count).map_err(|e| e.to_string())
+}
+
 /// Copy text to the clipboard. Sync on purpose: Tauri runs sync commands on the main
 /// (STA) thread, which the WinRT clipboard requires.
 #[tauri::command]
