@@ -257,7 +257,10 @@ export interface SpotifyPlaylist {
   uri: string;
   name: string;
   owner: string | null;
-  trackCount: number;
+  /** Null when Spotify doesn't say (playlists the user doesn't own). */
+  trackCount: number | null;
+  /** Small cover image URL; shown via `spotifyCover`, never loaded by the webview directly. */
+  imageUrl: string | null;
 }
 
 /** The Spotify playback snapshot that augments Now Playing (repeat/shuffle/like/art). */

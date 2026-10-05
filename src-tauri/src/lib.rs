@@ -158,6 +158,7 @@ pub fn run() {
             commands::spotify_connect,
             commands::spotify_disconnect,
             commands::spotify_playlists,
+            commands::spotify_cover,
             commands::spotify_play_playlist,
             commands::spotify_player,
             commands::spotify_set_repeat,
