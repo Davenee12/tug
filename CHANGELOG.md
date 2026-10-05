@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.5.4 — 2026-10-05
+
+Phone sync and weather (Sprint 4).
+
+### New
+- **Weather on the Feed.** A quiet card with the temperature (°F/°C switch beside it), today's high
+  and low, your place and its local time, and the one thing worth knowing ("Rain likely around
+  4 PM"). Drag it down for the next 24 hours and the week, drag it back up to close. Off until you
+  choose **Use my location** or type a city; hide or change it any time (also in settings).
+
+### Fixed
+- **Opening a conversation clears it on the phone.** Notifications for the conversation you're
+  reading leave your lock screen and the Feed, and its texts are marked read over Bluetooth (on
+  iPhone, the Messages app's own unread dot still needs the phone; Android clears fully).
+- **Renaming a contact on your phone no longer splits their conversation.** tug remembers earlier
+  names, including renames made before this version, and keeps everything under the current one.
+- A contact name saved from an inline reply no longer comes out garbled ("Zoer message").
+- Message times sent with a time zone are kept instead of falling back to the sync time.
+- A name the phone sends with a text shows until the number is a known contact.
+
+### Developer
+- Schema v3 (`unread_on_phone`, open-notifications index) and v4 (`contact_aliases`).
+- Large-history timing test (50k notifications, 10k texts): every query the UI runs stays under
+  20 ms. `cargo audit`: no vulnerabilities. 75 Rust tests, 25 frontend tests.
+
 ## v0.5.3 — 2026-10-05
 
 Search release (Sprint 3).
@@ -16,6 +41,7 @@ Search release (Sprint 3).
 - Pop-ups (pairing, new message, search) keep keyboard focus inside them and close with Esc; the
   pairing pop-up starts on Cancel so a stray Enter can't approve it. Ctrl+N no longer fires while
   typing.
+- The all-caught-up hint stays on one line.
 
 ### Developer
 - Versioned database migrations (`PRAGMA user_version`); v2 adds full-text search over texts and
