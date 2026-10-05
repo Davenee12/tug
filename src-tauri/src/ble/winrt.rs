@@ -21,6 +21,16 @@ pub enum BleError {
     NotFound(&'static str),
 }
 
+/// ERROR_BAD_COMMAND: what Windows reports when it connects with a bond the iPhone no
+/// longer has (the PC was forgotten on the phone).
+const STALE_BOND: windows::core::HRESULT = windows::core::HRESULT(0x8007_0016_u32 as i32);
+
+impl BleError {
+    pub fn is_stale_bond(&self) -> bool {
+        matches!(self, Self::Win(e) if e.code() == STALE_BOND)
+    }
+}
+
 impl From<windows::core::Error> for BleError {
     fn from(e: windows::core::Error) -> Self {
         Self::Win(e)
@@ -30,6 +40,9 @@ impl From<windows::core::Error> for BleError {
 impl fmt::Display for BleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Win(_) if self.is_stale_bond() => f.write_str(
+                "Your iPhone no longer has this PC paired for notifications (it was forgotten on the phone). Pair again to fix it.",
+            ),
             Self::Win(e) => write!(f, "Windows Bluetooth error: {}", e.message()),
             Self::Unreachable => f.write_str("iPhone is out of range or not connected"),
             Self::AccessDenied => f.write_str("Windows denied access to the device"),

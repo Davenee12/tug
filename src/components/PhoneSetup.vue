@@ -53,6 +53,10 @@ async function forget() {
   await tug.forget();
 }
 
+// The phone forgot this PC: no confirm needed, the old pairing is already useless.
+// Forgetting starts a scan (the watch above), so the iPhone can be paired again right away.
+const pairAgain = () => void tug.forget();
+
 const advertisingLabel = computed(
   () => ({ off: "Off", starting: "Starting…", on: "On", error: "Failed" })[s.value.advertising],
 );
@@ -65,7 +69,8 @@ const advertisingLabel = computed(
       class="flex gap-2.5 rounded-xl border border-error/30 bg-canvas px-4 py-3 text-[13px] text-body-strong"
     >
       <CircleAlert :size="16" class="mt-0.5 shrink-0 text-error" />
-      <span class="selectable">{{ s.lastError }}</span>
+      <span class="selectable min-w-0 flex-1">{{ s.lastError }}</span>
+      <button v-if="s.pairingStale" class="btn-primary btn-sm shrink-0" @click="pairAgain">Pair again</button>
     </div>
 
     <!-- Paired: device card -->

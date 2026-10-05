@@ -91,6 +91,8 @@ pub struct DeviceStatus {
     pub battery: Option<u8>,
     pub services: Services,
     pub last_error: Option<String>,
+    /// The iPhone rejects this PC's notifications bond (forgotten on the phone): pair again.
+    pub pairing_stale: bool,
     /// Why message access isn't available, when the user can fix it (e.g. consent).
     pub messages_error: Option<String>,
     /// Why the phone's contacts aren't available, when the user can fix it.
