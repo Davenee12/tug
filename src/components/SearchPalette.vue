@@ -6,6 +6,7 @@ import { useFocusTrap } from "../lib/focusTrap";
 import { parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
 import {
   appLabel,
+  canClear,
   cleanName,
   clockTime,
   dayLabel,
@@ -87,7 +88,7 @@ const ctx = computed<ActionContext>(() => {
   for (const n of feed) if (!apps.has(n.appId)) apps.set(n.appId, { appId: n.appId, label: appLabel(n), focusId: n.id });
   return {
     code: tug.latestCode(),
-    clearable: feed.filter((n) => n.live && n.flags.negativeAction),
+    clearable: feed.filter(canClear),
     doNotDisturb: tug.settings.doNotDisturb,
     unread: conversations.filter((c) => tug.newCount(c.key, c.notifications) > 0).length,
     apps: [...apps.values()],
