@@ -11,6 +11,7 @@ mod messages;
 mod perf;
 mod state;
 mod store;
+mod tray;
 
 use std::sync::Arc;
 
@@ -25,13 +26,7 @@ pub fn run() {
     tauri::Builder::default()
         // Must be first: a second launch focuses the running window instead of
         // starting a rival that can't advertise (Windows allows one provider per service).
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show(app)))
         .plugin(
             // Logs land in %LOCALAPPDATA%\dev.davejames.tug\logs for hardware debugging.
             tauri_plugin_log::Builder::new()
@@ -48,6 +43,10 @@ pub fn run() {
             let ble = ble::start(shared.clone());
             let _ = shared.map.set(map::service::start(shared.clone()));
             app.manage(AppState { shared, ble });
+            // Nice to have, never a reason not to start.
+            if let Err(e) = tray::install(app.handle()) {
+                log::warn!("tray icon unavailable: {e}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -74,6 +73,7 @@ pub fn run() {
             commands::refresh_messages,
             commands::copy_text,
             commands::set_hidden,
+            commands::set_unread,
             commands::locate,
             commands::mark_read,
         ])
