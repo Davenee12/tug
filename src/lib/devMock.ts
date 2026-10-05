@@ -91,6 +91,8 @@ const status: DeviceStatus = setup
       pairingStale: false,
       messagesError: null,
       contactsError: null,
+      textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
+      textsDevice: setup ? null : "Dave's iPhone",
     }
   : {
       radio: "on",
@@ -104,6 +106,8 @@ const status: DeviceStatus = setup
       pairingStale: false,
       messagesError: null,
       contactsError: null,
+      textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
+      textsDevice: setup ? null : "Dave's iPhone",
     };
 
 const nowPlaying: NowPlaying = setup
@@ -198,6 +202,8 @@ function simulateConnect(id: string) {
   }, 2400);
   setTimeout(() => {
     status.messagesError = "the iPhone refused message access; turn on Show Notifications for this PC";
+    status.textsPairing = "ok";
+    status.textsDevice = "Dave's iPhone";
     send();
   }, 8000);
   setTimeout(() => {
@@ -260,6 +266,14 @@ mockIPC(
       case "set_setting":
         settings[a.key as string] = a.value as string;
         return null;
+      case "app_icon": {
+        // Stand-in icons (the real ones come from the App Store): a coloured tile per app.
+        const id = String(a.appId ?? "");
+        const hue = [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+        const letter = (id.split(".").pop() ?? "?")[0].toUpperCase();
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="hsl(${hue} 65% 52%)"/><text x="32" y="43" font-family="Segoe UI" font-size="30" font-weight="700" fill="white" text-anchor="middle">${letter}</text></svg>`;
+        return `data:image/svg+xml;base64,${btoa(svg)}`;
+      }
       case "media_command":
         if (a.command === "advanceRepeatMode" && !repeatIgnored) {
           nowPlaying.repeat = nowPlaying.repeat === "off" ? "all" : nowPlaying.repeat === "all" ? "one" : "off";

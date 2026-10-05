@@ -166,6 +166,20 @@ pub async fn locate() -> Result<crate::location::Position> {
         .map_err(|e| e.to_string())?
 }
 
+/// An app's real icon (data URI) for the Feed, fetched once from the App Store and cached.
+/// Off when the user switched App icons off in Data & privacy.
+#[tauri::command]
+pub async fn app_icon(app: tauri::AppHandle, state: State<'_, AppState>, app_id: String) -> Result<Option<String>> {
+    use tauri::Manager;
+    if state.shared.store.setting("ui.appIcons").ok().flatten().as_deref() == Some("false") {
+        return Ok(None);
+    }
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || crate::app_icons::icon(&dir, &app_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// The reverse-lookup answer for coordinates (JSON), for naming "Use my location".
 #[tauri::command]
 pub async fn place_lookup(latitude: f64, longitude: f64) -> Result<String> {

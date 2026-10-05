@@ -87,11 +87,12 @@ mod worker {
 
     use super::MapCommand;
     use crate::map::address::normalize;
+    use crate::map::health::{Attempt, Health, TextsPairing};
     use crate::map::listing;
     use crate::map::obex::RSP_NOT_FOUND;
     use crate::map::session::{find_devices, pull_contacts, MapError, MapSession};
     use crate::messages::{IncomingMessage, Status, StoredMessage, SOURCE_IPHONE_MAP};
-    use crate::state::{events, Shared};
+    use crate::state::{events, ConnectionState, Shared};
 
     const FIRST_SYNC_DELAY: Duration = Duration::from_secs(3);
     const POLL_CONNECTED: Duration = Duration::from_secs(8);
@@ -127,6 +128,9 @@ mod worker {
         next_contacts_sync: Instant,
         unshared_contact_pulls: u32,
         backfilled: bool,
+        health: Health,
+        /// The phone Windows has paired for texts, found even when connecting to it fails.
+        texts_device: Option<String>,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -137,6 +141,8 @@ mod worker {
             next_contacts_sync: Instant::now(),
             unshared_contact_pulls: 0,
             backfilled: false,
+            health: Health::default(),
+            texts_device: None,
         };
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
@@ -176,6 +182,34 @@ mod worker {
     }
 
     impl Worker {
+        /// Track whether the texts pairing works, so a broken one is shown instead of only logged.
+        fn record_health(&mut self, result: &Result<usize, MapError>) {
+            // WSAENETUNREACH: what a connection to a phone that no longer accepts the pairing gives.
+            const NET_UNREACHABLE: windows::core::HRESULT = windows::core::HRESULT(0x8007_2743_u32 as i32);
+            let attempt = match result {
+                Ok(_) => Attempt::Connected,
+                Err(MapError::NoDevice) => Attempt::NoDevice,
+                Err(MapError::Consent) => Attempt::Answered,
+                Err(MapError::NoService) => Attempt::Unreachable,
+                Err(MapError::Win(e)) if e.code() == NET_UNREACHABLE => Attempt::Unreachable,
+                Err(_) => Attempt::Other,
+            };
+            let linked = self.shared.status().connection == ConnectionState::Connected;
+            let before = self.health.state();
+            let state = self.health.record(attempt, linked, std::time::Instant::now());
+            if state == TextsPairing::Broken && before != TextsPairing::Broken {
+                log::warn!("texts pairing looks broken: the phone is nearby but won't take the connection");
+            }
+            if attempt == Attempt::NoDevice {
+                self.texts_device = None;
+            }
+            let device = self.texts_device.clone();
+            self.shared.update_status(|s| {
+                s.texts_pairing = state;
+                s.texts_device = device;
+            });
+        }
+
         fn set_state(&self, connected: bool, error: Option<String>) {
             self.shared.update_status(|s| {
                 s.services.messages = connected;
@@ -194,6 +228,7 @@ mod worker {
                     .find(|d| wanted.as_deref() == Some(d.name.as_str()))
                     .or(if devices.len() == 1 { devices.first() } else { None })
                     .ok_or(MapError::NoDevice)?;
+                self.texts_device = Some(device.name.clone());
                 let session = MapSession::connect(&device.id).await?;
                 log::info!("message access connected to {}", device.name);
                 self.device_id = Some(device.id.clone());
@@ -282,6 +317,7 @@ mod worker {
 
         async fn refresh(&mut self) {
             let result = self.sync().await;
+            self.record_health(&result);
             if result.is_ok() {
                 self.sync_contacts_if_due().await;
             }

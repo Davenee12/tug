@@ -152,7 +152,7 @@ const sectionLabel = (s: Option["section"]) => ({ Recent: "Recent", Contacts: "A
               @mousemove="active = i"
               @click="pick(o)"
             >
-              <AppAvatar app-id="com.apple.MobileSMS" :label="o.name" size="sm" />
+              <AppAvatar app-id="com.apple.MobileSMS" :label="o.name" person size="sm" />
               <span class="min-w-0 flex-1">
                 <span class="block truncate text-[14px] font-medium text-ink">{{ o.name }}</span>
                 <span class="block truncate font-mono text-[12px] text-muted-soft">{{ formatAddress(o.address) }}</span>
