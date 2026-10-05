@@ -30,7 +30,8 @@ const active = ref(0);
 /** A cleared, non-chat notification shown in full here (it has nowhere else to open). */
 const expanded = ref<number | null>(null);
 
-useFocusTrap(root);
+// Esc closes from anywhere in the dialog, not only from the search box.
+useFocusTrap(root, () => close());
 onMounted(async () => {
   await nextTick();
   input.value?.focus();

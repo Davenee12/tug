@@ -12,7 +12,8 @@ const input = ref<HTMLInputElement | null>(null);
 const list = ref<HTMLElement | null>(null);
 const active = ref(0);
 const root = ref<HTMLElement | null>(null);
-useFocusTrap(root);
+// Esc closes from anywhere in the dialog, not only from the search box.
+useFocusTrap(root, () => close());
 
 onMounted(async () => {
   await nextTick();
