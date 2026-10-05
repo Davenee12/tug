@@ -11,16 +11,43 @@ import SearchPalette from "./components/SearchPalette.vue";
 import SettingsPage from "./components/SettingsPage.vue";
 import SetupWizard from "./components/SetupWizard.vue";
 import PairingDialog from "./components/PairingDialog.vue";
+import { nextDownSince, RECONNECT_GRACE_MS, showConnectionPanel } from "./lib/connectionPanel";
 
 const tug = useTugStore();
 
-// While there's no connected iPhone, wide windows show the Connection panel beside the
-// feed; everything else (and narrow windows) uses Settings › iPhone.
+// While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
+// show the Connection panel beside the feed; everything else (and narrow windows) uses
+// Settings › iPhone. A quick relink doesn't count: see lib/connectionPanel.
 const WIDE = "(min-width: 1240px)";
 const wide = ref(window.matchMedia(WIDE).matches);
-const panelInline = computed(() => wide.value && tug.status.connection !== "connected" && tug.view !== "settings");
 const mq = window.matchMedia(WIDE);
 const onMq = (e: MediaQueryListEvent) => (wide.value = e.matches);
+const downSince = ref<number | null>(null);
+const now = ref(Date.now());
+let graceTimer: number | undefined;
+watch(
+  () => tug.status.connection === "connected",
+  (up) => {
+    downSince.value = nextDownSince(downSince.value, up, Date.now());
+    now.value = Date.now();
+    window.clearTimeout(graceTimer);
+    // Look again once the grace period is over, in case the phone is still away.
+    if (!up) graceTimer = window.setTimeout(() => (now.value = Date.now()), RECONNECT_GRACE_MS + 100);
+  },
+  { immediate: true },
+);
+const panelInline = computed(() =>
+  showConnectionPanel({
+    wide: wide.value,
+    inSettings: tug.view === "settings",
+    statusKnown: tug.statusKnown,
+    connection: tug.status.connection,
+    hasDevice: tug.status.device != null,
+    pairingStale: tug.status.pairingStale,
+    downSince: downSince.value,
+    now: now.value,
+  }),
+);
 // The toast keeps showing (and acting on) its last message while it fades out, so a
 // click on Undo during the fade still works instead of hitting an emptied message.
 const shown = ref(tug.flash);
@@ -76,6 +103,7 @@ onMounted(async () => {
 onUnmounted(() => {
   mq.removeEventListener("change", onMq);
   window.removeEventListener("keydown", onShortcut);
+  window.clearTimeout(graceTimer);
   tug.dispose();
 });
 </script>
