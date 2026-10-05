@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.5.2 — 2026-10-05
+
+Stability release (Sprint 2): fixes found by a full review of the app, each with a regression test.
+
+### Fixed
+- **Replies can no longer go to the wrong person.** When one name has several numbers (two contacts
+  with the same name, or one person with two phones), the reply box shows a **To:** picker with the
+  number clearly chosen, instead of silently using whoever texted last.
+- **No more wrong contact names:** tug only learns a name from a matching text when the match is
+  unambiguous.
+- **Notifications no longer vanish after a reconnect** when fetching their details fails; tug retries,
+  and won't mark anything "cleared" unless it's sure.
+- **Two identical notifications or texts** (e.g. two "ok"s) are both kept instead of merged.
+- **Inline replies stay in the sender's conversation:** iOS titles them "zoe replied to you", which
+  used to open a second conversation with the same message in both.
+- **Messaging can't freeze or crash** on a stuck connection or a corrupt Bluetooth packet.
+- **Now Playing progress no longer jumps back** when you change the volume.
+- Fewer lost notification details around reconnects.
+
+### Developer
+- Frontend tests (Vitest) added to `npm run check`; 62 Rust tests.
+
 ## v0.5.1 — 2026-10-05
 
 ### Fixed

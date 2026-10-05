@@ -99,12 +99,13 @@ const status: DeviceStatus = setup
     };
 
 const nowPlaying: NowPlaying = setup
-  ? { player: null, state: "unknown", rate: null, elapsed: null, volume: null, title: null, artist: null, album: null, duration: null, available: [] }
+  ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, available: [] }
   : {
       player: "Spotify",
       state: "playing",
       rate: 1,
       elapsed: 74,
+      elapsedAt: now,
       volume: 0.6,
       title: "Teardrop",
       artist: "Massive Attack",
