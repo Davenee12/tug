@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { Info, Plus, RotateCcw, SendHorizontal, X } from "lucide-vue-next";
+import { Info, Plus, RotateCcw, SendHorizontal } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import {
   clockTime,
@@ -13,10 +13,8 @@ import {
   type ConversationItem,
 } from "../lib/format";
 import AppAvatar from "./AppAvatar.vue";
-import NewConversation from "./NewConversation.vue";
 
 const tug = useTugStore();
-const picking = ref(false);
 const convs = computed(() => {
   const list = groupConversations(tug.visible, tug.messages, tug.contacts);
   // A conversation started with + shows (empty) until its first message exists.
@@ -100,6 +98,8 @@ async function send(text = draft.value) {
   if (text === draft.value) draft.value = "";
   const ok = await tug.sendMessage(conv.address, text);
   if (!ok && !draft.value) draft.value = text;
+  // You've answered, so their notifications on the phone are done with.
+  if (ok) void tug.clearItems(conv.notifications);
   sending.value = false;
 }
 
@@ -118,16 +118,14 @@ function onKey(e: KeyboardEvent) {
         <span class="caption-upper text-muted">Conversations</span>
         <button
           class="rounded-md p-1 text-ink active:bg-surface-card"
-          :aria-label="picking ? 'Cancel new message' : 'New message'"
-          :title="picking ? 'Cancel' : 'New message'"
-          @click="picking = !picking"
+          aria-label="New message"
+          title="New message (Ctrl+N)"
+          @click="tug.pickerOpen = true"
         >
-          <X v-if="picking" :size="16" />
-          <Plus v-else :size="16" />
+          <Plus :size="16" />
         </button>
       </div>
-      <NewConversation v-if="picking" @close="picking = false" />
-      <p v-if="!picking && convs.length === 0" class="px-3 py-6 text-[13px] text-muted">
+      <p v-if="convs.length === 0" class="px-3 py-6 text-[13px] text-muted">
         No conversations yet. Texts from your iPhone and other chats collect here. Use + to start one.
       </p>
       <button
