@@ -6,6 +6,8 @@ import { api, errorMessage, on } from "../lib/ipc";
 import { appLabel, threadKey } from "../lib/format";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
+import { findCode } from "../lib/codes";
+import { copyText } from "../lib/clipboard";
 import type {
   Contact,
   DeviceStatus,
@@ -180,6 +182,35 @@ export const useTugStore = defineStore("tug", () => {
         return;
       }
     }
+  }
+
+  /** Copy a one-time code; once it's used, its notification has done its job on the phone too. */
+  async function copyCode(code: string, from: PhoneNotification[] = []): Promise<boolean> {
+    if (!(await copyText(code))) {
+      notify("error", "Couldn't copy to the clipboard.");
+      return false;
+    }
+    notify("info", `Copied ${code}`);
+    void clearItems(from, { quiet: true });
+    return true;
+  }
+
+  /** The newest code that arrived in the last few minutes, from a notification or a text. */
+  function latestCode(maxAgeMs = 10 * 60 * 1000): { code: string; from: PhoneNotification[] } | null {
+    const since = Date.now() - maxAgeMs;
+    type Hit = { code: string; at: number; from: PhoneNotification[] };
+    let best: Hit | null = null;
+    for (const n of notifications.value) {
+      if (n.receivedAt < since) break; // newest first
+      const found = findCode(n.message || n.subtitle);
+      if (found && (!best || n.receivedAt > best.at)) best = { code: found.code, at: n.receivedAt, from: [n] };
+    }
+    for (const m of messages.value) {
+      if (m.direction !== "in" || m.receivedAt < since) continue;
+      const found = findCode(m.body);
+      if (found && (!best || m.receivedAt > best.at)) best = { code: found.code, at: m.receivedAt, from: [] };
+    }
+    return best && { code: best.code, from: best.from };
   }
 
   /**
@@ -381,6 +412,8 @@ export const useTugStore = defineStore("tug", () => {
     startConversation,
     clearItems,
     readConversation,
+    copyCode,
+    latestCode,
     appNameFor,
     /** Send through the iPhone. The pending message appears via the `message` event. */
     async sendMessage(address: string, text: string): Promise<boolean> {
