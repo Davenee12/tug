@@ -1,6 +1,6 @@
 [package]
 name = "tug"
-version = "0.5.1"
+version = "0.5.2"
 description = "Bluetooth LE companion that mirrors iPhone notifications and media controls to Windows"
 authors = ["tug contributors"]
 edition = "2021"
