@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { Search, X } from "lucide-vue-next";
+import { MessageSquare, Plus, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, Volume1, Volume2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
+import { parseActions, type Action, type Person } from "../lib/commands";
 import {
   appLabel,
   cleanName,
@@ -27,6 +28,8 @@ const query = ref("");
 const results = ref<SearchResults | null>(null);
 const searching = ref(false);
 const active = ref(0);
+/** The user moved the selection themselves (arrows/mouse), so Enter means that row. */
+const chose = ref(false);
 /** A cleared, non-chat notification shown in full here (it has nowhere else to open). */
 const expanded = ref<number | null>(null);
 
@@ -41,6 +44,7 @@ let timer: number | undefined;
 let seq = 0;
 watch(query, (q) => {
   active.value = 0;
+  chose.value = false;
   window.clearTimeout(timer);
   if (!q.trim()) {
     results.value = null;
@@ -58,26 +62,61 @@ watch(query, (q) => {
 });
 
 type Option =
+  | { kind: "action"; key: string; a: Action }
   | { kind: "person"; key: string; c: Contact }
   | { kind: "message"; key: string; m: SmsMessage }
   | { kind: "notification"; key: string; n: PhoneNotification };
 
+// Everyone a "text …" action could mean: contacts, plus numbers you've texted with.
+const people = computed<Person[]>(() => {
+  const byAddress = new Map<string, Person>();
+  for (const c of tug.contacts) byAddress.set(c.address, { name: c.name, address: c.address });
+  for (const c of groupConversations(tug.notifications, tug.messages, tug.contacts)) {
+    for (const a of c.addresses) if (!byAddress.has(a)) byAddress.set(a, { name: c.contact, address: a });
+  }
+  return [...byAddress.values()];
+});
+
+// Actions answer as you type (no search round-trip), above the results.
+const actions = computed<Option[]>(() =>
+  parseActions(query.value, people.value).map((a, i) => ({ kind: "action" as const, key: `a:${i}:${a.label}`, a })),
+);
+
 const options = computed<Option[]>(() => {
   const r = results.value;
-  if (!r) return [];
+  if (!r) return actions.value;
   // A Messages notification whose text is already listed under Texts is the same message.
   const texts = new Set(r.messages.map((m) => m.body.trim()));
   const notifications = r.notifications.filter(
     (n) => !(n.appId === "com.apple.MobileSMS" && texts.has((n.message || n.subtitle).trim())),
   );
   return [
+    ...actions.value,
     ...r.people.slice(0, 5).map((c) => ({ kind: "person" as const, key: `p:${c.address}`, c })),
     ...r.messages.slice(0, 12).map((m) => ({ kind: "message" as const, key: `m:${m.id}`, m })),
     ...notifications.slice(0, 12).map((n) => ({ kind: "notification" as const, key: `n:${n.id}`, n })),
   ];
 });
 
-const sectionOf = (o: Option) => ({ person: "People", message: "Texts", notification: "Notifications" })[o.kind];
+const sectionOf = (o: Option) =>
+  ({ action: "Actions", person: "People", message: "Texts", notification: "Notifications" })[o.kind];
+const MEDIA_ICONS = {
+  play: Play,
+  pause: Pause,
+  togglePlayPause: Play,
+  nextTrack: SkipForward,
+  previousTrack: SkipBack,
+  volumeUp: Volume2,
+  volumeDown: Volume1,
+};
+function actionIcon(a: Action) {
+  if (a.kind === "send") return SendHorizontal;
+  if (a.kind === "open-chat") return MessageSquare;
+  if (a.kind === "media") return MEDIA_ICONS[a.command];
+  return a.target === "settings" ? Settings2 : Plus;
+}
+/** Several people match a "text …": Enter waits until one is picked on purpose. */
+const ambiguous = computed(() => actions.value.filter((o) => o.kind === "action" && o.a.kind === "send").length > 1);
 const showHeader = (i: number) => i === 0 || options.value[i].kind !== options.value[i - 1].kind;
 
 const messageName = (m: SmsMessage) => cleanName(m.contactName ?? formatAddress(m.address));
@@ -99,8 +138,29 @@ function openConversation(address: string | null, name: string) {
   else tug.openThread(key);
 }
 
+async function run(a: Action) {
+  close();
+  if (a.kind === "send") {
+    const ok = await tug.sendMessage(a.person.address, a.text);
+    if (ok) openConversation(a.person.address, cleanName(a.person.name));
+  } else if (a.kind === "open-chat") {
+    openConversation(a.person.address, cleanName(a.person.name));
+  } else if (a.kind === "media") {
+    void tug.media(a.command);
+  } else if (a.target === "new-message") {
+    tug.view = "messages";
+    tug.pickerOpen = true;
+  } else {
+    tug.panelOpen = true;
+  }
+}
+
 function pick(o: Option | undefined) {
   if (!o) return;
+  if (o.kind === "action") {
+    void run(o.a);
+    return;
+  }
   if (o.kind === "person") {
     openConversation(o.c.address, cleanName(o.c.name));
   } else if (o.kind === "message") {
@@ -124,6 +184,7 @@ async function move(delta: number) {
   const n = options.value.length;
   if (!n) return;
   active.value = (active.value + delta + n) % n;
+  chose.value = true;
   await nextTick();
   list.value?.querySelector<HTMLElement>(`[data-index="${active.value}"]`)?.scrollIntoView({ block: "nearest" });
 }
@@ -131,7 +192,12 @@ async function move(delta: number) {
 function onKey(e: KeyboardEvent) {
   if (e.key === "ArrowDown") void move(1);
   else if (e.key === "ArrowUp") void move(-1);
-  else if (e.key === "Enter") pick(options.value[active.value]);
+  else if (e.key === "Enter") {
+    const o = options.value[active.value];
+    if (o?.kind === "action" && o.a.kind === "send" && ambiguous.value && !chose.value) {
+      tug.notify("info", "More than one person matches. Pick one with ↑↓, then Enter.");
+    } else pick(o);
+  }
   else if (e.key === "Escape") close();
   else return;
   e.preventDefault();
@@ -153,7 +219,7 @@ function onKey(e: KeyboardEvent) {
           ref="input"
           v-model="query"
           class="h-8 flex-1 bg-transparent text-[17px] text-ink outline-none placeholder:text-muted-soft"
-          placeholder="Search people, texts and notifications"
+          placeholder="Search, or type an action: text tay on my way · pause"
           spellcheck="false"
           autocomplete="off"
           aria-label="Search"
@@ -168,6 +234,13 @@ function onKey(e: KeyboardEvent) {
         <li v-if="!query.trim()" class="px-4 py-8 text-center text-[13px] text-muted">
           <p class="headline text-[22px] text-ink">Find anything</p>
           <p class="mt-1">A name, a phone number, or words from a text or notification.</p>
+          <p class="mt-4 text-[12px] text-muted-soft">
+            Or do something:
+            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">text tay on my way</kbd>
+            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">pause</kbd>
+            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">next</kbd>
+            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">new message</kbd>
+          </p>
         </li>
         <li v-else-if="!searching && results && options.length === 0" class="px-4 py-8 text-center text-[13px] text-muted">
           Nothing matches “{{ query.trim() }}”.
@@ -179,11 +252,28 @@ function onKey(e: KeyboardEvent) {
             <button
               :data-index="i"
               :class="['flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left', i === active ? 'bg-surface-card' : '']"
-              @mousemove="active = i"
+              @mousemove="
+                active = i;
+                chose = true;
+              "
               @click="pick(o)"
             >
+              <!-- Action -->
+              <template v-if="o.kind === 'action'">
+                <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-surface-card text-ink">
+                  <component :is="actionIcon(o.a)" :size="15" />
+                </span>
+                <span class="min-w-0 flex-1 self-center">
+                  <span class="block truncate text-[14px] font-medium text-ink">{{ o.a.label }}</span>
+                  <span v-if="'detail' in o.a" class="block font-mono text-[12px] text-muted-soft">{{ o.a.detail }}</span>
+                </span>
+                <kbd v-if="i === active" class="self-center rounded border border-hairline px-1.5 font-mono text-[11px] text-muted">
+                  Enter
+                </kbd>
+              </template>
+
               <!-- Person -->
-              <template v-if="o.kind === 'person'">
+              <template v-else-if="o.kind === 'person'">
                 <AppAvatar app-id="com.apple.MobileSMS" :label="o.c.name" size="sm" />
                 <span class="min-w-0 flex-1">
                   <span class="block truncate text-[14px] font-medium text-ink">
