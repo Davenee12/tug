@@ -108,6 +108,19 @@ export const useTugStore = defineStore("tug", () => {
   function closeSettings() {
     if (view.value === "settings") view.value = viewBeforeSettings;
   }
+  /**
+   * The iPhone's switches are on screen (Settings, or setup's sharing step) and tug is visible:
+   * the app checks them every couple of seconds so flipping one on the phone shows up at once.
+   */
+  const setupSharingShown = ref(false);
+  const pageVisible = ref(document.visibilityState === "visible");
+  document.addEventListener("visibilitychange", () => (pageVisible.value = document.visibilityState === "visible"));
+  watch(
+    () => pageVisible.value && (view.value === "settings" || setupSharingShown.value),
+    (on) => void api.setWatching(on).catch(() => undefined),
+    { immediate: true },
+  );
+
   /** An item to scroll to and highlight after navigating from search: `m<id>` or `n<id>`. */
   const focusItem = ref<string | null>(null);
 
@@ -465,6 +478,7 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   return {
+    setupSharingShown,
     status,
     nowPlaying,
     notifications,

@@ -96,8 +96,14 @@ mod worker {
     const FIRST_SYNC_DELAY: Duration = Duration::from_secs(3);
     const POLL_CONNECTED: Duration = Duration::from_secs(8);
     const RETRY_DISCONNECTED: Duration = Duration::from_secs(30);
+    /// While the user watches the iPhone's switches, Show Message Notifications and Sync
+    /// Contacts are checked this often, so flipping one shows up in tug right away.
+    const WATCHING: Duration = Duration::from_secs(2);
     /// How many of the newest inbox messages to look at each poll.
     const LIST_MAX: u16 = 20;
+    /// Once per launch, page further back than that: a fresh install otherwise only sees the
+    /// last few texts, often all from one person, and other recent chats never show up.
+    const BACKFILL_MAX: u16 = 100;
     const CONTACTS_RESYNC: Duration = Duration::from_secs(6 * 60 * 60);
     const CONTACTS_RETRY: Duration = Duration::from_secs(10 * 60);
     /// An empty phonebook or a refusal means Sync Contacts is still off: it's often switched
@@ -120,6 +126,7 @@ mod worker {
         device_id: Option<String>,
         next_contacts_sync: Instant,
         unshared_contact_pulls: u32,
+        backfilled: bool,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -129,6 +136,7 @@ mod worker {
             device_id: None,
             next_contacts_sync: Instant::now(),
             unshared_contact_pulls: 0,
+            backfilled: false,
         };
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
@@ -156,7 +164,9 @@ mod worker {
             }
             if Instant::now() >= next {
                 next = Instant::now()
-                    + if w.session.is_some() {
+                    + if w.shared.watching() {
+                        WATCHING
+                    } else if w.session.is_some() {
                         POLL_CONNECTED
                     } else {
                         RETRY_DISCONNECTED
@@ -206,6 +216,9 @@ mod worker {
 
         /// When to ask again while contacts aren't shared yet: soon at first, then the usual retry.
         fn soon(&mut self) -> Duration {
+            if self.shared.watching() {
+                return WATCHING;
+            }
             self.unshared_contact_pulls += 1;
             if self.unshared_contact_pulls <= CONTACTS_UNSHARED_QUICK_TRIES {
                 CONTACTS_UNSHARED_RETRY
@@ -285,11 +298,30 @@ mod worker {
 
         async fn sync(&mut self) -> Result<usize, MapError> {
             let shared = self.shared.clone();
+            let backfill = !self.backfilled;
             let session = self.ensure().await?;
             if let Err(e) = session.update_inbox().await {
                 log::debug!("UpdateInbox: {e}");
             }
-            let listed = session.list("inbox", LIST_MAX).await?;
+            let mut listed = session.list("inbox", LIST_MAX, 0).await?;
+            if backfill {
+                let mut seen: std::collections::HashSet<String> = listed.iter().map(|m| m.handle.clone()).collect();
+                while !listed.is_empty() && listed.len() < BACKFILL_MAX as usize {
+                    let offset = listed.len() as u16;
+                    let page = session.list("inbox", LIST_MAX, offset).await?;
+                    // Stop at the end, at messages tug already has (everything older is known
+                    // too), or if the phone ignores the offset and repeats itself.
+                    let fresh: Vec<_> = page.into_iter().filter(|m| seen.insert(m.handle.clone())).collect();
+                    let known = fresh
+                        .iter()
+                        .all(|m| shared.store.has_message(SOURCE_IPHONE_MAP, &m.handle).unwrap_or(false));
+                    if fresh.is_empty() || known {
+                        break;
+                    }
+                    listed.extend(fresh);
+                }
+                log::info!("looked back over {} inbox message(s)", listed.len());
+            }
             let mut added = 0;
             // Oldest first so arrival order matches the phone.
             for item in listed.iter().rev() {
@@ -344,6 +376,8 @@ mod worker {
                     shared.emit(events::CONTACTS, shared.store.contacts()?);
                 }
             }
+            // Only once it all went through: a sync that failed partway looks back again.
+            self.backfilled = true;
             Ok(added)
         }
 

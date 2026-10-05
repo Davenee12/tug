@@ -156,6 +156,7 @@ watch(
 let baseline = 0;
 const first = ref<PhoneNotification | null>(null);
 watch(step, (st) => {
+  tug.setupSharingShown = st === "sharing";
   if (st === "try") {
     baseline = Math.max(0, ...tug.notifications.map((n) => n.id));
     first.value = null;
@@ -188,6 +189,7 @@ function finish() {
 
 onMounted(() => void nextTick(() => root.value?.querySelector<HTMLElement>("[data-autofocus]")?.focus()));
 onUnmounted(() => {
+  tug.setupSharingShown = false;
   window.clearTimeout(btTimer);
   window.clearTimeout(shareTimer);
   if (step.value === "connect") void tug.stopDiscovery();

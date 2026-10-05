@@ -100,7 +100,9 @@ pub fn run() {
             commands::set_unread,
             commands::open_windows_settings,
             commands::locate,
+            commands::place_lookup,
             commands::mark_read,
+            commands::set_watching,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -44,6 +44,8 @@ export const api = {
   setHidden: (notificationIds: number[], messageIds: number[], hidden: boolean) =>
     invoke<void>("set_hidden", { notificationIds, messageIds, hidden }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),
+  setWatching: (on: boolean) => invoke<void>("set_watching", { on }),
+  placeLookup: (latitude: number, longitude: number) => invoke<string>("place_lookup", { latitude, longitude }),
   markRead: (messageIds: number[]) => invoke<void>("mark_read", { messageIds }),
   searchAll: (query: string, limit: number) => invoke<SearchResults>("search_all", { query, limit }),
 };
