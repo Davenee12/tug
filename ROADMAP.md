@@ -22,6 +22,9 @@ See docs/STABILIZATION.md for the current backlog.
   opt-in diagnostics.
 
 ## Later — features
+- **Delete conversations:** an ✕ on each conversation to remove it from tug (local, with undo; nothing
+  on the phone is touched). Stretch: notice deletions made on the phone — only partly possible, since
+  message access shows a ~10-message window; a message vanishing from *inside* the window means deleted.
 - **Calls:** recent calls (PBAP call history), dial from the PC (HFP; Windows holds the hands-free link,
   so start with a feasibility spike); audio on the phone first.
 - **Connectors:** messages already carry a `source`. Android, then Slack, Teams, WhatsApp, Wispr Flow
