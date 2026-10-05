@@ -274,6 +274,15 @@ pub fn set_unread(app: tauri::AppHandle, count: u32) -> Result<()> {
     crate::tray::set_unread(&app, count).map_err(|e| e.to_string())
 }
 
+/// Pop up a phone notification with the actions the frontend found for it (reply, mark
+/// read, copy code, call back, clear). The frontend has already decided it should show
+/// (toasts on, not do-not-disturb, app not muted, within the rate limit). Falls back to a
+/// plain pop-up if Windows won't take the actionable one.
+#[tauri::command]
+pub fn show_toast(app: tauri::AppHandle, spec: crate::toast::ToastSpec) {
+    crate::toast::show(&app, spec);
+}
+
 /// Copy text to the clipboard. Sync on purpose: Tauri runs sync commands on the main
 /// (STA) thread, which the WinRT clipboard requires.
 #[tauri::command]
