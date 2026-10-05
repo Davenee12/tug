@@ -38,6 +38,8 @@ const EMPTY_STATUS: DeviceStatus = {
   pairingStale: false,
   messagesError: null,
   contactsError: null,
+  textsPairing: "unknown",
+  textsDevice: null,
 };
 
 const EMPTY_NOW_PLAYING: NowPlaying = {
@@ -65,7 +67,24 @@ export const useTugStore = defineStore("tug", () => {
   const hasMore = ref(true);
   const discovered = ref<DiscoveredDevice[]>([]);
   const pairingRequest = ref<PairingRequest | null>(null);
-  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [], closeToTray: true });
+  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [], closeToTray: true, appIcons: true });
+
+  /** App icons as data URIs by app id; null = the App Store has none (initials instead). */
+  const appIcons = ref<Record<string, string | null>>({});
+  const iconRequests = new Set<string>();
+  /** The app's real icon, asked for the first time it's needed (then cached on disk by the backend). */
+  function iconFor(appId: string): string | null {
+    if (!settings.value.appIcons) return null;
+    if (!(appId in appIcons.value) && !iconRequests.has(appId)) {
+      iconRequests.add(appId);
+      api
+        .appIcon(appId)
+        .then((uri) => (appIcons.value = { ...appIcons.value, [appId]: uri }))
+        // Offline or the lookup failed: initials for now, asked again next launch.
+        .catch(() => undefined);
+    }
+    return appIcons.value[appId] ?? null;
+  }
   const advertiseEnabled = ref(true);
   const zoom = ref(1);
   /** First-run setup finished (or skipped). Until then, with no iPhone paired, setup shows. */
@@ -380,6 +399,7 @@ export const useTugStore = defineStore("tug", () => {
       doNotDisturb: raw["ui.doNotDisturb"] === "true",
       mutedApps: raw["ui.mutedApps"] ? (JSON.parse(raw["ui.mutedApps"]) as string[]) : [],
       closeToTray: raw["ui.closeToTray"] !== "false",
+      appIcons: raw["ui.appIcons"] !== "false",
     };
     onboarded.value = raw["ui.onboarded"] === "1";
   }
@@ -528,6 +548,7 @@ export const useTugStore = defineStore("tug", () => {
     discovered,
     pairingRequest,
     settings,
+    iconFor,
     advertiseEnabled,
     flash,
     view,
