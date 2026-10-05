@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { hasDuplicateIphones, pairedPhones, pairingProblem, setupDeviceLists, startedOutsideTug } from "./pairings";
-import type { DiscoveredDevice } from "../types/protocol";
+import { bondHint, hasDuplicateIphones, pairedPhones, pairingProblem, setupDeviceLists, startedOutsideTug } from "./pairings";
+import type { DeviceStatus, DiscoveredDevice } from "../types/protocol";
+
+const CONNECTED: DeviceStatus = {
+  radio: "on",
+  peripheralSupported: true,
+  advertising: "on",
+  device: { id: "x", name: "Dave's iPhone" },
+  connection: "connected",
+  battery: 76,
+  services: { notifications: true, media: true, battery: true, messages: true },
+  lastError: null,
+  lastErrorAt: null,
+  pairingStale: false,
+  awaitingPhoneAllow: false,
+  messagesError: null,
+  contactsError: null,
+  textsPairing: "ok",
+  textsDevice: "Dave's iPhone",
+};
+const status = (o: Partial<DeviceStatus>): DeviceStatus => ({ ...CONNECTED, ...o });
 
 function dev(overrides: Partial<DiscoveredDevice>): DiscoveredDevice {
   return {
@@ -142,5 +161,37 @@ describe("startedOutsideTug", () => {
     expect(startedOutsideTug(true, true, false)).toBe(false);
     expect(startedOutsideTug(false, false, false)).toBe(false);
     expect(startedOutsideTug(undefined, true, false)).toBe(false);
+  });
+});
+
+describe("bondHint", () => {
+  it("is null for a healthy connected phone", () => {
+    expect(bondHint(CONNECTED)).toBeNull();
+  });
+
+  it("reports forgotten on a stale-bond signal", () => {
+    expect(bondHint(status({ pairingStale: true, connection: "disconnected" }))).toBe("forgotten");
+  });
+
+  it("reports maybe when the bond exists but the phone rejects it (0xC3, no notifications)", () => {
+    const s = status({
+      connection: "disconnected",
+      services: { notifications: false, media: false, battery: false, messages: false },
+      messagesError: "the iPhone refused message access",
+    });
+    expect(bondHint(s)).toBe("maybe");
+  });
+
+  it("does not cry forgotten when it's just Show Notifications off (LE fine)", () => {
+    // Connected, notifications flowing, only the texts switch off: that's not a forgotten bond.
+    const s = status({
+      services: { notifications: true, media: true, battery: true, messages: false },
+      messagesError: "turn on Show Notifications",
+    });
+    expect(bondHint(s)).toBeNull();
+  });
+
+  it("is null before a phone is adopted", () => {
+    expect(bondHint(status({ device: null, connection: "noDevice" }))).toBeNull();
   });
 });
