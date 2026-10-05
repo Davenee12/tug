@@ -3,14 +3,20 @@ import { computed, ref, watch } from "vue";
 import { avatarTone, initials } from "../lib/format";
 import { useTugStore } from "../stores/tug";
 
-// `person`: the avatar stands for someone (a conversation), not the app: always their initials,
-// so a friend never looks like a company.
-const props = defineProps<{ appId: string; label: string; size?: "sm" | "md"; person?: boolean }>();
+// `person`: the avatar stands for someone (a conversation), not the app. They get their contact
+// photo when the iPhone shared one, otherwise their initials — never the app's icon, so a friend
+// never looks like a company. `photoKey` finds that photo (a number is more precise than a name);
+// it defaults to the label, which the backend resolves as a name or number either way.
+const props = defineProps<{ appId: string; label: string; size?: "sm" | "md"; person?: boolean; photoKey?: string }>();
 const tug = useTugStore();
 const tone = computed(() => avatarTone(props.appId));
 const broken = ref(false);
-watch(() => props.appId, () => (broken.value = false));
-const icon = computed(() => (props.person || broken.value ? null : tug.iconFor(props.appId)));
+watch([() => props.appId, () => props.photoKey, () => props.label], () => (broken.value = false));
+// A person shows their photo (if any); an app shows its icon. Either falls back to the tile below.
+const icon = computed(() => {
+  if (broken.value) return null;
+  return props.person ? tug.contactPhoto(props.photoKey ?? props.label) : tug.iconFor(props.appId);
+});
 </script>
 
 <template>
