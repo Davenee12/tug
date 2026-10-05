@@ -174,6 +174,27 @@ pub fn mark_read(state: State<'_, AppState>, message_ids: Vec<i64>) {
     }
 }
 
+/// Delete a conversation from tug (`hidden: true`) or undo that. Local only.
+#[tauri::command]
+pub fn set_hidden(
+    state: State<'_, AppState>,
+    notification_ids: Vec<i64>,
+    message_ids: Vec<i64>,
+    hidden: bool,
+) -> Result<()> {
+    let at = hidden.then(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    });
+    state
+        .shared
+        .store
+        .set_hidden(&notification_ids, &message_ids, at)
+        .map_err(|e| e.to_string())
+}
+
 /// Copy text to the clipboard. Sync on purpose: Tauri runs sync commands on the main
 /// (STA) thread, which the WinRT clipboard requires.
 #[tauri::command]
