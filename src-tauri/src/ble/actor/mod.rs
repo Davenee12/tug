@@ -157,6 +157,8 @@ impl Ancs {
 struct Media {
     _service: GattDeviceService,
     remote_command: GattCharacteristic,
+    /// Reads full values of truncated updates; None if the phone didn't expose it.
+    entity_attribute: Option<GattCharacteristic>,
     _remote_updates: Subscription,
     _entity_update: Subscription,
 }
@@ -304,13 +306,7 @@ impl Actor {
                 let _ = reply.send(result);
             }
             Command::Media { command, reply } => {
-                let res = match self.link.as_ref().and_then(|l| l.media.as_ref()) {
-                    Some(m) => {
-                        let ch = m.remote_command.clone();
-                        winrt::write(&ch, &[command.id()]).await.map_err(|e| e.to_string())
-                    }
-                    None => Err("Media controls aren't available right now".into()),
-                };
+                let res = self.send_media_command(command).await;
                 let _ = reply.send(res);
             }
             Command::StartDiscovery => {
@@ -363,19 +359,13 @@ impl Actor {
                 log::debug!("ANCS event {data:02X?} (gen {gen}, current {current:?})")
             }
             Event::DataSource { gen, data } => log::debug!("ANCS data {} bytes (gen {gen})", data.len()),
-            Event::MediaEntity { data, .. } => log::debug!("AMS update {} bytes", data.len()),
             _ => {}
         }
         match ev {
             Event::NotificationSource { gen, data } if Some(gen) == current => self.on_notification_source(&data).await,
             Event::DataSource { gen, data } if Some(gen) == current => self.on_data_source(&data).await,
-            Event::MediaEntity { gen, data } if Some(gen) == current => {
-                self.shared
-                    .update_now_playing(|np| np.apply_entity_update(&data, now_ms()));
-            }
-            Event::MediaCommands { gen, data } if Some(gen) == current => {
-                self.shared.update_now_playing(|np| np.apply_available_commands(&data));
-            }
+            Event::MediaEntity { gen, data } if Some(gen) == current => self.on_media_entity(&data).await,
+            Event::MediaCommands { gen, data } if Some(gen) == current => self.on_media_commands(&data),
             Event::Battery { gen, data } if Some(gen) == current => {
                 if let Some(&level) = data.first() {
                     self.shared.update_status(|s| s.battery = Some(level.min(100)));

@@ -18,7 +18,9 @@ smartwatch or car kit does, using the Bluetooth services Apple publishes for acc
 | Now playing + play/pause/skip/volume | AMS (Bluetooth LE) | ✅ Verified |
 | Phone battery level | Battery Service | ✅ Verified (level only; no charging flag) |
 | Windows toasts, per-app mute, do not disturb, Ctrl +/−/0 zoom | Local | ✅ |
-| Calls: dial, recent calls | HFP + PBAP call history | Planned |
+| Incoming-call card (answer/decline, Enter/Esc) | ANCS | Built; not yet verified on hardware |
+| Recent calls | PBAP call history | Built; needs *Sync Contacts*; not yet verified on hardware |
+| Call from tug (audio stays on the phone) | HFP, experimental | Behind a check in Settings › iPhone; unverified |
 | Group texts, photos, texts sent from the phone itself | Not exposed by iOS over Bluetooth | Out of scope |
 
 ## Requirements
@@ -64,7 +66,8 @@ npx tauri build --no-bundle   # src-tauri/target/release/tug.exe
 npx tauri build               # installer: src-tauri/target/release/bundle/nsis/tug_0.1.0_x64-setup.exe
 ```
 
-Browser preview URLs: `/` (connected, sample history), `/?setup` (first run), `/?pairing` (PIN dialog).
+Browser preview URLs: `/` (connected, sample history), `/?setup` (first run), `/?pairing` (PIN dialog),
+`/?call` (a call rings), `/?nodial` (the calling check fails).
 
 Logs: `%LOCALAPPDATA%\dev.davejames.tug\logs`. History DB: `%APPDATA%\dev.davejames.tug\tug.db`.
 
@@ -99,8 +102,9 @@ duplicated.
 
 ## Roadmap
 
-1. **Calls:** recent calls via PBAP call history; dialing via hands-free (HFP). Windows' own stack
-   already holds the iPhone's hands-free link, so this starts with a feasibility spike.
+1. **Calls:** the incoming-call card and recent calls are built (not yet verified on hardware).
+   Dialing over hands-free (HFP) is experimental: it only works if Windows doesn't already hold the
+   iPhone's hands-free link, which `cargo run --example hfp_probe` checks.
 2. **Connectors:** messages are stored with a `source`; next sources are Android, then apps like
    Slack, Teams, WhatsApp and Wispr Flow feeding the same inbox.
 3. **PC media:** show and control what's playing on the PC (e.g. YouTube in a browser) next to the phone.
