@@ -192,8 +192,8 @@ describe("call", () => {
 
   it("plays a Spotify playlist by fuzzy name, and 'play' alone is still media", () => {
     const playlists = [
-      { uri: "spotify:playlist:1", name: "Deep Focus", owner: "Spotify", trackCount: 120 },
-      { uri: "spotify:playlist:2", name: "Morning Run", owner: "Dave", trackCount: 42 },
+      { uri: "spotify:playlist:1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: null },
+      { uri: "spotify:playlist:2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: null },
     ];
     expect(parseActions("play deep", people, { playlists })).toEqual([
       { kind: "play-playlist", uri: "spotify:playlist:1", name: "Deep Focus", label: "Play Deep Focus", detail: "Spotify · 120 songs" },

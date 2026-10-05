@@ -535,6 +535,15 @@ pub async fn spotify_playlists(state: State<'_, AppState>) -> Result<Vec<Playlis
         .map_err(|e| e.to_string())?
 }
 
+/// A playlist cover as a `data:` URI (fetched and cached by tug; only Spotify image hosts).
+#[tauri::command]
+pub async fn spotify_cover(state: State<'_, AppState>, url: String) -> Result<Option<String>> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.cover(&url))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Play a playlist on the iPhone (chosen from Spotify's device list, preferring the paired phone).
 #[tauri::command]
 pub async fn spotify_play_playlist(state: State<'_, AppState>, uri: String) -> Result<()> {

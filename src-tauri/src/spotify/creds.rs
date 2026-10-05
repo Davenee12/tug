@@ -3,7 +3,12 @@
 //! memory; the client id lives in settings (it isn't a secret).
 
 /// The Credential Manager target name under which the refresh token is kept.
+#[cfg(not(test))]
 pub const TARGET: &str = "tug/spotify-refresh-token";
+/// Tests use their own entry, so a real Spotify login on the dev machine can't leak into them
+/// (it made `status_reports_client_id_and_redirect` fail once Dave connected).
+#[cfg(test)]
+pub const TARGET: &str = "tug/test-spotify-refresh-token";
 
 pub use imp::{delete, load, store};
 
