@@ -10,6 +10,7 @@ impl Actor {
         self.shared.set_live_session(None);
         self.shared.update_status(|s| {
             s.battery = None;
+            s.awaiting_phone_allow = false;
             s.services = Services {
                 messages: s.services.messages,
                 ..Services::default()
@@ -33,7 +34,17 @@ impl Actor {
     pub(super) fn set_device_name(&mut self, name: &str) {
         let name = name.trim();
         let current = self.shared.status().device.map(|d| d.name);
-        if name.is_empty() || current.as_deref() == Some(name) {
+        // iOS reports junk mid-rename (a "4" once); a one- or two-char name is never a real
+        // iPhone, so keep the last good one instead of following it onto the wrong label.
+        if !crate::device_kind::plausible_device_name(name) || current.as_deref() == Some(name) {
+            return;
+        }
+        // Don't let the LE side's generic "iPhone" clobber a specific name we already have (the
+        // Classic side gives "Dave's iPhone", which the message service may have adopted).
+        if current
+            .as_deref()
+            .is_some_and(|cur| crate::device_kind::more_specific_name(name, cur))
+        {
             return;
         }
         log::info!("the iPhone is now called {name}");
@@ -82,6 +93,7 @@ impl Actor {
                     l.session_id = None;
                 }
                 self.shared.set_live_session(None);
+                self.shared.update_status(|s| s.awaiting_phone_allow = false);
                 self.fail_connect(e.to_string());
                 // One refusal can be a glitch; two in a row means the phone dropped the bond.
                 let stale = e.is_stale_bond() && self.connect_failures >= 2;

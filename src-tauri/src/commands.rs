@@ -133,6 +133,13 @@ pub async fn forget_device(state: State<'_, AppState>) -> Result<()> {
     state.ble.request(|reply| Command::Forget { reply }).await
 }
 
+/// Pair the iPhone's Classic (texts) side from inside tug (setup's Texts step). The PIN shows in
+/// tug via the pairing-request event, the same as notifications pairing.
+#[tauri::command]
+pub async fn pair_texts(state: State<'_, AppState>) -> Result<()> {
+    state.ble.request(|reply| Command::PairTexts { reply }).await
+}
+
 #[tauri::command]
 pub async fn set_advertising(state: State<'_, AppState>, enabled: bool) -> Result<()> {
     state

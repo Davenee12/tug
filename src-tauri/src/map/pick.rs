@@ -7,11 +7,39 @@
 //! first run and for when the remembered phone isn't around. Pure and unit-tested; the
 //! Windows device lookup lives in `session`.
 
+use crate::state::DeviceKind;
+
 /// A paired Classic device that offers a Message Access Server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MapDevice {
     pub id: String,
     pub name: String,
+}
+
+/// An unpaired Classic device found while pairing for texts from inside tug.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnpairedDevice {
+    pub id: String,
+    pub name: String,
+    pub kind: DeviceKind,
+}
+
+/// Choose which unpaired Classic device to pair for texts, given the name of the LE phone already
+/// adopted. Pure logic (the WinRT inquiry lives in the actor): prefer the device whose name
+/// matches the notifications phone and isn't an accessory, then a lone phone; never guess among
+/// several. Keeps tug from pairing a speaker or a second phone by mistake.
+pub fn choose_texts_candidate<'a>(devices: &'a [UnpairedDevice], le_name: &str) -> Option<&'a UnpairedDevice> {
+    if let Some(d) = devices
+        .iter()
+        .find(|d| d.name == le_name && d.kind != DeviceKind::Accessory)
+    {
+        return Some(d);
+    }
+    let phones: Vec<&UnpairedDevice> = devices.iter().filter(|d| d.kind == DeviceKind::Phone).collect();
+    if phones.len() == 1 {
+        return Some(phones[0]);
+    }
+    None
 }
 
 /// Pick the iPhone from the paired Classic devices, preferring the remembered one.
@@ -97,5 +125,54 @@ mod tests {
     fn a_lone_device_is_used_even_without_hints() {
         let devices = vec![dev("id-only", "iPhone")];
         assert_eq!(choose_device(&devices, None, None), Some(&devices[0]));
+    }
+
+    fn un(id: &str, name: &str, kind: DeviceKind) -> UnpairedDevice {
+        UnpairedDevice {
+            id: id.into(),
+            name: name.into(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn texts_pick_prefers_the_name_match() {
+        let devices = vec![
+            un("spk", "Kitchen Speaker", DeviceKind::Accessory),
+            un("phone", "Dave's iPhone", DeviceKind::Phone),
+        ];
+        assert_eq!(choose_texts_candidate(&devices, "Dave's iPhone"), Some(&devices[1]));
+    }
+
+    #[test]
+    fn texts_pick_never_takes_an_accessory_even_on_a_name_match() {
+        // A renamed accessory that happens to match the phone's name must not be paired for texts.
+        let devices = vec![un("x", "Dave's iPhone", DeviceKind::Accessory)];
+        assert_eq!(choose_texts_candidate(&devices, "Dave's iPhone"), None);
+    }
+
+    #[test]
+    fn texts_pick_falls_back_to_a_lone_phone() {
+        let devices = vec![
+            un("phone", "iPhone", DeviceKind::Phone),
+            un("kbd", "Keychron", DeviceKind::Accessory),
+        ];
+        assert_eq!(choose_texts_candidate(&devices, "Dave's iPhone"), Some(&devices[0]));
+    }
+
+    #[test]
+    fn texts_pick_never_guesses_among_several_phones() {
+        let devices = vec![
+            un("a", "A iPhone", DeviceKind::Phone),
+            un("b", "B iPhone", DeviceKind::Phone),
+        ];
+        assert_eq!(choose_texts_candidate(&devices, "C iPhone"), None);
+    }
+
+    #[test]
+    fn texts_pick_is_none_when_nothing_fits() {
+        assert_eq!(choose_texts_candidate(&[], "iPhone"), None);
+        let devices = vec![un("u", "Mystery", DeviceKind::Unknown)];
+        assert_eq!(choose_texts_candidate(&devices, "iPhone"), None);
     }
 }

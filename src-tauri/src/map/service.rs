@@ -305,8 +305,15 @@ mod worker {
             });
         }
 
-        /// The paired Classic device that is this iPhone.
+        /// The paired Classic device that is this iPhone. Only ever called once setup has adopted
+        /// an LE phone (see `refresh`), so the texts device is picked to match that phone (by the
+        /// remembered id first, then its name) rather than grabbing whatever is paired.
         async fn pick_device(&self) -> Result<MapDevice, MapError> {
+            // Don't touch any phone until setup has chosen one. On a fresh install an old paired
+            // Classic iPhone would otherwise be connected and retried before the user picked.
+            if self.shared.status().device.is_none() {
+                return Err(MapError::NoDevice);
+            }
             let devices = find_devices().await?;
             // Prefer the phone we last connected to by id (survives a rename); then the
             // notifications phone's name; then a lone phone. Logic (and its tests) in `pick`.
@@ -345,6 +352,19 @@ mod worker {
                 log::info!("message access connected to {}", device.name);
                 // Only once connecting worked: a device that won't connect isn't "the phone".
                 self.remember_texts_device(&device.id);
+                // The LE side often reports the bare "iPhone"; the Classic side carries the real
+                // name ("Dave's iPhone"). Adopt it when it's more specific.
+                let current = self.shared.status().device.map(|d| d.name).unwrap_or_default();
+                if crate::device_kind::more_specific_name(&current, &device.name) {
+                    log::info!("using the Classic name '{}' for the iPhone", device.name);
+                    let _ = self.shared.store.set_setting(keys::DEVICE_NAME, &device.name);
+                    let name = device.name.clone();
+                    self.shared.update_status(|s| {
+                        if let Some(d) = s.device.as_mut() {
+                            d.name = name;
+                        }
+                    });
+                }
                 self.device_id = Some(device.id.clone());
                 self.session = Some(session);
                 self.set_state(true, None);
@@ -671,6 +691,16 @@ mod worker {
         }
 
         async fn refresh(&mut self) {
+            // Until setup has adopted an LE phone, don't connect to (or report health for) any
+            // paired phone: a fresh install must not latch onto a stale bond before the user picks.
+            if self.shared.status().device.is_none() {
+                if self.session.take().is_some() {
+                    log::info!("message access paused: setup hasn't adopted an iPhone yet");
+                    self.device_id = None;
+                    self.set_state(false, None);
+                }
+                return;
+            }
             let result = self.sync().await;
             self.record_health(&result);
             if result.is_ok() {
