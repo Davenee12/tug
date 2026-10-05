@@ -227,6 +227,28 @@ pub async fn app_website(app: tauri::AppHandle, state: State<'_, AppState>, app_
         .map_err(|e| e.to_string())?
 }
 
+/// A contact's photo (data URI) for their avatar, when the iPhone shared one over PBAP. `key` is a
+/// phone number or a name as the avatar shows it; the number is matched exactly, the name only when
+/// one contact of that name has a photo. `None` falls the UI back to initials. Photos are local
+/// only — nothing is sent anywhere — so, unlike app icons, there's no setting to gate this.
+#[tauri::command]
+pub async fn contact_photo(app: tauri::AppHandle, state: State<'_, AppState>, key: String) -> Result<Option<String>> {
+    use tauri::Manager;
+    let number = crate::map::address::normalize(&key);
+    let hash = state
+        .shared
+        .store
+        .contact_photo_key(Some(&number), Some(&key))
+        .map_err(|e| e.to_string())?;
+    let Some(hash) = hash else {
+        return Ok(None);
+    };
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || crate::contact_photos::photo_data_uri(&dir, &hash))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The reverse-lookup answer for coordinates (JSON), for naming "Use my location".
 #[tauri::command]
 pub async fn place_lookup(latitude: f64, longitude: f64) -> Result<String> {

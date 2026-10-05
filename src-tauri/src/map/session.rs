@@ -54,7 +54,12 @@ const PB_FORMAT: u8 = 0x07;
 const PB_FORMAT_VCARD30: u8 = 0x01;
 /// PropertySelector bits: VERSION, FN, N, TEL.
 const PB_PROPERTIES: u64 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 7);
-/// The same plus X-IRMC-CALL-DATETIME (bit 28), which carries a call's direction and time.
+/// Contacts also ask for PHOTO (bit 3), so the iPhone inlines a face when it has one. iOS may or
+/// may not include it even when asked — the parser and the UI both fall back to initials — so this
+/// stays a hint, confirmed only on hardware.
+const PB_CONTACT_PROPERTIES: u64 = PB_PROPERTIES | (1 << 3);
+/// The base set plus X-IRMC-CALL-DATETIME (bit 28), which carries a call's direction and time.
+/// Call history has no use for photos, so it keeps asking only for the essentials.
 const PB_CALL_PROPERTIES: u64 = PB_PROPERTIES | (1 << 28);
 
 #[derive(Debug, Error)]
@@ -441,7 +446,7 @@ fn notification_registration_request(connection_id: u32, on: bool) -> Vec<u8> {
     obex::request(obex::OP_PUT_FINAL, &[], &headers)
 }
 
-/// Pull the iPhone's contacts over PBAP (`telecom/pb.vcf`): names and numbers only.
+/// Pull the iPhone's contacts over PBAP (`telecom/pb.vcf`): names, numbers, and a photo when shared.
 pub async fn pull_contacts(device_id: &str) -> Result<Vec<PhonebookEntry>> {
     let mut link = ObexLink::connect(device_id, PSE_UUID, &PBAP_TARGET, MapError::ContactsConsent).await?;
     let headers = vec![
@@ -450,7 +455,7 @@ pub async fn pull_contacts(device_id: &str) -> Result<Vec<PhonebookEntry>> {
         Header::Name(Some("telecom/pb.vcf".into())),
         obex::app_params(&[
             (PB_FORMAT, &[PB_FORMAT_VCARD30]),
-            (PB_PROPERTY_SELECTOR, &PB_PROPERTIES.to_be_bytes()),
+            (PB_PROPERTY_SELECTOR, &PB_CONTACT_PROPERTIES.to_be_bytes()),
             (PB_MAX_LIST_COUNT, &u16::MAX.to_be_bytes()),
         ]),
     ];

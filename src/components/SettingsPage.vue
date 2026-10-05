@@ -6,10 +6,9 @@ import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { connectionHealth, errorAge, type HealthLink, type LinkState } from "../lib/health";
-import { phoneSwitches } from "../lib/phoneSwitches";
 import { stepZoom } from "../lib/zoom";
 import { escClosesSettings } from "../lib/escape";
-import PhoneSetup from "./PhoneSetup.vue";
+import ConnectPanel from "./ConnectPanel.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsSwitch from "./SettingsSwitch.vue";
 
@@ -29,7 +28,7 @@ const current = computed(() => SECTIONS.find((s) => s.id === tug.settingsSection
 
 // Esc goes back to where you were (unless a dialog or setup is up, or already used the Esc to close itself).
 function onKey(e: KeyboardEvent) {
-  if (escClosesSettings(e, tug.overlayOpen || tug.showSetup)) {
+  if (escClosesSettings(e, tug.overlayOpen)) {
     e.preventDefault();
     tug.closeSettings();
   }
@@ -99,9 +98,6 @@ const SHORTCUTS: Array<[string, string[]]> = [
   ["Settings", ["Ctrl", ","]],
   ["Zoom in · out · reset", ["Ctrl", "+  −  0"]],
 ];
-
-// ---- iPhone: the three switches on the phone, checked live (shared pure logic) ----
-const checks = computed(() => phoneSwitches(tug.status));
 
 // ---- iPhone: experimental calling, on only after the hands-free check passes ----
 const checkingCalls = ref(false);
@@ -286,23 +282,6 @@ async function clearHistory() {
             <button class="btn-secondary btn-sm shrink-0" @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
           </div>
 
-          <div v-if="tug.status.device" class="mb-6">
-            <p class="caption-upper mb-2 px-1 text-muted">On your iPhone</p>
-            <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
-              <SettingsRow v-for="c in checks" :key="c.label" :label="c.label" :description="c.where">
-                <template v-if="c.state === 'off'" #below>
-                  <p class="mt-1 text-[13px] font-medium text-body-strong">{{ c.fix }}</p>
-                </template>
-                <span
-                  v-if="c.state === 'on'"
-                  class="flex items-center gap-1.5 text-[13px] font-medium text-ink"
-                ><Check :size="15" class="text-accent-teal" /> On</span>
-                <span v-else-if="c.state === 'off'" class="pill bg-accent-amber/20 text-[12px] text-ink">Needs turning on</span>
-                <span v-else class="text-[13px] text-muted-soft">Checks when connected</span>
-              </SettingsRow>
-            </div>
-          </div>
-
           <div class="mb-6 divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow label="Visible to iPhone" description="Lets your phone find and reconnect to this PC.">
               <SettingsSwitch v-model="advertise" label="Visible to iPhone" />
@@ -328,11 +307,8 @@ async function clearHistory() {
             </SettingsRow>
           </div>
 
-          <PhoneSetup />
-
-          <button class="mt-6 text-[13px] text-muted underline active:text-ink" @click="tug.setupRequested = true">
-            Run setup again
-          </button>
+          <p class="caption-upper mb-2 px-1 text-muted">Your iPhone</p>
+          <ConnectPanel context="settings" />
         </template>
 
         <!-- Notifications -->

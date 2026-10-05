@@ -331,9 +331,11 @@ impl Store {
         rows.collect()
     }
 
-    /// Store names from the phone's own contacts (PBAP). These win over names
-    /// learned from notifications. Returns how many numbers were saved.
-    pub fn save_phonebook(&self, entries: &[(String, String)]) -> Result<usize> {
+    /// Store names (and photo references) from the phone's own contacts (PBAP). These win over
+    /// names learned from notifications. Each entry is `(address, name, photo)`, where `photo` is
+    /// the key of a stored photo file (`crate::contact_photos`) or `None`. Returns how many
+    /// numbers were saved.
+    pub fn save_phonebook(&self, entries: &[(String, String, Option<String>)]) -> Result<usize> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let mut n = 0;
@@ -345,17 +347,54 @@ impl Store {
             )?;
             let mut forget = tx.prepare("DELETE FROM contact_aliases WHERE address = ?1 AND alias = ?2")?;
             let mut stmt = tx.prepare(
-                "INSERT INTO contacts (address, name) VALUES (?1, ?2)
-                 ON CONFLICT (address) DO UPDATE SET name = excluded.name",
+                "INSERT INTO contacts (address, name, photo) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (address) DO UPDATE SET name = excluded.name, photo = excluded.photo",
             )?;
-            for (address, name) in entries {
+            for (address, name, photo) in entries {
                 remember.execute(params![address, name])?;
                 forget.execute(params![address, name])?;
-                n += stmt.execute(params![address, name])?;
+                n += stmt.execute(params![address, name, photo])?;
             }
         }
         tx.commit()?;
         Ok(n)
+    }
+
+    /// The photo reference for a contact, looked up by phone number or by name. A number must match
+    /// an address exactly (the caller normalises it first); a name matches case-insensitively and
+    /// only when every contact of that name shares one photo, so two different people with the same
+    /// name never borrow each other's face. `None` when there's no photo to show.
+    pub fn contact_photo_key(&self, number: Option<&str>, name: Option<&str>) -> Result<Option<String>> {
+        let conn = self.conn();
+        if let Some(number) = number {
+            let by_number: Option<String> = conn
+                .query_row(
+                    "SELECT photo FROM contacts WHERE address = ?1 AND photo IS NOT NULL",
+                    params![number],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if by_number.is_some() {
+                return Ok(by_number);
+            }
+        }
+        if let Some(name) = name {
+            return conn.query_row(
+                "SELECT CASE WHEN COUNT(DISTINCT photo) = 1 THEN MIN(photo) END
+                 FROM contacts WHERE lower(name) = lower(?1) AND photo IS NOT NULL",
+                params![name],
+                |r| r.get(0),
+            );
+        }
+        Ok(None)
+    }
+
+    /// Every photo reference the contacts table still points at, for cleaning up orphaned files.
+    pub fn photo_keys(&self) -> Result<std::collections::HashSet<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT DISTINCT photo FROM contacts WHERE photo IS NOT NULL")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect()
     }
 
     /// Learn old names of known contacts from history: Messages notifications whose text
@@ -555,11 +594,13 @@ mod tests {
     #[test]
     fn renaming_a_contact_keeps_their_history_together() {
         let s = Store::in_memory().unwrap();
-        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into(), None)])
+            .unwrap();
         notify(&s, 1, "zoe 💜", "omw", 1_000);
         notify(&s, 2, "zoe 💜 replied to you", "Yes", 2_000);
         // Dave takes the heart off her name on the phone; the next contacts sync brings it over.
-        s.save_phonebook(&[("+13025550173".into(), "zoe".into())]).unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "zoe".into(), None)])
+            .unwrap();
         notify(&s, 3, "zoe", "hi again", 3_000);
         assert_eq!(
             titles(&s),
@@ -568,7 +609,8 @@ mod tests {
         );
         // Renaming back: "zoe" becomes the old name, and "zoe 💜" is current again (titles
         // that need no rewriting come back as iOS sent them; the UI cleans the reply suffix).
-        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into(), None)])
+            .unwrap();
         assert_eq!(titles(&s), vec!["zoe 💜", "zoe 💜 replied to you", "zoe 💜"]);
     }
 
@@ -576,7 +618,8 @@ mod tests {
     fn learns_old_names_from_history() {
         let s = Store::in_memory().unwrap();
         // Renamed before tug kept aliases: the contact is already "zoe", history says "zoe 💜".
-        s.save_phonebook(&[("+13025550173".into(), "zoe".into())]).unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "zoe".into(), None)])
+            .unwrap();
         notify(&s, 1, "zoe 💜", "dinner at 7?", 990);
         s.insert_incoming(&incoming("H1", "+13025550173", "dinner at 7?"))
             .unwrap();
@@ -592,7 +635,8 @@ mod tests {
     #[test]
     fn a_shared_short_text_never_hands_someone_elses_name_to_a_contact() {
         let s = Store::in_memory().unwrap();
-        s.save_phonebook(&[("+15550000001".into(), "Mom".into())]).unwrap();
+        s.save_phonebook(&[("+15550000001".into(), "Mom".into(), None)])
+            .unwrap();
         // Mom texts "ok" and "see you soon" (her own notifications never reached tug)...
         s.insert_incoming(&incoming("H1", "+15550000001", "ok")).unwrap();
         s.insert_incoming(&incoming("H2", "+15550000001", "see you soon"))
@@ -612,10 +656,11 @@ mod tests {
     fn old_names_never_take_over_someone_elses() {
         let s = Store::in_memory().unwrap();
         // Sam used to be called "Alex"; there's also a different, current Alex.
-        s.save_phonebook(&[("+15550000001".into(), "Alex".into())]).unwrap();
+        s.save_phonebook(&[("+15550000001".into(), "Alex".into(), None)])
+            .unwrap();
         s.save_phonebook(&[
-            ("+15550000001".into(), "Sam".into()),
-            ("+15550000002".into(), "Alex".into()),
+            ("+15550000001".into(), "Sam".into(), None),
+            ("+15550000002".into(), "Alex".into(), None),
         ])
         .unwrap();
         notify(&s, 1, "Alex", "hey", 1_000);
@@ -624,13 +669,13 @@ mod tests {
         // Two people who both used to be "Jo": ambiguous, so leave it as iOS showed it.
         let t = Store::in_memory().unwrap();
         t.save_phonebook(&[
-            ("+15550000003".into(), "Jo".into()),
-            ("+15550000004".into(), "Jo".into()),
+            ("+15550000003".into(), "Jo".into(), None),
+            ("+15550000004".into(), "Jo".into(), None),
         ])
         .unwrap();
         t.save_phonebook(&[
-            ("+15550000003".into(), "Jo A".into()),
-            ("+15550000004".into(), "Jo B".into()),
+            ("+15550000003".into(), "Jo A".into(), None),
+            ("+15550000004".into(), "Jo B".into(), None),
         ])
         .unwrap();
         notify(&t, 1, "Jo", "hi", 1_000);
@@ -673,7 +718,8 @@ mod tests {
             s.insert_incoming(&m).unwrap().unwrap().contact_name.as_deref(),
             Some("Zoe")
         );
-        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into(), None)])
+            .unwrap();
         assert_eq!(
             s.recent_messages(10).unwrap()[0].contact_name.as_deref(),
             Some("zoe 💜")
@@ -704,8 +750,8 @@ mod tests {
         assert!(s.search_messages("\"unbalanced", 10).is_ok());
 
         s.save_phonebook(&[
-            ("+13025550173".into(), "zoe 💜".into()),
-            ("+12145550186".into(), "Priya".into()),
+            ("+13025550173".into(), "zoe 💜".into(), None),
+            ("+12145550186".into(), "Priya".into(), None),
         ])
         .unwrap();
         assert_eq!(s.search_contacts("pri", 10).unwrap()[0].name, "Priya");
@@ -840,16 +886,71 @@ mod tests {
     #[test]
     fn phonebook_names_override_learned_ones() {
         let s = Store::in_memory().unwrap();
-        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into(), None)])
+            .unwrap();
         let n = s
             .save_phonebook(&[
-                ("+13025550173".into(), "Zoe Jones".into()),
-                ("+12145550186".into(), "Priya".into()),
+                ("+13025550173".into(), "Zoe Jones".into(), None),
+                ("+12145550186".into(), "Priya".into(), None),
             ])
             .unwrap();
         assert_eq!(n, 2);
         let names: Vec<String> = s.contacts().unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["Priya", "Zoe Jones"]);
+    }
+
+    #[test]
+    fn photo_references_round_trip_and_resolve_by_number_or_name() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[
+            ("+13025550173".into(), "Zoe".into(), Some("abc123".into())),
+            ("+12145550186".into(), "Priya".into(), None),
+        ])
+        .unwrap();
+        // By number: exact address match.
+        assert_eq!(
+            s.contact_photo_key(Some("+13025550173"), None).unwrap().as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(
+            s.contact_photo_key(Some("+12145550186"), None).unwrap(),
+            None,
+            "no photo"
+        );
+        // By name: falls back when the number is unknown.
+        assert_eq!(
+            s.contact_photo_key(Some("+1999"), Some("Zoe")).unwrap().as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(
+            s.contact_photo_key(None, Some("zoe")).unwrap().as_deref(),
+            Some("abc123"),
+            "case-insensitive"
+        );
+        // Only non-null photo keys are listed, for cleanup.
+        assert_eq!(s.photo_keys().unwrap(), ["abc123".to_string()].into_iter().collect());
+        // A resync that drops the photo clears the reference.
+        s.save_phonebook(&[("+13025550173".into(), "Zoe".into(), None)])
+            .unwrap();
+        assert_eq!(s.contact_photo_key(Some("+13025550173"), None).unwrap(), None);
+        assert!(s.photo_keys().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_name_two_people_share_lends_no_photo() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[
+            ("+15550000001".into(), "Sam".into(), Some("aaaa1111".into())),
+            ("+15550000002".into(), "Sam".into(), Some("bbbb2222".into())),
+        ])
+        .unwrap();
+        // Two different Sams with different photos: a name lookup must stay ambiguous.
+        assert_eq!(s.contact_photo_key(None, Some("Sam")).unwrap(), None);
+        // ...but each number still resolves to its own.
+        assert_eq!(
+            s.contact_photo_key(Some("+15550000001"), None).unwrap().as_deref(),
+            Some("aaaa1111")
+        );
     }
 
     #[test]

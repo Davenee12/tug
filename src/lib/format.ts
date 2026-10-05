@@ -420,11 +420,25 @@ export function snippet(text: string, query: string, width = 90): string {
 }
 
 /**
- * Can tug clear this notification on the phone? Only while it's still there and offers a
- * clear. Never a ringing call: its "negative" action is Decline, which only its own button sends.
+ * Whether a notification's "negative" action is a plain dismiss. For most it's "Clear", but a
+ * call's is "Decline" or "End Call": the ✕ on a WhatsApp "Active Call" row hung up Dave's call.
+ */
+export function isDismissLabel(label: string): boolean {
+  return /^(|clear|dismiss|close|delete)$/i.test(label.trim());
+}
+
+/**
+ * Can tug clear this notification on the phone? Only while it's still there and its negative
+ * action really is a dismiss. Never a call: Decline / End Call are only sent by their own buttons.
  */
 export function canClear(n: PhoneNotification): boolean {
-  return n.live && n.removedAt == null && n.flags.negativeAction && n.category !== "incomingCall";
+  return (
+    n.live &&
+    n.removedAt == null &&
+    n.flags.negativeAction &&
+    n.category !== "incomingCall" &&
+    isDismissLabel(n.negativeLabel)
+  );
 }
 
 const lastDigits = (s: string | null | undefined) => (s ?? "").replace(/\D/g, "").slice(-10);
