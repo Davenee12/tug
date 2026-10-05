@@ -132,12 +132,40 @@ describe("setupDeviceLists", () => {
     expect(lists.others).toEqual([]);
   });
 
-  it("only considers the LE transport", () => {
+  it("offers a discoverable Classic iPhone (the freshly-forgotten case)", () => {
+    // A phone that forgot this PC is discoverable over Classic inquiry with its real name, but
+    // unpaired; its LE adverts are anonymous. The wizard must still offer it.
     const list = [
-      dev({ id: "le", transport: "le", kind: "phone" }),
-      dev({ id: "classic", transport: "classic", kind: "phone" }),
+      dev({ id: "classic", transport: "classic", name: "Jordan's iPhone", kind: "phone", paired: false, canPair: true }),
+    ];
+    expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["classic"]);
+  });
+
+  it("shows one row when a phone appears on both transports (LE wins)", () => {
+    const list = [
+      dev({ id: "le", transport: "le", name: "Jordan's iPhone", kind: "phone" }),
+      dev({ id: "classic", transport: "classic", name: "Jordan's iPhone", kind: "phone" }),
     ];
     expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["le"]);
+  });
+
+  it("keeps a Classic phone with a different name alongside the LE one", () => {
+    const list = [
+      dev({ id: "le", transport: "le", name: "A iPhone", kind: "phone", connected: true }),
+      dev({ id: "classic", transport: "classic", name: "B iPhone", kind: "phone" }),
+    ];
+    // Connected LE first, then the distinct Classic phone.
+    expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["le", "classic"]);
+  });
+
+  it("hides Classic accessories and counts them", () => {
+    const list = [
+      dev({ id: "phone", transport: "classic", name: "Jordan's iPhone", kind: "phone", paired: false, canPair: true }),
+      dev({ id: "airpods", transport: "classic", name: "AirPods", kind: "accessory", paired: true }),
+    ];
+    const lists = setupDeviceLists(list);
+    expect(lists.phones.map((d) => d.id)).toEqual(["phone"]);
+    expect(lists.hiddenAccessories).toBe(1);
   });
 
   it("puts a connected phone first", () => {
