@@ -25,6 +25,8 @@ export interface Day {
 
 export interface Forecast {
   fetchedAt: number;
+  /** IANA zone of the place, e.g. America/New_York (absent in caches from before it was kept). */
+  timezone?: string;
   now: { time: string; temp: number; feels: number; code: number; day: boolean; wind: number; humidity: number };
   hours: Hour[]; // from the current hour, next 24
   days: Day[]; // today first, 7 days
@@ -126,6 +128,7 @@ export function parseForecast(j: any, fetchedAt: number): Forecast {
   }));
   return {
     fetchedAt,
+    timezone: typeof j.timezone === "string" ? j.timezone : undefined,
     now: {
       time: c.time,
       temp: c.temperature_2m,
@@ -152,6 +155,39 @@ export async function searchPlaces(query: string): Promise<Place[]> {
     latitude: r.latitude,
     longitude: r.longitude,
   }));
+}
+
+/**
+ * A name for coordinates from "Use my location" ("Orlando, Florida"). BigDataCloud's
+ * client-side reverse lookup: free, no key, meant for a device looking up itself.
+ */
+export async function nameFor(latitude: number, longitude: number): Promise<string | null> {
+  const q = new URLSearchParams({
+    latitude: String(round(latitude)),
+    longitude: String(round(longitude)),
+    localityLanguage: "en",
+  });
+  const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?${q}`);
+  if (!res.ok) return null;
+  return placeName(await res.json());
+}
+
+export function placeName(j: { city?: string; locality?: string; principalSubdivision?: string; countryCode?: string; countryName?: string }): string | null {
+  const town = j.city || j.locality;
+  if (!town) return null;
+  const region = j.principalSubdivision && j.principalSubdivision !== town ? j.principalSubdivision : null;
+  const country = j.countryCode && j.countryCode !== "US" ? j.countryName : null;
+  return [town, region, country].filter(Boolean).join(", ");
+}
+
+/** The time at the place, "9:58 PM", in its own zone when known. */
+export function localTime(now: Date, timezone?: string): string {
+  const opts: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  try {
+    return now.toLocaleTimeString(undefined, timezone ? { ...opts, timeZone: timezone } : opts);
+  } catch {
+    return now.toLocaleTimeString(undefined, opts); // unknown zone name
+  }
 }
 
 /** "Today", "Tue" for a place-local date. */

@@ -50,3 +50,16 @@ pub fn locate() -> Result<Position, String> {
 pub fn locate() -> Result<Position, String> {
     Err(DENIED.to_string())
 }
+
+#[cfg(all(test, windows))]
+mod tests {
+    /// Hardware check: `cargo test --lib location -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn locate_on_this_pc() {
+        match super::locate() {
+            Ok(p) => println!("located: {:.2}, {:.2}", p.latitude, p.longitude),
+            Err(e) => panic!("locate failed: {e}"),
+        }
+    }
+}
