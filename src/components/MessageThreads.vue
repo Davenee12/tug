@@ -158,7 +158,17 @@ const statusLabel = (i: ConversationItem) => {
 };
 
 // Composer: replies go through the iPhone over message access (MAP).
-const draft = ref("");
+// One draft per conversation: a shared box carried text typed to one person into another's
+// conversation, where Enter would send it to the wrong person.
+const drafts = ref<Record<string, string>>({});
+const draft = computed({
+  get: () => (selected.value ? (drafts.value[selected.value.key] ?? "") : ""),
+  set: (text: string) => {
+    if (selected.value) drafts.value = { ...drafts.value, [selected.value.key]: text };
+  },
+});
+const draftFor = (key: string) => drafts.value[key] ?? "";
+const setDraftFor = (key: string, text: string) => (drafts.value = { ...drafts.value, [key]: text });
 const sending = ref(false);
 /** Number chosen in the To: picker, per conversation (several numbers under one name). */
 const chosen = ref<Record<string, string>>({});
@@ -186,9 +196,11 @@ async function send(text = draft.value) {
   const to = replyTo.value;
   if (!conv || !to || !text.trim() || sending.value) return;
   sending.value = true;
-  if (text === draft.value) draft.value = "";
+  // Keyed by the conversation it was typed in, even if another is opened while it sends.
+  const key = conv.key;
+  if (text === draftFor(key)) setDraftFor(key, "");
   const ok = await tug.sendMessage(to, text);
-  if (!ok && !draft.value) draft.value = text;
+  if (!ok && !draftFor(key)) setDraftFor(key, text);
   // You've answered, so their notifications on the phone are done with.
   if (ok) void tug.clearItems(conv.notifications);
   sending.value = false;

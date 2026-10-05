@@ -201,6 +201,7 @@ export const useTugStore = defineStore("tug", () => {
    * the app checks them every couple of seconds so flipping one on the phone shows up at once.
    */
   const setupSharingShown = ref(false);
+  let watchRenew: number | undefined;
   const pageVisible = ref(document.visibilityState === "visible");
   document.addEventListener("visibilitychange", () => (pageVisible.value = document.visibilityState === "visible"));
   // The switches get flipped on the phone, with tug on any screen or in the tray. So for the
@@ -214,6 +215,7 @@ export const useTugStore = defineStore("tug", () => {
       if (!id) return;
       fresh.value = true;
       window.clearTimeout(freshTimer);
+    window.clearInterval(watchRenew);
       freshTimer = window.setTimeout(() => (fresh.value = false), FRESH_MS);
     },
   );
@@ -225,7 +227,13 @@ export const useTugStore = defineStore("tug", () => {
     () =>
       (pageVisible.value && (view.value === "settings" || setupSharingShown.value)) ||
       (fresh.value && switchesPending.value),
-    (on) => void api.setWatching(on).catch(() => undefined),
+    (on) => {
+      void api.setWatching(on).catch(() => undefined);
+      // The backend lets fast checks lapse after 90 s unless renewed, so a missed "off"
+      // can't leave the phone polled every 2 s; renew while they're wanted.
+      window.clearInterval(watchRenew);
+      if (on) watchRenew = window.setInterval(() => void api.setWatching(true).catch(() => undefined), 45_000);
+    },
     { immediate: true },
   );
 
@@ -292,8 +300,14 @@ export const useTugStore = defineStore("tug", () => {
   let batteryAlerted: number | null = null;
   async function checkBattery(level: number | null) {
     const r = batteryAlert(level, batteryAlerted);
+    // An alert that couldn't be shown (switch off, Do not disturb…) isn't used up: it comes
+    // when it can. Only a shown alert (or a charge, which resets it) moves the mark.
+    if (r.alert == null) {
+      batteryAlerted = r.alerted;
+      return;
+    }
+    if (!settings.value.lowBattery || !(await canToast())) return;
     batteryAlerted = r.alerted;
-    if (r.alert == null || !settings.value.lowBattery || !(await canToast())) return;
     sendNotification({ title: "iPhone battery low", body: `${level}% left. Time to charge it.` });
   }
 
