@@ -4,6 +4,7 @@ import { ArrowLeft, Bluetooth, Check, LoaderCircle, MapPin, Monitor, Radio, Smar
 import { useTugStore } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { useFocusTrap } from "../lib/focusTrap";
+import PhoneSwitches from "./PhoneSwitches.vue";
 import { api } from "../lib/ipc";
 import SettingsSwitch from "./SettingsSwitch.vue";
 import TugMark from "./TugMark.vue";
@@ -17,12 +18,13 @@ const weather = useWeatherStore();
 const root = ref<HTMLElement | null>(null);
 useFocusTrap(root);
 
-type Step = "welcome" | "bluetooth" | "connect" | "pin" | "sharing" | "try" | "personal" | "done";
-const ORDER: Step[] = ["welcome", "bluetooth", "connect", "pin", "sharing", "try", "personal", "done"];
+type Step = "welcome" | "bluetooth" | "connect" | "pin" | "sharing" | "texts" | "try" | "personal" | "done";
+const ORDER: Step[] = ["welcome", "bluetooth", "connect", "pin", "sharing", "texts", "try", "personal", "done"];
 const PROGRESS: Array<[Step[], string]> = [
   [["bluetooth"], "Bluetooth"],
   [["connect", "pin"], "Connect"],
-  [["sharing"], "Sharing"],
+  [["sharing"], "Notifications"],
+  [["texts"], "Texts"],
   [["try"], "Try it"],
   [["personal", "done"], "Finish"],
 ];
@@ -132,25 +134,31 @@ watch(
   },
 );
 
-// ---- Sharing: the iPhone's three switches, mirrored live ----
+// ---- Sharing: the notifications switch, mirrored live ----
 const sharing = computed(() => [
-  {
-    label: "Share System Notifications",
-    why: "Your notifications on this PC",
-    on: s.value.services.notifications,
-    required: true,
-  },
-  { label: "Show Notifications", why: "Read and reply to texts", on: s.value.services.messages && !s.value.messagesError, required: false },
-  { label: "Sync Contacts", why: "Names instead of numbers", on: tug.contacts.length > 0 && !s.value.contactsError, required: false },
+  { label: "Share System Notifications", why: "Your notifications on this PC", on: s.value.services.notifications, required: true },
 ]);
 const sharingDone = computed(() => sharing.value.every((x) => x.on));
 const connecting = computed(() => s.value.connection !== "connected");
+
+// ---- Texts: a second, Classic pairing made from Windows, then two more switches ----
+// It comes after the notifications pairing on purpose: pairing for notifications when the
+// phone was already paired for texts broke the texts pairing in testing; this order kept both.
+const texts = computed(() => [
+  { label: "Show Notifications", why: "Read and reply to texts", on: s.value.services.messages && !s.value.messagesError, required: false },
+  { label: "Sync Contacts", why: "Names instead of numbers", on: tug.contacts.length > 0 && !s.value.contactsError, required: false },
+]);
+const textsDone = computed(() => texts.value.every((x) => x.on));
+/** The phone answers for texts (connected, or asking for its switch): the Classic pairing exists. */
+const textsPaired = computed(() => s.value.services.messages || !!s.value.messagesError);
+
 let shareTimer: number | undefined;
 watch(
-  [step, sharingDone],
-  ([st, done]) => {
+  [step, sharingDone, textsDone],
+  ([st, shared, textsOn]) => {
     window.clearTimeout(shareTimer);
-    if (st === "sharing" && done) shareTimer = window.setTimeout(() => step.value === "sharing" && go("try"), 1500);
+    if (st === "sharing" && shared) shareTimer = window.setTimeout(() => step.value === "sharing" && go("texts"), 1500);
+    if (st === "texts" && textsOn) shareTimer = window.setTimeout(() => step.value === "texts" && go("try"), 1500);
   },
   { immediate: true },
 );
@@ -159,7 +167,7 @@ watch(
 let baseline = 0;
 const first = ref<PhoneNotification | null>(null);
 watch(step, (st) => {
-  tug.setupSharingShown = st === "sharing";
+  tug.setupSharingShown = st === "sharing" || st === "texts";
   if (st === "try") {
     baseline = Math.max(0, ...tug.notifications.map((n) => n.id));
     first.value = null;
@@ -381,23 +389,9 @@ const SHORTCUTS: Array<[string, string]> = [
           <h1 class="headline text-[36px] leading-tight">Turn on sharing</h1>
           <p class="mt-2 text-[15px] text-muted">
             On your iPhone, open <strong class="font-medium text-body-strong">Settings › Bluetooth</strong>, tap
-            <strong class="font-medium text-body-strong">ⓘ</strong> next to this PC, and switch these on. They'll light up here as you do.
+            <strong class="font-medium text-body-strong">ⓘ</strong> next to this PC, and switch this on. It lights up here as you do.
           </p>
-          <!-- A copy of the iPhone screen; its switches follow the real ones -->
-          <div class="mx-auto mt-8 w-full max-w-[380px] overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-sm">
-            <p class="border-b border-hairline-soft px-5 py-3 text-center text-[13px] font-semibold text-ink">This PC</p>
-            <ul class="divide-y divide-hairline-soft">
-              <li v-for="x in sharing" :key="x.label" class="flex items-center gap-3 px-5 py-3.5">
-                <span class="min-w-0 flex-1">
-                  <span class="block text-[14px] text-ink">{{ x.label }}</span>
-                  <span class="block text-[12px] text-muted">{{ x.why }}{{ x.required ? "" : " · optional" }}</span>
-                </span>
-                <span :class="['relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors duration-500', x.on ? 'bg-success' : 'bg-surface-cream-strong']">
-                  <span :class="['absolute top-[2px] left-0 size-[22px] rounded-full bg-canvas shadow-sm transition-transform duration-500', x.on ? 'translate-x-[20px]' : 'translate-x-[2px]']" />
-                </span>
-              </li>
-            </ul>
-          </div>
+          <PhoneSwitches :switches="sharing" />
           <div v-if="s.pairingStale" class="mt-6 flex items-center gap-3 rounded-xl bg-surface-card px-4 py-3">
             <p class="min-w-0 flex-1 text-[13px] text-body">Your iPhone has forgotten this PC, so it can't connect. Pair again: it takes a few seconds.</p>
             <button class="btn-primary btn-sm" :disabled="repairing" @click="pairAgain">
@@ -408,12 +402,51 @@ const SHORTCUTS: Array<[string, string]> = [
             <LoaderCircle :size="14" class="animate-spin" /> Connecting to your iPhone…
           </p>
           <p v-else-if="sharingDone" class="mt-6 flex items-center justify-center gap-2 text-[14px] font-medium text-ink">
-            <Check :size="16" class="text-accent-teal" /> Perfect. All three are on.
+            <Check :size="16" class="text-accent-teal" /> Notifications are on.
           </p>
           <div class="mt-auto flex justify-end pt-8">
-            <button class="btn-primary" :disabled="!sharing[0].on" data-autofocus @click="go('try')">
-              {{ sharing[0].on && !sharingDone ? "Continue without the rest" : "Continue" }}
-            </button>
+            <button class="btn-primary" :disabled="!sharingDone" data-autofocus @click="go('texts')">Continue</button>
+          </div>
+        </section>
+
+        <!-- Texts: pair for messages from Windows, then two switches on the phone -->
+        <section v-else-if="step === 'texts'" key="texts" class="animate-step-in flex flex-1 flex-col py-10">
+          <h1 class="headline text-[36px] leading-tight">Bring your texts over</h1>
+          <template v-if="!textsPaired">
+            <p class="mt-2 text-[15px] text-muted">
+              Reading and replying to texts uses a second Bluetooth connection, made from this PC. Optional, about a minute.
+            </p>
+            <ol class="mt-8 flex flex-col gap-4 text-[14px] text-body">
+              <li class="flex gap-3">
+                <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-card text-[12px] font-medium text-ink">1</span>
+                <span>On your iPhone, open <strong class="font-medium text-body-strong">Settings › Bluetooth</strong> and leave it on screen.</span>
+              </li>
+              <li class="flex gap-3">
+                <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-card text-[12px] font-medium text-ink">2</span>
+                <span>
+                  On this PC, open Bluetooth settings, choose <strong class="font-medium text-body-strong">Add device › Bluetooth</strong>, pick your iPhone,
+                  and confirm the code on both screens.
+                  <button class="btn-secondary btn-sm mt-2 flex" data-autofocus @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
+                </span>
+              </li>
+            </ol>
+            <p class="mt-8 flex items-center gap-2 text-[13px] text-muted">
+              <LoaderCircle :size="14" class="animate-spin" /> Waiting for your iPhone to answer for texts…
+            </p>
+          </template>
+          <template v-else>
+            <p class="mt-2 text-[15px] text-muted">
+              Paired for texts. On your iPhone, tap <strong class="font-medium text-body-strong">ⓘ</strong> next to this PC again and switch these on. Sync
+              Contacts appears a few seconds after the first.
+            </p>
+            <PhoneSwitches :switches="texts" />
+            <p v-if="textsDone" class="mt-6 flex items-center justify-center gap-2 text-[14px] font-medium text-ink">
+              <Check :size="16" class="text-accent-teal" /> Perfect. Texts and names are coming over.
+            </p>
+          </template>
+          <div class="mt-auto flex items-center justify-end gap-4 pt-8">
+            <button v-if="!textsDone" class="text-[13px] text-muted active:text-ink" @click="go('try')">Skip for now</button>
+            <button v-else class="btn-primary" data-autofocus @click="go('try')">Continue</button>
           </div>
         </section>
 

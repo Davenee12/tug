@@ -170,27 +170,38 @@ function simulateConnect(id: string) {
   status.device = { id, name };
   status.connection = "connecting";
   send();
+  // The real order: connected, Share System Notifications switched on, then the Texts step's
+  // Windows pairing (the phone asks for its switch), Show Notifications, Sync Contacts.
   setTimeout(() => {
     status.connection = "connected";
     status.battery = 76;
-    status.services = { ...status.services, notifications: true, media: true, battery: true };
+    status.services = { ...status.services, media: true, battery: true };
     send();
   }, 900);
   setTimeout(() => {
-    status.services = { ...status.services, messages: true };
+    status.services = { ...status.services, notifications: true };
     send();
   }, 2400);
   setTimeout(() => {
+    status.messagesError = "the iPhone refused message access; turn on Show Notifications for this PC";
+    send();
+  }, 8000);
+  setTimeout(() => {
+    status.messagesError = null;
+    status.services = { ...status.services, messages: true };
+    send();
+  }, 10500);
+  setTimeout(() => {
     contacts.push({ address: ZOE, name: "Zoe" }, { address: "+12145550199", name: "Priya" });
     void emit("contacts", [...contacts]);
-  }, 3400);
+  }, 12000);
   setTimeout(() => {
     const first = n("com.apple.MobileSMS", "Messages", "Zoe", "hey! is this thing on? 👋", 0);
     first.id = 500;
     first.receivedAt = Date.now();
     history.unshift(first);
     void emit("notification", first);
-  }, 9000);
+  }, 16000);
 }
 
 mockIPC(
