@@ -1,11 +1,25 @@
 //! tug in the system tray, and unread texts on the taskbar: the tray tooltip counts them
 //! and the taskbar button gets a small dot, so tug is noticeable while it's minimized.
+//! Closing the window hides tug to the tray (it keeps mirroring the phone); Quit is in the
+//! tray menu.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Runtime};
 
 const TRAY_ID: &str = "tug";
+/// Settings key: the "still running in the tray" hint has been shown once.
+const HINT_SHOWN: &str = "tray.hint_shown";
+
+/// Set once the tray icon exists. Without it, hiding on close would leave tug running
+/// with no way back or out, so closing quits as before.
+static INSTALLED: AtomicBool = AtomicBool::new(false);
+
+pub fn installed() -> bool {
+    INSTALLED.load(Ordering::Relaxed)
+}
 
 /// Left-click brings tug forward; right-click offers Open and Quit.
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
@@ -35,7 +49,29 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         builder = builder.icon(icon.clone());
     }
     builder.build(app)?;
+    INSTALLED.store(true, Ordering::Relaxed);
     Ok(())
+}
+
+/// The window was closed and tug went to the tray: say so the first time, so it doesn't
+/// look like tug vanished (or quit and stopped mirroring the phone).
+pub fn hint_once<R: Runtime>(app: &AppHandle<R>, store: &crate::store::Store) {
+    if store.setting(HINT_SHOWN).ok().flatten().is_some() {
+        return;
+    }
+    use tauri_plugin_notification::NotificationExt;
+    let shown = app
+        .notification()
+        .builder()
+        .title("tug is still running")
+        .body("It's in the tray by the clock, still mirroring your iPhone. Right-click it to quit.")
+        .show();
+    match shown {
+        Ok(()) => {
+            let _ = store.set_setting(HINT_SHOWN, "1");
+        }
+        Err(e) => log::info!("tray hint not shown: {e}"),
+    }
 }
 
 /// Bring the main window to the front, restoring it if minimized.

@@ -49,6 +49,19 @@ pub fn run() {
             }
             Ok(())
         })
+        // Closing the window hides tug to the tray instead of quitting (Quit is in the tray
+        // menu), so the phone stays mirrored and notifications keep arriving.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" && tray::installed() {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    if let Some(state) = window.app_handle().try_state::<AppState>() {
+                        tray::hint_once(window.app_handle(), &state.shared.store);
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::get_now_playing,
