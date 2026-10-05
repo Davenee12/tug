@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanName, groupConversations, groupFeed, highlight, initials, newestUnreadThread, snippet, threadKey } from "./format";
+import { canClear, cleanName, groupConversations, groupFeed, highlight, initials, newestUnreadThread, snippet, threadKey } from "./format";
 import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const T0 = Date.parse("2026-10-05T12:00:00");
@@ -175,5 +175,19 @@ describe("search presentation", () => {
     expect(s).toContain("dinner");
     expect(s.startsWith("…") && s.endsWith("…")).toBe(true);
     expect(snippet("short text", "x")).toBe("short text");
+  });
+});
+
+describe("canClear", () => {
+  it("clears what's still on the phone and offers a clear", () => {
+    expect(canClear(note("Tay", "hey", 0))).toBe(true);
+    expect(canClear(note("Tay", "hey", 0, { live: false }))).toBe(false);
+    expect(canClear(note("Tay", "hey", 0, { removedAt: T0 }))).toBe(false);
+  });
+
+  it("never clears a ringing call (its negative action is Decline)", () => {
+    const ringing = note("Mum", "Incoming call", 0, { appId: "com.apple.mobilephone", category: "incomingCall", negativeLabel: "Decline" });
+    expect(canClear(ringing)).toBe(false);
+    expect(canClear({ ...ringing, category: "missedCall" })).toBe(true);
   });
 });
