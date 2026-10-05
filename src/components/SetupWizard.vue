@@ -5,6 +5,7 @@ import { useTugStore } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { useFocusTrap } from "../lib/focusTrap";
 import PhoneSwitches from "./PhoneSwitches.vue";
+import { phoneSwitches } from "../lib/phoneSwitches";
 import { api, errorMessage } from "../lib/ipc";
 import { friendlyLocateError } from "../lib/locating";
 import { useLocating } from "../lib/useLocating";
@@ -136,21 +137,19 @@ watch(
   },
 );
 
+// ---- The iPhone's three switches, each with a live state from real signals (lib/phoneSwitches) ----
+const allSwitches = computed(() => phoneSwitches(s.value, tug.contacts.length));
+
 // ---- Sharing: the notifications switch, mirrored live ----
-const sharing = computed(() => [
-  { label: "Share System Notifications", why: "Your notifications on this PC", on: s.value.services.notifications, required: true },
-]);
-const sharingDone = computed(() => sharing.value.every((x) => x.on));
+const sharing = computed(() => allSwitches.value.filter((x) => x.key === "notifications"));
+const sharingDone = computed(() => sharing.value.every((x) => x.state === "on"));
 const connecting = computed(() => s.value.connection !== "connected");
 
 // ---- Texts: a second, Classic pairing made from Windows, then two more switches ----
 // It comes after the notifications pairing on purpose: pairing for notifications when the
 // phone was already paired for texts broke the texts pairing in testing; this order kept both.
-const texts = computed(() => [
-  { label: "Show Notifications", why: "Read and reply to texts", on: s.value.services.messages && !s.value.messagesError, required: false },
-  { label: "Sync Contacts", why: "Names instead of numbers", on: tug.contacts.length > 0 && !s.value.contactsError, required: false },
-]);
-const textsDone = computed(() => texts.value.every((x) => x.on));
+const texts = computed(() => allSwitches.value.filter((x) => x.key === "messages" || x.key === "contacts"));
+const textsDone = computed(() => texts.value.every((x) => x.state === "on"));
 /** The phone answers for texts (connected, or asking for its switch): the Classic pairing works. */
 const textsPaired = computed(() => s.value.services.messages || s.value.textsPairing === "ok");
 
