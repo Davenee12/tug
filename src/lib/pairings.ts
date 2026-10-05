@@ -35,7 +35,21 @@ export function setupDeviceLists(discovered: DiscoveredDevice[]): DeviceLists {
   const order = (a: DiscoveredDevice, b: DiscoveredDevice) =>
     Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name);
 
-  const lePhones = discovered.filter((d) => d.transport === "le" && d.kind === "phone");
+  // One row per phone. An iPhone shows up on both transports with the same name; an unpaired
+  // iPhone only accepts pairing over Classic (LE pairing fails with status 19 on Jordan's iPhone,
+  // and the LE bond then comes along via cross-transport keys). So when both are seen, the
+  // Classic row wins unless the LE side is already paired or connected (the LightBlue path).
+  const classicNames = new Set(
+    discovered
+      .filter((d) => d.transport === "classic" && d.kind === "phone")
+      .map(realName)
+      .filter((n): n is string => n !== null),
+  );
+  const leUsable = (d: DiscoveredDevice) => {
+    const n = realName(d);
+    return d.paired || d.connected || n === null || !classicNames.has(n);
+  };
+  const lePhones = discovered.filter((d) => d.transport === "le" && d.kind === "phone" && leUsable(d));
   const leNames = new Set(lePhones.map(realName).filter((n): n is string => n !== null));
   // Classic phones, minus any that are the same phone already offered over LE.
   const classicPhones = discovered.filter((d) => {
@@ -47,8 +61,9 @@ export function setupDeviceLists(discovered: DiscoveredDevice[]): DeviceLists {
   return {
     phones: [...lePhones, ...classicPhones].sort(order),
     // Unknowns (a nameless just-connected iPhone) stay LE-only: a nameless Classic device with no
-    // phone signal is an accessory, not a maybe-iPhone, so it shouldn't masquerade as one.
-    others: discovered.filter((d) => d.transport === "le" && d.kind === "unknown").sort(order),
+    // phone signal is an accessory, not a maybe-iPhone, so it shouldn't masquerade as one. An LE
+    // unknown named like a Classic phone is that phone's other side, already offered above.
+    others: discovered.filter((d) => d.transport === "le" && d.kind === "unknown" && leUsable(d)).sort(order),
     hiddenAccessories: discovered.filter((d) => d.kind === "accessory").length,
   };
 }
