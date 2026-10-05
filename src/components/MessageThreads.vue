@@ -29,6 +29,7 @@ const convs = computed(() => {
         appLabel: "Messages",
         contact: draft.name,
         address: draft.address,
+        addresses: [draft.address],
         items: [],
         latest: placeholder,
         notifications: [],
@@ -81,22 +82,34 @@ const statusLabel = (i: ConversationItem) => {
 // Composer: replies go through the iPhone over message access (MAP).
 const draft = ref("");
 const sending = ref(false);
-const canReply = computed(() => !!selected.value?.address && tug.status.services.messages);
+/** Number chosen in the To: picker, per conversation (several numbers under one name). */
+const chosen = ref<Record<string, string>>({});
+const replyTo = computed(() => {
+  const c = selected.value;
+  if (!c) return null;
+  const pick = chosen.value[c.key];
+  return pick && c.addresses.includes(pick) ? pick : c.address;
+});
+const canPickNumber = computed(() => (selected.value?.addresses.length ?? 0) > 1);
+const canReply = computed(
+  () => (!!replyTo.value || canPickNumber.value) && tug.status.services.messages && !!selected.value?.addresses.length,
+);
 const replyHint = computed(() => {
   if (!selected.value) return "";
   if (selected.value.appId !== "com.apple.MobileSMS") return `Reply to ${selected.value.appLabel} messages on your phone.`;
   if (tug.status.messagesError) return tug.status.messagesError;
   if (!tug.status.services.messages) return "Connecting to your iPhone's messages…";
-  if (!selected.value.address) return "tug will learn this number when their next text arrives.";
+  if (!selected.value.addresses.length) return "tug will learn this number when their next text arrives.";
   return "";
 });
 
 async function send(text = draft.value) {
   const conv = selected.value;
-  if (!conv?.address || !text.trim() || sending.value) return;
+  const to = replyTo.value;
+  if (!conv || !to || !text.trim() || sending.value) return;
   sending.value = true;
   if (text === draft.value) draft.value = "";
-  const ok = await tug.sendMessage(conv.address, text);
+  const ok = await tug.sendMessage(to, text);
   if (!ok && !draft.value) draft.value = text;
   // You've answered, so their notifications on the phone are done with.
   if (ok) void tug.clearItems(conv.notifications);
@@ -202,6 +215,18 @@ function onKey(e: KeyboardEvent) {
       </div>
 
       <footer class="border-t border-hairline px-6 py-3">
+        <label v-if="canReply && canPickNumber" class="mb-2 flex items-center gap-2 px-1 text-[12px] text-muted">
+          To:
+          <select
+            class="rounded-md border border-hairline bg-canvas px-2 py-1 font-mono text-[12px] text-ink"
+            :value="replyTo ?? ''"
+            @change="chosen[selected.key] = ($event.target as HTMLSelectElement).value"
+          >
+            <option v-if="!replyTo" value="" disabled>Choose a number</option>
+            <option v-for="a in selected.addresses" :key="a" :value="a">{{ formatAddress(a) }}</option>
+          </select>
+          <span v-if="selected.addresses.length > 1">· {{ selected.addresses.length }} numbers under this name</span>
+        </label>
         <form v-if="canReply" class="flex items-end gap-2" @submit.prevent="send()">
           <textarea
             v-model="draft"
@@ -210,7 +235,7 @@ function onKey(e: KeyboardEvent) {
             :placeholder="`Text ${selected.contact}`"
             @keydown="onKey"
           />
-          <button type="submit" class="btn-primary w-10 shrink-0 px-0" :disabled="!draft.trim() || sending" aria-label="Send">
+          <button type="submit" class="btn-primary w-10 shrink-0 px-0" :disabled="!draft.trim() || sending || !replyTo" aria-label="Send">
             <SendHorizontal :size="16" />
           </button>
         </form>

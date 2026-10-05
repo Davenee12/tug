@@ -36,6 +36,7 @@ const EMPTY_NOW_PLAYING: NowPlaying = {
   state: "unknown",
   rate: null,
   elapsed: null,
+  elapsedAt: null,
   volume: null,
   title: null,
   artist: null,
@@ -47,8 +48,6 @@ const EMPTY_NOW_PLAYING: NowPlaying = {
 export const useTugStore = defineStore("tug", () => {
   const status = ref<DeviceStatus>(EMPTY_STATUS);
   const nowPlaying = ref<NowPlaying>(EMPTY_NOW_PLAYING);
-  /** When the last now-playing update arrived, to advance the progress bar locally. */
-  const nowPlayingAt = ref(Date.now());
   const notifications = ref<PhoneNotification[]>([]);
   /** Messages from message access (MAP), oldest first. */
   const messages = ref<SmsMessage[]>([]);
@@ -209,7 +208,6 @@ export const useTugStore = defineStore("tug", () => {
       }),
       on("now-playing", (np) => {
         nowPlaying.value = np;
-        nowPlayingAt.value = Date.now();
       }),
       on("notification", (n) => {
         const added = upsert(notifications.value, n);
@@ -288,7 +286,6 @@ export const useTugStore = defineStore("tug", () => {
   return {
     status,
     nowPlaying,
-    nowPlayingAt,
     notifications,
     messages,
     contacts,

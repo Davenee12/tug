@@ -396,6 +396,13 @@ fn read_tuples(mut b: &[u8], count: usize) -> Option<Vec<(u8, &[u8])>> {
     Some(out)
 }
 
+/// If `chunk` is the start of a notification-attributes response, the UID it's for.
+/// Used to recognise a late reply to an earlier request, whatever was expected.
+pub fn notification_response_uid(chunk: &[u8]) -> Option<u32> {
+    (chunk.len() >= 5 && chunk[0] == CMD_GET_NOTIFICATION_ATTRIBUTES)
+        .then(|| u32::from_le_bytes([chunk[1], chunk[2], chunk[3], chunk[4]]))
+}
+
 /// `20261004T153012` → `2026-10-04T15:30:12`.
 pub fn ancs_date_to_iso(s: &str) -> Option<String> {
     let b = s.as_bytes();
@@ -548,6 +555,13 @@ mod tests {
                 display_name: Some("WhatsApp".into())
             })
         );
+    }
+
+    #[test]
+    fn recognises_the_start_of_a_notification_response() {
+        assert_eq!(notification_response_uid(&notification_response(42)), Some(42));
+        assert_eq!(notification_response_uid(&[1, b'a', 0]), None, "app response");
+        assert_eq!(notification_response_uid(&[0, 1, 0]), None, "too short to name a UID");
     }
 
     #[test]
