@@ -12,11 +12,25 @@ See docs/STABILIZATION.md for the current backlog.
 4. ~~Sprint 5: CI on every PR, second bug hunt (3 High / 3 Med / 8 Low fixed), `actor.rs` split
    into six modules.~~ (shipped alongside v0.5.5)
 
-## v0.5.7 — calling anyone, and texts in real time (agreed with Dave, 2026-10-05)
+## v0.5.7 — tug feels built into Windows (split agreed with Dave, 2026-10-05)
+Self-contained features that don't wait on hardware spikes or a purchase; built in parallel.
+- **Actionable pop-ups**: reply to a text from the Windows notification, Copy code, Call back on a
+  missed call, Clear; body click still opens tug.
+- **Media keys + Windows media panel** control the iPhone's music (SystemMediaTransportControls).
+- **Open in browser**: an "Open" button on notifications from apps with a website; Gmail opens a
+  search for that email.
+- **Filter unknown senders**: unsaved numbers / spam go to a collapsed "Unknown senders" list, out of
+  conversations, the unread badge and pop-ups (codes still pop up); "Move to conversations" or reply.
+- **Press-and-hold volume.**
+- **Connection health + "Copy diagnostics"** (redacted logs for support).
+- **Start with Windows, minimized to the tray** (off by default) and **remember the phone by id**.
+- **Low phone battery alert** at 20% and 10%.
+- Live texts' pure groundwork (event parser, OBEX server framing, registration call) lands inert.
 
-Two big bets (calling, live texts) plus smaller approved items. Research done 2026-10-05; the
-sequence below front-loads the two hardware spikes that gate the big bets, runs the pure modules in
-parallel while they're pending, and keeps calling's ship behind Dave's signing decision.
+## v0.5.8 — tug becomes your phone (calling anyone, live texts, auto-updates)
+The big bets: they need Dave's hardware for spikes and, for calling and auto-updates, signing.
+Dave is in the US, so Azure Artifact Signing (~$9.99/mo) is available to him. Spike 0 passed
+2026-10-05 (Handsfree Telephony back on: one PhoneLineTransportDevice for the iPhone).
 
 ### Needs Dave before coding can finish
 - **Hardware (spikes).** Calling and live texts can't be proven without Dave's PC + iPhone; the
@@ -41,23 +55,6 @@ parallel while they're pending, and keeps calling's ship behind Dave's signing d
   `ChangeAudioDeviceAsync(RemoteDevice)` to keep audio on the phone. This is the biggest unknown:
   whether an identity-only sparse package beside an NSIS install satisfies `phoneLineTransportManagement`.
   **Go/no-go for calling rides on this.**
-
-### Can start now — pure modules, no hardware (parallel)
-These land as tested pure PRs regardless of spike outcome:
-- **Live texts — event parser** (`x-bt/MAP-event-report`: NewMessage, SendingSuccess…) and **OBEX
-  server framing**, both pure + unit-tested.
-- **Calling — pure line-status state machine** (the calling module's core, independent of WinRT).
-- **Texts pairing / remember-by-id — pure pick logic** (`pick_device` prefers a stored id over name;
-  this is also the "remember the phone by id" item).
-
-### Independent features — no spike needed (parallel)
-- **Press-and-hold volume.** Holding Now Playing's volume up/down keeps stepping (AMS VolumeUp/Down
-  repeated, accelerating, stopping on release). Hardware only to verify.
-- **Connection health + "Copy diagnostics".** One Settings panel showing each link's state
-  (notifications, media, texts, contacts, calls) and a button that bundles the logs. Today's silent
-  failures (forgotten pairing, Windows closing GATT objects, a broken texts pairing) were log-only.
-- **Start with Windows, minimized to the tray.**
-- **Remember the phone by id, not name** (texts device included) — see the pure pick logic above.
 
 ### Live texts (MAP notifications / MNS) — after the pure modules, hardware to wire
 Texts land the instant the phone gets them instead of within ~8 s of polling; sends show "Sent".
@@ -92,8 +89,7 @@ feature `ApplicationModel_Calls`.
 ### Auto-updates
 From GitHub Releases, **after** releases are signed (same signing work as calling).
 
-## v0.5.8 — candidates
-- **Reply from the Windows pop-up** (type into the toast, Enter sends; technically risky).
+## v0.5.9 — candidates
 - **Welcome back**: after 30+ min away, who texted and called.
 - **Calls in Ctrl+K search**: a person's recent calls in their search result.
 
