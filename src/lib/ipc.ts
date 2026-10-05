@@ -46,6 +46,7 @@ export const api = {
     invoke<void>("set_hidden", { notificationIds, messageIds, hidden }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),
   setWatching: (on: boolean) => invoke<void>("set_watching", { on }),
+  appIcon: (appId: string) => invoke<string | null>("app_icon", { appId }),
   placeLookup: (latitude: number, longitude: number) => invoke<string>("place_lookup", { latitude, longitude }),
   markRead: (messageIds: number[]) => invoke<void>("mark_read", { messageIds }),
   searchAll: (query: string, limit: number) => invoke<SearchResults>("search_all", { query, limit }),
@@ -66,6 +67,7 @@ interface EventPayloads {
   "pairing-request-closed": null;
   message: SmsMessage;
   contacts: Contact[];
+  "open-latest-conversation": null;
   calls: CallRecord[];
 }
 

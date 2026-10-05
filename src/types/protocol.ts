@@ -33,7 +33,13 @@ export interface DeviceStatus {
   messagesError: string | null;
   /** Why the phone's contacts aren't available, when the user can fix it. */
   contactsError: string | null;
+  /** Whether the texts (Classic) pairing works, is missing, or needs making again. */
+  textsPairing: TextsPairing;
+  /** The phone Windows has paired for texts (what to remove when it needs re-pairing). */
+  textsDevice: string | null;
 }
+
+export type TextsPairing = "unknown" | "missing" | "broken" | "ok";
 
 export type Category =
   | "other"
@@ -86,7 +92,8 @@ export type MediaCommand =
   | "nextTrack"
   | "previousTrack"
   | "volumeUp"
-  | "volumeDown";
+  | "volumeDown"
+  | "advanceRepeatMode";
 
 export interface NowPlaying {
   player: string | null;
@@ -100,8 +107,12 @@ export interface NowPlaying {
   artist: string | null;
   album: string | null;
   duration: number | null;
+  /** The player's repeat mode, when it reports one. */
+  repeat: RepeatMode | null;
   available: MediaCommand[];
 }
+
+export type RepeatMode = "off" | "one" | "all";
 
 export type Transport = "le" | "classic";
 
@@ -176,6 +187,8 @@ export interface UiSettings {
   mutedApps: string[];
   /** Closing the window keeps tug running in the tray (read by the backend too). */
   closeToTray: boolean;
+  /** Real app icons in the Feed, fetched once per app from Apple's App Store. */
+  appIcons: boolean;
   /** Experimental Call buttons. Only a successful hands-free check (Settings › iPhone) turns them on. */
   dialing: boolean;
 }

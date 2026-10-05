@@ -152,7 +152,7 @@ const sectionLabel = (s: Option["section"]) => ({ Recent: "Recent", Contacts: "A
           <li v-if="showHeader(i)" class="caption-upper px-3 pt-3 pb-1 text-muted-soft">{{ sectionLabel(o.section) }}</li>
           <li :class="['flex items-center rounded-lg', i === active ? 'bg-surface-card' : '']" @mousemove="active = i">
             <button :data-index="i" class="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left" @click="pick(o)">
-              <AppAvatar app-id="com.apple.MobileSMS" :label="o.name" size="sm" />
+              <AppAvatar app-id="com.apple.MobileSMS" :label="o.name" person size="sm" />
               <span class="min-w-0 flex-1">
                 <span class="block truncate text-[14px] font-medium text-ink">{{ o.name }}</span>
                 <span class="block truncate font-mono text-[12px] text-muted-soft">{{ formatAddress(o.address) }}</span>
