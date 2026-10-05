@@ -7,6 +7,7 @@ import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { connectionHealth, errorAge, type HealthLink, type LinkState } from "../lib/health";
 import { stepZoom } from "../lib/zoom";
+import { escClosesSettings } from "../lib/escape";
 import PhoneSetup from "./PhoneSetup.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsSwitch from "./SettingsSwitch.vue";
@@ -24,9 +25,9 @@ const SECTIONS: Array<{ id: SettingsSection; label: string; icon: Component }> =
 ];
 const current = computed(() => SECTIONS.find((s) => s.id === tug.settingsSection) ?? SECTIONS[0]);
 
-// Esc goes back to where you were (unless a dialog is up; it handles its own Esc).
+// Esc goes back to where you were (unless a dialog or setup is up, or already used the Esc to close itself).
 function onKey(e: KeyboardEvent) {
-  if (e.key === "Escape" && !tug.overlayOpen) {
+  if (escClosesSettings(e, tug.overlayOpen || tug.showSetup)) {
     e.preventDefault();
     tug.closeSettings();
   }
