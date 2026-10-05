@@ -178,8 +178,8 @@ const SELECT: &str = "SELECT n.id, n.session, n.uid, n.app_id, a.display_name, n
             CASE WHEN n.app_id = 'com.apple.MobileSMS' THEN COALESCE((
                 SELECT CASE WHEN COUNT(DISTINCT c.name) = 1 THEN MIN(c.name) END
                 FROM contact_aliases ca JOIN contacts c ON c.address = ca.address
-                WHERE ca.alias = clean_name(n.title)
-                  AND NOT EXISTS (SELECT 1 FROM contacts c2 WHERE c2.name = ca.alias)
+                WHERE lower(ca.alias) = lower(clean_name(n.title))
+                  AND NOT EXISTS (SELECT 1 FROM contacts c2 WHERE lower(c2.name) = lower(ca.alias))
             ), n.title) ELSE n.title END,
             n.subtitle, n.message, n.posted_at, n.received_at, n.flags, n.positive_label, n.negative_label, n.removed_at
      FROM notifications n LEFT JOIN apps a ON a.app_id = n.app_id";
