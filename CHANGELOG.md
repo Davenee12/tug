@@ -12,8 +12,8 @@ Phone sync and weather (Sprint 4).
 
 ### Fixed
 - **Opening a conversation clears it on the phone.** Notifications for the conversation you're
-  reading leave your lock screen and the Feed, and its texts are marked read over Bluetooth (on
-  iPhone, the Messages app's own unread dot still needs the phone; Android clears fully).
+  reading leave your lock screen and the Feed, and its texts are marked read over Bluetooth, so the
+  unread dot in the phone's Messages app clears too.
 - **Renaming a contact on your phone no longer splits their conversation.** tug remembers earlier
   names, including renames made before this version, and keeps everything under the current one.
 - A contact name saved from an inline reply no longer comes out garbled ("Zoer message").
