@@ -166,6 +166,24 @@ pub async fn locate() -> Result<crate::location::Position> {
         .map_err(|e| e.to_string())?
 }
 
+/// The reverse-lookup answer for coordinates (JSON), for naming "Use my location".
+#[tauri::command]
+pub async fn place_lookup(latitude: f64, longitude: f64) -> Result<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::location::place_lookup(latitude, longitude))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The UI is showing the iPhone's switches (or stopped): check them every couple of seconds.
+#[tauri::command]
+pub fn set_watching(state: State<'_, AppState>, on: bool) {
+    if state.shared.set_watching(on) {
+        if let Some(map) = state.shared.map.get() {
+            map.refresh();
+        }
+    }
+}
+
 /// The user opened these messages in tug: mark them read on the phone too.
 #[tauri::command]
 pub fn mark_read(state: State<'_, AppState>, message_ids: Vec<i64>) {

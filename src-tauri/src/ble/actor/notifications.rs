@@ -311,17 +311,18 @@ impl Actor {
             return Err("The iPhone doesn't offer that action for this notification".into());
         }
         let cp = a.control_point.clone();
-        winrt::write(&cp, &ancs::perform_action(uid, positive))
-            .await
-            .map_err(|e| match e {
-                BleError::Protocol(Some(ancs::ERR_ACTION_FAILED)) => {
-                    "The iPhone couldn't perform that action".to_string()
-                }
-                BleError::Protocol(Some(ancs::ERR_UNKNOWN_COMMAND | ancs::ERR_INVALID_COMMAND)) => {
-                    "This iOS version doesn't support notification actions".to_string()
-                }
-                other => other.to_string(),
-            })
+        let what = if positive { "positive" } else { "clear" };
+        let result = winrt::write(&cp, &ancs::perform_action(uid, positive)).await;
+        if result.is_ok() {
+            log::info!("asked the iPhone to {what} notification {uid} (row {id})");
+        }
+        result.map_err(|e| match e {
+            BleError::Protocol(Some(ancs::ERR_ACTION_FAILED)) => "The iPhone couldn't perform that action".to_string(),
+            BleError::Protocol(Some(ancs::ERR_UNKNOWN_COMMAND | ancs::ERR_INVALID_COMMAND)) => {
+                "This iOS version doesn't support notification actions".to_string()
+            }
+            other => other.to_string(),
+        })
     }
 }
 

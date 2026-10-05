@@ -84,6 +84,7 @@ const status: DeviceStatus = setup
       battery: null,
       services: { notifications: false, media: false, battery: false, messages: false },
       lastError: null,
+      pairingStale: false,
       messagesError: null,
       contactsError: null,
     }
@@ -96,6 +97,7 @@ const status: DeviceStatus = setup
       battery: 76,
       services: { notifications: true, media: true, battery: true, messages: true },
       lastError: null,
+      pairingStale: false,
       messagesError: null,
       contactsError: null,
     };
@@ -116,10 +118,12 @@ const nowPlaying: NowPlaying = setup
       available: ["play", "pause", "togglePlayPause", "nextTrack", "previousTrack", "volumeUp", "volumeDown"],
     };
 
+// A connected keyboard listed first: setup must still offer only the iPhone.
 const discovered: DiscoveredDevice[] = [
-  { id: "a", name: "Dave's iPhone", transport: "le", paired: false, connected: true, canPair: true },
-  { id: "b", name: "WH-1000XM5", transport: "classic", paired: true, connected: false, canPair: false },
-  { id: "c", name: "LE-Bose Flex", transport: "le", paired: false, connected: false, canPair: true },
+  { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
+  { id: "a", name: "Dave's iPhone", transport: "le", paired: false, connected: true, canPair: true, kind: "phone" },
+  { id: "b", name: "WH-1000XM5", transport: "classic", paired: true, connected: false, canPair: false, kind: "accessory" },
+  { id: "c", name: "LE-Bose Flex", transport: "le", paired: false, connected: false, canPair: true, kind: "accessory" },
 ];
 
 // seenSince 0: everything still on the phone counts as new, so badges show in the preview.
@@ -166,27 +170,38 @@ function simulateConnect(id: string) {
   status.device = { id, name };
   status.connection = "connecting";
   send();
+  // The real order: connected, Share System Notifications switched on, then the Texts step's
+  // Windows pairing (the phone asks for its switch), Show Notifications, Sync Contacts.
   setTimeout(() => {
     status.connection = "connected";
     status.battery = 76;
-    status.services = { ...status.services, notifications: true, media: true, battery: true };
+    status.services = { ...status.services, media: true, battery: true };
     send();
   }, 900);
   setTimeout(() => {
-    status.services = { ...status.services, messages: true };
+    status.services = { ...status.services, notifications: true };
     send();
   }, 2400);
   setTimeout(() => {
+    status.messagesError = "the iPhone refused message access; turn on Show Notifications for this PC";
+    send();
+  }, 8000);
+  setTimeout(() => {
+    status.messagesError = null;
+    status.services = { ...status.services, messages: true };
+    send();
+  }, 10500);
+  setTimeout(() => {
     contacts.push({ address: TAY, name: "Tay" }, { address: "+12145550199", name: "Daviel" });
     void emit("contacts", [...contacts]);
-  }, 3400);
+  }, 12000);
   setTimeout(() => {
     const first = n("com.apple.MobileSMS", "Messages", "Tay", "hey! is this thing on? 👋", 0);
     first.id = 500;
     first.receivedAt = Date.now();
     history.unshift(first);
     void emit("notification", first);
-  }, 9000);
+  }, 16000);
 }
 
 mockIPC(
@@ -231,6 +246,8 @@ mockIPC(
       case "set_setting":
         settings[a.key as string] = a.value as string;
         return null;
+      case "place_lookup":
+        return JSON.stringify({ city: "Dallas", principalSubdivision: "Texas", countryCode: "US" });
       case "locate":
         return { latitude: 32.78, longitude: -96.8 };
       case "start_discovery":

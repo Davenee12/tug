@@ -35,6 +35,7 @@ const EMPTY_STATUS: DeviceStatus = {
   battery: null,
   services: { notifications: false, media: false, battery: false, messages: false },
   lastError: null,
+  pairingStale: false,
   messagesError: null,
   contactsError: null,
 };
@@ -107,6 +108,39 @@ export const useTugStore = defineStore("tug", () => {
   function closeSettings() {
     if (view.value === "settings") view.value = viewBeforeSettings;
   }
+  /**
+   * The iPhone's switches are on screen (Settings, or setup's sharing step) and tug is visible:
+   * the app checks them every couple of seconds so flipping one on the phone shows up at once.
+   */
+  const setupSharingShown = ref(false);
+  const pageVisible = ref(document.visibilityState === "visible");
+  document.addEventListener("visibilitychange", () => (pageVisible.value = document.visibilityState === "visible"));
+  // The switches get flipped on the phone, with tug on any screen or in the tray. So for the
+  // first minutes after launch or pairing, check fast whenever one is still off, too.
+  const FRESH_MS = 5 * 60 * 1000;
+  const fresh = ref(true);
+  let freshTimer = window.setTimeout(() => (fresh.value = false), FRESH_MS);
+  watch(
+    () => status.value.device?.id,
+    (id) => {
+      if (!id) return;
+      fresh.value = true;
+      window.clearTimeout(freshTimer);
+      freshTimer = window.setTimeout(() => (fresh.value = false), FRESH_MS);
+    },
+  );
+  const switchesPending = computed(() => {
+    const s = status.value;
+    return !!s.device && (!s.services.notifications || !s.services.messages || contacts.value.length === 0);
+  });
+  watch(
+    () =>
+      (pageVisible.value && (view.value === "settings" || setupSharingShown.value)) ||
+      (fresh.value && switchesPending.value),
+    (on) => void api.setWatching(on).catch(() => undefined),
+    { immediate: true },
+  );
+
   /** An item to scroll to and highlight after navigating from search: `m<id>` or `n<id>`. */
   const focusItem = ref<string | null>(null);
 
@@ -207,15 +241,17 @@ export const useTugStore = defineStore("tug", () => {
   /** Clear every notification in a row that's still on the phone and clearable. */
   async function clearItems(items: PhoneNotification[], { quiet = false } = {}) {
     const clearable = items.filter((n) => n.live && n.removedAt == null && n.flags.negativeAction);
+    let failure: unknown = null;
+    // One that's already gone from the phone mustn't stop the rest from clearing.
     for (const n of clearable) {
       try {
         await api.performAction(n.id, false);
       } catch (e) {
-        // Automatic clears (opening a conversation) shouldn't nag; the ✕ button does.
-        if (!quiet) notify("error", errorMessage(e));
-        return;
+        failure ??= e;
       }
     }
+    // Automatic clears (opening a conversation) shouldn't nag; the ✕ button does, once.
+    if (failure && !quiet) notify("error", errorMessage(failure));
   }
 
   /**
@@ -413,6 +449,7 @@ export const useTugStore = defineStore("tug", () => {
     for (const off of teardown) off();
     teardown = [];
     window.clearTimeout(toastSummary);
+    window.clearTimeout(freshTimer);
     toastSummary = undefined;
     started = false;
   }
@@ -464,6 +501,7 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   return {
+    setupSharingShown,
     status,
     nowPlaying,
     notifications,

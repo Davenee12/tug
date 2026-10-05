@@ -36,6 +36,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 // MAP application parameter tags.
 const AP_MAX_LIST_COUNT: u8 = 0x01;
+const AP_LIST_START_OFFSET: u8 = 0x02;
 const AP_ATTACHMENT: u8 = 0x0A;
 const AP_CHARSET: u8 = 0x14;
 const AP_STATUS_INDICATOR: u8 = 0x17;
@@ -297,13 +298,17 @@ impl MapSession {
     }
 
     /// Newest messages in `folder` (e.g. "inbox"), at most `max`.
-    pub async fn list(&mut self, folder: &str, max: u16) -> Result<Vec<ListedMessage>> {
+    /// Newest first: `max` messages, skipping the newest `offset`.
+    pub async fn list(&mut self, folder: &str, max: u16, offset: u16) -> Result<Vec<ListedMessage>> {
         self.goto_msg().await?;
         let headers = vec![
             self.link.conn(),
             Header::type_("x-bt/MAP-msg-listing"),
             Header::Name(Some(folder.to_string())),
-            obex::app_params(&[(AP_MAX_LIST_COUNT, &max.to_be_bytes())]),
+            obex::app_params(&[
+                (AP_MAX_LIST_COUNT, &max.to_be_bytes()),
+                (AP_LIST_START_OFFSET, &offset.to_be_bytes()),
+            ]),
         ];
         let xml = self.link.get("GetMessagesListing", headers).await?;
         Ok(listing::parse(&String::from_utf8_lossy(&xml)))

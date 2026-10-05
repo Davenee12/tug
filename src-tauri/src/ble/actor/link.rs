@@ -48,6 +48,7 @@ impl Actor {
                 self.shared.update_status(|s| {
                     s.connection = ConnectionState::Connected;
                     s.last_error = None;
+                    s.pairing_stale = false;
                 });
             }
             Err(e) => {
@@ -59,6 +60,9 @@ impl Actor {
                 }
                 self.shared.set_live_session(None);
                 self.fail_connect(e.to_string());
+                // One refusal can be a glitch; two in a row means the phone dropped the bond.
+                let stale = e.is_stale_bond() && self.connect_failures >= 2;
+                self.shared.update_status(|s| s.pairing_stale = stale);
             }
         }
     }
@@ -247,7 +251,11 @@ impl Actor {
         if idle {
             self.probe_ancs_authorization(&control_point).await;
         }
-        self.retry_optional_services().await;
+        let slow = Duration::from_secs(CCCD_CHECK_SECS.into());
+        if self.optional_retry_at.is_none_or(|t| t.elapsed() >= slow) {
+            self.optional_retry_at = Some(Instant::now());
+            self.retry_optional_services().await;
+        }
     }
 
     /// Media and battery are optional at connect time; if they failed (e.g. Windows

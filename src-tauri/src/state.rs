@@ -1,6 +1,7 @@
 //! State shared between the Bluetooth actor, Tauri commands and the UI.
 //! Every type here is mirrored in `src/types/protocol.ts`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
@@ -91,6 +92,8 @@ pub struct DeviceStatus {
     pub battery: Option<u8>,
     pub services: Services,
     pub last_error: Option<String>,
+    /// The iPhone rejects this PC's notifications bond (forgotten on the phone): pair again.
+    pub pairing_stale: bool,
     /// Why message access isn't available, when the user can fix it (e.g. consent).
     pub messages_error: Option<String>,
     /// Why the phone's contacts aren't available, when the user can fix it.
@@ -113,6 +116,18 @@ pub struct DiscoveredDevice {
     pub paired: bool,
     pub connected: bool,
     pub can_pair: bool,
+    pub kind: DeviceKind,
+}
+
+/// What a discovered device says it is, so setup never offers a keyboard as the iPhone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeviceKind {
+    Phone,
+    /// Keyboards, mice, headphones, watches: never the phone.
+    Accessory,
+    /// Nothing known yet (a just-connected iPhone is often nameless).
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,6 +155,9 @@ pub struct Shared {
     pub pairing_confirm: Mutex<Option<SyncSender<bool>>>,
     /// Message service, set once at startup.
     pub map: OnceLock<MapHandle>,
+    /// The user is looking at the iPhone's switches (setup's sharing step, Settings): check
+    /// them every couple of seconds so flipping one on the phone shows up right away.
+    watching: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -156,7 +174,17 @@ impl Shared {
             live_session: Mutex::default(),
             pairing_confirm: Mutex::default(),
             map: OnceLock::new(),
+            watching: AtomicBool::new(false),
         }
+    }
+
+    pub fn watching(&self) -> bool {
+        self.watching.load(Ordering::Relaxed)
+    }
+
+    /// Returns whether this turned watching on (so callers can check right away).
+    pub fn set_watching(&self, on: bool) -> bool {
+        !self.watching.swap(on, Ordering::Relaxed) && on
     }
 
     pub fn emit<S: Serialize + Clone>(&self, event: &str, payload: S) {

@@ -27,6 +27,8 @@ export interface DeviceStatus {
   battery: number | null;
   services: Services;
   lastError: string | null;
+  /** The iPhone rejects this PC's notifications pairing (forgotten on the phone): pair again. */
+  pairingStale: boolean;
   /** Why message access isn't available, when the user can fix it. */
   messagesError: string | null;
   /** Why the phone's contacts aren't available, when the user can fix it. */
@@ -110,7 +112,11 @@ export interface DiscoveredDevice {
   paired: boolean;
   connected: boolean;
   canPair: boolean;
+  /** "accessory": keyboards, mice, headphones — never offered as the iPhone. */
+  kind: DeviceKind;
 }
+
+export type DeviceKind = "phone" | "accessory" | "unknown";
 
 export interface PairingRequest {
   deviceName: string;
