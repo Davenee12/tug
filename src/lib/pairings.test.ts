@@ -18,6 +18,7 @@ const CONNECTED: DeviceStatus = {
   contactsError: null,
   textsPairing: "ok",
   textsDevice: "Dave's iPhone",
+  liveTexts: "off",
 };
 const status = (o: Partial<DeviceStatus>): DeviceStatus => ({ ...CONNECTED, ...o });
 

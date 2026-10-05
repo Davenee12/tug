@@ -19,6 +19,7 @@ const CONNECTED: DeviceStatus = {
   contactsError: null,
   textsPairing: "ok",
   textsDevice: "iPhone",
+  liveTexts: "off",
 };
 
 function states(overrides: Partial<DeviceStatus>, contacts = 3): Record<string, SwitchState> {
