@@ -1,14 +1,23 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import { MessageSquare, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { callName, callTime, clockTime, formatAddress, groupCalls } from "../lib/format";
 import type { CallDirection, CallRecord } from "../types/protocol";
 
-// Recents from the iPhone (PBAP call history): who, which way, when. Message anyone back;
-// Call back only once Settings has checked that hands-free dialing works on this PC.
+// Recents from the iPhone (PBAP call history): who, which way, when. Message anyone back.
+// Click a person to call them: back from their missed call (works without hands-free), or by
+// dialing once Settings has checked that hands-free works on this PC.
 const tug = useTugStore();
-onMounted(() => tug.refreshCalls());
+// Calls placed on the phone send nothing tug can see, so while this list is open (and tug is
+// on screen) ask for it every few seconds; the backend keeps pulls at least 10 s apart.
+const LIVE_MS = 10_000;
+let live: number | undefined;
+onMounted(() => {
+  tug.refreshCalls();
+  live = window.setInterval(() => document.visibilityState === "visible" && tug.refreshCalls(), LIVE_MS);
+});
+onUnmounted(() => window.clearInterval(live));
 
 const nameFor = computed(() => new Map(tug.contacts.map((c) => [c.address, c.name])));
 const groups = computed(() => groupCalls(tug.calls));
@@ -20,6 +29,12 @@ const DIRECTION: Record<CallDirection, { label: string; icon: typeof Phone; tone
 };
 
 const name = (c: CallRecord) => callName(c, nameFor.value);
+const route = (c: CallRecord) => tug.callRoute(name(c), c.number);
+// Every row with a number can be clicked: it calls when tug can, and says why when it can't
+// (rows that look tappable but do nothing were confusing).
+function callFrom(c: CallRecord) {
+  if (c.number) void tug.callPerson(name(c), c.number);
+}
 // The number goes under the name only when the name isn't the number already.
 const showNumber = (c: CallRecord) => !!c.number && name(c) !== formatAddress(c.number);
 const time = (c: CallRecord) => {
@@ -52,7 +67,9 @@ const emptyHint = computed(() => {
           <li
             v-for="(c, i) in g.calls"
             :key="`${c.at}-${c.number}-${i}`"
-            class="group flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-surface-soft"
+            :class="['group flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-surface-soft', c.number ? 'cursor-pointer' : '']"
+            :title="c.number ? `Call ${name(c)}${route(c) === 'back' ? ' back' : ''} on your iPhone` : undefined"
+            @click="callFrom(c)"
           >
             <span
               :class="['grid size-8 shrink-0 place-items-center rounded-lg', DIRECTION[c.direction].tone]"
@@ -76,19 +93,18 @@ const emptyHint = computed(() => {
                 class="shrink-0 rounded-md p-1.5 text-muted-soft opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-surface-card hover:text-ink focus-visible:opacity-100"
                 :aria-label="`Message ${name(c)}`"
                 :title="`Message ${name(c)}`"
-                @click="tug.startConversation(c.number, name(c))"
+                @click.stop="tug.startConversation(c.number, name(c))"
               >
                 <MessageSquare :size="15" />
               </button>
               <button
-                v-if="tug.canDial"
-                class="btn-secondary btn-sm shrink-0"
+                :class="['btn-secondary btn-sm shrink-0', route(c) ? '' : 'text-muted']"
                 :disabled="tug.calling !== null"
-                :title="`Call ${name(c)} on your iPhone (experimental)`"
-                @click="tug.call(c.number, name(c))"
+                :title="`Call ${name(c)} on your iPhone`"
+                @click.stop="callFrom(c)"
               >
                 <Phone :size="13" />
-                {{ tug.calling === c.number ? "Calling…" : c.direction === "missed" ? "Call back" : "Call" }}
+                {{ tug.calling === c.number ? "Calling…" : route(c) === "back" || c.direction === "missed" ? "Call back" : "Call" }}
               </button>
             </template>
             <!-- Same width as the Message button, so times line up on rows without a number. -->
