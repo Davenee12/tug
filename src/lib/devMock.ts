@@ -13,7 +13,7 @@
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, SmsMessage } from "../types/protocol";
+import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -201,6 +201,33 @@ const calls: CallRecord[] = setup
 
 const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
 let autostart = false;
+
+// Spotify connector: connected by default so its UI can be reviewed in the browser; ?spotifyoff
+// starts it disconnected (to see the Settings › Spotify setup flow and the empty states).
+const spotifyState: SpotifyStatus = {
+  connected: !setup && !params.has("spotifyoff"),
+  account: !setup && !params.has("spotifyoff") ? "Dave James" : null,
+  clientId: !setup && !params.has("spotifyoff") ? "0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d" : null,
+  redirectUri: "http://127.0.0.1:8972/callback",
+};
+const artSvg =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="6" fill="#1db954"/><circle cx="24" cy="44" r="7" fill="#0b2e18"/><rect x="29" y="18" width="6" height="26" fill="#0b2e18"/><path d="M35 18 L52 14 V22 L35 26 Z" fill="#0b2e18"/></svg>';
+const spotifyPlayer: SpotifyPlayer = {
+  isPlaying: true,
+  shuffle: false,
+  repeat: "off",
+  saved: false,
+  albumArt: `data:image/svg+xml;base64,${btoa(artSvg)}`,
+  trackUri: "spotify:track:mock123",
+  deviceName: "Dave's iPhone",
+};
+const spotifyPlaylists: SpotifyPlaylist[] = [
+  { uri: "spotify:playlist:1", name: "Deep Focus", owner: "Spotify", trackCount: 120 },
+  { uri: "spotify:playlist:2", name: "Morning Run", owner: "Dave", trackCount: 42 },
+  { uri: "spotify:playlist:3", name: "Discover Weekly", owner: "Spotify", trackCount: 30 },
+  { uri: "spotify:playlist:4", name: "Coding Flow", owner: "Dave", trackCount: 88 },
+  { uri: "spotify:playlist:5", name: "Rainy Day Jazz", owner: "Dave", trackCount: 61 },
+];
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
 // Pair → PIN → connected → the iPhone's three switches come on one by one → a first
@@ -407,6 +434,48 @@ mockIPC(
       // Windows pop-ups don't exist in a browser; log what tug would have shown.
       case "show_toast":
         console.info("[devMock] pop-up", a.spec);
+        return null;
+      // --- Spotify connector ---
+      // Return fresh copies (the real Rust commands serialize new objects each call), so Vue
+      // refs see an identity change and re-render. Returning the shared object wouldn't.
+      case "spotify_status":
+        return { ...spotifyState };
+      case "spotify_set_client_id": {
+        spotifyState.clientId = String(a.clientId ?? "").trim() || null;
+        if (!spotifyState.clientId) {
+          spotifyState.connected = false;
+          spotifyState.account = null;
+        }
+        return { ...spotifyState };
+      }
+      case "spotify_connect":
+        return new Promise((resolve) =>
+          setTimeout(() => {
+            spotifyState.clientId ??= "0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d";
+            spotifyState.connected = true;
+            spotifyState.account = "Dave James";
+            resolve({ ...spotifyState });
+          }, 900),
+        );
+      case "spotify_disconnect":
+        spotifyState.connected = false;
+        spotifyState.account = null;
+        return { ...spotifyState };
+      case "spotify_playlists":
+        return spotifyState.connected ? spotifyPlaylists.map((p) => ({ ...p })) : [];
+      case "spotify_play_playlist":
+        console.log("[devMock] spotify play", a.uri);
+        return null;
+      case "spotify_player":
+        return spotifyState.connected ? { ...spotifyPlayer } : null;
+      case "spotify_set_repeat":
+        spotifyPlayer.repeat = a.mode as RepeatMode;
+        return null;
+      case "spotify_set_shuffle":
+        spotifyPlayer.shuffle = Boolean(a.on);
+        return null;
+      case "spotify_set_saved":
+        spotifyPlayer.saved = Boolean(a.saved);
         return null;
       default:
         return null;

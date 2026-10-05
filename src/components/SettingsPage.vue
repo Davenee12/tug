@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Minus, Plus, ShieldCheck, SlidersHorizontal, Smartphone, X } from "lucide-vue-next";
+import { Bell, Check, CircleAlert, ClipboardList, CloudSun, Copy, FolderOpen, Info, Minus, Music, Plus, ShieldCheck, SlidersHorizontal, Smartphone, X } from "lucide-vue-next";
 import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
@@ -19,6 +19,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string; icon: Component }> =
   { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "iphone", label: "iPhone", icon: Smartphone },
   { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "spotify", label: "Spotify", icon: Music },
   { id: "weather", label: "Weather", icon: CloudSun },
   { id: "privacy", label: "Data & privacy", icon: ShieldCheck },
   { id: "about", label: "About", icon: Info },
@@ -132,6 +133,36 @@ async function checkCalls() {
   checkingCalls.value = true;
   await tug.checkDialing();
   checkingCalls.value = false;
+}
+
+// ---- Spotify ----
+const clientIdInput = ref("");
+// Fill the field from the saved Client ID once it loads, but never clobber what's being typed.
+watch(
+  () => tug.spotify.clientId,
+  (v) => {
+    if (v != null && !clientIdInput.value) clientIdInput.value = v;
+  },
+  { immediate: true },
+);
+const savingClientId = ref(false);
+async function saveClientId() {
+  savingClientId.value = true;
+  await tug.setSpotifyClientId(clientIdInput.value.trim());
+  savingClientId.value = false;
+  tug.notify("info", "Client ID saved.");
+}
+async function disconnectSpotify() {
+  await tug.disconnectSpotify();
+  tug.notify("info", "Disconnected from Spotify.");
+}
+async function copyRedirect() {
+  try {
+    await api.copyText(tug.spotify.redirectUri);
+    tug.notify("info", "Redirect URI copied.");
+  } catch {
+    tug.notify("error", "Couldn't copy to the clipboard.");
+  }
 }
 
 // ---- Weather ----
@@ -378,6 +409,74 @@ async function clearHistory() {
               </li>
             </ul>
           </div>
+        </template>
+
+        <!-- Spotify -->
+        <template v-else-if="current.id === 'spotify'">
+          <div class="mb-4 rounded-xl bg-surface-card px-5 py-4">
+            <p class="text-[14px] font-medium text-ink">Play your Spotify from tug</p>
+            <p class="mt-1 text-[13px] text-muted">
+              Spotify doesn't offer repeat, shuffle or album art over the iPhone's media link. Connect your own free Spotify
+              app and tug adds working repeat and shuffle, a Like button, album art on Now Playing, and your playlists to start
+              on your iPhone. Needs Spotify Premium.
+            </p>
+          </div>
+
+          <div v-if="tug.spotify.connected" class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
+            <SettingsRow label="Connected" :description="tug.spotify.account ? `Signed in as ${tug.spotify.account}` : 'Signed in to Spotify'">
+              <span class="flex items-center gap-1.5 text-[13px] font-medium text-ink"><Check :size="15" class="text-accent-teal" /> On</span>
+            </SettingsRow>
+            <SettingsRow label="Disconnect" description="Removes tug's access to your Spotify. Your account isn't changed.">
+              <button class="btn-secondary btn-sm" @click="disconnectSpotify">Disconnect</button>
+            </SettingsRow>
+          </div>
+
+          <template v-else>
+            <div class="rounded-xl bg-surface-card px-5 py-4">
+              <p class="caption-upper text-muted">Create your free Spotify app</p>
+              <ol class="mt-2 list-decimal space-y-2 pl-5 text-[13px] text-body">
+                <li>
+                  Open
+                  <button class="font-medium text-ink underline active:text-primary" @click="api.openUrl('https://developer.spotify.com/dashboard')">
+                    developer.spotify.com/dashboard
+                  </button>, log in, and click <strong class="text-body-strong">Create app</strong>.
+                </li>
+                <li>Give it any name and description.</li>
+                <li>
+                  For <strong class="text-body-strong">Redirect URI</strong>, enter exactly this and click <strong class="text-body-strong">Add</strong>:
+                  <span class="mt-1.5 flex items-center gap-2">
+                    <code class="selectable rounded bg-canvas px-2 py-1 font-mono text-[12px] text-ink">{{ tug.spotify.redirectUri }}</code>
+                    <button class="btn-secondary btn-sm" @click="copyRedirect"><Copy :size="13" /> Copy</button>
+                  </span>
+                  <span class="mt-1 block text-[12px] text-muted-soft">Copy it exactly, port included: tug listens for Spotify's sign-in at this address.</span>
+                </li>
+                <li>Under <strong class="text-body-strong">Which API/SDKs are you planning to use?</strong>, tick <strong class="text-body-strong">Web API</strong>.</li>
+                <li>Click <strong class="text-body-strong">Save</strong>, open the app's <strong class="text-body-strong">Settings</strong>, and copy its <strong class="text-body-strong">Client ID</strong>.</li>
+              </ol>
+            </div>
+
+            <div class="mt-4 rounded-xl bg-surface-card px-5 py-4">
+              <label for="spotify-client-id" class="text-[14px] font-medium text-ink">Client ID</label>
+              <div class="mt-2 flex gap-2">
+                <input
+                  id="spotify-client-id"
+                  v-model="clientIdInput"
+                  class="h-9 flex-1 rounded-lg border border-hairline bg-canvas px-3 font-mono text-[13px] text-ink outline-none placeholder:text-muted-soft focus:border-muted-soft"
+                  placeholder="Paste your Client ID"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+                <button class="btn-secondary btn-sm" :disabled="savingClientId || !clientIdInput.trim()" @click="saveClientId">Save</button>
+              </div>
+              <button class="btn-primary btn-sm mt-3" :disabled="!tug.spotify.clientId || tug.spotifyConnecting" @click="tug.connectSpotify()">
+                {{ tug.spotifyConnecting ? "Waiting for sign-in…" : "Connect Spotify" }}
+              </button>
+              <p class="mt-2 text-[12px] text-muted-soft">
+                Opens your browser to sign in. A development-mode app allows up to 5 listeners and needs the owner (you) to have
+                Spotify Premium.
+              </p>
+            </div>
+          </template>
         </template>
 
         <!-- Weather -->
