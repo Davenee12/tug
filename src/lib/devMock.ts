@@ -323,6 +323,10 @@ mockIPC(
           void emit("now-playing", { ...nowPlaying });
         }
         return null;
+      case "open_url":
+        // No browser launch in dev; just show what the real backend would open.
+        console.log("[devMock] open_url", a.url);
+        return null;
       case "place_lookup":
         return JSON.stringify({ city: "Dallas", principalSubdivision: "Texas", countryCode: "US" });
       case "locate":
