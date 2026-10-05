@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Bell, CheckCheck, Copy, MessageSquare, Moon, Plus, Repeat, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
+import { Bell, CheckCheck, Copy, MessageSquare, Moon, Phone, Plus, Repeat, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
 import { parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
@@ -92,6 +92,7 @@ const ctx = computed<ActionContext>(() => {
     doNotDisturb: tug.settings.doNotDisturb,
     unread: conversations.filter((c) => tug.newCount(c.key, c.notifications) > 0).length,
     apps: [...apps.values()],
+    canDial: tug.canDial,
   };
 });
 
@@ -130,6 +131,7 @@ const MEDIA_ICONS = {
 };
 function actionIcon(a: Action) {
   if (a.kind === "send") return SendHorizontal;
+  if (a.kind === "call" || a.kind === "call-setup") return Phone;
   if (a.kind === "open-chat") return MessageSquare;
   if (a.kind === "media") return MEDIA_ICONS[a.command];
   if (a.kind === "copy-code") return Copy;
@@ -140,7 +142,11 @@ function actionIcon(a: Action) {
   return a.target === "settings" ? Settings2 : Plus;
 }
 /** Several people match a "text …": Enter waits until one is picked on purpose. */
-const ambiguous = computed(() => actions.value.filter((o) => o.kind === "action" && o.a.kind === "send").length > 1);
+const picksPerson = (a: Action) => a.kind === "send" || a.kind === "call";
+const ambiguous = computed(() => {
+  const rows = actions.value.filter((o) => o.kind === "action" && picksPerson(o.a));
+  return rows.length > 1;
+});
 const showHeader = (i: number) => i === 0 || options.value[i].kind !== options.value[i - 1].kind;
 
 const messageName = (m: SmsMessage) => cleanName(m.contactName ?? formatAddress(m.address));
@@ -171,6 +177,10 @@ async function run(a: Action) {
     openConversation(a.person.address, cleanName(a.person.name));
   } else if (a.kind === "media") {
     void tug.media(a.command);
+  } else if (a.kind === "call") {
+    void tug.call(a.person.address, cleanName(a.person.name));
+  } else if (a.kind === "call-setup") {
+    tug.openSettings("iphone");
   } else if (a.kind === "copy-code") {
     if (a.code) void tug.copyCode(a.code, a.from);
   } else if (a.kind === "clear-all") {
@@ -229,7 +239,7 @@ function onKey(e: KeyboardEvent) {
   else if (e.key === "ArrowUp") void move(-1);
   else if (e.key === "Enter") {
     const o = options.value[active.value];
-    if (o?.kind === "action" && o.a.kind === "send" && ambiguous.value && !chose.value) {
+    if (o?.kind === "action" && picksPerson(o.a) && ambiguous.value && !chose.value) {
       tug.notify("info", "More than one person matches. Pick one with ↑↓, then Enter.");
     } else pick(o);
   }
