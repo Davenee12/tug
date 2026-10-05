@@ -49,7 +49,7 @@ pub fn parse(xml: &str) -> Vec<ListedMessage> {
 /// Index of the `>` that closes a tag, skipping any inside quoted attribute values:
 /// XML allows a raw `>` there (`subject="5 > 3"`), and stopping at it would lose every
 /// attribute after the subject, read status included.
-fn tag_end(s: &str) -> Option<usize> {
+pub(super) fn tag_end(s: &str) -> Option<usize> {
     let mut quote = None;
     for (i, c) in s.char_indices() {
         match quote {
@@ -79,7 +79,7 @@ pub fn datetime_to_iso(s: &str) -> Option<String> {
 }
 
 /// `key="value"` / `key='value'` pairs, entity-decoded.
-fn attributes(s: &str) -> HashMap<String, String> {
+pub(super) fn attributes(s: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let mut rest = s;
     while let Some(eq) = rest.find('=') {
