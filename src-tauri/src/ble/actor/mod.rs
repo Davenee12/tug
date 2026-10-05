@@ -75,6 +75,8 @@ const ADVERTISE_RETRY_SECS: u32 = 3;
 // restored, notifications still on the phone: a visible flicker).
 const REPLAY_SETTLE: Duration = Duration::from_secs(8);
 const CCCD_CHECK_SECS: u32 = 15;
+/// While the user watches the iPhone's switches: Share System Notifications shows up in ~2 s.
+const CCCD_CHECK_WATCHING_SECS: u32 = 2;
 const NOT_SHARING: &str = "Your iPhone is connected but isn't sharing notifications with this PC. On the iPhone: Settings › Bluetooth › tap ⓘ next to this PC › turn on Share System Notifications.";
 const PIN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -286,7 +288,11 @@ impl Actor {
     async fn command(&mut self, cmd: Command) {
         match cmd {
             Command::PerformAction { id, positive, reply } => {
-                let _ = reply.send(self.perform_action(id, positive).await);
+                let result = self.perform_action(id, positive).await;
+                if let Err(e) = &result {
+                    log::info!("notification action on row {id} not done: {e}");
+                }
+                let _ = reply.send(result);
             }
             Command::Media { command, reply } => {
                 let res = match self.link.as_ref().and_then(|l| l.media.as_ref()) {
@@ -455,10 +461,17 @@ impl Actor {
             }
         }
 
+        if self.shared.watching() {
+            self.cccd_check_in = self.cccd_check_in.min(CCCD_CHECK_WATCHING_SECS);
+        }
         if self.cccd_check_in > 0 {
             self.cccd_check_in -= 1;
         } else {
-            self.cccd_check_in = CCCD_CHECK_SECS;
+            self.cccd_check_in = if self.shared.watching() {
+                CCCD_CHECK_WATCHING_SECS
+            } else {
+                CCCD_CHECK_SECS
+            };
             self.verify_ancs_subscription().await;
         }
 
