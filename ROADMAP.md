@@ -22,8 +22,20 @@ See docs/STABILIZATION.md for the current backlog.
   within ~8 s of polling; sends can show "Sent".
 - **Press and hold volume**: holding Now Playing's volume up/down keeps stepping (AMS VolumeUp/Down
   repeated, accelerating, stopping on release), instead of one tap per step.
-- Follow-up: remember the texts (Classic) device by id rather than name, so a phone rename can't
-  confuse which phone texts come from.
+- **tug pairs for texts itself**: the setup's Texts step pairs the phone's Classic side from inside
+  tug (code shown in tug), instead of sending people to Windows › Add device, always in the order that
+  keeps both pairings (notifications first, then texts).
+- **Auto-updates** from GitHub Releases, once releases are signed (same code-signing work as calling).
+- **Connection health + "Copy diagnostics"**: one Settings panel with each link's state (notifications,
+  media, texts, contacts, calls) and a button that bundles the logs for support. Today's three silent
+  failures (forgotten pairing, Windows closing GATT objects, a broken texts pairing) were log-only.
+- **Start with Windows, minimized to the tray.**
+- **Remember the phone by id, not name** (texts device included), so a rename can't confuse anything.
+
+## v0.5.8 — candidates
+- **Reply from the Windows pop-up** (type into the toast, Enter sends; technically risky).
+- **Welcome back**: after 30+ min away, who texted and called.
+- **Calls in Ctrl+K search**: a person's recent calls in their search result.
 
 ## Next — onboarding & distribution (product readiness)
 - **Settings page** — a full page (not the side panel) with a left nav, like Wispr Flow's but tug's
