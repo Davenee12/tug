@@ -368,7 +368,8 @@ mockIPC(
       case "place_lookup":
         return JSON.stringify({ city: "Dallas", principalSubdivision: "Texas", countryCode: "US" });
       case "locate":
-        return { latitude: 32.78, longitude: -96.8 };
+        // A real fix takes a few seconds; long enough to see tug's "finding you" lines.
+        return new Promise((resolve) => setTimeout(() => resolve({ latitude: 32.78, longitude: -96.8 }), 4500));
       case "start_discovery":
         setTimeout(() => void emit("discovered-devices", discovered), 400);
         return null;
