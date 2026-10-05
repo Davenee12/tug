@@ -94,6 +94,19 @@ fn main() {
             Err(e) => println!("UpdateInbox: {e} (continuing)"),
         }
 
+        // How far back the phone lets us page (ListStartOffset), newest first.
+        for offset in [0u16, 10, 20, 50] {
+            match session.list("inbox", 50, offset).await {
+                Ok(msgs) => println!(
+                    "inbox page at offset {offset}: {} message(s), {} .. {}",
+                    msgs.len(),
+                    msgs.first().map(|m| m.datetime.as_str()).unwrap_or("-"),
+                    msgs.last().map(|m| m.datetime.as_str()).unwrap_or("-"),
+                ),
+                Err(e) => println!("inbox page at offset {offset}: {e}"),
+            }
+        }
+
         match session.list("inbox", 10, 0).await {
             Ok(msgs) => {
                 println!("inbox: {} message(s)", msgs.len());
