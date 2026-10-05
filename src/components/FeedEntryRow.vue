@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { ChevronRight, ExternalLink, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { notificationTime, relativeTime, type FeedEntry } from "../lib/format";
+import { canClear, notificationTime, relativeTime, type FeedEntry } from "../lib/format";
 import { findCode } from "../lib/codes";
 import { GMAIL_APP_ID, mayHaveWebsite, webLinkFor, type WebLink } from "../lib/weblinks";
 import AppAvatar from "./AppAvatar.vue";
@@ -27,7 +27,7 @@ const fresh = computed(() => tug.newCount(props.entry.key, items.value));
 const when = computed(() => relativeTime(notificationTime(latest.value)));
 // A ringing call needs its buttons without expanding anything.
 const ringing = computed(() => latest.value.category === "incomingCall" && latest.value.live);
-const clearable = computed(() => items.value.some((n) => n.live && n.flags.negativeAction));
+const clearable = computed(() => items.value.some(canClear));
 // A verification code in the newest notification: copy it right from the row.
 const code = computed(() => findCode(latest.value.message || latest.value.subtitle));
 // A web page to open for this app, but only for app stacks — conversation threads (people) never
