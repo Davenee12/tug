@@ -14,7 +14,7 @@ use crate::state::Shared;
 #[cfg(windows)]
 mod actor;
 #[cfg(windows)]
-mod winrt;
+pub(crate) mod winrt;
 
 pub type Reply = oneshot::Sender<Result<(), String>>;
 

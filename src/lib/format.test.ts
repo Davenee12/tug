@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canClear, cleanName, groupConversations, groupFeed, highlight, initials, snippet, threadKey } from "./format";
+import { canClear, cleanName, groupConversations, groupFeed, highlight, initials, newestUnreadThread, snippet, threadKey } from "./format";
 import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const T0 = Date.parse("2026-10-05T12:00:00");
@@ -133,6 +133,27 @@ describe("groupFeed", () => {
     ]);
     expect(entries.map((e) => e.kind)).toEqual(["thread", "stack"]);
     expect(entries[0].kind === "thread" && entries[0].thread.items.map((n) => n.message)).toEqual(["a", "b"]);
+  });
+});
+
+describe("the tray's newest unread conversation", () => {
+  const key = (title: string) => threadKey({ appId: "com.apple.MobileSMS", title });
+
+  it("picks the newest thread that still has unread texts", () => {
+    // Jane is newer overall, but all read; Tay is older and unread → Tay wins.
+    const notes = [note("Jane Doe", "see you at 5", 10), note("Tay", "omw 🚗", 4), note("Tay", "did you see?", 2)];
+    const unread = new Set([key("Tay")]);
+    expect(newestUnreadThread(notes, (k) => (unread.has(k) ? 1 : 0))).toBe(key("Tay"));
+  });
+
+  it("prefers the newest when several conversations are unread", () => {
+    const notes = [note("Tay", "older", 2), note("Jane Doe", "newer", 9)];
+    expect(newestUnreadThread(notes, () => 1)).toBe(key("Jane Doe"));
+  });
+
+  it("returns null when nothing is unread", () => {
+    expect(newestUnreadThread([note("Tay", "hi", 1)], () => 0)).toBeNull();
+    expect(newestUnreadThread([], () => 1)).toBeNull();
   });
 });
 
