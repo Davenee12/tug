@@ -173,7 +173,11 @@ impl Actor {
             .await?
             .ok_or(BleError::NotFound("Battery service"))?;
         if let Ok(all) = async {
-            let res = winrt::bounded(svc.GetCharacteristicsWithCacheModeAsync(BluetoothCacheMode::Uncached)?).await?;
+            let res = winrt::bounded_for(
+                winrt::DISCOVERY_TIMEOUT,
+                svc.GetCharacteristicsWithCacheModeAsync(BluetoothCacheMode::Uncached)?,
+            )
+            .await?;
             Ok::<_, BleError>(res.Characteristics()?)
         }
         .await

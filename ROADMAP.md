@@ -12,64 +12,63 @@ See docs/STABILIZATION.md for the current backlog.
 4. ~~Sprint 5: CI on every PR, second bug hunt (3 High / 3 Med / 8 Low fixed), `actor.rs` split
    into six modules.~~ (shipped alongside v0.5.5)
 
-## v0.5.7 — tug feels built into Windows (split agreed with Dave, 2026-10-05)
-Self-contained features that don't wait on hardware spikes or a purchase; built in parallel.
-- **Actionable pop-ups**: reply to a text from the Windows notification, Copy code, Call back on a
-  missed call, Clear; body click still opens tug.
-- **Media keys + Windows media panel** control the iPhone's music (SystemMediaTransportControls).
-- **Open in browser**: an "Open" button on notifications from apps with a website; Gmail opens a
-  search for that email.
-- **Filter unknown senders**: unsaved numbers / spam go to a collapsed "Unknown senders" list, out of
-  conversations, the unread badge and pop-ups (codes still pop up); "Move to conversations" or reply.
-- **Press-and-hold volume.**
-- **Connection health + "Copy diagnostics"** (redacted logs for support).
-- **Start with Windows, minimized to the tray** (off by default) and **remember the phone by id**.
-- **Low phone battery alert** at 20% and 10%.
-- Live texts' pure groundwork (event parser, OBEX server framing, registration call) lands inert.
+## ~~v0.5.7 — tug feels built into Windows~~ (released 2026-10-05)
+Actionable pop-ups, media keys + Windows media panel, Open on the web, unknown-sender filtering,
+press-and-hold volume, connection health + Copy diagnostics, start with Windows, low battery alert,
+plus a stabilization pass (Settings flicker, per-conversation drafts, bounded Bluetooth calls,
+calmer polling). See CHANGELOG.md.
 
-## v0.5.8 — live texts, and a stabilization pass
-Starts with a full stabilization check of the whole app (Dave, 2026-10-05) as the foundation
-for v0.5.8 and beyond. Auto-updates need code signing, which Dave isn't buying for now.
-Dave is in the US, so Azure Artifact Signing (~$9.99/mo) is available to him. Spike 0 passed
-2026-10-05 (Handsfree Telephony back on: one PhoneLineTransportDevice for the iPhone).
+## v0.5.8 — stability, setup, live texts, Spotify (agreed with Dave, 2026-10-05)
 
-### Needs Dave before coding can finish
-- **Hardware (spikes).** Calling and live texts can't be proven without Dave's PC + iPhone; the
-  pure modules land regardless, but the WinRT wiring is spike-gated.
-- **Re-tick Windows "Handsfree Telephony" service.** Dave unticked it today, so
-  `PhoneLineTransportDevice` count is 0; it must be back on before Spike 0, and Phone Link's own
-  calling must be off (one app owns a phone line at a time).
-- **Signing decision + country.** Calling's restricted capability and the installer need a signed
-  build to ship (sideloading the spike doesn't). Options: **Azure Artifact (Trusted) Signing**
-  ~$9.99/mo but **individuals only in US/Canada** — so we need Dave's country — or an **OV
-  certificate** $150–300/yr. Either shows Dave's name as publisher; neither instantly clears
-  SmartScreen — reputation still builds over time (correcting the old "signing removes the warning"
-  wording below). Auto-updates and the calling ship both wait on this.
+### 1. Finish the stabilization pass (first)
+- Feed scroll resets to the top when entries update.
+- Messages doesn't jump to the newest text when a conversation opens or a text arrives.
+- freshTimer / listener setup isn't symmetric with teardown in the store.
 
-### Live texts (MAP notifications / MNS) — after the pure modules, hardware to wire
+### 2. Setup, ironed out (added after Dave's rough re-pair, 2026-10-05)
+- **"Look at your iPhone and tap Allow"** while iOS holds the notifications subscribe open on a new
+  pairing (it looked stuck; #49 stops the 10 s give-up that tore the link down).
+- **Live switch checklist**: Share System Notifications, Show Notifications, Sync Contacts, each
+  read from real signals, naming the one that's off.
+- **Old or duplicate pairings** detected, with one confirmed "Start over" that removes both of the
+  phone's pairings; implausible transient phone names ignored.
+- **tug pairs for texts itself** (pulled back from v0.5.9): discover the unpaired Classic iPhone
+  during the Texts step, pair with a PIN shown in tug, **LE (notifications) first, then Classic
+  (texts)** because of CTKD; Windows › Add device stays as a fallback.
+
+### 3. Live texts (MAP notifications / MNS) — hardware to prove
 Texts land the instant the phone gets them instead of within ~8 s of polling; sends show "Sent".
 iOS supports `SetNotificationRegistration`. tug hosts an MNS server (`RfcommServiceProvider` 0x1133 +
 `StreamSocketListener` + SDP: name, MAP profile v1.1), keeping the 8 s poll as a backstop.
-- PRs: event parser (pure) → OBEX server framing (pure) → `SetNotificationRegistration` client call
-  → WinRT MNS listener → wire into the worker with poll fallback → "Sent" status UI.
+- Pure pieces shipped in v0.5.7 (event parser, OBEX server framing, registration request).
+- Left: WinRT MNS listener → wire into the worker with poll fallback → "Sent" status UI.
 - Risks: an RFCOMM **server** from an unpackaged app is unproven; the `PushMessage` handle may not
   equal the `SendingSuccess` handle (so "Sent" matching may be approximate).
 
-### tug pairs for texts itself — after the pure pick logic, hardware to wire
-The setup's Texts step pairs the phone's Classic side from inside tug (code shown in tug) instead of
-sending people to Windows › Add device. Discover the unpaired Classic iPhone via
-`BluetoothDevice.GetDeviceSelectorFromPairingState(false)` (inquiry; iPhone must have Settings ›
-Bluetooth open), pair with the existing `DeviceInformationCustomPairing` code. Order matters because
-of CTKD — **LE (notifications) first, then Classic (texts)**; persist `TEXTS_DEVICE_ID`.
-- PRs: pure pick logic → texts discovery mode (only during the step) → pair-for-texts command →
-  remember texts device by id → wizard button → ordering guard on re-pair.
+### 4. Spotify connector (new)
+Connect Spotify in Settings, then: your own playlists in tug (tap to play on the iPhone), repeat
+and shuffle that work (AMS gives Spotify none), like the current song, album art on Now Playing,
+Ctrl+K "play <playlist>". Spotify Web API from Rust, OAuth with PKCE (no client secret).
+- Spotify's February 2026 Development Mode rules: the app owner needs **Premium** (Dave has it),
+  **5 users per developer app**, so each person brings their own free Client ID. A personal feature
+  until Spotify grants more.
+- Still available in Development Mode: `/me/playlists`, playlist items, play/resume with a
+  playlist, repeat, shuffle, devices, transfer playback, `/me/library`, queue.
+- Risk: playing on the iPhone needs Spotify Connect to see it, which may need the phone's Spotify
+  app opened recently.
 
-### Auto-updates
-From GitHub Releases, **after** releases are signed (same signing work as calling).
+### Needs Dave
+- Create a free Spotify developer app and paste its Client ID into tug (steps in the PR).
+- Hardware runs for live texts and Spotify-on-iPhone.
 
 ## v0.5.9 — candidates
 - **Welcome back**: after 30+ min away, who texted and called.
 - **Calls in Ctrl+K search**: a person's recent calls in their search result.
+
+## Waiting on code signing (Dave isn't buying it for now)
+- **Auto-updates** from GitHub Releases, once releases are signed. Dave is in the US, so Azure
+  Artifact Signing (~$9.99/mo) is available, or an OV certificate ($150–300/yr). Neither instantly
+  clears SmartScreen; reputation still builds over time.
 
 ## Parked — calling anyone (v0.5.13 or later; Dave, 2026-10-05)
 Calling back a missed call already works (iOS's "Dial" over ANCS) and stays. Dialing anyone is
