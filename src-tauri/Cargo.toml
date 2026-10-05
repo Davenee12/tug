@@ -40,6 +40,7 @@ windows = { version = "0.62", features = [
   "Networking",
   "Networking_Sockets",
   "Storage_Streams",
+  "Web_Http",
 ] }
 windows-collections = "0.3"
 
