@@ -1,6 +1,8 @@
 // Weather for the Feed's glance card: Open-Meteo (free, no key). Only the chosen place's
 // coordinates are sent, rounded to ~1 km. Fetched in °C / km/h and converted for display.
 
+import { api } from "./ipc";
+
 export interface Place {
   name: string;
   latitude: number;
@@ -162,17 +164,11 @@ export async function searchPlaces(query: string): Promise<Place[]> {
 
 /**
  * A name for coordinates from "Use my location" ("Portland, Oregon"). BigDataCloud's
- * client-side reverse lookup: free, no key, meant for a device looking up itself.
+ * client-side reverse lookup (free, no key, meant for a device looking up itself), fetched
+ * by the app's native side: from the web view the request never got an answer.
  */
 export async function nameFor(latitude: number, longitude: number): Promise<string | null> {
-  const q = new URLSearchParams({
-    latitude: String(round(latitude)),
-    longitude: String(round(longitude)),
-    localityLanguage: "en",
-  });
-  const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?${q}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
-  if (!res.ok) return null;
-  return placeName(await res.json());
+  return placeName(JSON.parse(await api.placeLookup(latitude, longitude)));
 }
 
 export function placeName(j: { city?: string; locality?: string; principalSubdivision?: string; countryCode?: string; countryName?: string }): string | null {
