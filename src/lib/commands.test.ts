@@ -143,3 +143,50 @@ describe("parseActions", () => {
     expect(parseActions("g", people, ctx)).toEqual([]);
   });
 });
+
+describe("call", () => {
+  const dial = { canDial: true };
+
+  it("calls a person by their whole name, once calling from tug works", () => {
+    expect(parseActions("call priya", people, dial)).toEqual([
+      { kind: "call", person: people[1], label: "Call Priya", detail: "(214) 555-0186" },
+    ]);
+    expect(parseActions("ring zoe", people, dial)[0]).toMatchObject({ kind: "call", label: "Call zoe 💜" });
+  });
+
+  it("offers each match for a shared name, so one is picked on purpose", () => {
+    const rows = parseActions("call jo", people, dial);
+    expect(rows.map((r) => r.kind)).toEqual(["call", "call"]);
+  });
+
+  it("dials a typed number", () => {
+    expect(parseActions("call 302 555 0100", people, dial)[0]).toMatchObject({ kind: "call", person: { address: "3025550100" } });
+  });
+
+  it("says why instead of offering a call that can't work", () => {
+    expect(parseActions("call priya", people, {})).toEqual([
+      { kind: "call-setup", label: "Can't call Priya yet: only missed calls can be called back" },
+    ]);
+  });
+
+  it("calls back from a missed call without hands-free", () => {
+    const missed = {
+      id: 9,
+      category: "missedCall",
+      title: "Priya",
+      live: true,
+      removedAt: null,
+      receivedAt: 1,
+      flags: { positiveAction: true },
+    } as unknown as PhoneNotification;
+    expect(parseActions("call priya", people, { notifications: [missed] })).toEqual([
+      { kind: "call", person: people[1], label: "Call Priya back", detail: "From their missed call" },
+    ]);
+  });
+
+  it("never fires on a near miss", () => {
+    expect(parseActions("call priya later today", people, dial)).toEqual([]);
+    expect(parseActions("call nobody", people, dial)).toEqual([]);
+    expect(parseActions("callback", people, dial)).toEqual([]);
+  });
+});

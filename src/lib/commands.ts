@@ -2,7 +2,7 @@
 // "text zoe running late", "pause", "copy code", "clear all", "new message". Pure, so it's tested.
 
 import type { MediaCommand, PhoneNotification } from "../types/protocol";
-import { cleanName, formatAddress } from "./format";
+import { cleanName, formatAddress, missedCallFor } from "./format";
 
 export interface Person {
   name: string;
@@ -32,11 +32,18 @@ export interface ActionContext {
   unread?: number;
   /** Apps with notifications in the feed, to match a typed app name against. */
   apps?: AppFeed[];
+  /** Calling from tug passed its hands-free check, so "call zoe" can dial. */
+  canDial?: boolean;
+  /** Notifications, to find a missed call "call zoe" can call back from without hands-free. */
+  notifications?: PhoneNotification[];
 }
 
 export type Action =
   | { kind: "send"; person: Person; text: string; label: string; detail: string }
   | { kind: "open-chat"; person: Person; label: string; detail: string }
+  | { kind: "call"; person: Person; label: string; detail: string }
+  /** "call zoe" before calling from tug has been checked: points to where to turn it on. */
+  | { kind: "call-setup"; label: string }
   | { kind: "media"; command: MediaCommand; label: string }
   | { kind: "copy-code"; code: string | null; from: PhoneNotification[]; label: string }
   | { kind: "clear-all"; items: PhoneNotification[]; label: string }
@@ -66,6 +73,7 @@ const MARK_READ = ["mark all read", "mark all as read", "mark everything read"];
 const DND = /^(?:do not disturb|dnd)(?:\s+(on|off))?$/i;
 
 const SEND = /^(?:text|msg|message|tell|send)\s+(.+)$/i;
+const CALL = /^(?:call|ring|phone)\s+(.+)$/i;
 
 /** Lowercase, drop emoji/symbols, collapse spaces: "zoe 💜" → "zoe". */
 function key(s: string): string {
@@ -105,7 +113,26 @@ export function parseActions(query: string, people: Person[], ctx: ActionContext
 
   const m = SEND.exec(q);
   if (m) out.push(...sendActions(m[1], people));
+  const c = CALL.exec(q);
+  if (c) out.push(...callActions(c[1], people, ctx));
   return out;
+}
+
+/**
+ * "call zoe": the iPhone calls a person (or a typed number). Only the whole name counts,
+ * nothing after it. Back from their missed call when the phone has one (no hands-free needed),
+ * else by dialing once the hands-free check has passed; otherwise a row says why it can't.
+ */
+function callActions(rest: string, people: Person[], ctx: ActionContext): Action[] {
+  const found = findPeople(rest, people).filter((m) => m.text === "");
+  return found.map(({ person }): Action => {
+    const name = cleanName(person.name);
+    if (missedCallFor(ctx.notifications ?? [], person)) {
+      return { kind: "call", person, label: `Call ${name} back`, detail: "From their missed call" };
+    }
+    if (ctx.canDial) return { kind: "call", person, label: `Call ${name}`, detail: formatAddress(person.address) };
+    return { kind: "call-setup", label: `Can't call ${name} yet: only missed calls can be called back` };
+  });
 }
 
 /** Copy the newest one-time code; with none waiting the row says so and does nothing. */
@@ -151,13 +178,18 @@ function appActions(query: string, ctx: ActionContext): Action[] {
 }
 
 function sendActions(rest: string, people: Person[]): Action[] {
+  return findPeople(rest, people).map(({ person, text }) => build(person, text));
+}
+
+/** Who "rest" starts with (and what follows the name), or a number typed directly. */
+function findPeople(rest: string, people: Person[]): Array<{ person: Person; text: string }> {
   const lowerRest = rest.toLowerCase();
   // A number typed directly: "text 302 555 0100 on my way".
   const num = /^(\+?[\d\s().-]{7,}\d)(?:\s+(.*))?$/.exec(rest);
   if (num) {
     const address = num[1].replace(/[^\d+]/g, "");
     const person = { name: formatAddress(address.length === 10 ? `+1${address}` : address), address };
-    return [build(person, (num[2] ?? "").trim())];
+    return [{ person, text: (num[2] ?? "").trim() }];
   }
   // The longest name that starts what was typed wins; ties (two "Jo"s) all show, so
   // the right person is picked on purpose, never guessed.
@@ -175,7 +207,7 @@ function sendActions(rest: string, people: Person[]): Action[] {
       if (!matches.some((x) => x.person.address === p.address)) matches.push({ person: p, text });
     }
   }
-  return matches.slice(0, 4).map(({ person, text }) => build(person, text));
+  return matches.slice(0, 4);
 }
 
 function build(person: Person, text: string): Action {

@@ -55,7 +55,7 @@ function n(appId: string, appName: string | null, title: string, message: string
 const history: PhoneNotification[] = setup
   ? []
   : [
-      n("com.apple.mobilephone", "Phone", "Mum", "Missed Call", 3, { category: "missedCall" }),
+      n("com.apple.mobilephone", "Phone", "Mum", "Missed Call", 3, { category: "missedCall", flags: flags({ positiveAction: true }), positiveLabel: "Dial" }),
       n("com.apple.MobileSMS", "Messages", "Zoe", "omw, 10 mins 🚗", 1),
       n("com.apple.MobileSMS", "Messages", "Zoe", "did you see the photos I sent?", 4),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Are we still meeting at 5? I can grab a table if you're running late.", 2),
@@ -386,7 +386,7 @@ if (params.has("call")) {
     if (ring.removedAt != null) return;
     ring.removedAt = Date.now();
     void emit("notification-removed", ring.id);
-    const missed = n("com.apple.mobilephone", "Phone", "Jane Doe", "Missed Call", 0, { category: "missedCall" });
+    const missed = n("com.apple.mobilephone", "Phone", "Jane Doe", "Missed Call", 0, { category: "missedCall", flags: flags({ positiveAction: true }), positiveLabel: "Dial" });
     missed.id = 601;
     missed.receivedAt = Date.now();
     history.unshift(missed);

@@ -398,3 +398,26 @@ export function snippet(text: string, query: string, width = 90): string {
 export function canClear(n: PhoneNotification): boolean {
   return n.live && n.removedAt == null && n.flags.negativeAction && n.category !== "incomingCall";
 }
+
+const lastDigits = (s: string | null | undefined) => (s ?? "").replace(/\D/g, "").slice(-10);
+
+/**
+ * The phone's missed-call notification from this person that's still on the iPhone. iOS puts
+ * a "Dial" action on it, so tug can have the phone call them back without a hands-free link
+ * (confirmed on Jordan's iPhone). Matched on the name the phone shows, or the number; newest wins.
+ */
+export function missedCallFor(
+  notifications: PhoneNotification[],
+  person: { name: string | null; address: string | null },
+): PhoneNotification | null {
+  const name = person.name ? cleanName(person.name).toLowerCase() : null;
+  const digits = lastDigits(person.address);
+  let best: PhoneNotification | null = null;
+  for (const n of notifications) {
+    if (n.category !== "missedCall" || !n.live || n.removedAt != null || !n.flags.positiveAction) continue;
+    const title = cleanName(n.title).toLowerCase();
+    const matches = (name && title === name) || (digits.length >= 7 && lastDigits(n.title) === digits);
+    if (matches && (!best || n.receivedAt > best.receivedAt)) best = n;
+  }
+  return best;
+}

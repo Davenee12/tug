@@ -9,6 +9,7 @@ import {
   groupFeed,
   highlight,
   initials,
+  missedCallFor,
   newestUnreadThread,
   snippet,
   threadKey,
@@ -239,5 +240,31 @@ describe("recent calls", () => {
       ["Earlier", ["+4", "+5"]],
     ]);
     expect(callTime(call("+1", null, "2026-10-04T18:15:00Z"))?.toISOString()).toBe("2026-10-04T18:15:00.000Z");
+  });
+});
+
+describe("missedCallFor", () => {
+  const missed = (title: string, atMin: number, extra: Partial<PhoneNotification> = {}) =>
+    note(title, "Missed Call", atMin, {
+      appId: "com.apple.mobilephone",
+      category: "missedCall",
+      positiveLabel: "Dial",
+      flags: { silent: false, important: false, preExisting: false, positiveAction: true, negativeAction: true },
+      ...extra,
+    });
+
+  it("finds the newest missed call still on the phone, by name or number", () => {
+    const old = missed("zoe 💜", 0);
+    const recent = missed("zoe 💜", 5);
+    expect(missedCallFor([old, recent], { name: "Zoe 💜", address: "+13025550173" })).toBe(recent);
+    const byNumber = missed("(302) 555-0173", 1);
+    expect(missedCallFor([byNumber], { name: "Someone else", address: "+13025550173" })).toBe(byNumber);
+  });
+
+  it("ignores missed calls that are gone or can't be dialed, and other people", () => {
+    expect(missedCallFor([missed("zoe 💜", 0, { removedAt: T0 })], { name: "zoe 💜", address: null })).toBeNull();
+    expect(missedCallFor([missed("zoe 💜", 0, { live: false })], { name: "zoe 💜", address: null })).toBeNull();
+    expect(missedCallFor([missed("Priya", 0)], { name: "zoe 💜", address: "+13025550173" })).toBeNull();
+    expect(missedCallFor([note("zoe 💜", "hey", 0)], { name: "zoe 💜", address: null })).toBeNull();
   });
 });

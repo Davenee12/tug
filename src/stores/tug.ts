@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
-import { appLabel, canClear, formatAddress, groupConversations, groupThreads, newestUnreadThread, threadKey } from "../lib/format";
+import { appLabel, canClear, cleanName, formatAddress, groupConversations, groupThreads, missedCallFor, newestUnreadThread, threadKey } from "../lib/format";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
@@ -425,6 +425,40 @@ export const useTugStore = defineStore("tug", () => {
     }
   }
 
+  /** A missed call from this person still on the phone, to call back from (no hands-free needed). */
+  function missedCallFrom(name: string | null, address: string | null): PhoneNotification | null {
+    return missedCallFor(notifications.value, { name, address });
+  }
+
+  /** How tug can call this person right now: back from their missed call, by dialing, or not yet. */
+  function callRoute(name: string | null, address: string | null): "back" | "dial" | null {
+    if (missedCallFrom(name, address)) return "back";
+    return canDial.value && address ? "dial" : null;
+  }
+
+  /**
+   * Call someone from tug, the same way everywhere (Ctrl+K, Calls tab, Feed): press "Dial" on
+   * their missed call if the phone still has one (works today, no hands-free link), else dial
+   * over hands-free when that check has passed, else say why not. Never fails silently.
+   */
+  async function callPerson(name: string, address: string | null): Promise<boolean> {
+    const missed = missedCallFrom(name, address);
+    if (missed) {
+      const ok = await attempt(() => api.performAction(missed.id, true).then(() => true));
+      if (!ok) return false;
+      notify("info", `Calling ${cleanName(name)} back on your iPhone.`);
+      // The phone logs the call a moment later; show it in Calls without waiting.
+      window.setTimeout(() => void api.refreshCalls().catch(() => undefined), 6000);
+      return true;
+    }
+    if (canDial.value && address) return call(address, name);
+    notify(
+      "error",
+      `tug can't call ${cleanName(name)} yet: Windows is holding your iPhone's calling connection. Missed calls still on your phone can be called back.`,
+    );
+    return false;
+  }
+
   /** Settings › iPhone › Calls: open the hands-free link without calling. Only a pass turns Call buttons on. */
   async function checkDialing(): Promise<boolean> {
     try {
@@ -434,7 +468,7 @@ export const useTugStore = defineStore("tug", () => {
       return true;
     } catch (e) {
       await setSetting("dialing", false);
-      notify("error", `Calling from tug isn't available: ${errorMessage(e)}`);
+      notify("error", `Calling anyone from tug isn't available here: ${errorMessage(e)}. Calling back missed calls still works.`);
       return false;
     }
   }
@@ -646,6 +680,9 @@ export const useTugStore = defineStore("tug", () => {
     checkDialing,
     /** Recent calls are on screen: ask the phone again (the backend throttles it). */
     refreshCalls: () => void api.refreshCalls().catch(() => undefined),
+    missedCallFrom,
+    callRoute,
+    callPerson,
     hasMore,
     discovered,
     pairingRequest,
