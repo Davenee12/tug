@@ -12,11 +12,26 @@ See docs/STABILIZATION.md for the current backlog.
 4. ~~Sprint 5: CI on every PR, second bug hunt (3 High / 3 Med / 8 Low fixed), `actor.rs` split
    into six modules.~~ (shipped alongside v0.5.5)
 
-## v0.5.7 — calling anyone, and texts in real time (agreed with Dave, 2026-10-05)
+## v0.5.7 — tug feels built into Windows (split agreed with Dave, 2026-10-05)
+Self-contained features that don't wait on hardware spikes or a purchase; built in parallel.
+- **Actionable pop-ups**: reply to a text from the Windows notification, Copy code, Call back on a
+  missed call, Clear; body click still opens tug.
+- **Media keys + Windows media panel** control the iPhone's music (SystemMediaTransportControls).
+- **Open in browser**: an "Open" button on notifications from apps with a website; Gmail opens a
+  search for that email.
+- **Filter unknown senders**: unsaved numbers / spam go to a collapsed "Unknown senders" list, out of
+  conversations, the unread badge and pop-ups (codes still pop up); "Move to conversations" or reply.
+- **Press-and-hold volume.**
+- **Connection health + "Copy diagnostics"** (redacted logs for support).
+- **Start with Windows, minimized to the tray** (off by default) and **remember the phone by id**.
+- **Low phone battery alert** at 20% and 10%.
+- Live texts' pure groundwork (event parser, OBEX server framing, registration call) lands inert.
 
-Two big bets (calling, live texts) plus smaller approved items. Research done 2026-10-05; the
-sequence below front-loads the two hardware spikes that gate the big bets, runs the pure modules in
-parallel while they're pending, and keeps calling's ship behind Dave's signing decision.
+## v0.5.8 — live texts, and a stabilization pass
+Starts with a full stabilization check of the whole app (Dave, 2026-10-05) as the foundation
+for v0.5.8 and beyond. Auto-updates need code signing, which Dave isn't buying for now.
+Dave is in the US, so Azure Artifact Signing (~$9.99/mo) is available to him. Spike 0 passed
+2026-10-05 (Handsfree Telephony back on: one PhoneLineTransportDevice for the iPhone).
 
 ### Needs Dave before coding can finish
 - **Hardware (spikes).** Calling and live texts can't be proven without Dave's PC + iPhone; the
@@ -30,34 +45,6 @@ parallel while they're pending, and keeps calling's ship behind Dave's signing d
   certificate** $150–300/yr. Either shows Dave's name as publisher; neither instantly clears
   SmartScreen — reputation still builds over time (correcting the old "signing removes the warning"
   wording below). Auto-updates and the calling ship both wait on this.
-
-### Spikes first (Dave's hardware, gate the big items)
-- **Spike 0 — phone line exists.** Re-tick Handsfree Telephony; confirm one `PhoneLineTransportDevice`
-  appears for the iPhone (matched by Bluetooth address).
-- **Spike 1 — sparse package passes the restricted-capability check.** Standalone probe crate, sparse
-  MSIX identity, self-signed cert in `CurrentUser\TrustedPeople` (no admin). Drive the full flow:
-  `RequestAccessAsync` → `RegisterApp` → `ConnectAsync` → `PhoneCallManager.RequestStoreAsync` →
-  `PhoneLineWatcher` → `PhoneLine.DialWithResultAsync` (tug must be foreground) →
-  `ChangeAudioDeviceAsync(RemoteDevice)` to keep audio on the phone. This is the biggest unknown:
-  whether an identity-only sparse package beside an NSIS install satisfies `phoneLineTransportManagement`.
-  **Go/no-go for calling rides on this.**
-
-### Can start now — pure modules, no hardware (parallel)
-These land as tested pure PRs regardless of spike outcome:
-- **Live texts — event parser** (`x-bt/MAP-event-report`: NewMessage, SendingSuccess…) and **OBEX
-  server framing**, both pure + unit-tested.
-- **Calling — pure line-status state machine** (the calling module's core, independent of WinRT).
-- **Texts pairing / remember-by-id — pure pick logic** (`pick_device` prefers a stored id over name;
-  this is also the "remember the phone by id" item).
-
-### Independent features — no spike needed (parallel)
-- **Press-and-hold volume.** Holding Now Playing's volume up/down keeps stepping (AMS VolumeUp/Down
-  repeated, accelerating, stopping on release). Hardware only to verify.
-- **Connection health + "Copy diagnostics".** One Settings panel showing each link's state
-  (notifications, media, texts, contacts, calls) and a button that bundles the logs. Today's silent
-  failures (forgotten pairing, Windows closing GATT objects, a broken texts pairing) were log-only.
-- **Start with Windows, minimized to the tray.**
-- **Remember the phone by id, not name** (texts device included) — see the pure pick logic above.
 
 ### Live texts (MAP notifications / MNS) — after the pure modules, hardware to wire
 Texts land the instant the phone gets them instead of within ~8 s of polling; sends show "Sent".
@@ -77,6 +64,33 @@ of CTKD — **LE (notifications) first, then Classic (texts)**; persist `TEXTS_D
 - PRs: pure pick logic → texts discovery mode (only during the step) → pair-for-texts command →
   remember texts device by id → wizard button → ordering guard on re-pair.
 
+### Auto-updates
+From GitHub Releases, **after** releases are signed (same signing work as calling).
+
+## v0.5.9 — candidates
+- **Welcome back**: after 30+ min away, who texted and called.
+- **Calls in Ctrl+K search**: a person's recent calls in their search result.
+
+## Parked — calling anyone (v0.5.13 or later; Dave, 2026-10-05)
+Calling back a missed call already works (iOS's "Dial" over ANCS) and stays. Dialing anyone is
+parked: on 2026-10-05 Spike 0 passed and Spike 1 got package identity + `RequestAccessAsync` =
+Allowed (the sparse package passes the restricted-capability check), but `RegisterApp` didn't
+stick ("another app owns the line"), even with Windows' Mobile devices off. Next time: re-run
+the probe (PR #33, `spikes/phoneline`) after a PC restart, then investigate line ownership.
+Shipping it to others also needs paid code signing.
+
+### Spikes first (Dave's hardware, gate the big items)
+- **Spike 0 — phone line exists.** Re-tick Handsfree Telephony; confirm one `PhoneLineTransportDevice`
+  appears for the iPhone (matched by Bluetooth address).
+- **Spike 1 — sparse package passes the restricted-capability check.** Standalone probe crate, sparse
+  MSIX identity, self-signed cert in `CurrentUser\TrustedPeople` (no admin). Drive the full flow:
+  `RequestAccessAsync` → `RegisterApp` → `ConnectAsync` → `PhoneCallManager.RequestStoreAsync` →
+  `PhoneLineWatcher` → `PhoneLine.DialWithResultAsync` (tug must be foreground) →
+  `ChangeAudioDeviceAsync(RemoteDevice)` to keep audio on the phone. This is the biggest unknown:
+  whether an identity-only sparse package beside an NSIS install satisfies `phoneLineTransportManagement`.
+  **Go/no-go for calling rides on this.**
+
+
 ### Calling anyone — spike-gated, ships behind signing
 Call anyone from tug (Calls tab, Ctrl+K "call tay", conversations). Today only missed calls can be
 called back (iOS's "Dial" over ANCS); dialing anyone needs Windows' calling API
@@ -89,16 +103,6 @@ feature `ApplicationModel_Calls`.
 - PRs (after Spike 1 is a go): identity plumbing → calling module (uses the pure state machine) + UI
   → installer hooks (`Add-AppxPackage -ExternalLocation`) → production signing (Dave's chosen cert).
 
-### Auto-updates
-From GitHub Releases, **after** releases are signed (same signing work as calling).
-
-## v0.5.8 — candidates
-- **Reply from the Windows pop-up** — *built, awaiting a hardware test:* native WinRT toasts with a
-  reply box (texts from a person), Mark read, Copy code, Call back (missed calls) and Clear. Presses
-  work while tug runs (it lives in the tray); after tug quits its pop-ups are taken back, since a
-  press would only start tug and lose the action.
-- **Welcome back**: after 30+ min away, who texted and called.
-- **Calls in Ctrl+K search**: a person's recent calls in their search result.
 
 ## Next — onboarding & distribution (product readiness)
 - ~~**Settings page** — a full page (not the side panel) with a left nav: General, iPhone, Connectors
