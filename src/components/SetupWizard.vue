@@ -126,6 +126,9 @@ watch(
       void tug.stopDiscovery();
       go("sharing");
     }
+    // "Pair again" can land on Connect before the forget shows up in the status: start
+    // looking once it does, or the step waits forever.
+    if (!device && step.value === "connect") void tug.startDiscovery();
   },
 );
 

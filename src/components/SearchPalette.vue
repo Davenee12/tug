@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { MessageSquare, Plus, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, Volume1, Volume2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
@@ -41,6 +41,7 @@ onMounted(async () => {
 });
 
 let timer: number | undefined;
+onUnmounted(() => window.clearTimeout(timer));
 let seq = 0;
 watch(query, (q) => {
   active.value = 0;

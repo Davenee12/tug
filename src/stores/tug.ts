@@ -221,15 +221,17 @@ export const useTugStore = defineStore("tug", () => {
   /** Clear every notification in a row that's still on the phone and clearable. */
   async function clearItems(items: PhoneNotification[], { quiet = false } = {}) {
     const clearable = items.filter((n) => n.live && n.removedAt == null && n.flags.negativeAction);
+    let failure: unknown = null;
+    // One that's already gone from the phone mustn't stop the rest from clearing.
     for (const n of clearable) {
       try {
         await api.performAction(n.id, false);
       } catch (e) {
-        // Automatic clears (opening a conversation) shouldn't nag; the ✕ button does.
-        if (!quiet) notify("error", errorMessage(e));
-        return;
+        failure ??= e;
       }
     }
+    // Automatic clears (opening a conversation) shouldn't nag; the ✕ button does, once.
+    if (failure && !quiet) notify("error", errorMessage(failure));
   }
 
   /**
