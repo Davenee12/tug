@@ -338,23 +338,33 @@ impl Store {
         Ok(n)
     }
 
-    /// Learn old names of known contacts from history: a Messages notification whose text
-    /// matches a message from that contact (same rules as `learn_contacts`: the text came
-    /// from exactly one sender, close in time) but whose name differs from the contact's
-    /// current one. Covers renames that happened before tug kept aliases. Returns how
-    /// many were learned.
+    /// Learn old names of known contacts from history: Messages notifications whose text
+    /// matches messages from that contact, close in time, under a name that differs from
+    /// the contact's current one. Covers renames that happened before tug kept aliases.
+    ///
+    /// Stricter than `learn_contacts`, because a wrong alias moves someone else's
+    /// notifications into this contact's conversation: each text must have come from
+    /// exactly one stored sender *and* appear under exactly one name, and the pairing must
+    /// hold for at least two different texts. (One shared "ok" from an unsaved sender whose
+    /// own text never reached tug is a coincidence, not a rename.) Returns how many were learned.
     pub fn learn_aliases(&self) -> Result<usize> {
         self.conn().execute(
             "INSERT OR IGNORE INTO contact_aliases (address, alias)
-             SELECT DISTINCT m.address, clean_name(n.title)
-             FROM messages m
-             JOIN contacts c ON c.address = m.address
-             JOIN notifications n
-               ON n.app_id = ?1 AND n.message = m.body AND abs(n.received_at - m.received_at) <= ?2
-             WHERE m.direction = 'in' AND m.body <> ''
-               AND clean_name(n.title) <> '' AND lower(clean_name(n.title)) <> lower(c.name)
-               AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
-                    WHERE m2.direction = 'in' AND m2.body = m.body) = 1",
+             SELECT address, alias FROM (
+                 SELECT m.address AS address, clean_name(n.title) AS alias, COUNT(DISTINCT m.body) AS evidence
+                 FROM messages m
+                 JOIN contacts c ON c.address = m.address
+                 JOIN notifications n
+                   ON n.app_id = ?1 AND n.message = m.body AND abs(n.received_at - m.received_at) <= ?2
+                 WHERE m.direction = 'in' AND m.body <> ''
+                   AND clean_name(n.title) <> '' AND lower(clean_name(n.title)) <> lower(c.name)
+                   AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
+                        WHERE m2.direction = 'in' AND m2.body = m.body) = 1
+                   AND (SELECT COUNT(DISTINCT clean_name(n2.title)) FROM notifications n2
+                        WHERE n2.app_id = ?1 AND n2.message = m.body) = 1
+                 GROUP BY m.address, alias
+             )
+             WHERE evidence >= 2",
             params![MESSAGES_APP, LEARN_WINDOW_MS],
         )
     }
@@ -550,9 +560,32 @@ mod tests {
         notify(&s, 1, "zoe 💜", "dinner at 7?", 990);
         s.insert_incoming(&incoming("H1", "+13025550173", "dinner at 7?"))
             .unwrap();
+        assert_eq!(s.learn_aliases().unwrap(), 0, "one matching text isn't enough evidence");
+        notify(&s, 2, "zoe 💜", "running late", 990);
+        s.insert_incoming(&incoming("H2", "+13025550173", "running late"))
+            .unwrap();
         assert_eq!(s.learn_aliases().unwrap(), 1);
         assert_eq!(s.learn_aliases().unwrap(), 0, "learned once");
-        assert_eq!(titles(&s), vec!["zoe"]);
+        assert_eq!(titles(&s), vec!["zoe", "zoe"]);
+    }
+
+    #[test]
+    fn a_shared_short_text_never_hands_someone_elses_name_to_a_contact() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[("+15550000001".into(), "Mom".into())]).unwrap();
+        // Mom texts "ok" and "see you soon" (her own notifications never reached tug)...
+        s.insert_incoming(&incoming("H1", "+15550000001", "ok")).unwrap();
+        s.insert_incoming(&incoming("H2", "+15550000001", "see you soon"))
+            .unwrap();
+        // ...and an unsaved Coach also texts "ok"; his own text scrolled out before tug synced.
+        notify(&s, 1, "Coach", "ok", 990);
+        assert_eq!(s.learn_aliases().unwrap(), 0, "a single coincidence");
+        // Both texts show up under two names: neither proves anything.
+        notify(&s, 2, "Mom", "ok", 995);
+        notify(&s, 3, "Coach", "see you soon", 990);
+        notify(&s, 4, "Mom", "see you soon", 995);
+        assert_eq!(s.learn_aliases().unwrap(), 0);
+        assert_eq!(titles(&s), vec!["Mom", "Coach", "Mom", "Coach"]);
     }
 
     #[test]
