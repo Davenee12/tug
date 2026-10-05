@@ -16,6 +16,7 @@ const CONNECTED: DeviceStatus = {
   awaitingPhoneAllow: false,
   messagesError: null,
   contactsError: null,
+  contactsShared: false,
   textsPairing: "ok",
   textsDevice: "Jordan's iPhone",
   liveTexts: "off",
@@ -145,6 +146,34 @@ describe("setupDeviceLists", () => {
     const list = [
       dev({ id: "le", transport: "le", name: "Jordan's iPhone", kind: "phone" }),
       dev({ id: "classic", transport: "classic", name: "Jordan's iPhone", kind: "phone" }),
+    ];
+    expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["le"]);
+  });
+
+  it("offers the Classic row for an unpaired iPhone seen on both transports", () => {
+    // Dave's fresh setup: two "Jordan's iPhone" rows; the LE one failed to pair (status 19), the
+    // Classic one paired and brought the LE bond with it.
+    const list = [
+      dev({ id: "le", transport: "le", name: "Jordan’s iPhone", kind: "phone", paired: false }),
+      dev({ id: "classic", transport: "classic", name: "Jordan’s iPhone", kind: "phone", paired: false }),
+    ];
+    expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["classic"]);
+  });
+
+  it("hides an unrecognised LE entry that is the Classic phone's other side", () => {
+    const list = [
+      dev({ id: "le", transport: "le", name: "Jordan’s iPhone", kind: "unknown", paired: false }),
+      dev({ id: "classic", transport: "classic", name: "Jordan’s iPhone", kind: "phone", paired: false }),
+    ];
+    const lists = setupDeviceLists(list);
+    expect(lists.phones.map((d) => d.id)).toEqual(["classic"]);
+    expect(lists.others).toEqual([]);
+  });
+
+  it("keeps the LE row when the phone connected over LE (LightBlue)", () => {
+    const list = [
+      dev({ id: "le", transport: "le", name: "Jordan’s iPhone", kind: "phone", paired: false, connected: true }),
+      dev({ id: "classic", transport: "classic", name: "Jordan’s iPhone", kind: "phone", paired: false }),
     ];
     expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["le"]);
   });

@@ -444,10 +444,17 @@ mod worker {
             self.stop_live_texts();
         }
 
+        fn set_contacts_shared(&mut self, shared: bool) {
+            self.contacts_shared = shared;
+            self.shared.update_status(|s| s.contacts_shared = shared);
+        }
+
         fn fail(&mut self, e: &MapError) {
             if self.session.take().is_some() {
                 log::info!("message access dropped: {e}");
             }
+            // What the phone shares is per connection; ask again on the next one.
+            self.set_contacts_shared(false);
             self.stop_live_texts();
             let shown = match e {
                 MapError::Consent | MapError::NoService => Some(e.to_string()),
@@ -573,13 +580,13 @@ mod worker {
                 // The iPhone answers with an empty list, not a refusal, while Sync Contacts is
                 // off. Keep any names already saved and ask again rather than in 6 hours.
                 Ok(entries) if entries.is_empty() => {
-                    self.contacts_shared = false;
+                    self.set_contacts_shared(false);
                     log::debug!("the iPhone shared no contacts (Sync Contacts off?), asking again soon");
                     self.next_contacts_sync = Instant::now() + self.soon();
                 }
                 Ok(entries) => {
                     self.unshared_contact_pulls = 0;
-                    self.contacts_shared = true;
+                    self.set_contacts_shared(true);
                     let pairs: Vec<(String, String)> = entries
                         .iter()
                         .flat_map(|e| e.numbers.iter().map(move |n| (normalize(n), e.name.clone())))
@@ -606,7 +613,7 @@ mod worker {
                     log::info!("contacts sync failed: {e}");
                     let consent = matches!(e, MapError::ContactsConsent);
                     if consent {
-                        self.contacts_shared = false;
+                        self.set_contacts_shared(false);
                     }
                     let shown = consent.then(|| e.to_string());
                     self.shared.update_status(|s| s.contacts_error = shown);

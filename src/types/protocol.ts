@@ -37,6 +37,8 @@ export interface DeviceStatus {
   messagesError: string | null;
   /** Why the phone's contacts aren't available, when the user can fix it. */
   contactsError: string | null;
+  /** The phone shared contacts on the current connection (Sync Contacts on). */
+  contactsShared: boolean;
   /** Whether the texts (Classic) pairing works, is missing, or needs making again. */
   textsPairing: TextsPairing;
   /** The phone Windows has paired for texts (what to remove when it needs re-pairing). */
