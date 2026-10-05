@@ -5,7 +5,7 @@
 use rusqlite::{params, OptionalExtension, Row};
 use serde::Serialize;
 
-use crate::store::{Result, Store};
+use crate::store::{fts_query, like_pattern, Result, Store};
 
 pub const SOURCE_IPHONE_MAP: &str = "iphone-map";
 
@@ -209,6 +209,48 @@ impl Store {
         rows.collect()
     }
 
+    /// Messages whose text matches every word (prefix match), newest first.
+    pub fn search_messages(&self, query: &str, limit: u32) -> Result<Vec<StoredMessage>> {
+        let Some(fts) = fts_query(query) else {
+            return Ok(Vec::new());
+        };
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "{SELECT} WHERE m.id IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1)
+             ORDER BY m.received_at DESC, m.id DESC LIMIT ?2"
+        ))?;
+        let rows = stmt.query_map(params![fts, limit], map_row)?;
+        rows.collect()
+    }
+
+    /// Contacts whose name contains the text, or whose number contains the digits typed.
+    pub fn search_contacts(&self, query: &str, limit: u32) -> Result<Vec<Contact>> {
+        let q = query.trim();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+        let digits: String = q.chars().filter(char::is_ascii_digit).collect();
+        // Fewer than 3 digits would match almost every number; use a pattern that can't match.
+        let number_pattern = if digits.len() >= 3 {
+            format!("%{digits}%")
+        } else {
+            "\u{0}".into()
+        };
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT address, name FROM contacts
+             WHERE name LIKE ?1 ESCAPE '\\' OR address LIKE ?2
+             ORDER BY name LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![like_pattern(q), number_pattern, limit], |r| {
+            Ok(Contact {
+                address: r.get(0)?,
+                name: r.get(1)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     pub fn contacts(&self) -> Result<Vec<Contact>> {
         let conn = self.conn();
         let mut stmt = conn.prepare("SELECT address, name FROM contacts ORDER BY name")?;
@@ -383,6 +425,47 @@ mod tests {
         s.insert_incoming(&incoming("H1", "+13025550173", "Yes")).unwrap();
         let learned = s.learn_contacts().unwrap();
         assert_eq!(learned[0].name, "zoe 💜");
+    }
+
+    #[test]
+    fn searches_message_text_and_contacts() {
+        let s = Store::in_memory().unwrap();
+        s.insert_incoming(&incoming("H1", "+13025550173", "dinner at 7?"))
+            .unwrap();
+        s.insert_incoming(&incoming("H2", "+13025550173", "running late"))
+            .unwrap();
+        s.insert_outgoing(SOURCE_IPHONE_MAP, "+13025550173", "Dinner sounds great", 2_000)
+            .unwrap();
+        let hits: Vec<String> = s
+            .search_messages("dinn", 10)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.body)
+            .collect();
+        assert_eq!(
+            hits,
+            vec!["Dinner sounds great", "dinner at 7?"],
+            "prefix, case-insensitive, newest first"
+        );
+        assert!(s.search_messages("   ", 10).unwrap().is_empty());
+        assert!(s.search_messages("\"unbalanced", 10).is_ok());
+
+        s.save_phonebook(&[
+            ("+13025550173".into(), "zoe 💜".into()),
+            ("+12145550186".into(), "Priya".into()),
+        ])
+        .unwrap();
+        assert_eq!(s.search_contacts("pri", 10).unwrap()[0].name, "Priya");
+        assert_eq!(
+            s.search_contacts("555-017", 10).unwrap()[0].name,
+            "zoe 💜",
+            "by number digits"
+        );
+        assert!(
+            s.search_contacts("12", 10).unwrap().is_empty(),
+            "too few digits to mean a number"
+        );
+        assert!(s.search_contacts("100%", 10).unwrap().is_empty());
     }
 
     #[test]

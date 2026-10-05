@@ -51,6 +51,7 @@ pub fn run() {
             commands::get_now_playing,
             commands::list_notifications,
             commands::search_notifications,
+            commands::search_all,
             commands::clear_history,
             commands::perform_action,
             commands::media_command,

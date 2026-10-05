@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanName, groupConversations, groupFeed, initials, threadKey } from "./format";
+import { cleanName, groupConversations, groupFeed, highlight, initials, snippet, threadKey } from "./format";
 import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const T0 = Date.parse("2026-10-05T12:00:00");
@@ -133,5 +133,26 @@ describe("groupFeed", () => {
     ]);
     expect(entries.map((e) => e.kind)).toEqual(["thread", "stack"]);
     expect(entries[0].kind === "thread" && entries[0].thread.items.map((n) => n.message)).toEqual(["a", "b"]);
+  });
+});
+
+describe("search presentation", () => {
+  it("highlights every typed word, case-insensitively", () => {
+    const runs = highlight("Dinner at 7? See you at dinner", "din AT");
+    expect(runs.filter((r) => r.match).map((r) => r.text)).toEqual(["Din", "at", "at", "din"]);
+    expect(runs.map((r) => r.text).join("")).toBe("Dinner at 7? See you at dinner");
+  });
+
+  it("treats regex characters in the query literally", () => {
+    expect(highlight("cost $5 (approx)", "(approx").filter((r) => r.match).map((r) => r.text)).toEqual(["(approx"]);
+    expect(highlight("hello", "")).toEqual([{ text: "hello", match: false }]);
+  });
+
+  it("excerpts long text around the first match", () => {
+    const long = "a ".repeat(100) + "the dinner plan " + "b ".repeat(100);
+    const s = snippet(long, "dinner", 40);
+    expect(s).toContain("dinner");
+    expect(s.startsWith("…") && s.endsWith("…")).toBe(true);
+    expect(snippet("short text", "x")).toBe("short text");
   });
 });

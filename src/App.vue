@@ -6,6 +6,7 @@ import ConnectionPanel from "./components/ConnectionPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
 import FeedPanel from "./components/FeedPanel.vue";
 import NewConversation from "./components/NewConversation.vue";
+import SearchPalette from "./components/SearchPalette.vue";
 import PairingDialog from "./components/PairingDialog.vue";
 
 const tug = useTugStore();
@@ -20,10 +21,18 @@ const panelInline = computed(() => wide.value && tug.status.connection !== "conn
 const mq = window.matchMedia(WIDE);
 const onMq = (e: MediaQueryListEvent) => (wide.value = e.matches);
 
-// Ctrl+N: new message from anywhere.
+// Ctrl+K: search from anywhere. Ctrl+N: new message (not while typing in a field).
 function onShortcut(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+  const key = e.key.toLowerCase();
+  const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable]") !== null;
+  if (key === "k") {
     e.preventDefault();
+    tug.pickerOpen = false;
+    tug.searchOpen = true;
+  } else if (key === "n" && !typing) {
+    e.preventDefault();
+    tug.searchOpen = false;
     tug.view = "messages";
     tug.pickerOpen = true;
   }
@@ -41,6 +50,7 @@ onMounted(async () => {
 onUnmounted(() => {
   mq.removeEventListener("change", onMq);
   window.removeEventListener("keydown", onShortcut);
+  tug.dispose();
 });
 </script>
 
@@ -62,8 +72,9 @@ onUnmounted(() => {
       </Transition>
     </template>
 
-    <PairingDialog />
+    <PairingDialog v-if="tug.pairingRequest" />
     <NewConversation v-if="tug.pickerOpen" />
+    <SearchPalette v-if="tug.searchOpen" />
 
     <Transition enter-from-class="opacity-0 translate-y-2" leave-to-class="opacity-0 translate-y-2" enter-active-class="transition" leave-active-class="transition">
       <div

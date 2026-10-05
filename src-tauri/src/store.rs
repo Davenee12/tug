@@ -80,6 +80,56 @@ CREATE TABLE IF NOT EXISTS contacts (
 );
 "#;
 
+/// Schema changes after the baseline above, applied in order and recorded in
+/// `PRAGMA user_version`, so an existing install upgrades in place. Version 1 is
+/// the baseline `SCHEMA`; entry `i` takes the database to version `i + 2`.
+/// Append only — never edit a shipped migration.
+const MIGRATIONS: &[&str] = &[
+    // v2: full-text search over messages (for universal search), back-filled.
+    r#"
+    CREATE VIRTUAL TABLE messages_fts USING fts5 (body, content = 'messages', content_rowid = 'id');
+    CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+        INSERT INTO messages_fts (rowid, body) VALUES (new.id, new.body);
+    END;
+    CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+        INSERT INTO messages_fts (messages_fts, rowid, body) VALUES ('delete', old.id, old.body);
+    END;
+    CREATE TRIGGER messages_au AFTER UPDATE OF body ON messages BEGIN
+        INSERT INTO messages_fts (messages_fts, rowid, body) VALUES ('delete', old.id, old.body);
+        INSERT INTO messages_fts (rowid, body) VALUES (new.id, new.body);
+    END;
+    INSERT INTO messages_fts (messages_fts) VALUES ('rebuild');
+    "#,
+];
+
+/// The schema version this build expects.
+pub const SCHEMA_VERSION: i64 = 1 + MIGRATIONS.len() as i64;
+
+fn migrate(conn: &mut Connection) -> Result<()> {
+    let mut version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if version == 0 {
+        // Fresh database, or one from before versioning: the baseline is in place.
+        conn.pragma_update(None, "user_version", 1)?;
+        version = 1;
+    }
+    if version > SCHEMA_VERSION {
+        log::warn!("database is schema v{version}, newer than this build (v{SCHEMA_VERSION}); not migrating");
+        return Ok(());
+    }
+    for (i, sql) in MIGRATIONS.iter().enumerate() {
+        let target = i as i64 + 2;
+        if version < target {
+            let tx = conn.transaction()?;
+            tx.execute_batch(sql)?;
+            tx.pragma_update(None, "user_version", target)?;
+            tx.commit()?;
+            log::info!("database migrated to schema v{target}");
+            version = target;
+        }
+    }
+    Ok(())
+}
+
 const SELECT: &str =
     "SELECT n.id, n.session, n.uid, n.app_id, a.display_name, n.category, n.title, n.subtitle, n.message,
             n.posted_at, n.received_at, n.flags, n.positive_label, n.negative_label, n.removed_at
@@ -134,9 +184,10 @@ impl Store {
         Self::init(Connection::open_in_memory()?)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
+    fn init(mut conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&mut conn)?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -275,14 +326,7 @@ impl Store {
         let Some(fts) = fts_query(query) else {
             return self.recent(limit, None, live_session);
         };
-        let like = format!(
-            "%{}%",
-            query
-                .trim()
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_")
-        );
+        let like = like_pattern(query);
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "{SELECT} WHERE n.id IN (SELECT rowid FROM notifications_fts WHERE notifications_fts MATCH ?1)
@@ -358,8 +402,18 @@ fn map_row(r: &Row, live_session: Option<&str>) -> Result<StoredNotification> {
     })
 }
 
+/// `%text%` for LIKE … ESCAPE '\', with the user's `\ % _` taken literally.
+pub(crate) fn like_pattern(query: &str) -> String {
+    let escaped = query
+        .trim()
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
+}
+
 /// Turn free text into a safe FTS5 query: every token quoted, prefix-matched, ANDed.
-fn fts_query(input: &str) -> Option<String> {
+pub(crate) fn fts_query(input: &str) -> Option<String> {
     let terms: Vec<String> = input
         .split_whitespace()
         .map(|t| format!("\"{}\"*", t.replace('"', "\"\"")))
@@ -398,6 +452,40 @@ mod tests {
                 received_at: 1_000,
             })
             .unwrap()
+    }
+
+    #[test]
+    fn fresh_database_is_at_the_current_schema_version() {
+        let s = Store::in_memory().unwrap();
+        let v: i64 = s.conn().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn existing_v1_database_upgrades_in_place_and_keeps_its_data() {
+        // A database as shipped in v0.5.x: baseline schema, no version recorded.
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute(
+            "INSERT INTO messages (source, handle, direction, address, body, received_at, status)
+             VALUES ('iphone-map', 'H1', 'in', '+13025550100', 'dinner at 7?', 1000, 'received')",
+            [],
+        )
+        .unwrap();
+        migrate(&mut conn).unwrap();
+        let v: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        // The old message is searchable after the upgrade (back-filled index).
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'dinner'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1);
+        // Running again is a no-op.
+        migrate(&mut conn).unwrap();
     }
 
     #[test]

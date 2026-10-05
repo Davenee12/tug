@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { Info, Search, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { useFocusTrap } from "../lib/focusTrap";
 import { cleanName, formatAddress, groupConversations } from "../lib/format";
 import AppAvatar from "./AppAvatar.vue";
 
@@ -10,6 +11,8 @@ const query = ref("");
 const input = ref<HTMLInputElement | null>(null);
 const list = ref<HTMLElement | null>(null);
 const active = ref(0);
+const root = ref<HTMLElement | null>(null);
+useFocusTrap(root);
 
 onMounted(async () => {
   await nextTick();
@@ -102,6 +105,7 @@ const sectionLabel = (s: Option["section"]) => ({ Recent: "Recent", Contacts: "A
 <template>
   <div class="fixed inset-0 z-50 flex items-start justify-center bg-ink/30 px-6 pt-[12vh] backdrop-blur-[2px]" @click.self="close">
     <div
+      ref="root"
       role="dialog"
       aria-modal="true"
       aria-label="New message"

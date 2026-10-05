@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppName,
   Contact,
+  SearchResults,
   SmsMessage,
   DeviceStatus,
   DiscoveredDevice,
@@ -37,6 +38,7 @@ export const api = {
   getContacts: () => invoke<Contact[]>("get_contacts"),
   sendMessage: (address: string, text: string) => invoke<SmsMessage>("send_message", { address, text }),
   refreshMessages: () => invoke<void>("refresh_messages"),
+  searchAll: (query: string, limit: number) => invoke<SearchResults>("search_all", { query, limit }),
 };
 
 interface EventPayloads {

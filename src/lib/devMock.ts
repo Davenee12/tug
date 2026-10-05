@@ -170,6 +170,16 @@ mockIPC(
         const q = String(a.query).toLowerCase();
         return history.filter((x) => [x.title, x.message, x.appName ?? ""].some((s) => s.toLowerCase().includes(q)));
       }
+      case "search_all": {
+        const q = String(a.query).toLowerCase().trim();
+        const words = q.split(/\s+/).filter(Boolean);
+        const hit = (t: string) => words.every((w) => t.toLowerCase().split(/\W+/).some((x) => x.startsWith(w)));
+        return {
+          people: contacts.filter((c) => c.name.toLowerCase().includes(q)),
+          messages: messages.filter((m) => hit(m.body)).reverse(),
+          notifications: history.filter((x) => hit(`${x.title} ${x.message}`)),
+        };
+      }
       case "list_messages":
         return messages;
       case "get_contacts":
