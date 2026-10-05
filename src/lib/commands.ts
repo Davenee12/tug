@@ -2,7 +2,7 @@
 // "text tay running late", "pause", "copy code", "clear all", "new message". Pure, so it's tested.
 
 import type { MediaCommand, PhoneNotification } from "../types/protocol";
-import { cleanName, formatAddress } from "./format";
+import { cleanName, formatAddress, missedCallFor } from "./format";
 
 export interface Person {
   name: string;
@@ -34,6 +34,8 @@ export interface ActionContext {
   apps?: AppFeed[];
   /** Calling from tug passed its hands-free check, so "call tay" can dial. */
   canDial?: boolean;
+  /** Notifications, to find a missed call "call tay" can call back from without hands-free. */
+  notifications?: PhoneNotification[];
 }
 
 export type Action =
@@ -117,20 +119,20 @@ export function parseActions(query: string, people: Person[], ctx: ActionContext
 }
 
 /**
- * "call tay": dial a person (or a typed number) on the iPhone. Only the whole name counts,
- * nothing after it. Until calling from tug has passed its check, one row says where to turn
- * it on instead of offering a call that can't work.
+ * "call tay": the iPhone calls a person (or a typed number). Only the whole name counts,
+ * nothing after it. Back from their missed call when the phone has one (no hands-free needed),
+ * else by dialing once the hands-free check has passed; otherwise a row says why it can't.
  */
 function callActions(rest: string, people: Person[], ctx: ActionContext): Action[] {
   const found = findPeople(rest, people).filter((m) => m.text === "");
-  if (!found.length) return [];
-  if (!ctx.canDial) return [{ kind: "call-setup", label: "Calling from tug is off: check it in Settings › iPhone" }];
-  return found.map(({ person }) => ({
-    kind: "call",
-    person,
-    label: `Call ${cleanName(person.name)}`,
-    detail: formatAddress(person.address),
-  }));
+  return found.map(({ person }): Action => {
+    const name = cleanName(person.name);
+    if (missedCallFor(ctx.notifications ?? [], person)) {
+      return { kind: "call", person, label: `Call ${name} back`, detail: "From their missed call" };
+    }
+    if (ctx.canDial) return { kind: "call", person, label: `Call ${name}`, detail: formatAddress(person.address) };
+    return { kind: "call-setup", label: `Can't call ${name} yet: only missed calls can be called back` };
+  });
 }
 
 /** Copy the newest one-time code; with none waiting the row says so and does nothing. */
