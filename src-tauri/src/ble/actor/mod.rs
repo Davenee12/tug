@@ -118,8 +118,18 @@ enum Event {
     PairingDone {
         id: String,
         result: Result<(), String>,
+        /// Set when the device paired was an unpaired Classic iPhone, so success adopts the LE
+        /// bond cross-transport derivation creates rather than the Classic id directly.
+        classic: Option<ClassicPairing>,
         reply: Reply,
     },
+}
+
+/// What an in-flight Classic iPhone pairing needs once it succeeds: the phone's name, and the LE
+/// devices already bonded when it started (so the newly-derived LE bond stands out).
+struct ClassicPairing {
+    name: String,
+    before: HashSet<String>,
 }
 
 struct Ancs {
@@ -430,7 +440,14 @@ impl Actor {
                     // that appears and vanishes mid-pairing can be diagnosed.
                     let name = info.Name().map(|n| n.to_string()).unwrap_or_default();
                     let connected = pairing::bool_property(&info, PROP_IS_CONNECTED);
-                    log::info!("discovery: added {transport:?} {name:?} (connected={connected})");
+                    // Name the candidate and what tug takes it for, so a discoverable Classic iPhone
+                    // (and a phone that appears then vanishes mid-pairing) is clear in the log.
+                    let kind = crate::device_kind::classify(
+                        &name,
+                        pairing::uint_property(&info, pairing::PROP_LE_APPEARANCE).and_then(|a| u16::try_from(a).ok()),
+                        pairing::uint_property(&info, pairing::PROP_COD_MAJOR),
+                    );
+                    log::info!("discovery: added {transport:?} {name:?} ({kind:?}, connected={connected})");
                     self.discovered.insert(id.to_string(), Discovered { info, transport });
                     self.discovered_dirty = true;
                 }
@@ -457,10 +474,19 @@ impl Actor {
                 self.discovered.remove(&id);
                 self.discovered_dirty = true;
             }
-            Event::PairingDone { id, result, reply } => {
+            Event::PairingDone {
+                id,
+                result,
+                classic,
+                reply,
+            } => {
                 log::info!("pairing finished: {result:?}");
                 let result = match result {
-                    Ok(()) => self.use_device(&id).await,
+                    // A Classic iPhone: adopt the LE bond derivation makes, remember Classic for texts.
+                    Ok(()) => match classic {
+                        Some(ctx) => self.adopt_le_after_classic(id, ctx).await,
+                        None => self.use_device(&id).await,
+                    },
                     Err(e) => Err(e),
                 };
                 let _ = reply.send(result);

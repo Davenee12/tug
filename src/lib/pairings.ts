@@ -20,20 +20,36 @@ export interface DeviceLists {
 }
 
 /**
- * Split the discovered Bluetooth LE devices into what the setup step should show. The phone is
- * offered up front whenever Windows classifies it as one (named "… iPhone", or by LE Appearance)
- * — it does NOT have to be connected to this PC first, which is the old LightBlue assumption that
- * left the wizard's list empty. Pure, so the filter is unit-tested without a phone.
+ * Split the discovered Bluetooth devices into what the setup step should show. A phone is offered
+ * up front whenever Windows classifies it as one (named "… iPhone", or by LE Appearance / Classic
+ * Class of Device) — it does NOT have to be connected to this PC first, which was the old LightBlue
+ * assumption that left the wizard's list empty.
+ *
+ * Both transports are considered: a freshly-forgotten iPhone sitting on Settings › Bluetooth is
+ * only discoverable over Classic (its LE adverts are anonymous and nameless), so Classic phones
+ * must be offered too. When one phone shows on both transports, the LE entry wins and the Classic
+ * duplicate is dropped, so the user sees one row. Pure, so the split is unit-tested without a phone.
  */
 export function setupDeviceLists(discovered: DiscoveredDevice[]): DeviceLists {
-  const le = discovered.filter((d) => d.transport === "le");
   // Connected first, then by name, so a phone actively linked to the PC sits at the top.
   const order = (a: DiscoveredDevice, b: DiscoveredDevice) =>
     Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name);
+
+  const lePhones = discovered.filter((d) => d.transport === "le" && d.kind === "phone");
+  const leNames = new Set(lePhones.map(realName).filter((n): n is string => n !== null));
+  // Classic phones, minus any that are the same phone already offered over LE.
+  const classicPhones = discovered.filter((d) => {
+    if (d.transport !== "classic" || d.kind !== "phone") return false;
+    const n = realName(d);
+    return !(n !== null && leNames.has(n));
+  });
+
   return {
-    phones: le.filter((d) => d.kind === "phone").sort(order),
-    others: le.filter((d) => d.kind === "unknown").sort(order),
-    hiddenAccessories: le.filter((d) => d.kind === "accessory").length,
+    phones: [...lePhones, ...classicPhones].sort(order),
+    // Unknowns (a nameless just-connected iPhone) stay LE-only: a nameless Classic device with no
+    // phone signal is an accessory, not a maybe-iPhone, so it shouldn't masquerade as one.
+    others: discovered.filter((d) => d.transport === "le" && d.kind === "unknown").sort(order),
+    hiddenAccessories: discovered.filter((d) => d.kind === "accessory").length,
   };
 }
 
