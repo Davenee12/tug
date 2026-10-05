@@ -83,8 +83,8 @@ function restart() {
 </script>
 
 <template>
-  <section class="rounded-xl bg-surface-dark-elevated p-5">
-    <div class="caption-upper mb-3 flex items-center gap-2 text-on-dark-soft">
+  <section class="rounded-xl bg-surface-dark-elevated p-4">
+    <div class="caption-upper mb-2.5 flex items-center gap-2 text-on-dark-soft">
       <Music2 :size="13" />
       <span class="min-w-0 flex-1 truncate">{{ available ? np.player ?? "Now playing" : "Now playing" }}</span>
       <template v-if="available">
@@ -111,7 +111,7 @@ function restart() {
 
     <template v-if="available">
       <div class="flex items-center gap-3">
-        <img v-if="art" :src="art" alt="" class="size-12 shrink-0 rounded-md object-cover" />
+        <img v-if="art" :src="art" alt="" class="size-11 shrink-0 rounded-md object-cover" />
         <div class="min-w-0 flex-1">
           <p class="truncate font-display text-[22px] leading-tight text-on-dark" style="letter-spacing: -0.01em">
             {{ np.title }}
@@ -120,9 +120,20 @@ function restart() {
             {{ [np.artist, np.album].filter(Boolean).join(" — ") || "Unknown artist" }}
           </p>
         </div>
+        <!-- Like the current song: Spotify only, sat next to the title. -->
+        <button
+          v-if="sp"
+          class="shrink-0 rounded-full p-1.5 text-on-dark active:bg-surface-dark-soft"
+          :aria-pressed="sp.saved === true"
+          aria-label="Like song"
+          title="Save to your Liked Songs"
+          @click="tug.toggleSpotifyLike()"
+        >
+          <Heart :size="17" :fill="sp.saved ? 'currentColor' : 'none'" />
+        </button>
       </div>
 
-      <div class="mt-4 h-1 overflow-hidden rounded-full bg-surface-dark-soft">
+      <div class="mt-3 h-1 overflow-hidden rounded-full bg-surface-dark-soft">
         <!-- Keyed by track so a new song starts at its position instead of sliding back. -->
         <div
           :key="np.title ?? ''"
@@ -135,86 +146,80 @@ function restart() {
         <span>{{ duration(np.duration) }}</span>
       </div>
 
+      <!-- One row: playback modes bookend it (Spotify only), volume just inside, transport centred. -->
       <div class="mt-3 flex items-center justify-between">
-        <button
-          class="rounded-full p-2 text-on-dark-soft active:text-on-dark"
-          :disabled="!can('volumeDown')"
-          aria-label="Volume down"
-          title="Hold to keep changing"
-          @pointerdown="pressDown"
-          @pointerup="holdDown.stop"
-          @pointercancel="holdDown.stop"
-          @pointerleave="holdDown.stop"
-          @blur="holdDown.stop"
-          @keydown="holdKey($event, pressDown)"
-          @keyup="holdDown.stop"
-        >
-          <Volume1 :size="18" />
-        </button>
-        <div class="flex items-center gap-1">
-          <button class="rounded-full p-2 text-on-dark active:bg-surface-dark-soft" :disabled="!can('previousTrack')" aria-label="Previous" @click="tug.media('previousTrack')">
-            <SkipBack :size="18" />
+        <div class="flex items-center gap-0.5">
+          <button
+            v-if="sp"
+            class="rounded-full p-1.5 active:bg-surface-dark-soft"
+            :class="sp.shuffle ? 'text-on-dark' : 'text-on-dark-soft/50'"
+            :aria-pressed="sp.shuffle"
+            aria-label="Shuffle"
+            :title="sp.shuffle ? 'Shuffle on' : 'Shuffle off'"
+            @click="tug.toggleSpotifyShuffle()"
+          >
+            <Shuffle :size="16" />
           </button>
           <button
-            class="flex size-11 items-center justify-center rounded-full bg-on-dark text-surface-dark active:bg-on-dark-soft"
+            class="rounded-full p-1.5 text-on-dark-soft active:text-on-dark"
+            :disabled="!can('volumeDown')"
+            aria-label="Volume down"
+            title="Hold to keep changing"
+            @pointerdown="pressDown"
+            @pointerup="holdDown.stop"
+            @pointercancel="holdDown.stop"
+            @pointerleave="holdDown.stop"
+            @blur="holdDown.stop"
+            @keydown="holdKey($event, pressDown)"
+            @keyup="holdDown.stop"
+          >
+            <Volume1 :size="17" />
+          </button>
+        </div>
+        <div class="flex items-center gap-0.5">
+          <button class="rounded-full p-1.5 text-on-dark active:bg-surface-dark-soft" :disabled="!can('previousTrack')" aria-label="Previous" @click="tug.media('previousTrack')">
+            <SkipBack :size="17" />
+          </button>
+          <button
+            class="flex size-10 items-center justify-center rounded-full bg-on-dark text-surface-dark active:bg-on-dark-soft"
             :aria-label="playing ? 'Pause' : 'Play'"
             @click="tug.media('togglePlayPause')"
           >
-            <Pause v-if="playing" :size="18" fill="currentColor" />
-            <Play v-else :size="18" fill="currentColor" class="translate-x-px" />
+            <Pause v-if="playing" :size="17" fill="currentColor" />
+            <Play v-else :size="17" fill="currentColor" class="translate-x-px" />
           </button>
-          <button class="rounded-full p-2 text-on-dark active:bg-surface-dark-soft" :disabled="!can('nextTrack')" aria-label="Next" @click="tug.media('nextTrack')">
-            <SkipForward :size="18" />
+          <button class="rounded-full p-1.5 text-on-dark active:bg-surface-dark-soft" :disabled="!can('nextTrack')" aria-label="Next" @click="tug.media('nextTrack')">
+            <SkipForward :size="17" />
           </button>
         </div>
-        <button
-          class="rounded-full p-2 text-on-dark-soft active:text-on-dark"
-          :disabled="!can('volumeUp')"
-          aria-label="Volume up"
-          title="Hold to keep changing"
-          @pointerdown="pressUp"
-          @pointerup="holdUp.stop"
-          @pointercancel="holdUp.stop"
-          @pointerleave="holdUp.stop"
-          @blur="holdUp.stop"
-          @keydown="holdKey($event, pressUp)"
-          @keyup="holdUp.stop"
-        >
-          <Volume2 :size="18" />
-        </button>
-      </div>
-
-      <!-- Spotify-only: repeat/shuffle (AMS can't), and Like the current song. -->
-      <div v-if="sp" class="mt-3 flex items-center justify-between border-t border-surface-dark-soft pt-3">
-        <button
-          class="rounded-full p-2 active:bg-surface-dark-soft"
-          :class="sp.shuffle ? 'text-on-dark' : 'text-on-dark-soft/50'"
-          :aria-pressed="sp.shuffle"
-          aria-label="Shuffle"
-          :title="sp.shuffle ? 'Shuffle on' : 'Shuffle off'"
-          @click="tug.toggleSpotifyShuffle()"
-        >
-          <Shuffle :size="17" />
-        </button>
-        <button
-          class="rounded-full p-2 active:bg-surface-dark-soft"
-          :class="sp.repeat && sp.repeat !== 'off' ? 'text-on-dark' : 'text-on-dark-soft/50'"
-          aria-label="Repeat"
-          :title="repeatLabel(sp.repeat)"
-          @click="tug.cycleSpotifyRepeat()"
-        >
-          <Repeat1 v-if="sp.repeat === 'one'" :size="17" />
-          <Repeat v-else :size="17" />
-        </button>
-        <button
-          class="rounded-full p-2 text-on-dark active:bg-surface-dark-soft"
-          :aria-pressed="sp.saved === true"
-          aria-label="Like song"
-          title="Save to your Liked Songs"
-          @click="tug.toggleSpotifyLike()"
-        >
-          <Heart :size="17" :fill="sp.saved ? 'currentColor' : 'none'" />
-        </button>
+        <div class="flex items-center gap-0.5">
+          <button
+            class="rounded-full p-1.5 text-on-dark-soft active:text-on-dark"
+            :disabled="!can('volumeUp')"
+            aria-label="Volume up"
+            title="Hold to keep changing"
+            @pointerdown="pressUp"
+            @pointerup="holdUp.stop"
+            @pointercancel="holdUp.stop"
+            @pointerleave="holdUp.stop"
+            @blur="holdUp.stop"
+            @keydown="holdKey($event, pressUp)"
+            @keyup="holdUp.stop"
+          >
+            <Volume2 :size="17" />
+          </button>
+          <button
+            v-if="sp"
+            class="rounded-full p-1.5 active:bg-surface-dark-soft"
+            :class="sp.repeat && sp.repeat !== 'off' ? 'text-on-dark' : 'text-on-dark-soft/50'"
+            aria-label="Repeat"
+            :title="repeatLabel(sp.repeat)"
+            @click="tug.cycleSpotifyRepeat()"
+          >
+            <Repeat1 v-if="sp.repeat === 'one'" :size="16" />
+            <Repeat v-else :size="16" />
+          </button>
+        </div>
       </div>
     </template>
 
