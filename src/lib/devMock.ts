@@ -3,7 +3,8 @@
 // main.ts only when Tauri isn't present; never included in `tauri build`.
 //
 //   http://localhost:1420/            connected iPhone with sample history
-//   http://localhost:1420/?setup      first run, nothing paired
+//   http://localhost:1420/?setup      first run, nothing paired (scripted: pair, PIN, sharing, first notification)
+//   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
 
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -266,6 +267,17 @@ mockIPC(
   },
   { shouldMockEvents: true },
 );
+
+// ?setup&btoff: Bluetooth starts off and comes on after a few seconds (setup's first check).
+if (setup && params.has("btoff")) {
+  status.radio = "off";
+  status.advertising = "off";
+  setTimeout(() => {
+    status.radio = "on";
+    status.advertising = "on";
+    void emit("device-status", { ...status });
+  }, 20000);
+}
 
 if (params.has("pairing")) {
   setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913" }), 600);
