@@ -104,7 +104,9 @@ mod worker {
     /// Once per launch, page further back than that: a fresh install otherwise only sees the
     /// last few texts, often all from one person, and other recent chats never show up.
     const BACKFILL_MAX: u16 = 100;
-    const CONTACTS_RESYNC: Duration = Duration::from_secs(6 * 60 * 60);
+    /// The phone sends nothing when a contact is added or renamed, so look again this often
+    /// (a pull of a few hundred contacts takes about a second).
+    const CONTACTS_RESYNC: Duration = Duration::from_secs(15 * 60);
     const CONTACTS_RETRY: Duration = Duration::from_secs(10 * 60);
     /// An empty phonebook or a refusal means Sync Contacts is still off: it's often switched
     /// on moments after messages connect, so look again soon, then back off.
