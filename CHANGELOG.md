@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Calls. Not yet verified on hardware.
+
+### New
+- **Incoming calls ring as a card over tug:** the caller's name large, rings rippling out, how long
+  it's been ringing. **Enter** answers, **Esc** declines, ✕ hides it while the phone keeps ringing.
+  It goes as soon as the call does. The Windows pop-up still rings through from the tray.
+- **Calls tab:** your iPhone's last 50 calls (incoming, outgoing, missed), named from your contacts,
+  with a Message button on each. Needs **Sync Contacts**; refreshes after each call.
+- **Call from tug (experimental):** Settings › iPhone › Calls checks whether this PC can reach the
+  iPhone's hands-free link; only then do Call buttons appear (recent calls, conversations, the
+  new-message picker). You talk on the phone.
+
+### Developer
+- `map/calls.rs` parses PBAP call history; `hfp/` builds and parses HFP AT commands (both pure,
+  tested). `cargo run --example hfp_probe` checks the hands-free link, dials, or pulls recent calls.
+- New commands `get_calls`, `refresh_calls`, `dial`; event `calls`; setting `ui.dialing`.
+
 ## v0.5.5 — 2026-10-05
 
 Setup, settings and everyday shortcuts (Sprints 5–7), plus fixes from a full fresh-install test.
