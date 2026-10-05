@@ -404,7 +404,7 @@ mod server {
                 let _ = socket.Close();
                 return Ok(());
             }
-            let packet = match read_packet(&reader).await {
+            let packet = match read_packet(&reader, &stopped).await {
                 Ok(p) => p,
                 // A clean close is how the phone ends the link; report it as done.
                 Err(MapError::Closed) => return Ok(()),
@@ -428,8 +428,27 @@ mod server {
     }
 
     /// Read exactly one OBEX packet, using its 3-byte length prefix (mirrors the client link).
-    async fn read_packet(reader: &DataReader) -> Result<Vec<u8>, MapError> {
+    /// Waiting for a packet to *start* has no limit: the phone keeps the MNS link open and
+    /// silent until a text arrives, and timing that out dropped live texts 7 s after the iPhone
+    /// connected (Dave's PC, 2026-10-05). Once a packet has begun, the rest is bounded.
+    async fn read_packet(reader: &DataReader, stopped: &AtomicBool) -> Result<Vec<u8>, MapError> {
         let mut buf = Vec::new();
+        // The first bytes: keep the same pending read across checks of `stopped` (WinRT allows
+        // only one outstanding LoadAsync per reader).
+        let mut first = std::pin::pin!(std::future::IntoFuture::into_future(reader.LoadAsync(3)?));
+        let got = loop {
+            match tokio::time::timeout(OP_TIMEOUT, first.as_mut()).await {
+                Ok(r) => break r?,
+                Err(_) if stopped.load(Ordering::SeqCst) => return Err(MapError::Closed),
+                Err(_) => continue,
+            }
+        };
+        if got == 0 {
+            return Err(MapError::Closed);
+        }
+        let mut chunk = vec![0; got as usize];
+        reader.ReadBytes(&mut chunk)?;
+        buf.extend_from_slice(&chunk);
         loop {
             let need = match obex::packet_len(&buf) {
                 Some(len) if buf.len() >= len => return Ok(buf),
