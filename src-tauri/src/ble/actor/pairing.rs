@@ -142,6 +142,8 @@ impl Actor {
             .filter(|(_, d)| d.transport == Transport::Le && bool_property(&d.info, PROP_IS_CONNECTED))
             .filter(|(_, d)| !d.info.Pairing().and_then(|p| p.IsPaired()).unwrap_or(false))
             .map(|(id, d)| (id, d.info.Name().map(|n| n.to_string()).unwrap_or_default()))
+            // The lone-candidate guess below must never land on headphones or a keyboard.
+            .filter(|(_, n)| device_kind::classify(n, None, None) != DeviceKind::Accessory)
             .collect();
         let pick = candidates
             .iter()

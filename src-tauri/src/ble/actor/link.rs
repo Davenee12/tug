@@ -251,7 +251,11 @@ impl Actor {
         if idle {
             self.probe_ancs_authorization(&control_point).await;
         }
-        self.retry_optional_services().await;
+        let slow = Duration::from_secs(CCCD_CHECK_SECS.into());
+        if self.optional_retry_at.is_none_or(|t| t.elapsed() >= slow) {
+            self.optional_retry_at = Some(Instant::now());
+            self.retry_optional_services().await;
+        }
     }
 
     /// Media and battery are optional at connect time; if they failed (e.g. Windows

@@ -202,6 +202,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         advertise_retry_in: None,
         carried_name: None,
         cccd_check_in: CCCD_CHECK_SECS,
+        optional_retry_at: None,
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -237,6 +238,9 @@ struct Actor {
     carried_name: Option<String>,
     /// Seconds until the ANCS subscription is verified on the iPhone again.
     cccd_check_in: u32,
+    /// Last retry of media/battery discovery: full GATT discovery, so it keeps the slow
+    /// cadence even while the user watches the switches (and the probe runs every 2 s).
+    optional_retry_at: Option<Instant>,
 }
 
 fn now_ms() -> i64 {
