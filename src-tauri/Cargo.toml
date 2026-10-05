@@ -34,6 +34,7 @@ windows = { version = "0.62", features = [
   "Devices_Bluetooth_GenericAttributeProfile",
   "Devices_Bluetooth_Rfcomm",
   "Devices_Enumeration",
+  "Devices_Geolocation",
   "Devices_Radios",
   "Networking",
   "Networking_Sockets",
