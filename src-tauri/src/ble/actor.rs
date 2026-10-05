@@ -32,7 +32,7 @@ use windows::Devices::Radios::{Radio, RadioKind, RadioState as WinRadioState};
 use windows::Foundation::{IReference, TypedEventHandler};
 use windows_collections::IIterable;
 
-use super::winrt::{self, BleError};
+use super::winrt::{self, BleError, Subscription};
 use super::{Command, Reply};
 use crate::ams::{self, NowPlaying};
 use crate::ancs::{self, Category, EventFlags, EventId, ParseError, Response};
@@ -60,7 +60,9 @@ const RETRY_CONNECTED_SECS: u32 = 2;
 const RETRY_IDLE_SECS: u32 = 10;
 const ADVERTISE_RETRY_SECS: u32 = 3;
 /// Quiet period after the last replayed notification before sweeping stale rows.
-const REPLAY_SETTLE: Duration = Duration::from_secs(4);
+// Long enough that a slow replay's gaps aren't mistaken for its end (that swept, then
+// restored, notifications still on the phone: a visible flicker).
+const REPLAY_SETTLE: Duration = Duration::from_secs(8);
 const CCCD_CHECK_SECS: u32 = 15;
 const NOT_SHARING: &str = "Your iPhone is connected but isn't sharing notifications with this PC. On the iPhone: Settings › Bluetooth › tap ⓘ next to this PC › turn on Share System Notifications.";
 const PIN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
@@ -107,9 +109,9 @@ struct Ancs {
     // service, their ValueChanged notifications stop without any error.
     _service: GattDeviceService,
     control_point: GattCharacteristic,
-    // Held so their ValueChanged registrations stay alive.
-    notification_source: GattCharacteristic,
-    data_source: GattCharacteristic,
+    // Their notification handlers live exactly as long as these do.
+    notification_source: Subscription,
+    data_source: Subscription,
     /// Control Point requests, one in flight at a time (see ancs_queue).
     requests: RequestQueue,
     reassembler: ancs::Reassembler,
@@ -126,7 +128,14 @@ struct Ancs {
 struct Media {
     _service: GattDeviceService,
     remote_command: GattCharacteristic,
-    _entity_update: GattCharacteristic,
+    _remote_updates: Subscription,
+    _entity_update: Subscription,
+}
+
+struct Battery {
+    _service: GattDeviceService,
+    /// None when the phone only allows reading the level, not notifications.
+    _level: Option<Subscription>,
 }
 
 /// One opened iPhone. Survives disconnects; services are rebuilt on reconnect.
@@ -143,7 +152,7 @@ struct Link {
     session_id: Option<String>,
     ancs: Option<Ancs>,
     media: Option<Media>,
-    _battery: Option<(GattDeviceService, GattCharacteristic)>,
+    _battery: Option<Battery>,
 }
 
 struct Discovered {
@@ -975,12 +984,12 @@ impl Actor {
 
         // Data Source first, so no attribute response can arrive unheard.
         let tx = self.tx.clone();
-        winrt::subscribe(&ds, move |data| {
+        let data_source = winrt::subscribe(&ds, move |data| {
             let _ = tx.send(Event::DataSource { gen, data });
         })
         .await?;
         let tx = self.tx.clone();
-        winrt::subscribe(&ns, move |data| {
+        let notification_source = winrt::subscribe(&ns, move |data| {
             let _ = tx.send(Event::NotificationSource { gen, data });
         })
         .await?;
@@ -993,8 +1002,8 @@ impl Actor {
         Ok(Ancs {
             _service: svc,
             control_point,
-            notification_source: ns,
-            data_source: ds,
+            notification_source,
+            data_source,
             requests: RequestQueue::default(),
             reassembler: ancs::Reassembler::default(),
             resume: None,
@@ -1011,13 +1020,15 @@ impl Actor {
             .ok_or(BleError::NotFound("Media service (AMS)"))?;
         let remote = winrt::characteristic(&svc, guid(ams::REMOTE_COMMAND), "AMS remote command").await?;
         let entity = winrt::characteristic(&svc, guid(ams::ENTITY_UPDATE), "AMS entity update").await?;
+        // If anything below fails, these drop and their handlers go with them, so the
+        // periodic retry can't stack duplicates.
         let tx = self.tx.clone();
-        winrt::subscribe(&remote, move |data| {
+        let remote_updates = winrt::subscribe(&remote, move |data| {
             let _ = tx.send(Event::MediaCommands { gen, data });
         })
         .await?;
         let tx = self.tx.clone();
-        winrt::subscribe(&entity, move |data| {
+        let entity_updates = winrt::subscribe(&entity, move |data| {
             let _ = tx.send(Event::MediaEntity { gen, data });
         })
         .await?;
@@ -1028,7 +1039,8 @@ impl Actor {
         Ok(Media {
             _service: svc,
             remote_command: remote,
-            _entity_update: entity,
+            _remote_updates: remote_updates,
+            _entity_update: entity_updates,
         })
     }
 
@@ -1053,11 +1065,7 @@ impl Actor {
         log::info!("AMS current values read");
     }
 
-    async fn setup_battery(
-        &self,
-        device: &BluetoothLEDevice,
-        gen: u64,
-    ) -> Result<(GattDeviceService, GattCharacteristic), BleError> {
+    async fn setup_battery(&self, device: &BluetoothLEDevice, gen: u64) -> Result<Battery, BleError> {
         let svc = winrt::service(device, winrt::sig_uuid(BATTERY_SERVICE))
             .await?
             .ok_or(BleError::NotFound("Battery service"))?;
@@ -1079,14 +1087,16 @@ impl Actor {
         let initial = winrt::read(&level).await?;
         let _ = self.tx.send(Event::Battery { gen, data: initial });
         let tx = self.tx.clone();
-        if let Err(e) = winrt::subscribe(&level, move |data| {
+        let updates = winrt::subscribe(&level, move |data| {
             let _ = tx.send(Event::Battery { gen, data });
         })
         .await
-        {
-            log::info!("battery notifications unavailable, showing last read value: {e}");
-        }
-        Ok((svc, level))
+        .map_err(|e| log::info!("battery notifications unavailable, showing last read value: {e}"))
+        .ok();
+        Ok(Battery {
+            _service: svc,
+            _level: updates,
+        })
     }
 
     // ---------------------------------------------------------------- ANCS
@@ -1132,8 +1142,8 @@ impl Actor {
         let control_point = a.control_point.clone();
         let idle = a.requests.inflight().is_none();
         for (name, ch) in [
-            ("data source", a.data_source.clone()),
-            ("notification source", a.notification_source.clone()),
+            ("data source", a.data_source.characteristic().clone()),
+            ("notification source", a.notification_source.characteristic().clone()),
         ] {
             match winrt::notify_enabled(&ch).await {
                 Ok(true) => log::debug!("ANCS {name}: notifications on"),
@@ -1313,7 +1323,11 @@ impl Actor {
         };
         match resp {
             Response::Notification { uid, attrs } => {
-                let (flags, category) = a.meta.get(&uid).copied().unwrap_or_default();
+                // Dismissed on the phone while its details were on the way: storing them now
+                // would bring back a notification the user just cleared.
+                let Some(&(flags, category)) = a.meta.get(&uid) else {
+                    return log::debug!("dropping details for {uid}: removed while they were being fetched");
+                };
                 let stored = self.shared.store.upsert_notification(&NewNotification {
                     session,
                     uid,
