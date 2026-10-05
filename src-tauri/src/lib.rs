@@ -24,12 +24,28 @@ use commands::AppState;
 use state::Shared;
 use store::Store;
 
+/// Passed to tug by the autostart entry (and usable by hand). It means "come up hidden in
+/// the tray", so starting with Windows doesn't throw the window in the user's face at login.
+pub const MINIMIZED_ARG: &str = "--minimized";
+
+/// Whether this launch asked to start minimized (autostart adds `MINIMIZED_ARG`).
+fn launched_minimized() -> bool {
+    std::env::args().any(|a| a == MINIMIZED_ARG)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         // Must be first: a second launch focuses the running window instead of
         // starting a rival that can't advertise (Windows allows one provider per service).
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show(app)))
+        // Start with Windows (Settings › General). The autostart entry carries `--minimized`
+        // so an automatic launch comes up hidden in the tray; the switch reads the registry
+        // (via `autolaunch().is_enabled()`), so that state is the single source of truth.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![MINIMIZED_ARG]),
+        ))
         .plugin(
             // Logs land in %LOCALAPPDATA%\dev.davejames.tug\logs for hardware debugging.
             // Keep a few rotated files: the default (one 40 KB file) had already thrown away
@@ -53,6 +69,15 @@ pub fn run() {
             // Nice to have, never a reason not to start.
             if let Err(e) = tray::install(app.handle()) {
                 log::warn!("tray icon unavailable: {e}");
+            }
+            // The window is created hidden (see tauri.conf.json). Start in the tray only when
+            // asked to (autostart adds `--minimized`) AND there's a tray to come back from;
+            // otherwise show normally, so a `--minimized` launch with no tray isn't stranded.
+            if !(launched_minimized() && tray::installed()) {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
             }
             Ok(())
         })
@@ -97,6 +122,8 @@ pub fn run() {
             commands::set_advertising,
             commands::get_settings,
             commands::set_setting,
+            commands::get_autostart,
+            commands::set_autostart,
             commands::list_messages,
             commands::get_contacts,
             commands::send_message,
