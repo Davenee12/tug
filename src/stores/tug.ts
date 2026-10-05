@@ -67,6 +67,19 @@ export const useTugStore = defineStore("tug", () => {
   const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [], closeToTray: true });
   const advertiseEnabled = ref(true);
   const zoom = ref(1);
+  /** First-run setup finished (or skipped). Until then, with no iPhone paired, setup shows. */
+  const onboarded = ref(true);
+  /** Setup opened on purpose (Settings › iPhone › Run setup again). */
+  const setupRequested = ref(false);
+  /**
+   * First run: nothing paired and setup never finished. Latched once it starts, because
+   * pairing mid-setup gives us a device, and setup still has steps to go after that.
+   */
+  const setupActive = ref(false);
+  watch([onboarded, () => status.value.device], ([done, device]) => {
+    if (!done && device == null) setupActive.value = true;
+  });
+  const showSetup = computed(() => setupRequested.value || setupActive.value);
   const flash = ref<{ kind: "error" | "info"; text: string; action?: { label: string; run: () => void } } | null>(null);
   let flashTimer: number | undefined;
 
@@ -316,6 +329,7 @@ export const useTugStore = defineStore("tug", () => {
       mutedApps: raw["ui.mutedApps"] ? (JSON.parse(raw["ui.mutedApps"]) as string[]) : [],
       closeToTray: raw["ui.closeToTray"] !== "false",
     };
+    onboarded.value = raw["ui.onboarded"] === "1";
   }
 
   // Listeners and shortcuts are installed once and torn down by dispose(), so a
@@ -429,6 +443,14 @@ export const useTugStore = defineStore("tug", () => {
     await attempt(() => api.setSetting(`ui.${key}`, typeof value === "string" ? value : JSON.stringify(value)));
   }
 
+  /** Setup is done (or skipped): don't show it again on its own. */
+  function finishSetup() {
+    onboarded.value = true;
+    setupRequested.value = false;
+    setupActive.value = false;
+    void attempt(() => api.setSetting("ui.onboarded", "1"));
+  }
+
   /** App zoom from Settings (Ctrl +/−/0 does the same from anywhere). */
   function setZoom(factor: number) {
     zoom.value = factor;
@@ -465,6 +487,10 @@ export const useTugStore = defineStore("tug", () => {
     closeSettings,
     zoom,
     setZoom,
+    onboarded,
+    setupRequested,
+    showSetup,
+    finishSetup,
     focusItem,
     seen,
     connected,
@@ -505,7 +531,8 @@ export const useTugStore = defineStore("tug", () => {
     },
     async pair(id: string) {
       const ok = await attempt(() => api.pairDevice(id).then(() => true));
-      if (ok) notify("info", "Paired. Connecting to your iPhone…");
+      // Setup shows this itself; a toast over it would just cover the screen.
+      if (ok && !showSetup.value) notify("info", "Paired. Connecting to your iPhone…");
       return ok === true;
     },
     async useDevice(id: string) {

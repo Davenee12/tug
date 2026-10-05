@@ -49,3 +49,14 @@ pop-up, the glance strip with weather, welcome back...) and what we decided *not
 - **Full history import** from a local iPhone backup (sent messages, photos/attachments), since iOS
   doesn't expose those over Bluetooth.
 - Exact charging indicator (needs companion app or USB trust pairing).
+
+## Future — macOS
+Tauri, the UI, the store and the pure protocol modules (`ancs.rs`, `ams.rs`, `map/` parsers) are
+portable; the Bluetooth I/O (`ble/`, `map/session.rs`) and a few Windows bits (tray overlay,
+clipboard, location, Settings links) are WinRT and would be rewritten on CoreBluetooth/IOBluetooth.
+- **Spike first:** can a macOS app subscribe to an iPhone's ANCS/AMS and open MAP/PBAP at all, or
+  does macOS reserve them for its own Continuity features? Go/no-go before any port.
+- **Product angle:** Mac users already get iPhone texts (Messages), notifications (iPhone
+  Mirroring) and code autofill from Apple, so tug on a Mac would lead with what Apple doesn't do:
+  connectors in one inbox (WhatsApp, Slack, Teams), and Android phones on a Mac.
+- Until then: keep protocol logic out of `ble/` so the port stays a transport swap.

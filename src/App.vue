@@ -8,6 +8,7 @@ import FeedPanel from "./components/FeedPanel.vue";
 import NewConversation from "./components/NewConversation.vue";
 import SearchPalette from "./components/SearchPalette.vue";
 import SettingsPage from "./components/SettingsPage.vue";
+import SetupWizard from "./components/SetupWizard.vue";
 import PairingDialog from "./components/PairingDialog.vue";
 
 const tug = useTugStore();
@@ -87,7 +88,9 @@ onUnmounted(() => {
 
     <ConnectionPanel v-if="panelInline" class="w-[360px] shrink-0 border-l border-hairline" />
 
-    <PairingDialog v-if="tug.pairingRequest" />
+    <!-- First run: setup covers everything (and shows the PIN itself). -->
+    <SetupWizard v-if="tug.showSetup" />
+    <PairingDialog v-if="tug.pairingRequest && !tug.showSetup" />
     <NewConversation v-if="tug.pickerOpen" />
     <SearchPalette v-if="tug.searchOpen" />
 

@@ -195,6 +195,23 @@ pub fn set_hidden(
         .map_err(|e| e.to_string())
 }
 
+/// Open a page of Windows Settings (setup's "Open Bluetooth settings" and friends). Only
+/// known pages: the webview never gets to launch arbitrary URIs.
+#[tauri::command]
+pub fn open_windows_settings(page: String) -> Result<()> {
+    let uri = match page.as_str() {
+        "bluetooth" => "ms-settings:bluetooth",
+        "location" => "ms-settings:privacy-location",
+        "notifications" => "ms-settings:notifications",
+        other => return Err(format!("unknown settings page: {other}")),
+    };
+    std::process::Command::new("explorer.exe")
+        .arg(uri)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Unread texts, for the tray tooltip and the taskbar dot.
 #[tauri::command]
 pub fn set_unread(app: tauri::AppHandle, count: u32) -> Result<()> {
