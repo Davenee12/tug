@@ -14,6 +14,7 @@ const CONNECTED: DeviceStatus = {
   lastError: null,
   lastErrorAt: null,
   pairingStale: false,
+  awaitingPhoneAllow: false,
   messagesError: null,
   contactsError: null,
   textsPairing: "ok",

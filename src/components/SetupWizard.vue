@@ -5,6 +5,8 @@ import { useTugStore } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { useFocusTrap } from "../lib/focusTrap";
 import PhoneSwitches from "./PhoneSwitches.vue";
+import { phoneSwitches } from "../lib/phoneSwitches";
+import { bondHint, pairingProblem, setupDeviceLists, startedOutsideTug } from "../lib/pairings";
 import { api, errorMessage } from "../lib/ipc";
 import { friendlyLocateError } from "../lib/locating";
 import { useLocating } from "../lib/useLocating";
@@ -68,22 +70,51 @@ watch(
   { immediate: true },
 );
 
-// ---- Connect: the phone shows up in discovery once LightBlue connects to this PC ----
-// Only connected devices that could be a phone: a keyboard or headphones also show up
-// connected, and must never be offered as the iPhone. Likely phones first.
-const KIND_RANK: Record<DiscoveredDevice["kind"], number> = { phone: 0, unknown: 1, accessory: 2 };
-const candidates = computed(() =>
-  tug.discovered
-    .filter((d) => d.connected && d.transport === "le" && d.kind !== "accessory")
-    .sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind])
-    .slice(0, 3),
-);
+// ---- Connect: the iPhone appears in the scan whenever its Settings › Bluetooth screen is open ----
+// It does NOT have to connect to the PC first (the old LightBlue assumption, which left this list
+// empty on a clean pair). Phones Windows classifies as such are offered up front; the list/filter
+// is pure and unit-tested in lib/pairings. Scanning runs continuously while this step is open.
+const lists = computed(() => setupDeviceLists(tug.discovered));
+// Windows can drop an unpaired LE link nobody holds within seconds, which made a just-appeared
+// iPhone vanish before it could be clicked. Hold a phone we've seen in the list for a short grace
+// so a transient discovery blip doesn't pull the row out from under the cursor.
+const CANDIDATE_GRACE_MS = 10_000;
+const heldPhones = new Map<string, { device: DiscoveredDevice; at: number }>();
+const graceNow = ref(Date.now());
+let graceTimer: number | undefined;
+const candidates = computed(() => {
+  const t = graceNow.value;
+  const live = lists.value.phones;
+  for (const d of live) heldPhones.set(d.id, { device: d, at: Date.now() });
+  const liveIds = new Set(live.map((d) => d.id));
+  const stale = [...heldPhones.values()]
+    .filter((e) => !liveIds.has(e.device.id) && t - e.at < CANDIDATE_GRACE_MS)
+    .map((e) => e.device);
+  return [...live, ...stale].slice(0, 4);
+});
 /** One device that says it's a phone: offer it plainly. Otherwise ask which one. */
-const sure = computed(() => candidates.value.length === 1 && candidates.value[0].kind === "phone");
-const others = computed(() => tug.discovered.filter((d) => !candidates.value.includes(d) && d.transport === "le").slice(0, 3));
+const sure = computed(() => candidates.value.length === 1);
+/** Unknowns (which could be a nameless just-connected iPhone): a quiet fallback list. */
+const otherDevices = computed(() => lists.value.others.slice(0, 5));
 const pairing = ref(false);
 const choosingId = ref<string | null>(null);
 const connectError = ref<string | null>(null);
+
+// Windows' own pairing dialog (phone-initiated: tapping this PC in the iPhone's Bluetooth list)
+// can create the bond before tug does, and then the code shows in Windows, not tug. Detect a
+// device flipping unpaired→paired that tug didn't start, so we can point at Windows' prompt.
+const windowsPairing = ref(false);
+const initiatedPair = new Set<string>();
+const pairedBefore = new Map<string, boolean>();
+watch(
+  () => tug.discovered.map((d) => [d.id, d.paired] as const),
+  (now) => {
+    for (const [id, paired] of now) {
+      if (startedOutsideTug(pairedBefore.get(id), paired, initiatedPair.has(id))) windowsPairing.value = true;
+      pairedBefore.set(id, paired);
+    }
+  },
+);
 watch(
   step,
   (st, old) => {
@@ -98,23 +129,41 @@ async function choose(d: DiscoveredDevice) {
   connectError.value = null;
   pairing.value = true;
   choosingId.value = d.id;
+  // Prefer tug's own pairing for an unpaired phone, so the code shows in tug's prompt, not
+  // Windows'. Record that we started it, so the Windows-pairing hint doesn't fire for our flip.
+  if (!d.paired) initiatedPair.add(d.id);
   // The result decides, not the PIN prompt closing: Windows closes it a moment before the
   // phone is actually chosen, so "closed, no device yet" is the normal path to success.
   const ok = d.paired ? await tug.useDevice(d.id) : await tug.pair(d.id);
   pairing.value = false;
   if (!ok && !s.value.device) {
-    connectError.value = "Pairing didn't finish. Try again: tap this PC in LightBlue, then choose your iPhone here.";
+    connectError.value = "Pairing didn't finish. Keep Settings › Bluetooth open on your iPhone and try Pair again.";
     go("connect");
   }
 }
-// The phone forgot this PC (e.g. Forget This Device): drop Windows' half of the old pairing
-// and pair from scratch, instead of retrying a bond the phone will never accept.
-const repairing = ref(false);
-async function pairAgain() {
-  repairing.value = true;
+// The phone looks to have forgotten this PC while Windows still holds the bond (stale-bond
+// errors, or a bond the phone never connects to): decided purely in lib/pairings.
+const bond = computed(() => bondHint(s.value));
+
+// Windows ended up with more than one iPhone bond (an old one and a new one), or the phone that's
+// paired now isn't the one tug remembers. One clear "Start over" unpairs both bonds tug knows
+// about and returns to the first step. Confirmed first, because unpairing is irreversible.
+const problem = computed(() => pairingProblem(tug.discovered, s.value.device?.id ?? null));
+const confirmStartOver = ref(false);
+let startOverTimer: number | undefined;
+const startingOver = ref(false);
+async function startOver() {
+  if (!confirmStartOver.value) {
+    confirmStartOver.value = true;
+    window.clearTimeout(startOverTimer);
+    startOverTimer = window.setTimeout(() => (confirmStartOver.value = false), 4000);
+    return;
+  }
+  confirmStartOver.value = false;
+  startingOver.value = true;
   await tug.forget();
-  repairing.value = false;
-  go("connect");
+  startingOver.value = false;
+  go("welcome");
 }
 // Windows asks for the PIN → its own screen; once paired, the device watcher moves on.
 watch(
@@ -136,23 +185,34 @@ watch(
   },
 );
 
+// ---- The iPhone's three switches, each with a live state from real signals (lib/phoneSwitches) ----
+const allSwitches = computed(() => phoneSwitches(s.value, tug.contacts.length));
+
 // ---- Sharing: the notifications switch, mirrored live ----
-const sharing = computed(() => [
-  { label: "Share System Notifications", why: "Your notifications on this PC", on: s.value.services.notifications, required: true },
-]);
-const sharingDone = computed(() => sharing.value.every((x) => x.on));
+const sharing = computed(() => allSwitches.value.filter((x) => x.key === "notifications"));
+const sharingDone = computed(() => sharing.value.every((x) => x.state === "on"));
 const connecting = computed(() => s.value.connection !== "connected");
 
 // ---- Texts: a second, Classic pairing made from Windows, then two more switches ----
 // It comes after the notifications pairing on purpose: pairing for notifications when the
 // phone was already paired for texts broke the texts pairing in testing; this order kept both.
-const texts = computed(() => [
-  { label: "Show Notifications", why: "Read and reply to texts", on: s.value.services.messages && !s.value.messagesError, required: false },
-  { label: "Sync Contacts", why: "Names instead of numbers", on: tug.contacts.length > 0 && !s.value.contactsError, required: false },
-]);
-const textsDone = computed(() => texts.value.every((x) => x.on));
+const texts = computed(() => allSwitches.value.filter((x) => x.key === "messages" || x.key === "contacts"));
+const textsDone = computed(() => texts.value.every((x) => x.state === "on"));
 /** The phone answers for texts (connected, or asking for its switch): the Classic pairing works. */
 const textsPaired = computed(() => s.value.services.messages || s.value.textsPairing === "ok");
+
+// With one pairing the iPhone usually creates the Classic (texts) bond too (cross-transport keys),
+// so the texts step first waits a short while to see it connect, and only offers to pair for texts
+// (or the Windows fallback) if no bond turns up. Pairing for texts from inside tug (lib/ipc).
+const TEXTS_WAIT_MS = 15_000;
+const textsWaitElapsed = ref(false);
+let textsWaitTimer: number | undefined;
+const pairingTexts = ref(false);
+async function pairForTexts() {
+  pairingTexts.value = true;
+  await tug.pairTexts();
+  pairingTexts.value = false;
+}
 
 let shareTimer: number | undefined;
 watch(
@@ -170,6 +230,12 @@ let baseline = 0;
 const first = ref<PhoneNotification | null>(null);
 watch(step, (st) => {
   tug.setupSharingShown = st === "sharing" || st === "texts";
+  // Give the Classic bond a moment to come up on its own before offering to pair for texts.
+  window.clearTimeout(textsWaitTimer);
+  if (st === "texts") {
+    textsWaitElapsed.value = false;
+    textsWaitTimer = window.setTimeout(() => (textsWaitElapsed.value = true), TEXTS_WAIT_MS);
+  }
   if (st === "try") {
     baseline = Math.max(0, ...tug.notifications.map((n) => n.id));
     first.value = null;
@@ -211,11 +277,18 @@ function finish() {
   tug.view = "feed";
 }
 
-onMounted(() => void nextTick(() => root.value?.querySelector<HTMLElement>("[data-autofocus]")?.focus()));
+onMounted(() => {
+  void nextTick(() => root.value?.querySelector<HTMLElement>("[data-autofocus]")?.focus());
+  // Tick so the candidate grace expires devices that haven't reappeared.
+  graceTimer = window.setInterval(() => (graceNow.value = Date.now()), 1000);
+});
 onUnmounted(() => {
   tug.setupSharingShown = false;
   window.clearTimeout(btTimer);
   window.clearTimeout(shareTimer);
+  window.clearTimeout(startOverTimer);
+  window.clearTimeout(textsWaitTimer);
+  window.clearInterval(graceTimer);
   if (step.value === "connect") void tug.stopDiscovery();
 });
 
@@ -257,7 +330,7 @@ const SHORTCUTS: Array<[string, string]> = [
             <li class="flex gap-3"><Check :size="18" class="mt-0.5 shrink-0 text-accent-teal" /> Your music, battery and codes, one glance away.</li>
           </ul>
           <p class="mt-8 text-[13px] text-muted">
-            About 3 minutes. Over Bluetooth, with nothing to install on your phone but a free helper app, once. Your notifications and texts stay on this PC.
+            About 3 minutes, over Bluetooth, with nothing to install on your phone. Your notifications and texts stay on this PC.
           </p>
           <div class="mt-8 flex items-center gap-4">
             <button class="btn-primary" data-autofocus @click="go('bluetooth')">Get started</button>
@@ -299,37 +372,49 @@ const SHORTCUTS: Array<[string, string]> = [
 
         <!-- Connect -->
         <section v-else-if="step === 'connect'" key="connect" class="animate-step-in flex flex-1 flex-col py-10">
-          <h1 class="headline text-[36px] leading-tight">Connect from your iPhone</h1>
+          <h1 class="headline text-[36px] leading-tight">Pair your iPhone</h1>
           <p class="mt-2 text-[15px] text-muted">
-            iPhones only connect to accessories from the phone's side, so this one time you'll use a free app called
-            <strong class="font-medium text-body-strong">LightBlue</strong>.
+            This takes a few seconds and sets up everything — notifications, texts and your music — in one go.
           </p>
-          <div class="mt-8 flex gap-8">
-            <ol class="flex flex-1 flex-col gap-4 text-[14px] text-body">
-              <li class="flex gap-3">
-                <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-cream-strong text-[12px] font-semibold text-ink">1</span>
-                <span>Install <strong class="font-medium text-ink">LightBlue</strong> from the App Store and open it near this PC.</span>
-              </li>
-              <li class="flex gap-3">
-                <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-cream-strong text-[12px] font-semibold text-ink">2</span>
-                <span>Tap the device called <strong class="font-medium text-ink">Unnamed</strong> with the strongest signal (the number closest to zero).</span>
-              </li>
-              <li class="flex gap-3">
-                <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-cream-strong text-[12px] font-semibold text-ink">3</span>
-                <span>Your iPhone appears here. Choose it to pair.</span>
-              </li>
-            </ol>
-            <!-- What LightBlue looks like, so you know what to tap -->
-            <div class="w-[190px] shrink-0 rounded-[30px] border-[6px] border-ink bg-canvas p-3 shadow-sm" aria-hidden="true">
-              <p class="text-center text-[10px] font-semibold text-ink">LightBlue</p>
-              <ul class="mt-2 flex flex-col gap-1.5 text-[11px]">
-                <li class="flex items-center justify-between rounded-lg bg-accent-amber/25 px-2 py-1.5 ring-2 ring-accent-amber">
-                  <span class="font-medium text-ink">Unnamed</span><span class="font-mono text-muted">−45</span>
-                </li>
-                <li class="flex items-center justify-between px-2 py-1.5"><span class="text-body">LE-Bose Flex</span><span class="font-mono text-muted-soft">−71</span></li>
-                <li class="flex items-center justify-between px-2 py-1.5"><span class="text-body">Unnamed</span><span class="font-mono text-muted-soft">−88</span></li>
-              </ul>
-            </div>
+          <ol class="mt-8 flex flex-col gap-4 text-[14px] text-body">
+            <li class="flex gap-3">
+              <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-cream-strong text-[12px] font-semibold text-ink">1</span>
+              <span>On your iPhone, open <strong class="font-medium text-ink">Settings › Bluetooth</strong> and keep that screen open. Don't tap this PC in the list — just leave it showing.</span>
+            </li>
+            <li class="flex gap-3">
+              <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-cream-strong text-[12px] font-semibold text-ink">2</span>
+              <span>Your iPhone appears below. Click <strong class="font-medium text-ink">Pair</strong> next to it.</span>
+            </li>
+            <li class="flex gap-3">
+              <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-cream-strong text-[12px] font-semibold text-ink">3</span>
+              <span>A code appears here and on your iPhone — check they match and confirm on both.</span>
+            </li>
+            <li class="flex gap-3">
+              <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-cream-strong text-[12px] font-semibold text-ink">4</span>
+              <span>Tap <strong class="font-medium text-ink">Allow</strong> on your iPhone when it asks to share notifications.</span>
+            </li>
+          </ol>
+
+          <!-- More than one iPhone paired, or the wrong one: offer one clean Start over. -->
+          <div v-if="problem" class="mt-8 flex flex-col gap-2 rounded-xl border border-hairline bg-surface-card px-4 py-3">
+            <p class="text-[13px] text-body">
+              <template v-if="problem === 'duplicates'">More than one iPhone is paired with this PC, so tug can't tell which to use.</template>
+              <template v-else>The iPhone paired now isn't the one tug remembers.</template>
+              Start over clears the pairings tug made and begins again. Also tap <strong class="font-medium text-body-strong">Forget This Device</strong>
+              for this PC under Settings › Bluetooth on the iPhone.
+            </p>
+            <button class="btn-secondary btn-sm self-start" :disabled="startingOver" @click="startOver">
+              <LoaderCircle v-if="startingOver" :size="13" class="animate-spin" />
+              {{ confirmStartOver ? "Tap again to start over" : "Start over" }}
+            </button>
+          </div>
+
+          <!-- Windows' own pairing dialog is handling it (the phone started the pairing). -->
+          <div v-if="windowsPairing && !s.device" class="mt-8 flex items-start gap-3 rounded-xl border border-hairline bg-surface-card px-4 py-3">
+            <Smartphone :size="18" class="mt-0.5 shrink-0 text-ink" />
+            <p class="min-w-0 flex-1 text-[13px] text-body">
+              Windows is pairing your iPhone and will show a code — check it matches your iPhone and confirm on both.
+            </p>
           </div>
 
           <div class="mt-8 rounded-xl bg-surface-card p-4">
@@ -346,7 +431,8 @@ const SHORTCUTS: Array<[string, string]> = [
                 <span class="flex size-10 items-center justify-center rounded-full bg-canvas"><Smartphone :size="18" class="text-ink" /></span>
                 <div class="min-w-0 flex-1">
                   <p class="truncate text-[15px] font-medium text-ink">{{ d.name }}</p>
-                  <p class="text-[12px] font-medium text-accent-teal">Connected now</p>
+                  <p v-if="d.connected" class="text-[12px] font-medium text-accent-teal">Connected now</p>
+                  <p v-else-if="d.paired" class="text-[12px] text-muted">Paired</p>
                 </div>
                 <button
                   :class="i === 0 ? 'btn-primary' : 'btn-secondary'"
@@ -354,23 +440,42 @@ const SHORTCUTS: Array<[string, string]> = [
                   :data-autofocus="i === 0 ? '' : undefined"
                   @click="choose(d)"
                 >
-                  <LoaderCircle v-if="pairing && choosingId === d.id" :size="14" class="animate-spin" /> This is my iPhone
+                  <LoaderCircle v-if="pairing && choosingId === d.id" :size="14" class="animate-spin" />
+                  {{ d.paired ? "Use" : "Pair" }}
                 </button>
               </div>
             </div>
             <p v-else class="flex items-center gap-3 text-[14px] text-muted">
-              <LoaderCircle :size="16" class="animate-spin" /> Waiting for your iPhone to connect…
+              <LoaderCircle :size="16" class="animate-spin" /> Looking for your iPhone… keep Settings › Bluetooth open on it.
             </p>
             <p v-if="connectError" class="mt-3 text-[13px] text-error">{{ connectError }}</p>
           </div>
+
+          <!-- Other nearby devices tug couldn't confirm as a phone (possibly a nameless iPhone). -->
+          <details v-if="otherDevices.length" class="mt-4 text-[13px] text-muted">
+            <summary class="cursor-pointer select-none">Don't see your iPhone? Other nearby devices</summary>
+            <ul class="mt-3 flex flex-col gap-2">
+              <li v-for="d in otherDevices" :key="d.id" class="flex items-center gap-3 rounded-xl border border-hairline bg-canvas px-4 py-2.5">
+                <p class="min-w-0 flex-1 truncate text-[13px] text-ink">{{ d.name }}</p>
+                <button class="btn-secondary btn-sm" :disabled="pairing" @click="choose(d)">
+                  <LoaderCircle v-if="pairing && choosingId === d.id" :size="13" class="animate-spin" />
+                  {{ d.paired ? "Use" : "Pair" }}
+                </button>
+              </li>
+            </ul>
+          </details>
+
+          <!-- Fallback for older iOS or when the phone never appears: the LightBlue route. -->
           <details class="mt-4 text-[13px] text-muted">
-            <summary class="cursor-pointer select-none">Can't tell which one is this PC?</summary>
+            <summary class="cursor-pointer select-none">Can't see your iPhone?</summary>
             <p class="mt-2">
-              Switch <em>Visible to iPhone</em> off for a moment
-              <button class="ml-1 underline" @click="tug.setAdvertising(!tug.advertiseEnabled)">
-                ({{ tug.advertiseEnabled ? "turn off" : "turn back on" }})
-              </button>: the entry that disappears in LightBlue is this PC. Turn it back on and tap it.
-              <template v-if="others.length"> Other devices nearby: {{ others.map((d) => d.name).join(", ") }}.</template>
+              Keep <strong class="font-medium text-body-strong">Settings › Bluetooth</strong> open on your iPhone — it only advertises while that
+              screen is showing. If it still doesn't appear, install the free <strong class="font-medium text-body-strong">LightBlue</strong> app, open
+              it near this PC, and tap the <strong class="font-medium text-body-strong">Unnamed</strong> entry with the strongest signal (closest to 0,
+              e.g. −45) to wake the link; your iPhone then shows up here. To be sure which entry is this PC, switch
+              <em>Visible to iPhone</em> off for a moment
+              <button class="underline" @click="tug.setAdvertising(!tug.advertiseEnabled)">({{ tug.advertiseEnabled ? "turn off" : "turn back on" }})</button>:
+              the one that disappears is this PC.
             </p>
           </details>
         </section>
@@ -383,6 +488,18 @@ const SHORTCUTS: Array<[string, string]> = [
         >
           <LoaderCircle :size="22" class="animate-spin text-muted" />
           <p class="text-[15px] text-muted">Finishing pairing…</p>
+        </section>
+        <!-- ConfirmOnly: Windows has accepted; the user just taps Pair on the iPhone. -->
+        <section
+          v-else-if="step === 'pin' && tug.pairingRequest?.confirmOnPhone"
+          key="pin-phone"
+          class="animate-step-in flex flex-1 flex-col items-center justify-center gap-4 py-10 text-center"
+        >
+          <Smartphone :size="26" class="text-ink" />
+          <h1 class="headline text-[36px] leading-tight">Tap Pair on your iPhone</h1>
+          <p class="text-[15px] text-muted">{{ tug.pairingRequest?.deviceName }}</p>
+          <p class="text-[14px] text-muted">Confirm the pairing on your iPhone — it continues here on its own.</p>
+          <LoaderCircle :size="20" class="animate-spin text-muted-soft" />
         </section>
         <section v-else-if="step === 'pin'" key="pin" class="animate-step-in flex flex-1 flex-col items-center justify-center py-10 text-center">
           <h1 class="headline text-[36px] leading-tight">{{ tug.pairingRequest?.pin ? "Do the codes match?" : "Pair with your iPhone?" }}</h1>
@@ -405,11 +522,24 @@ const SHORTCUTS: Array<[string, string]> = [
             <strong class="font-medium text-body-strong">ⓘ</strong> next to this PC, and switch this on. It lights up here as you do.
           </p>
           <PhoneSwitches :switches="sharing" />
-          <div v-if="s.pairingStale" class="mt-6 flex items-center gap-3 rounded-xl bg-surface-card px-4 py-3">
-            <p class="min-w-0 flex-1 text-[13px] text-body">Your iPhone has forgotten this PC, so it can't connect. Pair again: it takes a few seconds.</p>
-            <button class="btn-primary btn-sm" :disabled="repairing" @click="pairAgain">
-              <LoaderCircle v-if="repairing" :size="13" class="animate-spin" /> Pair again
-            </button>
+          <div v-if="bond" class="mt-6 flex flex-col gap-2 rounded-xl bg-surface-card px-4 py-3">
+            <p class="text-[13px] text-body">
+              <template v-if="bond === 'forgotten'">Your PC still remembers a pairing your iPhone forgot, so they can't reconnect.</template>
+              <template v-else>Your iPhone keeps refusing this PC's pairing — it may have been forgotten on the phone.</template>
+              Remove <strong class="font-medium text-body-strong">{{ s.textsDevice ?? s.device?.name ?? "your iPhone" }}</strong> in Windows Bluetooth
+              settings, or Start over here, then pair again.
+            </p>
+            <div class="flex gap-2">
+              <button class="btn-primary btn-sm" :disabled="startingOver" @click="startOver">
+                <LoaderCircle v-if="startingOver" :size="13" class="animate-spin" />
+                {{ confirmStartOver ? "Tap again to start over" : "Start over" }}
+              </button>
+              <button class="btn-secondary btn-sm" @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
+            </div>
+          </div>
+          <div v-else-if="s.awaitingPhoneAllow" class="mt-6 flex items-center gap-3 rounded-xl bg-surface-card px-4 py-3">
+            <Smartphone :size="18" class="shrink-0 text-ink" />
+            <p class="min-w-0 flex-1 text-[13px] text-body">Look at your iPhone and tap <strong class="font-medium text-body-strong">Allow</strong> to let this PC see your notifications.</p>
           </div>
           <p v-else-if="connecting" class="mt-6 flex items-center justify-center gap-2 text-[13px] text-muted">
             <LoaderCircle :size="14" class="animate-spin" /> Connecting to your iPhone…
@@ -425,31 +555,57 @@ const SHORTCUTS: Array<[string, string]> = [
         <!-- Texts: pair for messages from Windows, then two switches on the phone -->
         <section v-else-if="step === 'texts'" key="texts" class="animate-step-in flex flex-1 flex-col py-10">
           <h1 class="headline text-[36px] leading-tight">Bring your texts over</h1>
-          <template v-if="!textsPaired">
+          <!-- The one pairing usually brings texts too; wait briefly before offering to pair. -->
+          <template v-if="!textsPaired && !textsWaitElapsed">
+            <p class="mt-2 text-[15px] text-muted">Setting up texts over the same pairing…</p>
+            <div class="mt-10 flex flex-col items-center gap-4 rounded-xl border border-dashed border-hairline px-6 py-12 text-center">
+              <LoaderCircle :size="20" class="animate-spin text-muted" />
+              <p class="text-[14px] text-muted">Checking whether your iPhone shares texts over this pairing…</p>
+            </div>
+          </template>
+          <template v-else-if="!textsPaired">
             <p class="mt-2 text-[15px] text-muted">
-              Reading and replying to texts uses a second Bluetooth connection, made from this PC. Optional, about a minute.
+              Reading and replying to texts needs a second Bluetooth pairing. tug can make it for you — about a minute, and optional.
             </p>
             <p v-if="s.textsPairing === 'broken'" class="mt-4 rounded-xl bg-surface-card px-4 py-3 text-[13px] text-body">
-              Windows has an older texts pairing with {{ s.textsDevice ?? "your iPhone" }} that's stopped working. Remove it in Bluetooth settings
-              first, then add your iPhone again.
+              Windows has an older texts pairing with {{ s.textsDevice ?? "your iPhone" }} that's stopped working. Press Start over, or remove it in
+              Bluetooth settings first, then pair again.
             </p>
-            <ol class="mt-8 flex flex-col gap-4 text-[14px] text-body">
-              <li class="flex gap-3">
-                <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-card text-[12px] font-medium text-ink">1</span>
-                <span>On your iPhone, open <strong class="font-medium text-body-strong">Settings › Bluetooth</strong> and leave it on screen.</span>
-              </li>
-              <li class="flex gap-3">
-                <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-card text-[12px] font-medium text-ink">2</span>
-                <span>
-                  On this PC, open Bluetooth settings, choose <strong class="font-medium text-body-strong">Add device › Bluetooth</strong>, pick your iPhone,
-                  and confirm the code on both screens.
-                  <button class="btn-secondary btn-sm mt-2 flex" data-autofocus @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
-                </span>
-              </li>
-            </ol>
-            <p class="mt-8 flex items-center gap-2 text-[13px] text-muted">
-              <LoaderCircle :size="14" class="animate-spin" /> Waiting for your iPhone to answer for texts…
-            </p>
+            <!-- Pairing in progress: the code shows right here (ConfirmPinMatch) or on the phone. -->
+            <div v-if="pairingTexts && tug.pairingRequest" class="mt-8 rounded-xl bg-surface-card px-5 py-5 text-center">
+              <p class="text-[14px] font-medium text-ink">{{ tug.pairingRequest.confirmOnPhone ? "Tap Pair on your iPhone" : "Do the codes match?" }}</p>
+              <p v-if="tug.pairingRequest.pin" class="my-4 font-mono text-[44px] tracking-[0.2em] text-ink">{{ tug.pairingRequest.pin }}</p>
+              <p class="text-[13px] text-muted">
+                {{ tug.pairingRequest.confirmOnPhone ? "Confirm on your iPhone — it continues here." : "Check it matches your iPhone, then tap Pair on both." }}
+              </p>
+              <div v-if="!tug.pairingRequest.confirmOnPhone" class="mt-4 flex justify-center gap-3">
+                <button class="btn-secondary btn-sm" @click="tug.confirmPairing(false)">Cancel</button>
+                <button class="btn-primary btn-sm" @click="tug.confirmPairing(true)">Pair</button>
+              </div>
+            </div>
+            <template v-else>
+              <ol class="mt-8 flex flex-col gap-4 text-[14px] text-body">
+                <li class="flex gap-3">
+                  <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-card text-[12px] font-medium text-ink">1</span>
+                  <span>On your iPhone, open <strong class="font-medium text-body-strong">Settings › Bluetooth</strong> and leave it on screen.</span>
+                </li>
+                <li class="flex gap-3">
+                  <span class="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-card text-[12px] font-medium text-ink">2</span>
+                  <span>Click Pair for texts — a code shows here and on your iPhone; confirm on both.</span>
+                </li>
+              </ol>
+              <button class="btn-primary mt-6 self-start" data-autofocus :disabled="pairingTexts" @click="pairForTexts">
+                <LoaderCircle v-if="pairingTexts" :size="14" class="animate-spin" /> Pair for texts
+              </button>
+              <details class="mt-4 text-[13px] text-muted">
+                <summary class="cursor-pointer select-none">Pair from Windows instead</summary>
+                <p class="mt-2">
+                  With <strong class="font-medium text-body-strong">Settings › Bluetooth</strong> open on your iPhone, open Bluetooth settings on this PC,
+                  choose <strong class="font-medium text-body-strong">Add device › Bluetooth</strong>, pick your iPhone and confirm the code on both.
+                  <button class="btn-secondary btn-sm mt-2 flex" @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
+                </p>
+              </details>
+            </template>
           </template>
           <template v-else>
             <p class="mt-2 text-[15px] text-muted">

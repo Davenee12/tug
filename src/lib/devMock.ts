@@ -91,6 +91,7 @@ const status: DeviceStatus = setup
       lastError: null,
       lastErrorAt: null,
       pairingStale: false,
+      awaitingPhoneAllow: false,
       messagesError: null,
       contactsError: null,
       textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
@@ -108,6 +109,7 @@ const status: DeviceStatus = setup
       lastError: params.has("lasterror") ? "Couldn't advertise to the iPhone: the radio is busy" : null,
       lastErrorAt: params.has("lasterror") ? now - 4 * min : null,
       pairingStale: false,
+      awaitingPhoneAllow: false,
       messagesError: null,
       contactsError: null,
       textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
@@ -225,11 +227,11 @@ const spotifyPlayer: SpotifyPlayer = {
   deviceName: "Jordan's iPhone",
 };
 const spotifyPlaylists: SpotifyPlaylist[] = [
-  { uri: "spotify:playlist:1", name: "Deep Focus", owner: "Spotify", trackCount: 120 },
-  { uri: "spotify:playlist:2", name: "Morning Run", owner: "Dave", trackCount: 42 },
-  { uri: "spotify:playlist:3", name: "Discover Weekly", owner: "Spotify", trackCount: 30 },
-  { uri: "spotify:playlist:4", name: "Coding Flow", owner: "Dave", trackCount: 88 },
-  { uri: "spotify:playlist:5", name: "Rainy Day Jazz", owner: "Dave", trackCount: 61 },
+  { uri: "spotify:playlist:1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: null },
+  { uri: "spotify:playlist:2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: null },
+  { uri: "spotify:playlist:3", name: "Discover Weekly", owner: "Spotify", trackCount: 30, imageUrl: null },
+  { uri: "spotify:playlist:4", name: "Coding Flow", owner: "Dave", trackCount: 88, imageUrl: null },
+  { uri: "spotify:playlist:5", name: "Rainy Day Jazz", owner: "Dave", trackCount: 61, imageUrl: null },
 ];
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
@@ -241,11 +243,15 @@ function simulateConnect(id: string) {
   const send = () => void emit("device-status", { ...status, services: { ...status.services } });
   status.device = { id, name };
   status.connection = "connecting";
+  // On a fresh bond iOS holds the ANCS subscribe open until "Allow" is tapped: the UI should
+  // prompt to look at the phone during this window.
+  status.awaitingPhoneAllow = true;
   send();
   // The real order: connected, Share System Notifications switched on, then the Texts step's
   // Windows pairing (the phone asks for its switch), Show Notifications, Sync Contacts.
   setTimeout(() => {
     status.connection = "connected";
+    status.awaitingPhoneAllow = false;
     status.battery = 76;
     status.services = { ...status.services, media: true, battery: true };
     send();
@@ -409,7 +415,7 @@ mockIPC(
         return null;
       case "pair_device":
         // Like Windows: the PIN shows on both screens; the call returns once it's answered.
-        setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913" }), 300);
+        setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913", confirmOnPhone: false }), 300);
         return new Promise<null>((resolve, reject) => {
           finishPairing = (ok) => (ok ? resolve(null) : reject("Pairing was cancelled"));
         }).then(() => {
@@ -466,6 +472,8 @@ mockIPC(
         return { ...spotifyState };
       case "spotify_playlists":
         return spotifyState.connected ? spotifyPlaylists.map((p) => ({ ...p })) : [];
+      case "spotify_cover":
+        return null;
       case "spotify_play_playlist":
         console.log("[devMock] spotify play", a.uri);
         return null;
@@ -499,7 +507,7 @@ if (setup && params.has("btoff")) {
 }
 
 if (params.has("pairing")) {
-  setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913" }), 600);
+  setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913", confirmOnPhone: false }), 600);
 }
 
 // ?call: the phone rings. Answer or Decline takes it down (perform_action above); left alone,

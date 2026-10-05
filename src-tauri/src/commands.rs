@@ -133,6 +133,13 @@ pub async fn forget_device(state: State<'_, AppState>) -> Result<()> {
     state.ble.request(|reply| Command::Forget { reply }).await
 }
 
+/// Pair the iPhone's Classic (texts) side from inside tug (setup's Texts step). The PIN shows in
+/// tug via the pairing-request event, the same as notifications pairing.
+#[tauri::command]
+pub async fn pair_texts(state: State<'_, AppState>) -> Result<()> {
+    state.ble.request(|reply| Command::PairTexts { reply }).await
+}
+
 #[tauri::command]
 pub async fn set_advertising(state: State<'_, AppState>, enabled: bool) -> Result<()> {
     state
@@ -533,6 +540,15 @@ pub async fn spotify_playlists(state: State<'_, AppState>) -> Result<Vec<Playlis
     tauri::async_runtime::spawn_blocking(move || sp.playlists())
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// A playlist cover as a `data:` URI (fetched and cached by tug; only Spotify image hosts).
+#[tauri::command]
+pub async fn spotify_cover(state: State<'_, AppState>, url: String) -> Result<Option<String>> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.cover(&url))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Play a playlist on the iPhone (chosen from Spotify's device list, preferring the paired phone).

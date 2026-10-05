@@ -38,6 +38,8 @@ export const api = {
   confirmPairing: (accept: boolean) => invoke<void>("confirm_pairing", { accept }),
   useDevice: (id: string) => invoke<void>("use_device", { id }),
   forgetDevice: () => invoke<void>("forget_device"),
+  /** Pair the iPhone's Classic (texts) side from inside tug; the PIN shows via pairing-request. */
+  pairTexts: () => invoke<void>("pair_texts"),
   setAdvertising: (enabled: boolean) => invoke<void>("set_advertising", { enabled }),
   getSettings: () => invoke<Record<string, string>>("get_settings"),
   setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),
@@ -79,6 +81,7 @@ export const api = {
   spotifyConnect: () => invoke<SpotifyStatus>("spotify_connect"),
   spotifyDisconnect: () => invoke<SpotifyStatus>("spotify_disconnect"),
   spotifyPlaylists: () => invoke<SpotifyPlaylist[]>("spotify_playlists"),
+  spotifyCover: (url: string) => invoke<string | null>("spotify_cover", { url }),
   spotifyPlayPlaylist: (uri: string) => invoke<void>("spotify_play_playlist", { uri }),
   spotifyPlayer: () => invoke<SpotifyPlayer | null>("spotify_player"),
   spotifySetRepeat: (mode: RepeatMode) => invoke<void>("spotify_set_repeat", { mode }),

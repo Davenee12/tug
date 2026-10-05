@@ -220,8 +220,13 @@ impl Actor {
         Ok(())
     }
 
+    /// Start over: drop and unpair both bonds tug knows about — the notifications (LE) device
+    /// and the remembered texts (Classic) device — and clear the remembered ids, so a phone the
+    /// user replaced (or that forgot this PC) leaves nothing stale behind for the next pairing.
     pub(super) async fn forget(&mut self) -> Result<(), String> {
-        let id = self.device_id.take();
+        let le_id = self.device_id.take();
+        // Read the texts device id before deleting the setting, so we can unpair it too.
+        let texts_id = self.shared.store.setting(keys::TEXTS_DEVICE_ID).ok().flatten();
         self.drop_link();
         let store = &self.shared.store;
         let _ = store.delete_setting(keys::DEVICE_ID);
@@ -233,16 +238,107 @@ impl Actor {
             s.connection = ConnectionState::NoDevice;
             s.last_error = None;
             s.pairing_stale = false;
+            s.awaiting_phone_allow = false;
+            s.texts_pairing = crate::map::health::TextsPairing::Unknown;
+            s.texts_device = None;
+            s.messages_error = None;
+            s.contacts_error = None;
+            s.services = Services::default();
         });
-        if let Some(id) = id {
-            // Best effort: a stale Windows bond makes re-pairing fail silently.
-            if let Ok(info) = async { DeviceInformation::CreateFromIdAsync(&HSTRING::from(id))?.await }.await {
-                if let Ok(op) = info.Pairing().and_then(|p| p.UnpairAsync()) {
-                    let _ = op.await;
-                }
-            }
+        // Best effort: a stale Windows bond makes re-pairing fail silently. The Classic (texts)
+        // bond and the LE (notifications) bond are separate Windows pairings; remove both.
+        for id in [le_id, texts_id].into_iter().flatten() {
+            unpair_device(&id).await;
         }
         Ok(())
+    }
+
+    /// Pair the iPhone's Classic (texts) side from inside tug, so the Texts step doesn't have to
+    /// send people to Windows › Add device. LE (notifications) must be paired first — cross-
+    /// transport key derivation depends on that order. Runs a one-shot inquiry for unpaired
+    /// Classic devices (the iPhone must have Settings › Bluetooth open), picks the one matching
+    /// the adopted phone with pure logic, pairs it with the PIN shown in tug, and remembers it.
+    pub(super) async fn pair_texts(&mut self) -> Result<(), String> {
+        let le_name = match self.shared.status().device {
+            Some(d) => d.name,
+            None => return Err("Pair your iPhone for notifications first, then set up texts.".into()),
+        };
+        let candidates = discover_unpaired_classic().await?;
+        let pick = crate::map::pick::choose_texts_candidate(&candidates, &le_name).ok_or_else(|| {
+            "Couldn't find your iPhone to pair for texts. On the iPhone, open Settings › Bluetooth and keep it on screen, then try again."
+                .to_string()
+        })?;
+        let id = pick.id.clone();
+        log::info!("pairing for texts: {} ({id})", pick.name);
+        let op =
+            DeviceInformation::CreateFromIdAsync(&HSTRING::from(id.as_str())).map_err(|e| e.message().to_string())?;
+        let info = winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op)
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = pair_device(&info, self.shared.clone())
+            .await
+            .map_err(|e| e.message().to_string())?;
+        match status {
+            DevicePairingResultStatus::Paired | DevicePairingResultStatus::AlreadyPaired => {}
+            DevicePairingResultStatus::RejectedByHandler | DevicePairingResultStatus::PairingCanceled => {
+                return Err("Texts pairing was cancelled".into())
+            }
+            DevicePairingResultStatus::AuthenticationTimeout => return Err("Texts pairing timed out".into()),
+            other => return Err(format!("Texts pairing failed ({other:?})")),
+        }
+        // Remember this phone as the texts device and ask the message service to connect now.
+        let _ = self.shared.store.set_setting(keys::TEXTS_DEVICE_ID, &id);
+        if let Some(map) = self.shared.map.get() {
+            map.refresh();
+        }
+        log::info!("paired for texts; message service will connect");
+        Ok(())
+    }
+}
+
+/// One-shot inquiry for unpaired Classic devices (`GetDeviceSelectorFromPairingState(false)`).
+/// Only run during the Texts step; the iPhone appears only while its Settings › Bluetooth screen
+/// is open. Bounded, so a quiet radio can't park the actor.
+async fn discover_unpaired_classic() -> std::result::Result<Vec<crate::map::pick::UnpairedDevice>, String> {
+    use crate::map::pick::UnpairedDevice;
+    let selector = BluetoothDevice::GetDeviceSelectorFromPairingState(false).map_err(|e| e.message().to_string())?;
+    let props = IIterable::<HSTRING>::from(vec![HSTRING::from(PROP_COD_MAJOR)]);
+    let op = DeviceInformation::FindAllAsyncAqsFilterAndAdditionalProperties(&selector, &props)
+        .map_err(|e| e.message().to_string())?;
+    let infos = winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for info in infos {
+        let Ok(id) = info.Id() else { continue };
+        let name = info.Name().map(|n| n.to_string()).unwrap_or_default();
+        let kind = device_kind::classify(&name, None, uint_property(&info, PROP_COD_MAJOR));
+        log::info!("texts inquiry: {name:?} ({kind:?})");
+        out.push(UnpairedDevice {
+            id: id.to_string(),
+            name,
+            kind,
+        });
+    }
+    Ok(out)
+}
+
+/// Remove one Windows Bluetooth bond by device id. Best effort and fully bounded, so a phone
+/// that's away (CreateFromIdAsync or UnpairAsync hanging) can't park the actor loop.
+pub(super) async fn unpair_device(id: &str) {
+    let op = match DeviceInformation::CreateFromIdAsync(&HSTRING::from(id)) {
+        Ok(op) => op,
+        Err(e) => return log::debug!("unpair {id}: {}", e.message()),
+    };
+    let info = match winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op).await {
+        Ok(info) => info,
+        Err(e) => return log::debug!("unpair {id}: {e}"),
+    };
+    if let Ok(op) = info.Pairing().and_then(|p| p.UnpairAsync()) {
+        match winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op).await {
+            Ok(status) => log::info!("unpaired {id}: {:?}", status.Status()),
+            Err(e) => log::debug!("unpair {id}: {e}"),
+        }
     }
 }
 
@@ -259,6 +355,9 @@ pub(super) async fn pair_device(
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "your iPhone".to_string());
     let custom = pairing.Custom()?;
+    // Cleared after pairing resolves, so a ConfirmOnly prompt (which Windows accepts on its own,
+    // with no deferral thread to clear it) doesn't linger in tug.
+    let shared_for_close = shared.clone();
     custom.PairingRequested(&TypedEventHandler::<
         DeviceInformationCustomPairing,
         DevicePairingRequestedEventArgs,
@@ -266,6 +365,16 @@ pub(super) async fn pair_device(
         let Some(args) = args.as_ref() else { return Ok(()) };
         log::info!("pairing requested by Windows: kind {:?}", args.PairingKind()?);
         if args.PairingKind()? == DevicePairingKinds::ConfirmOnly {
+            // Windows accepts on its own; the user taps "Pair" on the iPhone. Show that in tug so
+            // the screen isn't blank while the phone waits for them.
+            shared.emit(
+                events::PAIRING_REQUEST,
+                PairingRequest {
+                    device_name: device_name.clone(),
+                    pin: None,
+                    confirm_on_phone: true,
+                },
+            );
             return args.Accept();
         }
         // ConfirmPinMatch / DisplayPin: show the code and let the user decide.
@@ -278,6 +387,7 @@ pub(super) async fn pair_device(
             PairingRequest {
                 device_name: device_name.clone(),
                 pin,
+                confirm_on_phone: false,
             },
         );
         let args = args.clone();
@@ -296,6 +406,8 @@ pub(super) async fn pair_device(
     let result = custom
         .PairWithProtectionLevelAsync(kinds, DevicePairingProtectionLevel::Encryption)?
         .await?;
+    // Clear any informational prompt (ConfirmOnly has no deferral thread to do it).
+    shared_for_close.emit(events::PAIRING_REQUEST_CLOSED, ());
     result.Status()
 }
 

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { matchPlaylists, matchScore, nextRepeat, normalize } from "./spotify";
+import { matchPlaylists, matchScore, nextRepeat, normalize, playlistDetail } from "./spotify";
 import type { SpotifyPlaylist } from "../types/protocol";
 
-const pl = (name: string): SpotifyPlaylist => ({ uri: `spotify:playlist:${name}`, name, owner: "Dave", trackCount: 10 });
+const pl = (name: string): SpotifyPlaylist => ({ uri: `spotify:playlist:${name}`, name, owner: "Dave", trackCount: 10, imageUrl: null });
 const lists = [pl("Deep Focus"), pl("Morning Run"), pl("Discover Weekly"), pl("Coding Flow"), pl("Rainy Day Jazz")];
 
 describe("normalize", () => {
@@ -52,5 +52,14 @@ describe("nextRepeat", () => {
     expect(nextRepeat("all")).toBe("one");
     expect(nextRepeat("one")).toBe("off");
     expect(nextRepeat(null)).toBe("all");
+  });
+});
+
+describe("playlistDetail", () => {
+  it("shows owner and count, and leaves out a count Spotify didn't give", () => {
+    expect(playlistDetail({ owner: "Dave", trackCount: 42 })).toBe("Dave · 42 songs");
+    expect(playlistDetail({ owner: "Dave", trackCount: 1 })).toBe("Dave · 1 song");
+    expect(playlistDetail({ owner: "Island Ting", trackCount: null })).toBe("Island Ting");
+    expect(playlistDetail({ owner: null, trackCount: 0 })).toBe("0 songs");
   });
 });
