@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.5.1 — 2026-10-05
+
+### Fixed
+- One conversation per person: iOS sometimes pads a contact's name in notifications ("marco "),
+  which split a person into two conversations. Names are now matched ignoring extra spaces and case.
+- Avatars for names with emoji ("zoe 💜") no longer show a broken character.
+- Contacts: when Sync Contacts is off, tug now shows the switch to turn on (iOS refuses with an
+  unusual code that was previously reported as a generic error).
+
+### Improved
+- New message is a pop-up (Ctrl+N or +): people you've recently texted appear first without typing,
+  then all contacts A–Z; search ignores case and accents and covers your message history.
+- Replying from tug clears that person's notifications on your iPhone.
+
 ## v0.5.0 — 2026-10-04
 
 First release. Verified end to end on an iPhone 15 Pro Max with Windows 11.
