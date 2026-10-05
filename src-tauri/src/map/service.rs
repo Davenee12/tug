@@ -325,6 +325,19 @@ mod worker {
                 log::info!("message access connected to {}", device.name);
                 // Only once connecting worked: a device that won't connect isn't "the phone".
                 self.remember_texts_device(&device.id);
+                // The LE side often reports the bare "iPhone"; the Classic side carries the real
+                // name ("Dave's iPhone"). Adopt it when it's more specific.
+                let current = self.shared.status().device.map(|d| d.name).unwrap_or_default();
+                if crate::device_kind::more_specific_name(&current, &device.name) {
+                    log::info!("using the Classic name '{}' for the iPhone", device.name);
+                    let _ = self.shared.store.set_setting(keys::DEVICE_NAME, &device.name);
+                    let name = device.name.clone();
+                    self.shared.update_status(|s| {
+                        if let Some(d) = s.device.as_mut() {
+                            d.name = name;
+                        }
+                    });
+                }
                 self.device_id = Some(device.id.clone());
                 self.session = Some(session);
                 self.set_state(true, None);

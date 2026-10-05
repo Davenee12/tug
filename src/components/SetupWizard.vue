@@ -75,7 +75,23 @@ watch(
 // empty on a clean pair). Phones Windows classifies as such are offered up front; the list/filter
 // is pure and unit-tested in lib/pairings. Scanning runs continuously while this step is open.
 const lists = computed(() => setupDeviceLists(tug.discovered));
-const candidates = computed(() => lists.value.phones.slice(0, 4));
+// Windows can drop an unpaired LE link nobody holds within seconds, which made a just-appeared
+// iPhone vanish before it could be clicked. Hold a phone we've seen in the list for a short grace
+// so a transient discovery blip doesn't pull the row out from under the cursor.
+const CANDIDATE_GRACE_MS = 10_000;
+const heldPhones = new Map<string, { device: DiscoveredDevice; at: number }>();
+const graceNow = ref(Date.now());
+let graceTimer: number | undefined;
+const candidates = computed(() => {
+  const t = graceNow.value;
+  const live = lists.value.phones;
+  for (const d of live) heldPhones.set(d.id, { device: d, at: Date.now() });
+  const liveIds = new Set(live.map((d) => d.id));
+  const stale = [...heldPhones.values()]
+    .filter((e) => !liveIds.has(e.device.id) && t - e.at < CANDIDATE_GRACE_MS)
+    .map((e) => e.device);
+  return [...live, ...stale].slice(0, 4);
+});
 /** One device that says it's a phone: offer it plainly. Otherwise ask which one. */
 const sure = computed(() => candidates.value.length === 1);
 /** Unknowns (which could be a nameless just-connected iPhone): a quiet fallback list. */
@@ -242,12 +258,17 @@ function finish() {
   tug.view = "feed";
 }
 
-onMounted(() => void nextTick(() => root.value?.querySelector<HTMLElement>("[data-autofocus]")?.focus()));
+onMounted(() => {
+  void nextTick(() => root.value?.querySelector<HTMLElement>("[data-autofocus]")?.focus());
+  // Tick so the candidate grace expires devices that haven't reappeared.
+  graceTimer = window.setInterval(() => (graceNow.value = Date.now()), 1000);
+});
 onUnmounted(() => {
   tug.setupSharingShown = false;
   window.clearTimeout(btTimer);
   window.clearTimeout(shareTimer);
   window.clearTimeout(startOverTimer);
+  window.clearInterval(graceTimer);
   if (step.value === "connect") void tug.stopDiscovery();
 });
 
@@ -289,7 +310,7 @@ const SHORTCUTS: Array<[string, string]> = [
             <li class="flex gap-3"><Check :size="18" class="mt-0.5 shrink-0 text-accent-teal" /> Your music, battery and codes, one glance away.</li>
           </ul>
           <p class="mt-8 text-[13px] text-muted">
-            About 3 minutes. Over Bluetooth, with nothing to install on your phone but a free helper app, once. Your notifications and texts stay on this PC.
+            About 3 minutes, over Bluetooth, with nothing to install on your phone. Your notifications and texts stay on this PC.
           </p>
           <div class="mt-8 flex items-center gap-4">
             <button class="btn-primary" data-autofocus @click="go('bluetooth')">Get started</button>
@@ -447,6 +468,18 @@ const SHORTCUTS: Array<[string, string]> = [
         >
           <LoaderCircle :size="22" class="animate-spin text-muted" />
           <p class="text-[15px] text-muted">Finishing pairing…</p>
+        </section>
+        <!-- ConfirmOnly: Windows has accepted; the user just taps Pair on the iPhone. -->
+        <section
+          v-else-if="step === 'pin' && tug.pairingRequest?.confirmOnPhone"
+          key="pin-phone"
+          class="animate-step-in flex flex-1 flex-col items-center justify-center gap-4 py-10 text-center"
+        >
+          <Smartphone :size="26" class="text-ink" />
+          <h1 class="headline text-[36px] leading-tight">Tap Pair on your iPhone</h1>
+          <p class="text-[15px] text-muted">{{ tug.pairingRequest?.deviceName }}</p>
+          <p class="text-[14px] text-muted">Confirm the pairing on your iPhone — it continues here on its own.</p>
+          <LoaderCircle :size="20" class="animate-spin text-muted-soft" />
         </section>
         <section v-else-if="step === 'pin'" key="pin" class="animate-step-in flex flex-1 flex-col items-center justify-center py-10 text-center">
           <h1 class="headline text-[36px] leading-tight">{{ tug.pairingRequest?.pin ? "Do the codes match?" : "Pair with your iPhone?" }}</h1>

@@ -286,6 +286,9 @@ pub(super) async fn pair_device(
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "your iPhone".to_string());
     let custom = pairing.Custom()?;
+    // Cleared after pairing resolves, so a ConfirmOnly prompt (which Windows accepts on its own,
+    // with no deferral thread to clear it) doesn't linger in tug.
+    let shared_for_close = shared.clone();
     custom.PairingRequested(&TypedEventHandler::<
         DeviceInformationCustomPairing,
         DevicePairingRequestedEventArgs,
@@ -293,6 +296,16 @@ pub(super) async fn pair_device(
         let Some(args) = args.as_ref() else { return Ok(()) };
         log::info!("pairing requested by Windows: kind {:?}", args.PairingKind()?);
         if args.PairingKind()? == DevicePairingKinds::ConfirmOnly {
+            // Windows accepts on its own; the user taps "Pair" on the iPhone. Show that in tug so
+            // the screen isn't blank while the phone waits for them.
+            shared.emit(
+                events::PAIRING_REQUEST,
+                PairingRequest {
+                    device_name: device_name.clone(),
+                    pin: None,
+                    confirm_on_phone: true,
+                },
+            );
             return args.Accept();
         }
         // ConfirmPinMatch / DisplayPin: show the code and let the user decide.
@@ -305,6 +318,7 @@ pub(super) async fn pair_device(
             PairingRequest {
                 device_name: device_name.clone(),
                 pin,
+                confirm_on_phone: false,
             },
         );
         let args = args.clone();
@@ -323,6 +337,8 @@ pub(super) async fn pair_device(
     let result = custom
         .PairWithProtectionLevelAsync(kinds, DevicePairingProtectionLevel::Encryption)?
         .await?;
+    // Clear any informational prompt (ConfirmOnly has no deferral thread to do it).
+    shared_for_close.emit(events::PAIRING_REQUEST_CLOSED, ());
     result.Status()
 }
 

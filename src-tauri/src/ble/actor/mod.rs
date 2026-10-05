@@ -423,6 +423,11 @@ impl Actor {
             }
             Event::DeviceAdded(info, transport) => {
                 if let Ok(id) = info.Id() {
+                    // Discovery was effectively silent in the logs; name the candidates so a phone
+                    // that appears and vanishes mid-pairing can be diagnosed.
+                    let name = info.Name().map(|n| n.to_string()).unwrap_or_default();
+                    let connected = pairing::bool_property(&info, PROP_IS_CONNECTED);
+                    log::info!("discovery: added {transport:?} {name:?} (connected={connected})");
                     self.discovered.insert(id.to_string(), Discovered { info, transport });
                     self.discovered_dirty = true;
                 }
@@ -430,12 +435,22 @@ impl Actor {
             Event::DeviceUpdated(update) => {
                 if let Ok(id) = update.Id() {
                     if let Some(d) = self.discovered.get(&id.to_string()) {
+                        let was = pairing::bool_property(&d.info, PROP_IS_CONNECTED);
                         let _ = d.info.Update(&update);
+                        let now = pairing::bool_property(&d.info, PROP_IS_CONNECTED);
+                        if was != now {
+                            let name = d.info.Name().map(|n| n.to_string()).unwrap_or_default();
+                            log::info!("discovery: {name:?} {}", if now { "connected" } else { "disconnected" });
+                        }
                         self.discovered_dirty = true;
                     }
                 }
             }
             Event::DeviceRemoved(id) => {
+                if let Some(d) = self.discovered.get(&id) {
+                    let name = d.info.Name().map(|n| n.to_string()).unwrap_or_default();
+                    log::info!("discovery: removed {name:?}");
+                }
                 self.discovered.remove(&id);
                 self.discovered_dirty = true;
             }

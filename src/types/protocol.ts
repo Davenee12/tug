@@ -136,6 +136,8 @@ export type DeviceKind = "phone" | "accessory" | "unknown";
 export interface PairingRequest {
   deviceName: string;
   pin: string | null;
+  /** ConfirmOnly: Windows accepts on its own and the user taps Pair on the iPhone — tug just waits. */
+  confirmOnPhone: boolean;
 }
 
 export interface AppName {
