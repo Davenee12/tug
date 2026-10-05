@@ -7,6 +7,7 @@ import { appLabel, canClear, cleanName, formatAddress, groupConversations, group
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
+import { batteryAlert } from "../lib/battery";
 import { copyText } from "../lib/clipboard";
 import type {
   CallRecord,
@@ -71,7 +72,7 @@ export const useTugStore = defineStore("tug", () => {
   const hasMore = ref(true);
   const discovered = ref<DiscoveredDevice[]>([]);
   const pairingRequest = ref<PairingRequest | null>(null);
-  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [], closeToTray: true, appIcons: true, dialing: false });
+  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [], closeToTray: true, appIcons: true, lowBattery: true, dialing: false });
 
   /** App icons as data URIs by app id; null = the App Store has none (initials instead). */
   const appIcons = ref<Record<string, string | null>>({});
@@ -90,6 +91,8 @@ export const useTugStore = defineStore("tug", () => {
     return appIcons.value[appId] ?? null;
   }
   const advertiseEnabled = ref(true);
+  /** Start with Windows. Mirrors the real autostart registry entry, not a stored setting. */
+  const autostartEnabled = ref(false);
   const zoom = ref(1);
   /** First-run setup finished (or skipped). Until then, with no iPhone paired, setup shows. */
   const onboarded = ref(true);
@@ -222,14 +225,28 @@ export const useTugStore = defineStore("tug", () => {
   let toastPermission: boolean | null = null;
   const toasts = new ToastLimiter();
   let toastSummary: number | undefined;
-  async function maybeToast(n: PhoneNotification) {
+  /** Windows pop-ups are on, not held by Do not disturb, and allowed by Windows. */
+  async function canToast(): Promise<boolean> {
     const s = settings.value;
-    if (!s.toasts || s.doNotDisturb || n.flags.silent || n.flags.preExisting) return;
-    if (s.mutedApps.includes(n.appId)) return;
+    if (!s.toasts || s.doNotDisturb) return false;
     if (toastPermission === null) {
       toastPermission = (await isPermissionGranted()) || (await requestPermission()) === "granted";
     }
-    if (!toastPermission) return;
+    return toastPermission;
+  }
+
+  // Low phone battery: one pop-up at 20% and one at 10% per discharge (see lib/battery).
+  let batteryAlerted: number | null = null;
+  async function checkBattery(level: number | null) {
+    const r = batteryAlert(level, batteryAlerted);
+    batteryAlerted = r.alerted;
+    if (r.alert == null || !settings.value.lowBattery || !(await canToast())) return;
+    sendNotification({ title: "iPhone battery low", body: `${level}% left. Time to charge it.` });
+  }
+
+  async function maybeToast(n: PhoneNotification) {
+    if (n.flags.silent || n.flags.preExisting || settings.value.mutedApps.includes(n.appId)) return;
+    if (!(await canToast())) return;
     // Calls always ring through; everything else is rate-limited and summed up.
     if (n.category !== "incomingCall" && !toasts.admit(Date.now())) {
       if (toastSummary === undefined) {
@@ -519,11 +536,14 @@ export const useTugStore = defineStore("tug", () => {
       await api.setSetting("ui.seenSince", String(seenSince.value));
     }
     advertiseEnabled.value = raw.advertise !== "false";
+    // The autostart registry entry is the source of truth, not a stored setting.
+    autostartEnabled.value = (await attempt(api.getAutostart)) ?? false;
     settings.value = {
       toasts: raw["ui.toasts"] !== "false",
       doNotDisturb: raw["ui.doNotDisturb"] === "true",
       mutedApps: raw["ui.mutedApps"] ? (JSON.parse(raw["ui.mutedApps"]) as string[]) : [],
       closeToTray: raw["ui.closeToTray"] !== "false",
+      lowBattery: raw["ui.lowBattery"] !== "false",
       appIcons: raw["ui.appIcons"] !== "false",
       dialing: raw["ui.dialing"] === "true",
     };
@@ -552,6 +572,7 @@ export const useTugStore = defineStore("tug", () => {
       ...(await Promise.all([
         on("device-status", (s) => {
           const wasConnected = status.value.connection === "connected";
+          if (s.battery !== status.value.battery) void checkBattery(s.battery);
           status.value = s;
           // Notification UIDs die with the connection, so nothing stays actionable.
           if (wasConnected && s.connection !== "connected") {
@@ -689,6 +710,7 @@ export const useTugStore = defineStore("tug", () => {
     settings,
     iconFor,
     advertiseEnabled,
+    autostartEnabled,
     flash,
     view,
     selectedThread,
@@ -767,6 +789,15 @@ export const useTugStore = defineStore("tug", () => {
     async setAdvertising(enabled: boolean) {
       advertiseEnabled.value = enabled;
       await attempt(() => api.setAdvertising(enabled));
+    },
+    async setAutostart(enabled: boolean) {
+      // Show the change at once, then confirm against what the registry actually holds, so a
+      // failure doesn't leave the switch lying about whether tug starts with Windows.
+      autostartEnabled.value = enabled;
+      const ok = await attempt(() => api.setAutostart(enabled).then(() => true));
+      if (ok !== true) {
+        autostartEnabled.value = (await attempt(api.getAutostart)) ?? false;
+      }
     },
     async confirmPairing(accept: boolean) {
       pairingRequest.value = null;
