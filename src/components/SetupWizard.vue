@@ -186,7 +186,7 @@ watch(
 );
 
 // ---- The iPhone's three switches, each with a live state from real signals (lib/phoneSwitches) ----
-const allSwitches = computed(() => phoneSwitches(s.value, tug.contacts.length));
+const allSwitches = computed(() => phoneSwitches(s.value));
 
 // ---- Sharing: the notifications switch, mirrored live ----
 const sharing = computed(() => allSwitches.value.filter((x) => x.key === "notifications"));

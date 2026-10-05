@@ -113,6 +113,9 @@ pub struct DeviceStatus {
     pub messages_error: Option<String>,
     /// Why the phone's contacts aren't available, when the user can fix it.
     pub contacts_error: Option<String>,
+    /// Whether the phone shared contacts on the current connection (Sync Contacts on). Not
+    /// "tug has contacts saved": kept history made the setup checklist say on while it was off.
+    pub contacts_shared: bool,
     /// Whether the texts (Classic) pairing works, is missing, or needs making again.
     pub texts_pairing: TextsPairing,
     /// The phone Windows has paired for texts (what to remove when it needs re-pairing).
