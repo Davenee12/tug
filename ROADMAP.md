@@ -10,6 +10,19 @@ See docs/STABILIZATION.md for the current backlog.
 3. Sprint 4: phone sync (mark texts read on the phone when opened in tug, clear their
    notifications), accuracy audit fixes, performance, maintainability, CI.
 
+## v0.5.7 — calling anyone, and texts in real time (agreed with Dave, 2026-10-05)
+- **Call anyone from tug** (Calls tab, Ctrl+K "call zoe", conversations). Today only missed calls can
+  be called back (iOS's "Dial" action over ANCS); dialing anyone needs the hands-free link, and
+  Windows' own hands-free driver holds it (DeniedBySystem on Dave's PC, even with Handsfree Telephony
+  unticked). The supported route is Windows' calling API (`PhoneLineTransportDevice` + `PhoneLine`,
+  what Phone Link uses), which needs package identity: a sparse package beside the NSIS install (or
+  MSIX), the restricted `phoneLineTransportManagement` capability, and **code signing** (e.g. Azure
+  Trusted Signing). Spike first on Dave's PC; signing also removes SmartScreen's "unknown publisher".
+- **Live texts (MAP notifications / MNS)**: texts land the instant the phone gets them, instead of
+  within ~8 s of polling; sends can show "Sent".
+- Follow-up: remember the texts (Classic) device by id rather than name, so a phone rename can't
+  confuse which phone texts come from.
+
 ## Next — onboarding & distribution (product readiness)
 - **Settings page** — a full page (not the side panel) with a left nav, like Wispr Flow's but tug's
   own. Built first in this track because the wizard, updates and connectors all need a home:
