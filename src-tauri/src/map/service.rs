@@ -132,6 +132,8 @@ mod worker {
     /// While the user watches the iPhone's switches, Show Message Notifications and Sync
     /// Contacts are checked this often, so flipping one shows up in tug right away.
     const WATCHING: Duration = Duration::from_secs(2);
+    /// Contacts (a full PBAP pull) are retried no faster than this while watching.
+    const CONTACTS_WATCHING: Duration = Duration::from_secs(10);
     /// How many of the newest inbox messages to look at each poll.
     const LIST_MAX: u16 = 20;
     /// Once per launch, page further back than that: a fresh install otherwise only sees the
@@ -332,8 +334,10 @@ mod worker {
 
         /// When to ask again while contacts aren't shared yet: soon at first, then the usual retry.
         fn soon(&mut self) -> Duration {
+            // While the switches are on screen, still not every 2 s: each try is a whole PBAP
+            // connection to the phone.
             if self.shared.watching() {
-                return WATCHING;
+                return CONTACTS_WATCHING;
             }
             self.unshared_contact_pulls += 1;
             if self.unshared_contact_pulls <= CONTACTS_UNSHARED_QUICK_TRIES {
@@ -359,7 +363,7 @@ mod worker {
                 // The iPhone answers with an empty list, not a refusal, while Sync Contacts is
                 // off. Keep any names already saved and ask again rather than in 6 hours.
                 Ok(entries) if entries.is_empty() => {
-                    log::info!("the iPhone shared no contacts (Sync Contacts off?), asking again soon");
+                    log::debug!("the iPhone shared no contacts (Sync Contacts off?), asking again soon");
                     self.next_contacts_sync = Instant::now() + self.soon();
                 }
                 Ok(entries) => {
