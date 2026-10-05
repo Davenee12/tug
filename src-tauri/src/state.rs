@@ -154,6 +154,9 @@ pub enum DeviceKind {
 pub struct PairingRequest {
     pub device_name: String,
     pub pin: Option<String>,
+    /// ConfirmOnly pairing: Windows accepts on its own and the code (if any) is confirmed on the
+    /// iPhone, so tug shows "Tap Pair on your iPhone" and offers no buttons of its own.
+    pub confirm_on_phone: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
