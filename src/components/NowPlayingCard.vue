@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { Music2, Pause, Play, Repeat, Repeat1, RotateCcw, SkipBack, SkipForward, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { duration } from "../lib/format";
+import { REPEAT_CONFIRM_MS, canRestart, repeatIgnoredMessage, repeatLabel as labelFor, supportsRepeat } from "../lib/media";
 
 const tug = useTugStore();
 const np = computed(() => tug.nowPlaying);
@@ -28,18 +29,36 @@ const progress = computed(() =>
 );
 const can = (c: string) => np.value.available.length === 0 || np.value.available.includes(c as never);
 
-// Start the song over. AMS has no "seek", but Back restarts the song once it's a few seconds
-// in (and only goes to the previous song near the start), so send it only past that point.
-const RESTART_AFTER_S = 3;
+// Start the song over with Back, only where Back restarts rather than skips (see canRestart).
 function restart() {
-  if (elapsed.value == null || elapsed.value > RESTART_AFTER_S) void tug.media("previousTrack");
+  if (canRestart(elapsed.value)) void tug.media("previousTrack");
+  else tug.notify("info", "Already at the start of the song");
 }
 
-// Loop: only when the player says it supports it (not every app has a repeat mode).
-const canRepeat = computed(() => np.value.available.includes("advanceRepeatMode") || np.value.repeat != null);
-const repeatLabel = computed(
-  () => ({ off: "Repeat is off", all: "Repeating all", one: "Repeating this song" })[np.value.repeat ?? "off"],
+// Loop: only when the player lists AdvanceRepeatMode, showing the mode the phone reports.
+const canRepeat = computed(() => supportsRepeat(np.value));
+const repeatLabel = computed(() => labelFor(np.value.repeat));
+
+// iOS accepting the command only means it reached the player. If the phone doesn't report a new
+// mode soon after, say so instead of leaving a button that silently did nothing. Counting reported
+// changes (rather than comparing before/after) also covers an update that beats the write's reply.
+let repeatChanges = 0;
+let repeatCheck: number | undefined;
+watch(
+  () => np.value.repeat,
+  () => repeatChanges++,
 );
+onUnmounted(() => window.clearTimeout(repeatCheck));
+async function advanceRepeat() {
+  window.clearTimeout(repeatCheck);
+  const seen = repeatChanges;
+  const player = np.value.player;
+  // A failed write already shows the phone's error.
+  if (!(await tug.media("advanceRepeatMode"))) return;
+  repeatCheck = window.setTimeout(() => {
+    if (repeatChanges === seen) tug.notify("info", repeatIgnoredMessage(player));
+  }, REPEAT_CONFIRM_MS);
+}
 </script>
 
 <template>
@@ -66,7 +85,7 @@ const repeatLabel = computed(
           :aria-label="repeatLabel"
           :aria-pressed="np.repeat != null && np.repeat !== 'off'"
           :title="repeatLabel"
-          @click="tug.media('advanceRepeatMode')"
+          @click="advanceRepeat"
         >
           <Repeat1 v-if="np.repeat === 'one'" :size="15" />
           <Repeat v-else :size="15" />
@@ -83,7 +102,12 @@ const repeatLabel = computed(
       </p>
 
       <div class="mt-4 h-1 overflow-hidden rounded-full bg-surface-dark-soft">
-        <div class="h-full rounded-full bg-on-dark transition-[width] duration-1000 ease-linear" :style="{ width: `${progress}%` }" />
+        <!-- Keyed by track so a new song starts at its position instead of sliding back. -->
+        <div
+          :key="np.title ?? ''"
+          class="h-full rounded-full bg-on-dark transition-[width] duration-1000 ease-linear"
+          :style="{ width: `${progress}%` }"
+        />
       </div>
       <div class="mt-1.5 flex justify-between font-mono text-[11px] text-on-dark-soft">
         <span>{{ duration(elapsed) }}</span>
