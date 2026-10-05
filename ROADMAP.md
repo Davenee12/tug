@@ -4,11 +4,19 @@ Order follows the stabilization plan: trustworthy first, features second.
 See docs/STABILIZATION.md for the current backlog.
 
 ## Now — stabilization sprints
-1. Sprint 2: high-severity data-integrity bugs and the messaging crash path.
-2. Sprint 3: frontend tests + accuracy audit.
-3. Sprint 4: performance and maintainability.
+1. ~~Sprint 2: high-severity data-integrity bugs and the messaging crash path.~~ (v0.5.2)
+2. ~~Sprint 3: universal search, migrations, frontend fixes.~~ (v0.5.3) Accuracy audit (times, time
+   zones, counts, badges) carries into Sprint 4.
+3. Sprint 4: accuracy audit, performance and maintainability.
 
 ## Next — onboarding & distribution (product readiness)
+- **Settings page** — a full page (not the side panel) with a left nav, like Wispr Flow's but tug's
+  own. Built first in this track because the wizard, updates and connectors all need a home:
+  - *General:* start with Windows, notifications/toasts, sounds, zoom, theme.
+  - *iPhone:* paired device, connection status, the three iPhone switches with live ✓, re-pair, forget.
+  - *Connectors:* see below (the section ships empty-but-honest until the first connector lands).
+  - *Data & privacy:* history retention, clear history, export, where data lives (local only).
+  - *About:* version, check for updates, changelog, logs folder.
 - **First-run setup wizard** in the app: Bluetooth check, guided pairing with live status, the three
   iPhone switches (Share System Notifications, Show Notifications, Sync Contacts) with screenshots and
   live ✓ detection, and a send-yourself-a-test step.
@@ -28,7 +36,9 @@ See docs/STABILIZATION.md for the current backlog.
 - **Calls:** recent calls (PBAP call history), dial from the PC (HFP; Windows holds the hands-free link,
   so start with a feasibility spike); audio on the phone first.
 - **Connectors:** messages already carry a `source`. Android, then Slack, Teams, WhatsApp, Wispr Flow
-  into one inbox.
+  into one inbox. Each gets a card in Settings › Connectors (icon, one-line "what you get", Connect /
+  Disconnect, status), built alongside the first real connector so the page is never a list of
+  dead buttons.
 - **PC media** next to the phone's (Windows media sessions, e.g. YouTube in a browser).
 - **Full history import** from a local iPhone backup (sent messages, photos/attachments), since iOS
   doesn't expose those over Bluetooth.
