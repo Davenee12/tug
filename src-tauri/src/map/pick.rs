@@ -7,6 +7,8 @@
 //! first run and for when the remembered phone isn't around. Pure and unit-tested; the
 //! Windows device lookup lives in `session`.
 
+use std::collections::HashSet;
+
 use crate::state::DeviceKind;
 
 /// A paired Classic device that offers a Message Access Server.
@@ -22,6 +24,52 @@ pub struct UnpairedDevice {
     pub id: String,
     pub name: String,
     pub kind: DeviceKind,
+}
+
+/// A paired Bluetooth LE device, used to spot the one that came with a just-paired Classic iPhone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeCandidate {
+    pub id: String,
+    pub name: String,
+    pub kind: DeviceKind,
+}
+
+/// After pairing an iPhone's Classic side from tug, Windows derives a Bluetooth LE bond for the
+/// same phone (cross-transport key derivation). Pick that LE device from the paired ones.
+///
+/// Pure logic (the WinRT enumeration lives in the actor). `before_ids` are the LE devices already
+/// bonded when pairing started, so a device missing from it appeared *because of* this pairing.
+/// The Classic and LE sides don't always share a name (the LE side often reports a bare "iPhone"),
+/// so a lone newly-bonded phone is the main signal and the name match is a bonus. Never an
+/// accessory, and never a guess among several; `None` means fall back to the address mapping.
+pub fn choose_le_after_classic<'a>(
+    candidates: &'a [LeCandidate],
+    classic_name: &str,
+    before_ids: &HashSet<String>,
+) -> Option<&'a LeCandidate> {
+    let is_new = |c: &LeCandidate| !before_ids.contains(&c.id);
+    // New since pairing, same name as the Classic phone, not an accessory: the strongest signal.
+    if let Some(c) = candidates
+        .iter()
+        .filter(|c| is_new(c) && c.kind != DeviceKind::Accessory)
+        .find(|c| c.name == classic_name)
+    {
+        return Some(c);
+    }
+    // Exactly one phone appeared since pairing: it's the LE bond cross-transport derivation made.
+    let new_phones: Vec<&LeCandidate> = candidates
+        .iter()
+        .filter(|c| is_new(c) && c.kind == DeviceKind::Phone)
+        .collect();
+    if new_phones.len() == 1 {
+        return Some(new_phones[0]);
+    }
+    // Nothing newly bonded resolved; a name match among all non-accessory LE devices is a safe
+    // last resort (e.g. the bond existed from a half-finished earlier attempt).
+    candidates
+        .iter()
+        .filter(|c| c.kind != DeviceKind::Accessory)
+        .find(|c| c.name == classic_name)
 }
 
 /// Choose which unpaired Classic device to pair for texts, given the name of the LE phone already
@@ -174,5 +222,78 @@ mod tests {
         assert_eq!(choose_texts_candidate(&[], "iPhone"), None);
         let devices = vec![un("u", "Mystery", DeviceKind::Unknown)];
         assert_eq!(choose_texts_candidate(&devices, "iPhone"), None);
+    }
+
+    fn le(id: &str, name: &str, kind: DeviceKind) -> LeCandidate {
+        LeCandidate {
+            id: id.into(),
+            name: name.into(),
+            kind,
+        }
+    }
+
+    fn before(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn le_after_classic_prefers_a_new_name_match() {
+        // A phone bonded before (same name on an old entry) must not win over the fresh one.
+        let devices = vec![
+            le("old", "Dave's iPhone", DeviceKind::Phone),
+            le("new", "Dave's iPhone", DeviceKind::Phone),
+        ];
+        let pick = choose_le_after_classic(&devices, "Dave's iPhone", &before(&["old"]));
+        assert_eq!(pick, Some(&devices[1]));
+    }
+
+    #[test]
+    fn le_after_classic_takes_a_lone_new_phone_when_names_differ() {
+        // The LE side reports the bare "iPhone" while the Classic side carried "Dave's iPhone".
+        let devices = vec![
+            le("kbd", "Keychron", DeviceKind::Accessory),
+            le("phone", "iPhone", DeviceKind::Phone),
+        ];
+        let pick = choose_le_after_classic(&devices, "Dave's iPhone", &before(&["kbd"]));
+        assert_eq!(pick, Some(&devices[1]));
+    }
+
+    #[test]
+    fn le_after_classic_never_takes_an_accessory() {
+        // A renamed accessory matching the phone's name must never be adopted for notifications.
+        let devices = vec![le("x", "Dave's iPhone", DeviceKind::Accessory)];
+        assert_eq!(
+            choose_le_after_classic(&devices, "Dave's iPhone", &HashSet::new()),
+            None
+        );
+    }
+
+    #[test]
+    fn le_after_classic_never_guesses_among_several_new_phones() {
+        let devices = vec![
+            le("a", "A iPhone", DeviceKind::Phone),
+            le("b", "B iPhone", DeviceKind::Phone),
+        ];
+        assert_eq!(choose_le_after_classic(&devices, "C iPhone", &HashSet::new()), None);
+    }
+
+    #[test]
+    fn le_after_classic_falls_back_to_a_name_match_even_if_not_new() {
+        // Nothing appeared since pairing (an earlier attempt already made the bond), but a
+        // non-accessory name match is still safe to adopt.
+        let devices = vec![le("phone", "Dave's iPhone", DeviceKind::Phone)];
+        let pick = choose_le_after_classic(&devices, "Dave's iPhone", &before(&["phone"]));
+        assert_eq!(pick, Some(&devices[0]));
+    }
+
+    #[test]
+    fn le_after_classic_is_none_when_nothing_fits() {
+        assert_eq!(choose_le_after_classic(&[], "iPhone", &HashSet::new()), None);
+        // A lone phone that was already bonded and whose name doesn't match isn't a safe guess.
+        let devices = vec![le("old", "Work iPhone", DeviceKind::Phone)];
+        assert_eq!(
+            choose_le_after_classic(&devices, "Dave's iPhone", &before(&["old"])),
+            None
+        );
     }
 }

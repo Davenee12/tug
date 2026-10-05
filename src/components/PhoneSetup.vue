@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { CircleAlert, LoaderCircle, RefreshCw, Smartphone } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { bondHint, pairingProblem } from "../lib/pairings";
+import { bondHint, pairingProblem, setupDeviceLists } from "../lib/pairings";
 import { api } from "../lib/ipc";
 import type { DiscoveredDevice } from "../types/protocol";
 
@@ -11,10 +11,12 @@ import type { DiscoveredDevice } from "../types/protocol";
 const tug = useTugStore();
 // Offer iPhones up front; anything tug can't confirm as a phone (a nameless just-connected
 // iPhone, but also an Echo Dot) goes under "Other devices" with no primary action. Keyboards,
-// mice and headphones are never the phone, so they're hidden entirely.
-const devices = computed(() => tug.discovered.filter((d) => d.kind === "phone"));
-const otherDevices = computed(() => tug.discovered.filter((d) => d.kind === "unknown"));
-const hidden = computed(() => tug.discovered.filter((d) => d.kind === "accessory").length);
+// mice and headphones are never the phone, so they're hidden entirely. A discoverable but unpaired
+// Classic iPhone (the freshly-forgotten case) is offered too — the split lives in lib/pairings.
+const lists = computed(() => setupDeviceLists(tug.discovered));
+const devices = computed(() => lists.value.phones);
+const otherDevices = computed(() => lists.value.others);
+const hidden = computed(() => lists.value.hiddenAccessories);
 const s = computed(() => tug.status);
 const scanning = ref(false);
 const busyId = ref<string | null>(null);
@@ -205,8 +207,8 @@ const advertisingLabel = computed(
             <p class="truncate text-[14px] font-medium text-ink">{{ d.name }}</p>
             <p class="flex gap-2 text-[12px] text-muted">
               <span v-if="d.connected" class="font-medium text-ink">Connected now</span>
-              <span v-if="d.paired">Paired</span>
-              <span v-if="d.transport === 'classic'">Paired for calls &amp; audio</span>
+              <span v-if="d.paired && d.transport === 'classic'">Paired for calls &amp; audio</span>
+              <span v-else-if="d.paired">Paired</span>
             </p>
           </div>
           <button
