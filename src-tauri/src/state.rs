@@ -113,6 +113,18 @@ pub struct DiscoveredDevice {
     pub paired: bool,
     pub connected: bool,
     pub can_pair: bool,
+    pub kind: DeviceKind,
+}
+
+/// What a discovered device says it is, so setup never offers a keyboard as the iPhone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeviceKind {
+    Phone,
+    /// Keyboards, mice, headphones, watches: never the phone.
+    Accessory,
+    /// Nothing known yet (a just-connected iPhone is often nameless).
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize)]

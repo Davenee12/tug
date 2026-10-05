@@ -110,7 +110,11 @@ export interface DiscoveredDevice {
   paired: boolean;
   connected: boolean;
   canPair: boolean;
+  /** "accessory": keyboards, mice, headphones — never offered as the iPhone. */
+  kind: DeviceKind;
 }
+
+export type DeviceKind = "phone" | "accessory" | "unknown";
 
 export interface PairingRequest {
   deviceName: string;

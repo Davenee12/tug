@@ -4,6 +4,7 @@ mod ancs_queue;
 mod ble;
 mod clipboard;
 mod commands;
+mod device_kind;
 mod location;
 pub mod map;
 mod messages;
