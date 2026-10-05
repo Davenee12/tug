@@ -113,3 +113,19 @@
 @utility pill {
   @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] font-medium;
 }
+
+/* A screen arriving (setup steps): fades up on its own, never waits on the one leaving. */
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@utility animate-step-in {
+  animation: step-in 300ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-step-in {
+    animation: none;
+  }
+}

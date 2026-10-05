@@ -40,6 +40,7 @@ export const api = {
   refreshMessages: () => invoke<void>("refresh_messages"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
   setUnread: (count: number) => invoke<void>("set_unread", { count }),
+  openWindowsSettings: (page: "bluetooth" | "location" | "notifications") => invoke<void>("open_windows_settings", { page }),
   setHidden: (notificationIds: number[], messageIds: number[], hidden: boolean) =>
     invoke<void>("set_hidden", { notificationIds, messageIds, hidden }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),

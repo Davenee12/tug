@@ -198,6 +198,10 @@ async function clearHistory() {
           </div>
 
           <PhoneSetup />
+
+          <button class="mt-6 text-[13px] text-muted underline active:text-ink" @click="tug.setupRequested = true">
+            Run setup again
+          </button>
         </template>
 
         <!-- Notifications -->

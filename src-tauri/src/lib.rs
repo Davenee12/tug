@@ -97,6 +97,7 @@ pub fn run() {
             commands::copy_text,
             commands::set_hidden,
             commands::set_unread,
+            commands::open_windows_settings,
             commands::locate,
             commands::mark_read,
         ])

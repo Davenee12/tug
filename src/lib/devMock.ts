@@ -155,6 +155,39 @@ const messages: SmsMessage[] = setup
 
 const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
 
+// ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
+// Pair → PIN → connected → the iPhone's three switches come on one by one → a first
+// notification arrives.
+let finishPairing: ((ok: boolean) => void) | null = null;
+function simulateConnect(id: string) {
+  const name = discovered.find((d) => d.id === id)?.name ?? "iPhone";
+  const send = () => void emit("device-status", { ...status, services: { ...status.services } });
+  status.device = { id, name };
+  status.connection = "connecting";
+  send();
+  setTimeout(() => {
+    status.connection = "connected";
+    status.battery = 76;
+    status.services = { ...status.services, notifications: true, media: true, battery: true };
+    send();
+  }, 900);
+  setTimeout(() => {
+    status.services = { ...status.services, messages: true };
+    send();
+  }, 2400);
+  setTimeout(() => {
+    contacts.push({ address: TAY, name: "Tay" }, { address: "+12145550199", name: "Daviel" });
+    void emit("contacts", [...contacts]);
+  }, 3400);
+  setTimeout(() => {
+    const first = n("com.apple.MobileSMS", "Messages", "Tay", "hey! is this thing on? 👋", 0);
+    first.id = 500;
+    first.receivedAt = Date.now();
+    history.unshift(first);
+    void emit("notification", first);
+  }, 9000);
+}
+
 mockIPC(
   (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
@@ -201,6 +234,23 @@ mockIPC(
         return { latitude: 32.78, longitude: -96.8 };
       case "start_discovery":
         setTimeout(() => void emit("discovered-devices", discovered), 400);
+        return null;
+      case "pair_device":
+        // Like Windows: the PIN shows on both screens; the call returns once it's answered.
+        setTimeout(() => void emit("pairing-request", { deviceName: "Dave's iPhone", pin: "482 913" }), 300);
+        return new Promise<null>((resolve, reject) => {
+          finishPairing = (ok) => (ok ? resolve(null) : reject("Pairing was cancelled"));
+        }).then(() => {
+          simulateConnect(String(a.id));
+          return null;
+        });
+      case "confirm_pairing":
+        setTimeout(() => void emit("pairing-request-closed", null), 0);
+        finishPairing?.(Boolean(a.accept));
+        finishPairing = null;
+        return null;
+      case "use_device":
+        simulateConnect(String(a.id));
         return null;
       case "perform_action":
         // Like the iPhone: a negative action (Clear/Decline) removes the notification.
