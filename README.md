@@ -77,6 +77,7 @@ Logs: `%LOCALAPPDATA%\dev.davejames.tug\logs`. History DB: `%APPDATA%\dev.daveja
 src-tauri/src/
   ancs.rs        ANCS wire protocol: parse events, build Control Point requests, reassemble Data Source fragments
   ams.rs         AMS wire protocol: register for player/track updates, parse them, remote commands
+  media_keys.rs  Windows media keys and flyout (SMTC) show and control the iPhone's music
   store.rs       SQLite history (FTS5 search), app names, settings
   state.rs       Status/now-playing shared with the UI; event names
   commands.rs    Tauri commands called from the UI
