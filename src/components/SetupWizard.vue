@@ -5,7 +5,9 @@ import { useTugStore } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { useFocusTrap } from "../lib/focusTrap";
 import PhoneSwitches from "./PhoneSwitches.vue";
-import { api } from "../lib/ipc";
+import { api, errorMessage } from "../lib/ipc";
+import { friendlyLocateError } from "../lib/locating";
+import { useLocating } from "../lib/useLocating";
 import SettingsSwitch from "./SettingsSwitch.vue";
 import TugMark from "./TugMark.vue";
 import type { DiscoveredDevice, PhoneNotification } from "../types/protocol";
@@ -186,10 +188,21 @@ const toasts = computed({ get: () => tug.settings.toasts, set: (v) => void tug.s
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
 const locating = ref(false);
 const weatherNote = ref<string | null>(null);
+const finding = useLocating();
 async function addWeather() {
+  weatherNote.value = null;
   locating.value = true;
-  weatherNote.value = (await weather.useMyLocation()) ?? null;
-  locating.value = false;
+  finding.start();
+  try {
+    const p = await weather.findMyPlace();
+    await finding.succeed();
+    await weather.setPlace(p);
+  } catch (e) {
+    weatherNote.value = friendlyLocateError(errorMessage(e));
+  } finally {
+    finding.stop();
+    locating.value = false;
+  }
 }
 const weatherPlace = computed(() => (weather.place && weather.place !== "off" ? weather.place.name : null));
 
@@ -506,14 +519,25 @@ const SHORTCUTS: Array<[string, string]> = [
             <div class="flex items-center gap-6 px-5 py-4">
               <div class="flex-1">
                 <p class="text-[14px] font-medium text-ink">Weather on the Feed</p>
-                <p class="text-[13px] text-muted">
+                <p v-if="finding.line.value" class="text-[13px]" role="status" aria-live="polite">
+                  <Transition
+                    mode="out-in"
+                    enter-active-class="transition duration-300 ease-out motion-reduce:transition-none"
+                    enter-from-class="opacity-0 translate-y-1"
+                    leave-active-class="transition duration-200 ease-in motion-reduce:transition-none"
+                    leave-to-class="opacity-0 -translate-y-1"
+                  >
+                    <span :key="finding.line.value" :class="['inline-block', finding.found.value ? 'font-medium text-ink' : 'text-muted']">{{ finding.line.value }}</span>
+                  </Transition>
+                </p>
+                <p v-else class="text-[13px] text-muted">
                   <template v-if="weatherPlace">Showing {{ weatherPlace }}.</template>
                   <template v-else>A forecast at the top of your notifications.</template>
                 </p>
                 <p v-if="weatherNote" class="mt-1 text-[12px] text-error">{{ weatherNote }}</p>
               </div>
               <button v-if="!weatherPlace" class="btn-secondary btn-sm" :disabled="locating" @click="addWeather">
-                <LoaderCircle v-if="locating" :size="13" class="animate-spin" /><MapPin v-else :size="13" /> Use my location
+                <MapPin :size="13" :class="locating ? 'animate-pulse motion-reduce:animate-none' : ''" /> Use my location
               </button>
               <Check v-else :size="18" class="text-accent-teal" />
             </div>

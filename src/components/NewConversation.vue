@@ -34,10 +34,12 @@ const fold = (s: string) =>
     .replace(/\p{Diacritic}/gu, "")
     .toLowerCase();
 
-// People you've texted, most recent first, wherever tug knows their number.
+// People you've texted, most recent first, wherever tug knows their number. Unknown senders
+// (spam, short codes) stay out, like everywhere else Filter unknown senders applies; a number
+// can still be typed.
 const recent = computed<Option[]>(() =>
   groupConversations(tug.notifications, tug.messages, tug.contacts)
-    .filter((c) => c.appId === "com.apple.MobileSMS" && c.address)
+    .filter((c) => c.appId === "com.apple.MobileSMS" && c.address && tug.isKnown(c))
     .map((c) => ({ key: `r:${c.address}`, name: c.contact, address: c.address!, section: "Recent" as const })),
 );
 
