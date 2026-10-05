@@ -252,6 +252,75 @@ impl Actor {
         }
         Ok(())
     }
+
+    /// Pair the iPhone's Classic (texts) side from inside tug, so the Texts step doesn't have to
+    /// send people to Windows › Add device. LE (notifications) must be paired first — cross-
+    /// transport key derivation depends on that order. Runs a one-shot inquiry for unpaired
+    /// Classic devices (the iPhone must have Settings › Bluetooth open), picks the one matching
+    /// the adopted phone with pure logic, pairs it with the PIN shown in tug, and remembers it.
+    pub(super) async fn pair_texts(&mut self) -> Result<(), String> {
+        let le_name = match self.shared.status().device {
+            Some(d) => d.name,
+            None => return Err("Pair your iPhone for notifications first, then set up texts.".into()),
+        };
+        let candidates = discover_unpaired_classic().await?;
+        let pick = crate::map::pick::choose_texts_candidate(&candidates, &le_name).ok_or_else(|| {
+            "Couldn't find your iPhone to pair for texts. On the iPhone, open Settings › Bluetooth and keep it on screen, then try again."
+                .to_string()
+        })?;
+        let id = pick.id.clone();
+        log::info!("pairing for texts: {} ({id})", pick.name);
+        let op =
+            DeviceInformation::CreateFromIdAsync(&HSTRING::from(id.as_str())).map_err(|e| e.message().to_string())?;
+        let info = winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op)
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = pair_device(&info, self.shared.clone())
+            .await
+            .map_err(|e| e.message().to_string())?;
+        match status {
+            DevicePairingResultStatus::Paired | DevicePairingResultStatus::AlreadyPaired => {}
+            DevicePairingResultStatus::RejectedByHandler | DevicePairingResultStatus::PairingCanceled => {
+                return Err("Texts pairing was cancelled".into())
+            }
+            DevicePairingResultStatus::AuthenticationTimeout => return Err("Texts pairing timed out".into()),
+            other => return Err(format!("Texts pairing failed ({other:?})")),
+        }
+        // Remember this phone as the texts device and ask the message service to connect now.
+        let _ = self.shared.store.set_setting(keys::TEXTS_DEVICE_ID, &id);
+        if let Some(map) = self.shared.map.get() {
+            map.refresh();
+        }
+        log::info!("paired for texts; message service will connect");
+        Ok(())
+    }
+}
+
+/// One-shot inquiry for unpaired Classic devices (`GetDeviceSelectorFromPairingState(false)`).
+/// Only run during the Texts step; the iPhone appears only while its Settings › Bluetooth screen
+/// is open. Bounded, so a quiet radio can't park the actor.
+async fn discover_unpaired_classic() -> std::result::Result<Vec<crate::map::pick::UnpairedDevice>, String> {
+    use crate::map::pick::UnpairedDevice;
+    let selector = BluetoothDevice::GetDeviceSelectorFromPairingState(false).map_err(|e| e.message().to_string())?;
+    let props = IIterable::<HSTRING>::from(vec![HSTRING::from(PROP_COD_MAJOR)]);
+    let op = DeviceInformation::FindAllAsyncAqsFilterAndAdditionalProperties(&selector, &props)
+        .map_err(|e| e.message().to_string())?;
+    let infos = winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for info in infos {
+        let Ok(id) = info.Id() else { continue };
+        let name = info.Name().map(|n| n.to_string()).unwrap_or_default();
+        let kind = device_kind::classify(&name, None, uint_property(&info, PROP_COD_MAJOR));
+        log::info!("texts inquiry: {name:?} ({kind:?})");
+        out.push(UnpairedDevice {
+            id: id.to_string(),
+            name,
+            kind,
+        });
+    }
+    Ok(out)
 }
 
 /// Remove one Windows Bluetooth bond by device id. Best effort and fully bounded, so a phone

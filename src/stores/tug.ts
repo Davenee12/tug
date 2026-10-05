@@ -917,6 +917,11 @@ export const useTugStore = defineStore("tug", () => {
       return ok === true;
     },
     forget: () => attempt(api.forgetDevice),
+    /** Pair the iPhone's Classic (texts) side from inside tug; true on success. */
+    async pairTexts(): Promise<boolean> {
+      const ok = await attempt(() => api.pairTexts().then(() => true));
+      return ok === true;
+    },
     async setAdvertising(enabled: boolean) {
       advertiseEnabled.value = enabled;
       await attempt(() => api.setAdvertising(enabled));

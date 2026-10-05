@@ -333,6 +333,9 @@ impl Actor {
                     let _ = reply.send(ok);
                 }
             },
+            Command::PairTexts { reply } => {
+                let _ = reply.send(self.pair_texts().await);
+            }
             Command::Forget { reply } => {
                 let _ = reply.send(self.forget().await);
             }
