@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ChevronRight, Info, Phone, Plus, RotateCcw, SendHorizontal, ShieldQuestionMark } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { clockTime, dayLabel, formatAddress, groupConversations, threadKey, type Conversation, type ConversationItem } from "../lib/format";
+import { shouldStickToBottom } from "../lib/scroll";
 import CodeChip from "./CodeChip.vue";
 import ConversationRow from "./ConversationRow.vue";
 import { findCode } from "../lib/codes";
@@ -107,13 +108,20 @@ watch(
   { immediate: true },
 );
 
-// Keep the latest message in view, like any chat.
+// Keep the newest message in view, like any chat — but only when it's wanted. Opening a
+// conversation (the key changes) jumps to the bottom so you see the latest. A new message in the
+// one you're reading sticks to the bottom only if you were already there; if you've scrolled up
+// into history, it stays put. The reader's position is measured here, before the DOM updates (this
+// watcher runs pre-flush), so "were they at the bottom?" is asked of the content as it was.
 const scroller = ref<HTMLElement | null>(null);
 watch(
-  () => [selected.value?.key, selected.value?.items.length],
-  async () => {
+  () => [selected.value?.key, selected.value?.items.length] as const,
+  async ([key], old) => {
+    const switched = key !== old?.[0];
+    const el = scroller.value;
+    const stick = switched || !el || shouldStickToBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
     await nextTick();
-    scroller.value?.scrollTo({ top: scroller.value.scrollHeight });
+    if (stick) scroller.value?.scrollTo({ top: scroller.value.scrollHeight });
   },
   { immediate: true },
 );
@@ -154,7 +162,9 @@ const outgoing = (i: ConversationItem) => i.kind === "message" && i.m.direction 
 const codeIn = (i: ConversationItem) => findCode(i.body);
 const statusLabel = (i: ConversationItem) => {
   if (i.kind !== "message" || i.m.direction !== "out") return "";
-  return { pending: "Sending…", accepted: "Sent via iPhone", failed: "Not sent", received: "" }[i.m.status];
+  // "accepted" (the iPhone took it) and "sent" (a MAP SendingSuccess event confirmed it, when
+  // live texts are working) both read as "Sent" — a send the user can trust either way.
+  return { pending: "Sending…", accepted: "Sent", sent: "Sent", failed: "Not sent", received: "" }[i.m.status];
 };
 
 // Composer: replies go through the iPhone over message access (MAP).
