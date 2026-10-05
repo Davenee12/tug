@@ -123,6 +123,7 @@ pub fn run() {
             commands::confirm_pairing,
             commands::use_device,
             commands::forget_device,
+            commands::pair_texts,
             commands::set_advertising,
             commands::get_settings,
             commands::set_setting,

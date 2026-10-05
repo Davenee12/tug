@@ -19,14 +19,37 @@ pub(crate) mod winrt;
 pub type Reply = oneshot::Sender<Result<(), String>>;
 
 pub enum Command {
-    PerformAction { id: i64, positive: bool, reply: Reply },
-    Media { command: RemoteCommand, reply: Reply },
+    PerformAction {
+        id: i64,
+        positive: bool,
+        reply: Reply,
+    },
+    Media {
+        command: RemoteCommand,
+        reply: Reply,
+    },
     StartDiscovery,
     StopDiscovery,
-    Pair { id: String, reply: Reply },
-    UseDevice { id: String, reply: Reply },
-    Forget { reply: Reply },
-    SetAdvertising { enabled: bool, reply: Reply },
+    Pair {
+        id: String,
+        reply: Reply,
+    },
+    UseDevice {
+        id: String,
+        reply: Reply,
+    },
+    /// Pair the iPhone's Classic (texts) side from inside tug (a one-shot inquiry during the
+    /// setup step); the PIN shows in tug. Requires the LE (notifications) side first.
+    PairTexts {
+        reply: Reply,
+    },
+    Forget {
+        reply: Reply,
+    },
+    SetAdvertising {
+        enabled: bool,
+        reply: Reply,
+    },
 }
 
 #[derive(Clone)]
@@ -77,6 +100,7 @@ pub fn start(shared: Arc<Shared>) -> BleHandle {
                     | Command::Media { reply, .. }
                     | Command::Pair { reply, .. }
                     | Command::UseDevice { reply, .. }
+                    | Command::PairTexts { reply }
                     | Command::Forget { reply }
                     | Command::SetAdvertising { reply, .. } => reply,
                     Command::StartDiscovery | Command::StopDiscovery => continue,
