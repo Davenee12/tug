@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
-import { Music2, Pause, Play, Repeat, Repeat1, RotateCcw, SkipBack, SkipForward, Volume1, Volume2 } from "lucide-vue-next";
+import { computed, onUnmounted, ref } from "vue";
+import { Music2, Pause, Play, RotateCcw, SkipBack, SkipForward, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { duration } from "../lib/format";
-import { REPEAT_CONFIRM_MS, canRestart, repeatIgnoredMessage, repeatLabel as labelFor, supportsRepeat } from "../lib/media";
+import { canRestart } from "../lib/media";
 
 const tug = useTugStore();
 const np = computed(() => tug.nowPlaying);
@@ -35,30 +35,10 @@ function restart() {
   else tug.notify("info", "Already at the start of the song");
 }
 
-// Loop: only when the player lists AdvanceRepeatMode, showing the mode the phone reports.
-const canRepeat = computed(() => supportsRepeat(np.value));
-const repeatLabel = computed(() => labelFor(np.value.repeat));
-
-// iOS accepting the command only means it reached the player. If the phone doesn't report a new
-// mode soon after, say so instead of leaving a button that silently did nothing. Counting reported
-// changes (rather than comparing before/after) also covers an update that beats the write's reply.
-let repeatChanges = 0;
-let repeatCheck: number | undefined;
-watch(
-  () => np.value.repeat,
-  () => repeatChanges++,
-);
-onUnmounted(() => window.clearTimeout(repeatCheck));
-async function advanceRepeat() {
-  window.clearTimeout(repeatCheck);
-  const seen = repeatChanges;
-  const player = np.value.player;
-  // A failed write already shows the phone's error.
-  if (!(await tug.media("advanceRepeatMode"))) return;
-  repeatCheck = window.setTimeout(() => {
-    if (repeatChanges === seen) tug.notify("info", repeatIgnoredMessage(player));
-  }, REPEAT_CONFIRM_MS);
-}
+// No loop button: on Jordan's iPhone Spotify offers no remote commands for repeat and Apple Music
+// accepts AdvanceRepeatMode but never changes mode (checked in the log, 2026-10-05). tug still
+// reads and logs the repeat mode (see lib/media.ts), so a button can return for a player that
+// honours it.
 </script>
 
 <template>
@@ -75,20 +55,6 @@ async function advanceRepeat() {
           @click="restart"
         >
           <RotateCcw :size="15" />
-        </button>
-        <button
-          v-if="canRepeat"
-          :class="[
-            'rounded-full p-1.5 normal-case',
-            np.repeat && np.repeat !== 'off' ? 'bg-surface-dark-soft text-on-dark' : 'text-on-dark-soft active:text-on-dark',
-          ]"
-          :aria-label="repeatLabel"
-          :aria-pressed="np.repeat != null && np.repeat !== 'off'"
-          :title="repeatLabel"
-          @click="advanceRepeat"
-        >
-          <Repeat1 v-if="np.repeat === 'one'" :size="15" />
-          <Repeat v-else :size="15" />
         </button>
       </template>
     </div>
