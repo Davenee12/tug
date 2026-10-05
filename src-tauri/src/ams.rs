@@ -4,6 +4,8 @@
 //!
 //! Pure encode/decode only, like `ancs`.
 
+use std::fmt;
+
 use serde::Serialize;
 
 pub const SERVICE: u128 = 0x89D3502B_0F36_433A_8EF4_C502AD55F8DC;
@@ -15,6 +17,13 @@ const ENTITY_PLAYER: u8 = 0;
 const ENTITY_QUEUE: u8 = 1;
 const ENTITY_TRACK: u8 = 2;
 
+/// EntityUpdateFlagTruncated: the value was cut to fit the notification; the full
+/// value is read through Entity Attribute.
+const FLAG_TRUNCATED: u8 = 1 << 0;
+
+const QUEUE_INDEX: u8 = 0;
+const QUEUE_COUNT: u8 = 1;
+const QUEUE_SHUFFLE_MODE: u8 = 2;
 const QUEUE_REPEAT_MODE: u8 = 3;
 
 const PLAYER_NAME: u8 = 0;
@@ -53,6 +62,11 @@ impl RemoteCommand {
         }
     }
 
+    /// The command's name, as the UI and the logs spell it.
+    pub fn as_str(self) -> &'static str {
+        Self::name(self.id()).unwrap_or("unknown")
+    }
+
     fn name(id: u8) -> Option<&'static str> {
         Some(match id {
             0 => "play",
@@ -82,14 +96,124 @@ impl RemoteCommand {
     }
 }
 
+/// Every RemoteCommandID the spec defines, named for the log, including the ones tug
+/// doesn't send, so the log shows exactly what the player offers.
+pub fn command_label(id: u8) -> String {
+    let name = match id {
+        8 => "advanceShuffleMode",
+        9 => "skipForward",
+        10 => "skipBackward",
+        11 => "likeTrack",
+        12 => "dislikeTrack",
+        13 => "bookmarkTrack",
+        _ => match RemoteCommand::name(id) {
+            Some(n) => n,
+            None => return format!("unknown({id})"),
+        },
+    };
+    name.to_string()
+}
+
+/// A Remote Command notification (the player's supported commands) for the log.
+pub fn describe_commands(b: &[u8]) -> String {
+    let names: Vec<_> = b.iter().map(|&id| command_label(id)).collect();
+    format!("[{}]", names.join(", "))
+}
+
+/// AMS-specific ATT error codes (spec "Error Codes"); `None` for generic ATT ones.
+pub fn error_name(code: u8) -> Option<&'static str> {
+    Some(match code {
+        0xA0 => "Invalid State (AMS not set up: Entity Update not subscribed)",
+        0xA1 => "Invalid Command (improperly formatted)",
+        0xA2 => "Absent Attribute (the attribute is empty)",
+        _ => return None,
+    })
+}
+
+/// `player`, `queue`, `track`, for the log.
+pub fn entity_name(entity: u8) -> String {
+    match entity {
+        ENTITY_PLAYER => "player".into(),
+        ENTITY_QUEUE => "queue".into(),
+        ENTITY_TRACK => "track".into(),
+        e => format!("entity{e}"),
+    }
+}
+
+/// `queue/repeatMode` and the like, for the log.
+pub fn attribute_name(entity: u8, attribute: u8) -> String {
+    let attr = match (entity, attribute) {
+        (ENTITY_PLAYER, PLAYER_NAME) => "name",
+        (ENTITY_PLAYER, PLAYER_PLAYBACK_INFO) => "playbackInfo",
+        (ENTITY_PLAYER, PLAYER_VOLUME) => "volume",
+        (ENTITY_QUEUE, QUEUE_INDEX) => "index",
+        (ENTITY_QUEUE, QUEUE_COUNT) => "count",
+        (ENTITY_QUEUE, QUEUE_SHUFFLE_MODE) => "shuffleMode",
+        (ENTITY_QUEUE, QUEUE_REPEAT_MODE) => "repeatMode",
+        (ENTITY_TRACK, TRACK_ARTIST) => "artist",
+        (ENTITY_TRACK, TRACK_ALBUM) => "album",
+        (ENTITY_TRACK, TRACK_TITLE) => "title",
+        (ENTITY_TRACK, TRACK_DURATION) => "duration",
+        _ => return format!("{}/attr{attribute}", entity_name(entity)),
+    };
+    format!("{}/{attr}", entity_name(entity))
+}
+
+/// One Entity Update notification: `[EntityID][AttributeID][EntityUpdateFlags][value…]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntityUpdate<'a> {
+    pub entity: u8,
+    pub attribute: u8,
+    /// The value was cut to fit the notification; the full value can be read
+    /// through Entity Attribute.
+    pub truncated: bool,
+    pub value: &'a [u8],
+}
+
+impl<'a> EntityUpdate<'a> {
+    pub fn parse(b: &'a [u8]) -> Option<Self> {
+        match b {
+            [entity, attribute, flags, value @ ..] => Some(Self {
+                entity: *entity,
+                attribute: *attribute,
+                truncated: flags & FLAG_TRUNCATED != 0,
+                value,
+            }),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for EntityUpdate<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} = {:?}",
+            attribute_name(self.entity, self.attribute),
+            String::from_utf8_lossy(self.value)
+        )?;
+        if self.truncated {
+            f.write_str(" (truncated)")?;
+        }
+        Ok(())
+    }
+}
+
 /// Entity Update writes that register for player, queue and track changes.
-/// Each must be written separately.
+/// Each must be written separately: one entity per write.
 pub fn registrations() -> [Vec<u8>; 3] {
     [
         vec![ENTITY_PLAYER, PLAYER_NAME, PLAYER_PLAYBACK_INFO, PLAYER_VOLUME],
         vec![ENTITY_QUEUE, QUEUE_REPEAT_MODE],
         vec![ENTITY_TRACK, TRACK_ARTIST, TRACK_ALBUM, TRACK_TITLE, TRACK_DURATION],
     ]
+}
+
+/// Whether media can work without this registration. The queue only feeds the loop
+/// button, so a phone or player that refuses it shouldn't take the whole Now Playing
+/// card down; player and track are the card itself.
+pub fn registration_is_optional(registration: &[u8]) -> bool {
+    registration.first() == Some(&ENTITY_QUEUE)
 }
 
 /// Every (entity, attribute) tug shows. Entity Update only reports *changes*, so on
@@ -153,10 +277,10 @@ impl NowPlaying {
     /// Apply one Entity Update notification: `[entity][attr][flags][utf8 value]`.
     /// Returns true if anything changed.
     pub fn apply_entity_update(&mut self, b: &[u8], now_ms: i64) -> bool {
-        if b.len() < 3 {
-            return false;
+        match EntityUpdate::parse(b) {
+            Some(u) => self.apply_attribute(u.entity, u.attribute, u.value, now_ms),
+            None => false,
         }
-        self.apply_attribute(b[0], b[1], &b[3..], now_ms)
     }
 
     /// Apply one attribute value, from an Entity Update or an Entity Attribute read.
@@ -182,7 +306,7 @@ impl NowPlaying {
             }
             (ENTITY_PLAYER, PLAYER_VOLUME) => self.volume = value.parse().ok(),
             (ENTITY_QUEUE, QUEUE_REPEAT_MODE) => {
-                self.repeat = match value.as_str() {
+                self.repeat = match value.trim() {
                     "0" => Some(RepeatMode::Off),
                     "1" => Some(RepeatMode::One),
                     "2" => Some(RepeatMode::All),
@@ -196,6 +320,11 @@ impl NowPlaying {
             _ => {}
         }
         *self != before
+    }
+
+    /// Whether the current player listed `command` among its supported commands.
+    pub fn lists(&self, command: RemoteCommand) -> bool {
+        self.available.contains(&command.as_str())
     }
 
     /// Apply a Remote Command notification: a list of supported command ids.
@@ -312,9 +441,95 @@ mod tests {
 
     #[test]
     fn command_names_round_trip() {
-        for id in 0..7 {
+        for id in 0..=7 {
             let name = RemoteCommand::name(id).unwrap();
-            assert_eq!(RemoteCommand::parse(name).unwrap().id(), id);
+            let command = RemoteCommand::parse(name).unwrap();
+            assert_eq!(command.id(), id);
+            assert_eq!(command.as_str(), name);
         }
+        assert_eq!(RemoteCommand::name(8), None, "tug doesn't send shuffle");
+    }
+
+    #[test]
+    fn parses_entity_update_header_and_truncation_flag() {
+        let u = EntityUpdate::parse(&[1, 3, 0, b'2']).unwrap();
+        assert_eq!((u.entity, u.attribute, u.truncated, u.value), (1, 3, false, &b"2"[..]));
+        assert_eq!(u.to_string(), r#"queue/repeatMode = "2""#);
+
+        let u = EntityUpdate::parse(&[2, 2, 1, b'L', b'o']).unwrap();
+        assert!(u.truncated);
+        assert_eq!(u.to_string(), r#"track/title = "Lo" (truncated)"#);
+        // Other flag bits are reserved and don't mean truncated.
+        assert!(!EntityUpdate::parse(&[2, 2, 0b10]).unwrap().truncated);
+
+        // An empty value is still a valid update (it clears the attribute).
+        let u = EntityUpdate::parse(&[2, 0, 0]).unwrap();
+        assert_eq!(u.value, b"");
+        assert_eq!(EntityUpdate::parse(&[2, 0]), None);
+        assert_eq!(EntityUpdate::parse(&[]), None);
+    }
+
+    #[test]
+    fn names_attributes_for_the_log() {
+        assert_eq!(attribute_name(0, 1), "player/playbackInfo");
+        assert_eq!(attribute_name(1, 2), "queue/shuffleMode");
+        assert_eq!(attribute_name(1, 3), "queue/repeatMode");
+        assert_eq!(attribute_name(2, 3), "track/duration");
+        assert_eq!(attribute_name(1, 9), "queue/attr9");
+        assert_eq!(attribute_name(7, 0), "entity7/attr0");
+    }
+
+    #[test]
+    fn describes_every_spec_command_for_the_log() {
+        assert_eq!(
+            describe_commands(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 200]),
+            "[play, pause, togglePlayPause, nextTrack, previousTrack, volumeUp, volumeDown, \
+             advanceRepeatMode, advanceShuffleMode, skipForward, skipBackward, likeTrack, \
+             dislikeTrack, bookmarkTrack, unknown(200)]"
+        );
+        assert_eq!(describe_commands(&[]), "[]");
+    }
+
+    #[test]
+    fn names_ams_error_codes() {
+        assert!(error_name(0xA0).unwrap().starts_with("Invalid State"));
+        assert!(error_name(0xA1).unwrap().starts_with("Invalid Command"));
+        assert!(error_name(0xA2).unwrap().starts_with("Absent Attribute"));
+        assert_eq!(error_name(0x0E), None);
+    }
+
+    #[test]
+    fn queue_registration_is_separate_and_optional() {
+        let regs = registrations();
+        // One entity per write, as the spec requires.
+        assert_eq!(regs.iter().map(|r| r[0]).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(regs[1], vec![1, 3]);
+        assert!(registration_is_optional(&regs[1]));
+        assert!(!registration_is_optional(&regs[0]));
+        assert!(!registration_is_optional(&regs[2]));
+    }
+
+    #[test]
+    fn repeat_support_comes_from_the_command_list_not_the_queue_value() {
+        // Spotify-like: reports a repeat mode but doesn't list AdvanceRepeatMode.
+        let mut np = NowPlaying::default();
+        np.apply_attribute(1, 3, b"0", 0);
+        np.apply_available_commands(&[0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(np.repeat, Some(RepeatMode::Off));
+        assert!(!np.lists(RemoteCommand::AdvanceRepeatMode));
+        // Apple Music-like: lists it.
+        np.apply_available_commands(&[0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert!(np.lists(RemoteCommand::AdvanceRepeatMode));
+        assert!(np.lists(RemoteCommand::NextTrack));
+    }
+
+    #[test]
+    fn unknown_repeat_value_is_none() {
+        let mut np = NowPlaying::default();
+        np.apply_entity_update(&update(1, 3, "2"), 0);
+        assert!(np.apply_entity_update(&update(1, 3, ""), 0));
+        assert_eq!(np.repeat, None);
+        np.apply_entity_update(&update(1, 3, "1 "), 0);
+        assert_eq!(np.repeat, Some(RepeatMode::One));
     }
 }
