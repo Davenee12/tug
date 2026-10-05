@@ -343,6 +343,27 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
     state.shared.store.set_setting(&key, &value).map_err(|e| e.to_string())
 }
 
+/// Whether tug starts with Windows. The registry entry (via the autostart plugin) is the
+/// source of truth, so the Settings switch reads this rather than a stored preference.
+#[tauri::command]
+pub fn get_autostart(app: tauri::AppHandle) -> Result<bool> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// Turn "start with Windows" on or off. On writes an entry that launches tug with
+/// `--minimized`, so it comes up hidden in the tray.
+#[tauri::command]
+pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<()> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_http_url;
