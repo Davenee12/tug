@@ -27,8 +27,9 @@ Self-contained features that don't wait on hardware spikes or a purchase; built 
 - **Low phone battery alert** at 20% and 10%.
 - Live texts' pure groundwork (event parser, OBEX server framing, registration call) lands inert.
 
-## v0.5.8 — tug becomes your phone (calling anyone, live texts, auto-updates)
-The big bets: they need Dave's hardware for spikes and, for calling and auto-updates, signing.
+## v0.5.8 — live texts, and a stabilization pass
+Starts with a full stabilization check of the whole app (Dave, 2026-10-05) as the foundation
+for v0.5.8 and beyond. Auto-updates need code signing, which Dave isn't buying for now.
 Dave is in the US, so Azure Artifact Signing (~$9.99/mo) is available to him. Spike 0 passed
 2026-10-05 (Handsfree Telephony back on: one PhoneLineTransportDevice for the iPhone).
 
@@ -44,17 +45,6 @@ Dave is in the US, so Azure Artifact Signing (~$9.99/mo) is available to him. Sp
   certificate** $150–300/yr. Either shows Dave's name as publisher; neither instantly clears
   SmartScreen — reputation still builds over time (correcting the old "signing removes the warning"
   wording below). Auto-updates and the calling ship both wait on this.
-
-### Spikes first (Dave's hardware, gate the big items)
-- **Spike 0 — phone line exists.** Re-tick Handsfree Telephony; confirm one `PhoneLineTransportDevice`
-  appears for the iPhone (matched by Bluetooth address).
-- **Spike 1 — sparse package passes the restricted-capability check.** Standalone probe crate, sparse
-  MSIX identity, self-signed cert in `CurrentUser\TrustedPeople` (no admin). Drive the full flow:
-  `RequestAccessAsync` → `RegisterApp` → `ConnectAsync` → `PhoneCallManager.RequestStoreAsync` →
-  `PhoneLineWatcher` → `PhoneLine.DialWithResultAsync` (tug must be foreground) →
-  `ChangeAudioDeviceAsync(RemoteDevice)` to keep audio on the phone. This is the biggest unknown:
-  whether an identity-only sparse package beside an NSIS install satisfies `phoneLineTransportManagement`.
-  **Go/no-go for calling rides on this.**
 
 ### Live texts (MAP notifications / MNS) — after the pure modules, hardware to wire
 Texts land the instant the phone gets them instead of within ~8 s of polling; sends show "Sent".
@@ -74,6 +64,33 @@ of CTKD — **LE (notifications) first, then Classic (texts)**; persist `TEXTS_D
 - PRs: pure pick logic → texts discovery mode (only during the step) → pair-for-texts command →
   remember texts device by id → wizard button → ordering guard on re-pair.
 
+### Auto-updates
+From GitHub Releases, **after** releases are signed (same signing work as calling).
+
+## v0.5.9 — candidates
+- **Welcome back**: after 30+ min away, who texted and called.
+- **Calls in Ctrl+K search**: a person's recent calls in their search result.
+
+## Parked — calling anyone (v0.5.13 or later; Dave, 2026-10-05)
+Calling back a missed call already works (iOS's "Dial" over ANCS) and stays. Dialing anyone is
+parked: on 2026-10-05 Spike 0 passed and Spike 1 got package identity + `RequestAccessAsync` =
+Allowed (the sparse package passes the restricted-capability check), but `RegisterApp` didn't
+stick ("another app owns the line"), even with Windows' Mobile devices off. Next time: re-run
+the probe (PR #33, `spikes/phoneline`) after a PC restart, then investigate line ownership.
+Shipping it to others also needs paid code signing.
+
+### Spikes first (Dave's hardware, gate the big items)
+- **Spike 0 — phone line exists.** Re-tick Handsfree Telephony; confirm one `PhoneLineTransportDevice`
+  appears for the iPhone (matched by Bluetooth address).
+- **Spike 1 — sparse package passes the restricted-capability check.** Standalone probe crate, sparse
+  MSIX identity, self-signed cert in `CurrentUser\TrustedPeople` (no admin). Drive the full flow:
+  `RequestAccessAsync` → `RegisterApp` → `ConnectAsync` → `PhoneCallManager.RequestStoreAsync` →
+  `PhoneLineWatcher` → `PhoneLine.DialWithResultAsync` (tug must be foreground) →
+  `ChangeAudioDeviceAsync(RemoteDevice)` to keep audio on the phone. This is the biggest unknown:
+  whether an identity-only sparse package beside an NSIS install satisfies `phoneLineTransportManagement`.
+  **Go/no-go for calling rides on this.**
+
+
 ### Calling anyone — spike-gated, ships behind signing
 Call anyone from tug (Calls tab, Ctrl+K "call zoe", conversations). Today only missed calls can be
 called back (iOS's "Dial" over ANCS); dialing anyone needs Windows' calling API
@@ -86,12 +103,6 @@ feature `ApplicationModel_Calls`.
 - PRs (after Spike 1 is a go): identity plumbing → calling module (uses the pure state machine) + UI
   → installer hooks (`Add-AppxPackage -ExternalLocation`) → production signing (Dave's chosen cert).
 
-### Auto-updates
-From GitHub Releases, **after** releases are signed (same signing work as calling).
-
-## v0.5.9 — candidates
-- **Welcome back**: after 30+ min away, who texted and called.
-- **Calls in Ctrl+K search**: a person's recent calls in their search result.
 
 ## Next — onboarding & distribution (product readiness)
 - ~~**Settings page** — a full page (not the side panel) with a left nav: General, iPhone, Connectors

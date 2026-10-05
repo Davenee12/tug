@@ -14,6 +14,8 @@ import type {
   NowPlaying,
   PairingRequest,
   PhoneNotification,
+  ToastPressed,
+  ToastSpec,
 } from "../types/protocol";
 
 export const api = {
@@ -35,13 +37,22 @@ export const api = {
   setAdvertising: (enabled: boolean) => invoke<void>("set_advertising", { enabled }),
   getSettings: () => invoke<Record<string, string>>("get_settings"),
   setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),
+  /** Whether tug starts with Windows (reads the actual registry entry). */
+  getAutostart: () => invoke<boolean>("get_autostart"),
+  setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
   listMessages: (limit: number) => invoke<SmsMessage[]>("list_messages", { limit }),
   getContacts: () => invoke<Contact[]>("get_contacts"),
   sendMessage: (address: string, text: string) => invoke<SmsMessage>("send_message", { address, text }),
   refreshMessages: () => invoke<void>("refresh_messages"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
+  /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */
+  copyDiagnostics: () => invoke<string>("copy_diagnostics"),
+  /** Open tug's log folder in Explorer. */
+  openLogsFolder: () => invoke<void>("open_logs_folder"),
   setUnread: (count: number) => invoke<void>("set_unread", { count }),
   openWindowsSettings: (page: "bluetooth" | "location" | "notifications") => invoke<void>("open_windows_settings", { page }),
+  /** Open an http(s) link (a notification's "Open in browser") in the default browser. */
+  openUrl: (url: string) => invoke<void>("open_url", { url }),
   setHidden: (notificationIds: number[], messageIds: number[], hidden: boolean) =>
     invoke<void>("set_hidden", { notificationIds, messageIds, hidden }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),
@@ -54,6 +65,8 @@ export const api = {
   refreshCalls: () => invoke<void>("refresh_calls"),
   /** Experimental hands-free dialing; with no number, only checks the link can be opened. */
   dial: (number: string | null) => invoke<void>("dial", { number }),
+  /** A Windows pop-up with buttons (falls back to a plain one in the backend). */
+  showToast: (spec: ToastSpec) => invoke<void>("show_toast", { spec }),
 };
 
 interface EventPayloads {
@@ -69,6 +82,7 @@ interface EventPayloads {
   contacts: Contact[];
   "open-latest-conversation": null;
   calls: CallRecord[];
+  "toast-pressed": ToastPressed;
 }
 
 export function on<E extends keyof EventPayloads>(
