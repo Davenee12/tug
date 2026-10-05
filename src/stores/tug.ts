@@ -22,6 +22,8 @@ import type {
 } from "../types/protocol";
 
 const PAGE = 100;
+
+export type SettingsSection = "general" | "iphone" | "notifications" | "weather" | "privacy" | "about";
 const SEEN_KEEP = 300;
 
 const EMPTY_STATUS: DeviceStatus = {
@@ -62,14 +64,17 @@ export const useTugStore = defineStore("tug", () => {
   const hasMore = ref(true);
   const discovered = ref<DiscoveredDevice[]>([]);
   const pairingRequest = ref<PairingRequest | null>(null);
-  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [] });
+  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [], closeToTray: true });
   const advertiseEnabled = ref(true);
   const zoom = ref(1);
   const flash = ref<{ kind: "error" | "info"; text: string; action?: { label: string; run: () => void } } | null>(null);
   let flashTimer: number | undefined;
 
   /** Middle-panel view, and the conversation open in Messages. */
-  const view = ref<"feed" | "messages">("feed");
+  const view = ref<"feed" | "messages" | "settings">("feed");
+  const settingsSection = ref<SettingsSection>("general");
+  /** Where Settings returns to. */
+  let viewBeforeSettings: "feed" | "messages" = "feed";
   const selectedThread = ref<string | null>(null);
   /** A new conversation being started from the + button, before any message exists. */
   const composeTo = ref<{ address: string; name: string } | null>(null);
@@ -77,10 +82,18 @@ export const useTugStore = defineStore("tug", () => {
   const pickerOpen = ref(false);
   /** Universal search (Ctrl+K or the search box). */
   const searchOpen = ref(false);
-  /** The connection/settings panel sliding over the window (narrow layouts). */
-  const panelOpen = ref(false);
   /** Something is covering the main view, so whatever is behind it isn't being looked at. */
-  const overlayOpen = computed(() => searchOpen.value || pickerOpen.value || panelOpen.value || !!pairingRequest.value);
+  const overlayOpen = computed(() => searchOpen.value || pickerOpen.value || !!pairingRequest.value);
+
+  function openSettings(section?: SettingsSection) {
+    if (view.value !== "settings") viewBeforeSettings = view.value;
+    if (section) settingsSection.value = section;
+    view.value = "settings";
+  }
+
+  function closeSettings() {
+    if (view.value === "settings") view.value = viewBeforeSettings;
+  }
   /** An item to scroll to and highlight after navigating from search: `m<id>` or `n<id>`. */
   const focusItem = ref<string | null>(null);
 
@@ -301,6 +314,7 @@ export const useTugStore = defineStore("tug", () => {
       toasts: raw["ui.toasts"] !== "false",
       doNotDisturb: raw["ui.doNotDisturb"] === "true",
       mutedApps: raw["ui.mutedApps"] ? (JSON.parse(raw["ui.mutedApps"]) as string[]) : [],
+      closeToTray: raw["ui.closeToTray"] !== "false",
     };
   }
 
@@ -415,6 +429,13 @@ export const useTugStore = defineStore("tug", () => {
     await attempt(() => api.setSetting(`ui.${key}`, typeof value === "string" ? value : JSON.stringify(value)));
   }
 
+  /** App zoom from Settings (Ctrl +/−/0 does the same from anywhere). */
+  function setZoom(factor: number) {
+    zoom.value = factor;
+    applyZoom(factor);
+    void attempt(() => api.setSetting("ui.zoom", String(factor)));
+  }
+
   function toggleMuted(appId: string) {
     const muted = settings.value.mutedApps;
     void setSetting("mutedApps", muted.includes(appId) ? muted.filter((a) => a !== appId) : [...muted, appId]);
@@ -438,8 +459,12 @@ export const useTugStore = defineStore("tug", () => {
     pickerOpen,
     searchOpen,
     unreadTexts,
-    panelOpen,
     overlayOpen,
+    settingsSection,
+    openSettings,
+    closeSettings,
+    zoom,
+    setZoom,
     focusItem,
     seen,
     connected,

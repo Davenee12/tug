@@ -151,7 +151,7 @@ async function run(a: Action) {
     tug.view = "messages";
     tug.pickerOpen = true;
   } else {
-    tug.panelOpen = true;
+    tug.openSettings();
   }
 }
 

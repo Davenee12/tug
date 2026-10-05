@@ -7,16 +7,16 @@ import DeviceRail from "./components/DeviceRail.vue";
 import FeedPanel from "./components/FeedPanel.vue";
 import NewConversation from "./components/NewConversation.vue";
 import SearchPalette from "./components/SearchPalette.vue";
+import SettingsPage from "./components/SettingsPage.vue";
 import PairingDialog from "./components/PairingDialog.vue";
 
 const tug = useTugStore();
 
-// The connection panel sits inline on wide windows and slides over on narrow ones.
+// While there's no connected iPhone, wide windows show the Connection panel beside the
+// feed; everything else (and narrow windows) uses Settings › iPhone.
 const WIDE = "(min-width: 1240px)";
 const wide = ref(window.matchMedia(WIDE).matches);
-// Inline while setting up or disconnected; once connected it tucks behind the gear
-// so the feed and conversations get the room.
-const panelInline = computed(() => wide.value && tug.status.connection !== "connected");
+const panelInline = computed(() => wide.value && tug.status.connection !== "connected" && tug.view !== "settings");
 const mq = window.matchMedia(WIDE);
 const onMq = (e: MediaQueryListEvent) => (wide.value = e.matches);
 // The toast keeps showing (and acting on) its last message while it fades out, so a
@@ -29,13 +29,8 @@ watch(
   },
 );
 
-// Once the panel sits inline it no longer covers anything.
-watch(panelInline, (inline) => {
-  if (inline) tug.panelOpen = false;
-});
-
 // Ctrl+K: search from anywhere. Ctrl+N: new message (not while typing in a field).
-// Ctrl+Shift+C: copy the latest one-time code.
+// Ctrl+Shift+C: copy the latest one-time code. Ctrl+,: settings.
 function onShortcut(e: KeyboardEvent) {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
   const key = e.key.toLowerCase();
@@ -52,6 +47,11 @@ function onShortcut(e: KeyboardEvent) {
     e.preventDefault();
     tug.pickerOpen = false;
     tug.searchOpen = true;
+  } else if (key === ",") {
+    e.preventDefault();
+    tug.searchOpen = false;
+    tug.pickerOpen = false;
+    tug.openSettings();
   } else if (key === "n" && !typing) {
     e.preventDefault();
     tug.searchOpen = false;
@@ -81,18 +81,11 @@ onUnmounted(() => {
     <DeviceRail class="w-[288px] shrink-0" />
 
     <main class="min-w-0 flex-1">
-      <FeedPanel :panel-inline="panelInline" @open-panel="tug.panelOpen = true" />
+      <SettingsPage v-if="tug.view === 'settings'" />
+      <FeedPanel v-else />
     </main>
 
-    <ConnectionPanel v-if="panelInline" class="w-[360px] shrink-0 border-l border-hairline" :closable="false" />
-    <template v-else>
-      <Transition enter-from-class="opacity-0" leave-to-class="opacity-0" enter-active-class="transition-opacity" leave-active-class="transition-opacity">
-        <div v-if="tug.panelOpen" class="fixed inset-0 z-30 bg-ink/20" @click="tug.panelOpen = false" />
-      </Transition>
-      <Transition enter-from-class="translate-x-full" leave-to-class="translate-x-full" enter-active-class="transition-transform" leave-active-class="transition-transform">
-        <ConnectionPanel v-if="tug.panelOpen" class="fixed inset-y-0 right-0 z-40 w-[380px] border-l border-hairline" closable @close="tug.panelOpen = false" />
-      </Transition>
-    </template>
+    <ConnectionPanel v-if="panelInline" class="w-[360px] shrink-0 border-l border-hairline" />
 
     <PairingDialog v-if="tug.pairingRequest" />
     <NewConversation v-if="tug.pickerOpen" />
