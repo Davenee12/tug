@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { Search, Settings2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { dayLabel, entryLatest, groupFeed, notificationTime, type FeedEntry } from "../lib/format";
+import { preservedScrollTop } from "../lib/scroll";
 import CallsPanel from "./CallsPanel.vue";
 import FeedEntryRow from "./FeedEntryRow.vue";
 import MessageThreads from "./MessageThreads.vue";
@@ -26,6 +27,26 @@ const entryGroups = computed(() => {
     else out.push({ label, entries: [e] });
   }
   return out;
+});
+
+// Hold the reader's place as the feed changes under them. The list is newest-first, so a new
+// notification, a bump or a cleared row lands at or near the top: left alone the viewport would
+// slide. Measure before the DOM updates (this watcher runs pre-flush), then restore afterwards —
+// stay at the top if they were at the top (so the newest is seen), otherwise keep the rows under
+// their eye still. Paging older history in at the bottom isn't a top change, so it's left be.
+const feedScroller = ref<HTMLElement | null>(null);
+const firstKey = (groups: { entries: FeedEntry[] }[]): string | undefined => groups[0]?.entries[0]?.key;
+watch(entryGroups, async (next, prev) => {
+  const el = feedScroller.value;
+  if (!el) return;
+  const prevTop = el.scrollTop;
+  const prevHeight = el.scrollHeight;
+  const prependedAtTop = firstKey(next) !== firstKey(prev ?? []);
+  await nextTick();
+  const after = feedScroller.value;
+  if (!after) return;
+  const top = preservedScrollTop({ prevTop, prevHeight, newHeight: after.scrollHeight, prependedAtTop });
+  if (top !== null) after.scrollTop = top;
 });
 
 const unreadMessages = computed(() => tug.unreadTexts);
@@ -100,7 +121,7 @@ const setUp = computed(() => tug.status.device != null);
 
     <CallsPanel v-else-if="tug.view === 'calls'" />
 
-    <div v-else class="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-10">
+    <div v-else ref="feedScroller" class="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-10">
       <div v-if="weather.place !== 'off'" class="mx-auto w-full max-w-3xl px-3 pt-5">
         <WeatherCard />
       </div>
