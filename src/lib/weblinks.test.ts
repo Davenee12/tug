@@ -30,8 +30,12 @@ describe("webLinkFor", () => {
   });
 
   it("searches Google for what a Google app alert is about", () => {
-    const n = note({ appId: "com.google.GoogleMobile", title: "Google", subtitle: "", message: "⏰ France vs Belgium · Tap to add the live score to your lock screen" });
-    expect(webLinkFor(n)?.url).toBe(`https://www.google.com/search?q=${encodeURIComponent("⏰ France vs Belgium")}`);
+    // The shape Dave's iPhone actually sends: topic in the title, generic text in the message.
+    const n = note({ appId: "com.google.GoogleMobile", title: "⏰ France vs Belgium", subtitle: "", message: "Tap to add the live score to your lock screen" });
+    expect(webLinkFor(n)?.url).toBe(`https://www.google.com/search?q=${encodeURIComponent("France vs Belgium")}`);
+    // A plain "Google" title falls back to the text.
+    const plain = note({ appId: "com.google.GoogleMobile", title: "Google", subtitle: "", message: "Lakers vs Celtics tonight" });
+    expect(webLinkFor(plain)?.url).toBe(`https://www.google.com/search?q=${encodeURIComponent("Lakers vs Celtics tonight")}`);
   });
 
   it("never offers a web page for Messages or Phone", () => {
@@ -43,13 +47,13 @@ describe("webLinkFor", () => {
     expect(note().appId).toBe(GMAIL_APP_ID);
   });
 
-  it("returns a fixed landing page for mapped apps", () => {
+  it("opens a mapped app at its home page", () => {
     expect(webLinkFor(note({ appId: "com.linkedin.LinkedIn", title: "Someone" }))).toEqual({
-      url: "https://www.linkedin.com/notifications/",
+      url: "https://www.linkedin.com/",
       label: "LinkedIn",
     });
     expect(webLinkFor(note({ appId: "com.github.stormbreaker.prod", title: "octocat" }))).toEqual({
-      url: "https://github.com/notifications",
+      url: "https://github.com/",
       label: "GitHub",
     });
   });
