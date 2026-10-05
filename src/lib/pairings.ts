@@ -4,7 +4,7 @@
 // already has (each entry's `kind` comes from the Rust device_kind::classify), so they're
 // unit-tested without a phone. We don't guess: a problem is only reported on clear evidence.
 
-import type { DiscoveredDevice } from "../types/protocol";
+import type { DeviceStatus, DiscoveredDevice } from "../types/protocol";
 
 /** What's wrong with the current pairing, if anything. */
 export type PairingProblem = "duplicates" | "remembered-missing" | null;
@@ -93,4 +93,24 @@ export function startedOutsideTug(
   tugInitiated: boolean,
 ): boolean {
   return wasPaired === false && nowPaired && !tugInitiated;
+}
+
+/**
+ * Whether the iPhone looks to have forgotten this PC while Windows still holds the bond — Dave
+ * forgot the PC on the phone but both bonds stayed, so LightBlue kept dropping, LE connects
+ * failed with stale-bond errors and MAP CONNECT was refused 0xC3.
+ *
+ * - "forgotten": the LE link reported the stale-bond HRESULT (pairingStale) — a definite signal.
+ * - "maybe": the bond exists but the phone won't let the link connect and isn't sharing
+ *   notifications, with a message refusal (0xC3) on top. That 0xC3 alone is ambiguous (it's also
+ *   how "Show Notifications off" looks), so this is worded tentatively and covers both causes.
+ */
+export type BondHint = "forgotten" | "maybe" | null;
+
+export function bondHint(s: DeviceStatus): BondHint {
+  if (s.pairingStale) return "forgotten";
+  if (s.device && s.connection !== "connected" && !s.services.notifications && !!s.messagesError) {
+    return "maybe";
+  }
+  return null;
 }

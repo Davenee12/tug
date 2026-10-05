@@ -2,7 +2,8 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { CircleAlert, LoaderCircle, RefreshCw, Smartphone } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { pairingProblem } from "../lib/pairings";
+import { bondHint, pairingProblem } from "../lib/pairings";
+import { api } from "../lib/ipc";
 import type { DiscoveredDevice } from "../types/protocol";
 
 // The paired iPhone, or the steps to pair one. Shared by first-run setup (the inline
@@ -74,9 +75,9 @@ async function startOver() {
   await tug.forget();
 }
 
-// The phone forgot this PC: no confirm needed, the old pairing is already useless.
-// Forgetting starts a scan (the watch above), so the iPhone can be paired again right away.
-const pairAgain = () => void tug.forget();
+// The phone looks to have forgotten this PC while Windows still holds the bond (stale-bond
+// errors, or a bond the phone never connects to): decided purely in lib/pairings.
+const bond = computed(() => bondHint(s.value));
 
 const advertisingLabel = computed(
   () => ({ off: "Off", starting: "Starting…", on: "On", error: "Failed" })[s.value.advertising],
@@ -85,13 +86,26 @@ const advertisingLabel = computed(
 
 <template>
   <div class="flex flex-col gap-6">
+    <!-- The phone looks to have forgotten this PC while Windows still holds the bond. -->
+    <div v-if="bond" class="flex flex-col gap-2 rounded-xl border border-error/30 bg-canvas px-4 py-3">
+      <p class="text-[13px] text-body-strong">
+        <template v-if="bond === 'forgotten'">Your PC still remembers a pairing your iPhone forgot, so they can't reconnect.</template>
+        <template v-else>Your iPhone keeps refusing this PC's pairing — it may have been forgotten on the phone.</template>
+        Remove <strong class="font-medium">{{ s.textsDevice ?? s.device?.name ?? "your iPhone" }}</strong> in Windows Bluetooth settings, or Start over
+        here, then pair again.
+      </p>
+      <div class="flex gap-2">
+        <button class="btn-primary btn-sm" @click="startOver">{{ confirmStartOver ? "Tap again to start over" : "Start over" }}</button>
+        <button class="btn-secondary btn-sm" @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
+      </div>
+    </div>
+
     <div
-      v-if="s.lastError && (s.connection !== 'connected' || !s.services.notifications)"
+      v-else-if="s.lastError && (s.connection !== 'connected' || !s.services.notifications)"
       class="flex gap-2.5 rounded-xl border border-error/30 bg-canvas px-4 py-3 text-[13px] text-body-strong"
     >
       <CircleAlert :size="16" class="mt-0.5 shrink-0 text-error" />
       <span class="selectable min-w-0 flex-1">{{ s.lastError }}</span>
-      <button v-if="s.pairingStale" class="btn-primary btn-sm shrink-0" @click="pairAgain">Pair again</button>
     </div>
 
     <!-- More than one iPhone paired, or a different one than tug remembers: one clean Start over. -->

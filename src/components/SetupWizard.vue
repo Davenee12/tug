@@ -6,7 +6,7 @@ import { useWeatherStore } from "../stores/weather";
 import { useFocusTrap } from "../lib/focusTrap";
 import PhoneSwitches from "./PhoneSwitches.vue";
 import { phoneSwitches } from "../lib/phoneSwitches";
-import { pairingProblem, setupDeviceLists, startedOutsideTug } from "../lib/pairings";
+import { bondHint, pairingProblem, setupDeviceLists, startedOutsideTug } from "../lib/pairings";
 import { api, errorMessage } from "../lib/ipc";
 import { friendlyLocateError } from "../lib/locating";
 import { useLocating } from "../lib/useLocating";
@@ -125,15 +125,9 @@ async function choose(d: DiscoveredDevice) {
     go("connect");
   }
 }
-// The phone forgot this PC (e.g. Forget This Device): drop Windows' half of the old pairing
-// and pair from scratch, instead of retrying a bond the phone will never accept.
-const repairing = ref(false);
-async function pairAgain() {
-  repairing.value = true;
-  await tug.forget();
-  repairing.value = false;
-  go("connect");
-}
+// The phone looks to have forgotten this PC while Windows still holds the bond (stale-bond
+// errors, or a bond the phone never connects to): decided purely in lib/pairings.
+const bond = computed(() => bondHint(s.value));
 
 // Windows ended up with more than one iPhone bond (an old one and a new one), or the phone that's
 // paired now isn't the one tug remembers. One clear "Start over" unpairs both bonds tug knows
@@ -475,11 +469,20 @@ const SHORTCUTS: Array<[string, string]> = [
             <strong class="font-medium text-body-strong">ⓘ</strong> next to this PC, and switch this on. It lights up here as you do.
           </p>
           <PhoneSwitches :switches="sharing" />
-          <div v-if="s.pairingStale" class="mt-6 flex items-center gap-3 rounded-xl bg-surface-card px-4 py-3">
-            <p class="min-w-0 flex-1 text-[13px] text-body">Your iPhone has forgotten this PC, so it can't connect. Pair again: it takes a few seconds.</p>
-            <button class="btn-primary btn-sm" :disabled="repairing" @click="pairAgain">
-              <LoaderCircle v-if="repairing" :size="13" class="animate-spin" /> Pair again
-            </button>
+          <div v-if="bond" class="mt-6 flex flex-col gap-2 rounded-xl bg-surface-card px-4 py-3">
+            <p class="text-[13px] text-body">
+              <template v-if="bond === 'forgotten'">Your PC still remembers a pairing your iPhone forgot, so they can't reconnect.</template>
+              <template v-else>Your iPhone keeps refusing this PC's pairing — it may have been forgotten on the phone.</template>
+              Remove <strong class="font-medium text-body-strong">{{ s.textsDevice ?? s.device?.name ?? "your iPhone" }}</strong> in Windows Bluetooth
+              settings, or Start over here, then pair again.
+            </p>
+            <div class="flex gap-2">
+              <button class="btn-primary btn-sm" :disabled="startingOver" @click="startOver">
+                <LoaderCircle v-if="startingOver" :size="13" class="animate-spin" />
+                {{ confirmStartOver ? "Tap again to start over" : "Start over" }}
+              </button>
+              <button class="btn-secondary btn-sm" @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
+            </div>
           </div>
           <div v-else-if="s.awaitingPhoneAllow" class="mt-6 flex items-center gap-3 rounded-xl bg-surface-card px-4 py-3">
             <Smartphone :size="18" class="shrink-0 text-ink" />
