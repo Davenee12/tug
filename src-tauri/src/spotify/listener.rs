@@ -3,19 +3,19 @@
 //! page, and returns the query string. Everything but the socket work is pure and tested.
 //!
 //! Spotify requires a loopback IP literal (`127.0.0.1`), never `localhost`, and permits HTTP
-//! there. Registering the redirect URI *without* a port lets tug use whatever port it binds, so a
-//! busy preferred port can fall back cleanly.
+//! there. Its docs also allow registering it without a port, but the dashboard rejects that as
+//! "not secure" (seen on Dave's account, 2026-10-05), so tug uses one fixed, registered port.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
-/// The redirect path tug listens on and registers (`http://127.0.0.1/callback`).
+/// The redirect path tug listens on.
 pub const REDIRECT_PATH: &str = "/callback";
-/// The redirect URI to register in the Spotify dashboard — no port, so any bound port works.
-pub const REGISTERED_REDIRECT: &str = "http://127.0.0.1/callback";
-/// Ports tug tries, in order. All fall under one registered port-less loopback URI.
-pub const PREFERRED_PORTS: &[u16] = &[8972, 8973, 8974, 49227];
+/// The one port tug listens on; it's part of the registered Redirect URI, so it can't vary.
+pub const REDIRECT_PORT: u16 = 8972;
+/// The redirect URI to register in the Spotify dashboard, exactly.
+pub const REGISTERED_REDIRECT: &str = "http://127.0.0.1:8972/callback";
 
 /// How long to wait for the user to finish signing in before giving up.
 pub const CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
@@ -74,18 +74,11 @@ fn not_found() -> &'static str {
     "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 }
 
-/// Bind the first free port from `PREFERRED_PORTS` on `127.0.0.1`. Returns the listener and the
-/// port it bound, so the caller can build the exact redirect URI the request must use.
-pub fn bind() -> Result<(TcpListener, u16), String> {
-    for &port in PREFERRED_PORTS {
-        if let Ok(l) = TcpListener::bind(("127.0.0.1", port)) {
-            return Ok((l, port));
-        }
-    }
-    // Last resort: let the OS pick any free loopback port (still covered by the port-less URI).
-    let l = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("couldn't open a loopback port: {e}"))?;
-    let port = l.local_addr().map_err(|e| e.to_string())?.port();
-    Ok((l, port))
+/// Bind `REDIRECT_PORT` on `127.0.0.1` for the sign-in redirect.
+pub fn bind() -> Result<TcpListener, String> {
+    TcpListener::bind(("127.0.0.1", REDIRECT_PORT)).map_err(|e| {
+        format!("Couldn't listen for Spotify's sign-in on port {REDIRECT_PORT} (another app may be using it): {e}")
+    })
 }
 
 /// Accept connections until the `/callback` arrives (or the deadline passes), and return its
@@ -161,15 +154,10 @@ mod tests {
     }
 
     #[test]
-    fn registered_redirect_has_no_port() {
-        assert_eq!(REGISTERED_REDIRECT, "http://127.0.0.1/callback");
-        assert!(!REGISTERED_REDIRECT.contains(':') || REGISTERED_REDIRECT.matches(':').count() == 1);
-    }
-
-    #[test]
-    fn binds_a_loopback_port() {
-        let (listener, port) = bind().expect("bind loopback");
-        assert!(port > 0);
-        assert!(listener.local_addr().unwrap().ip().is_loopback());
+    fn registered_redirect_matches_the_listener() {
+        assert_eq!(
+            REGISTERED_REDIRECT,
+            format!("http://127.0.0.1:{REDIRECT_PORT}{REDIRECT_PATH}")
+        );
     }
 }

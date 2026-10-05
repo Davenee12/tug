@@ -109,7 +109,7 @@ export const useTugStore = defineStore("tug", () => {
   });
 
   // --- Spotify connector ---
-  const spotify = ref<SpotifyStatus>({ connected: false, account: null, clientId: null, redirectUri: "http://127.0.0.1/callback" });
+  const spotify = ref<SpotifyStatus>({ connected: false, account: null, clientId: null, redirectUri: "http://127.0.0.1:8972/callback" });
   /** The Spotify playback snapshot (repeat/shuffle/like/art), polled only while relevant. */
   const spotifyPlayer = ref<SpotifyPlayer | null>(null);
   /** The user's playlists, loaded on connect / first use and cached for Ctrl+K and the panel. */

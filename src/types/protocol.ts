@@ -239,7 +239,7 @@ export interface SpotifyStatus {
   account: string | null;
   /** The Client ID the owner pasted (null until set). */
   clientId: string | null;
-  /** The exact Redirect URI to register in the Spotify dashboard (no port). */
+  /** The exact Redirect URI to register in the Spotify dashboard. */
   redirectUri: string;
 }
 
