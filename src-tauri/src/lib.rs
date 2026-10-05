@@ -140,6 +140,7 @@ pub fn run() {
             commands::locate,
             commands::place_lookup,
             commands::app_icon,
+            commands::app_website,
             commands::mark_read,
             commands::set_watching,
             commands::get_calls,
