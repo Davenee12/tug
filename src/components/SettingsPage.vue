@@ -44,6 +44,7 @@ const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tu
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
 const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) => void tug.setAutostart(v) });
 const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
+const filterUnknown = computed({ get: () => tug.settings.filterUnknown, set: (v) => void tug.setSetting("filterUnknown", v) });
 const advertise = computed({ get: () => tug.advertiseEnabled, set: (v) => void tug.setAdvertising(v) });
 const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
 
@@ -268,6 +269,14 @@ async function clearHistory() {
 
         <!-- Notifications -->
         <template v-else-if="current.id === 'notifications'">
+          <div class="mb-4 rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Filter unknown senders"
+              description="Texts from numbers that aren't in your contacts, and that you've never texted, wait in their own list in Messages: no badge, no pop-up. Texts with a code still pop up."
+            >
+              <SettingsSwitch v-model="filterUnknown" label="Filter unknown senders" />
+            </SettingsRow>
+          </div>
           <div class="rounded-xl bg-surface-card px-5 py-4">
             <p class="text-[14px] font-medium text-ink">Muted on this PC</p>
             <p class="mt-0.5 text-[13px] text-muted">
