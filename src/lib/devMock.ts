@@ -196,6 +196,7 @@ const calls: CallRecord[] = setup
     ];
 
 const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
+let autostart = false;
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
 // Pair → PIN → connected → the iPhone's three switches come on one by one → a first
@@ -299,6 +300,11 @@ mockIPC(
       case "set_setting":
         settings[a.key as string] = a.value as string;
         return null;
+      case "get_autostart":
+        return autostart;
+      case "set_autostart":
+        autostart = a.enabled as boolean;
+        return null;
       case "app_icon": {
         // Stand-in icons (the real ones come from the App Store): a coloured tile per app.
         const id = String(a.appId ?? "");
@@ -316,6 +322,17 @@ mockIPC(
           Object.assign(nowPlaying, { elapsed: 0, elapsedAt: Date.now() });
           void emit("now-playing", { ...nowPlaying });
         }
+        // One AMS VolumeUp/VolumeDown is one phone step; iOS reports volume as a 0–1 fraction,
+        // ~16 steps. Clamp at the ends so press-and-hold stops there, as it would on hardware.
+        if (a.command === "volumeUp" || a.command === "volumeDown") {
+          const step = (a.command === "volumeUp" ? 1 : -1) / 16;
+          nowPlaying.volume = Math.min(1, Math.max(0, (nowPlaying.volume ?? 0.5) + step));
+          void emit("now-playing", { ...nowPlaying });
+        }
+        return null;
+      case "open_url":
+        // No browser launch in dev; just show what the real backend would open.
+        console.log("[devMock] open_url", a.url);
         return null;
       case "place_lookup":
         return JSON.stringify({ city: "Dallas", principalSubdivision: "Texas", countryCode: "US" });
