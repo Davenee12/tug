@@ -1,21 +1,41 @@
 # Changelog
 
-## Unreleased
+## Unreleased (v0.5.8)
+
+Smoother setup, texts that arrive instantly, and Spotify. Merged as #48–#59; tried on Dave's
+iPhone where noted.
 
 ### New
-- **Codes that arrive as texts show in the Feed.** When a verification code comes in as a text with
-  no notification behind it (the iPhone showed no banner — common for short codes and unknown
-  senders), it now appears in the Feed with the sender, the message and a **Copy code** button, so
-  you don't have to dig it out of Messages. The row opens the conversation; **Clear** hides it
-  (the text stays in Messages). A code text arriving live also raises the Windows pop-up with Copy
-  code when no notification did. No duplicate row when a notification already carried the same code.
-- **Spotify connector (opt-in):** connect your own free Spotify app in Settings › Spotify to get
-  what the iPhone's media link can't do for Spotify — working **repeat and shuffle**, a **Like**
-  button, **album art** on Now Playing, and your **playlists** to start on your iPhone. Open the
-  Playlists panel from the Now Playing card, or press Ctrl+K and type "play &lt;playlist&gt;".
-  Sign-in uses OAuth with PKCE through your browser (no client secret); the refresh token is kept in
-  Windows Credential Manager, never in plaintext, and the account name and tokens never appear in
-  diagnostics. Development-mode apps need the owner to have Spotify Premium and allow up to 5 users.
+- **Setup finds your iPhone and pairs it from tug.** Open Settings › Bluetooth on the iPhone and
+  tug lists it by name; click Pair, the code shows in tug, and that one pairing brings
+  notifications, music, battery and texts. No LightBlue needed. Tapping the PC on the iPhone (or
+  Windows' "Add a device" pop-up) still works: tug says Windows will show the code, then offers
+  your iPhone. *(The Windows pop-up path was proven on Jordan's iPhone; tug's own scan, #59, is
+  built and checked, waiting on a fresh-setup run.)*
+- **Setup tells you what to do:** "Look at your iPhone and tap Allow" while the phone waits on
+  you, a checklist of the iPhone's three switches naming the one that's off, a confirmed
+  **Start over** for old or duplicate pairings, and your phone's real name instead of "iPhone".
+- **Texts arrive the moment your phone gets them** (live texts), with **Sending… → Sent** on
+  texts you send. If the phone drops the link, tug reconnects by itself; checking every few
+  seconds stays as a backstop. *(Connected and held on Jordan's iPhone.)*
+- **Codes that arrive as texts show in the Feed** with a **Copy code** button, even when the
+  iPhone showed no banner, and pop up in Windows.
+- **Settings › Connectors**, starting with **Spotify**: click Connect and sign in. Then your
+  playlists (with covers) play on your iPhone, repeat and shuffle work, Like the current song,
+  album art on Now Playing, and Ctrl+K "play <playlist>". If Spotify is closed on the iPhone, tug
+  asks you to open it and starts the playlist as soon as it's open. *(Tried on Dave's account.)*
+
+### Fixed
+- The Feed keeps your place when notifications come and go; Messages opens on the newest text
+  and doesn't pull you down while you read back.
+- A new pairing no longer drops texts and notifications every few seconds while the iPhone waits
+  for you to tap Allow.
+- tug doesn't touch a phone until you've picked it in setup.
+
+### Known limits
+- Spotify extras need Spotify Premium; while tug's Spotify app is in Spotify's Development Mode,
+  only listeners added in its Spotify dashboard (up to 5) can connect.
+- iOS only shares the 10 newest incoming texts with a new install, and no sent texts.
 
 ## v0.5.7 — 2026-10-05
 
