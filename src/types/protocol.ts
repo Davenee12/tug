@@ -163,4 +163,6 @@ export interface UiSettings {
   mutedApps: string[];
   /** Closing the window keeps tug running in the tray (read by the backend too). */
   closeToTray: boolean;
+  /** Real app icons in the Feed, fetched once per app from Apple's App Store. */
+  appIcons: boolean;
 }
