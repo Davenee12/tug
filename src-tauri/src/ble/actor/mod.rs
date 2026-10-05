@@ -105,6 +105,11 @@ enum Event {
         gen: u64,
         connected: bool,
     },
+    /// The phone's Bluetooth name changed (renamed in Settings › General › About).
+    Name {
+        gen: u64,
+        name: String,
+    },
     Advertising(GattServiceProviderAdvertisementStatus),
     Radio(RadioState),
     DeviceAdded(DeviceInformation, Transport),
@@ -367,12 +372,14 @@ impl Actor {
                 }
             }
             Event::Connection { gen, connected } if Some(gen) == link_gen => self.on_connection(connected),
+            Event::Name { gen, name } if Some(gen) == link_gen => self.set_device_name(&name),
             Event::NotificationSource { .. }
             | Event::DataSource { .. }
             | Event::MediaEntity { .. }
             | Event::MediaCommands { .. }
             | Event::Battery { .. }
-            | Event::Connection { .. } => log::debug!("ignored event from a replaced link"),
+            | Event::Connection { .. }
+            | Event::Name { .. } => log::debug!("ignored event from a replaced link"),
             Event::Advertising(status) => {
                 let name = match status {
                     GattServiceProviderAdvertisementStatus::Created => "created",
