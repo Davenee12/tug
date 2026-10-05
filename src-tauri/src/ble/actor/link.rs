@@ -38,6 +38,10 @@ impl Actor {
         }
         match self.setup_services().await {
             Ok(()) => {
+                if self.connect_failures > 0 {
+                    log::info!("connected after {} failed attempt(s)", self.connect_failures);
+                }
+                self.connect_failures = 0;
                 if let Some(l) = self.link.as_mut() {
                     l.connected = true;
                 }
@@ -60,9 +64,17 @@ impl Actor {
     }
 
     pub(super) fn fail_connect(&mut self, message: String) {
-        log::info!("connect attempt failed: {message}");
+        self.connect_failures = self.connect_failures.saturating_add(1);
+        // A phone at the edge of range fails every few seconds all night: log the first
+        // few, then every tenth.
+        if self.connect_failures <= 3 || self.connect_failures.is_multiple_of(10) {
+            log::info!("connect attempt failed ({} in a row): {message}", self.connect_failures);
+        } else {
+            log::debug!("connect attempt failed ({} in a row): {message}", self.connect_failures);
+        }
         let linked = self.link.as_ref().is_some_and(|l| l.connected);
-        self.retry_in = if linked { RETRY_CONNECTED_SECS } else { RETRY_IDLE_SECS };
+        let base = if linked { RETRY_CONNECTED_SECS } else { RETRY_IDLE_SECS };
+        self.retry_in = retry_delay(base, self.connect_failures);
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
             s.last_error = Some(message);
@@ -125,7 +137,13 @@ impl Actor {
         link.connected = connected;
         if connected {
             if link.ancs.is_none() {
-                self.retry_in = 0;
+                // Normally connect right away. After repeated failures the link is probably
+                // flapping at the edge of range: let it settle instead of retrying on every blip.
+                self.retry_in = if self.connect_failures < FLAPPING_AFTER {
+                    0
+                } else {
+                    self.retry_in.min(FLAP_SETTLE_SECS)
+                };
             }
             return;
         }
@@ -135,7 +153,8 @@ impl Actor {
         link._battery = None;
         link.session_id = None;
         self.shared.set_live_session(None);
-        self.retry_in = RETRY_CONNECTED_SECS;
+        // Keep any backoff: a link going down mid-flap isn't a reason to hurry.
+        self.retry_in = retry_delay(RETRY_CONNECTED_SECS, self.connect_failures);
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
             s.battery = None;
