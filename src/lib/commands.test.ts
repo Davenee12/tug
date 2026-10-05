@@ -143,3 +143,35 @@ describe("parseActions", () => {
     expect(parseActions("g", people, ctx)).toEqual([]);
   });
 });
+
+describe("call", () => {
+  const dial = { canDial: true };
+
+  it("calls a person by their whole name, once calling from tug works", () => {
+    expect(parseActions("call daviel", people, dial)).toEqual([
+      { kind: "call", person: people[1], label: "Call Daviel", detail: "(214) 223-0313" },
+    ]);
+    expect(parseActions("ring tay", people, dial)[0]).toMatchObject({ kind: "call", label: "Call tay 🤎" });
+  });
+
+  it("offers each match for a shared name, so one is picked on purpose", () => {
+    const rows = parseActions("call jo", people, dial);
+    expect(rows.map((r) => r.kind)).toEqual(["call", "call"]);
+  });
+
+  it("dials a typed number", () => {
+    expect(parseActions("call 302 555 0100", people, dial)[0]).toMatchObject({ kind: "call", person: { address: "3025550100" } });
+  });
+
+  it("points to Settings instead of offering a call that can't work", () => {
+    expect(parseActions("call daviel", people, {})).toEqual([
+      { kind: "call-setup", label: "Calling from tug is off: check it in Settings › iPhone" },
+    ]);
+  });
+
+  it("never fires on a near miss", () => {
+    expect(parseActions("call daviel later today", people, dial)).toEqual([]);
+    expect(parseActions("call nobody", people, dial)).toEqual([]);
+    expect(parseActions("callback", people, dial)).toEqual([]);
+  });
+});
