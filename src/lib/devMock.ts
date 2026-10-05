@@ -6,6 +6,8 @@
 //   http://localhost:1420/?setup      first run, nothing paired (scripted: pair, PIN, sharing, first notification)
 //   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
+//   http://localhost:1420/?norepeat   player doesn't list AdvanceRepeatMode: no loop button
+//   http://localhost:1420/?repeatignored   player lists it but ignores it: the "didn't change" toast
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
@@ -13,6 +15,8 @@ import type { Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotifica
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
+const noRepeat = params.has("norepeat");
+const repeatIgnored = params.has("repeatignored");
 const now = Date.now();
 const min = 60_000;
 
@@ -116,7 +120,16 @@ const nowPlaying: NowPlaying = setup
       album: "Mezzanine",
       duration: 330,
       repeat: "off",
-      available: ["play", "pause", "togglePlayPause", "nextTrack", "previousTrack", "volumeUp", "volumeDown", "advanceRepeatMode"],
+      available: [
+        "play",
+        "pause",
+        "togglePlayPause",
+        "nextTrack",
+        "previousTrack",
+        "volumeUp",
+        "volumeDown",
+        ...(noRepeat ? [] : (["advanceRepeatMode"] as const)),
+      ],
     };
 
 // A connected keyboard listed first: setup must still offer only the iPhone.
@@ -248,7 +261,7 @@ mockIPC(
         settings[a.key as string] = a.value as string;
         return null;
       case "media_command":
-        if (a.command === "advanceRepeatMode") {
+        if (a.command === "advanceRepeatMode" && !repeatIgnored) {
           nowPlaying.repeat = nowPlaying.repeat === "off" ? "all" : nowPlaying.repeat === "all" ? "one" : "off";
           void emit("now-playing", { ...nowPlaying });
         }

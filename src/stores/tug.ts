@@ -562,7 +562,10 @@ export const useTugStore = defineStore("tug", () => {
       }
     },
     performAction: (id: number, positive: boolean) => attempt(() => api.performAction(id, positive)),
-    media: (command: MediaCommand) => attempt(() => api.mediaCommand(command)),
+    /** True once the phone accepted the write (which isn't the player acting on it). */
+    async media(command: MediaCommand): Promise<boolean> {
+      return (await attempt(() => api.mediaCommand(command).then(() => true))) === true;
+    },
     startDiscovery: () => attempt(api.startDiscovery),
     stopDiscovery: () => {
       discovered.value = [];
