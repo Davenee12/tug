@@ -65,6 +65,7 @@ export const api = {
   setWatching: (on: boolean) => invoke<void>("set_watching", { on }),
   appIcon: (appId: string) => invoke<string | null>("app_icon", { appId }),
   appWebsite: (appId: string) => invoke<string | null>("app_website", { appId }),
+  contactPhoto: (key: string) => invoke<string | null>("contact_photo", { key }),
   placeLookup: (latitude: number, longitude: number) => invoke<string>("place_lookup", { latitude, longitude }),
   markRead: (messageIds: number[]) => invoke<void>("mark_read", { messageIds }),
   searchAll: (query: string, limit: number) => invoke<SearchResults>("search_all", { query, limit }),

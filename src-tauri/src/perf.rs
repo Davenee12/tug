@@ -103,8 +103,8 @@ fn perf_large_history() {
             .unwrap();
     }
     store.conn().execute_batch("COMMIT").unwrap();
-    let phonebook: Vec<(String, String)> = (0..CONTACTS)
-        .map(|i| (format!("+1302555{i:04}"), format!("Contact {i}")))
+    let phonebook: Vec<(String, String, Option<String>)> = (0..CONTACTS)
+        .map(|i| (format!("+1302555{i:04}"), format!("Contact {i}"), None))
         .collect();
     store.save_phonebook(&phonebook).unwrap();
     println!(
