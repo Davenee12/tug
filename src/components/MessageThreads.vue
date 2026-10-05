@@ -63,11 +63,11 @@ watch(
   { immediate: true },
 );
 
-// A conversation you opened is read: clear it on the phone (and so the Feed) and mark its
-// texts read there — on open, when new texts land in it, and when you come back to it.
-// Clearing the phone can't be undone, so only when you're really looking at it: you chose
-// it (from the list, the Feed or search — not just the newest one shown by default), the
-// window is focused, and nothing (search, the picker, settings, pairing) covers it.
+// The conversation on screen is read: clear it on the phone (and so the Feed) and mark its
+// texts read there — on open, when new texts land in it, and when you come back to it. That
+// includes the newest one Messages shows by default (Dave's call). Clearing the phone can't
+// be undone, so only while you can actually see it: the window is focused and nothing
+// (search, the picker, settings, pairing) covers it.
 const focused = ref(document.hasFocus());
 const onFocus = () => (focused.value = true);
 const onBlur = () => (focused.value = false);
@@ -80,7 +80,7 @@ onUnmounted(() => {
   window.removeEventListener("blur", onBlur);
 });
 const lookingAt = (c: Conversation | null): c is Conversation =>
-  !!c && c.key === tug.selectedThread && c.items.length > 0 && focused.value && tug.view === "messages" && !tug.overlayOpen;
+  !!c && c.items.length > 0 && focused.value && tug.view === "messages" && !tug.overlayOpen;
 watch(
   () =>
     [
