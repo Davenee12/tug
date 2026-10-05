@@ -49,7 +49,7 @@ import { nextRepeat } from "../lib/spotify";
 
 const PAGE = 100;
 
-export type SettingsSection = "general" | "iphone" | "notifications" | "spotify" | "weather" | "privacy" | "about";
+export type SettingsSection = "general" | "iphone" | "notifications" | "connectors" | "weather" | "privacy" | "about";
 const SEEN_KEEP = 300;
 /** How many cleared-code message ids to remember (they expire from the Feed in minutes anyway). */
 const CLEARED_CODES_KEEP = 200;
@@ -124,7 +124,7 @@ export const useTugStore = defineStore("tug", () => {
   });
 
   // --- Spotify connector ---
-  const spotify = ref<SpotifyStatus>({ connected: false, account: null, clientId: null, redirectUri: "http://127.0.0.1:8972/callback" });
+  const spotify = ref<SpotifyStatus>({ connected: false, account: null });
   /** The Spotify playback snapshot (repeat/shuffle/like/art), polled only while relevant. */
   const spotifyPlayer = ref<SpotifyPlayer | null>(null);
   /** The user's playlists, loaded on connect / first use and cached for Ctrl+K and the panel. */
@@ -952,17 +952,8 @@ export const useTugStore = defineStore("tug", () => {
     if (list) playlists.value = list;
   }
 
-  async function setSpotifyClientId(id: string) {
-    const s = await attempt(() => api.spotifySetClientId(id));
-    if (s) spotify.value = s;
-  }
-
   /** Run the OAuth flow (opens the browser). Resolves when the loopback redirect returns. */
   async function connectSpotify(): Promise<boolean> {
-    if (!spotify.value.clientId) {
-      notify("error", "Add your Spotify Client ID first.");
-      return false;
-    }
     spotifyConnecting.value = true;
     notify("info", "Finish signing in to Spotify in your browser…");
     try {
@@ -1066,7 +1057,6 @@ export const useTugStore = defineStore("tug", () => {
     spotifyPanelOpen,
     loadSpotify,
     loadPlaylists,
-    setSpotifyClientId,
     connectSpotify,
     disconnectSpotify,
     playPlaylist,

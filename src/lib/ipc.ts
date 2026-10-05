@@ -76,7 +76,6 @@ export const api = {
   showToast: (spec: ToastSpec) => invoke<void>("show_toast", { spec }),
   // --- Spotify connector ---
   spotifyStatus: () => invoke<SpotifyStatus>("spotify_status"),
-  spotifySetClientId: (clientId: string) => invoke<SpotifyStatus>("spotify_set_client_id", { clientId }),
   /** Opens the browser for OAuth; resolves once the loopback redirect comes back. */
   spotifyConnect: () => invoke<SpotifyStatus>("spotify_connect"),
   spotifyDisconnect: () => invoke<SpotifyStatus>("spotify_disconnect"),
