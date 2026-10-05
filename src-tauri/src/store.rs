@@ -100,6 +100,14 @@ const MIGRATIONS: &[&str] = &[
     END;
     INSERT INTO messages_fts (messages_fts) VALUES ('rebuild');
     "#,
+    // v3: whether the phone still lists the message as unread, so opening it in tug
+    // marks it read on the phone once. Existing history counts as already read.
+    // Plus an index of notifications still open, for the sweep after each reconnect
+    // (a full scan took ~170 ms at 50k rows).
+    r#"
+    ALTER TABLE messages ADD COLUMN unread_on_phone INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX notifications_open ON notifications (session) WHERE removed_at IS NULL;
+    "#,
 ];
 
 /// The schema version this build expects.
