@@ -6,31 +6,91 @@ See docs/STABILIZATION.md for the current backlog.
 ## Now — stabilization sprints
 1. ~~Sprint 2: high-severity data-integrity bugs and the messaging crash path.~~ (v0.5.2)
 2. ~~Sprint 3: universal search, migrations, frontend fixes.~~ (v0.5.3) Accuracy audit (times, time
-   zones, counts, badges) carries into Sprint 4.
-3. Sprint 4: phone sync (mark texts read on the phone when opened in tug, clear their
-   notifications), accuracy audit fixes, performance, maintainability, CI.
+   zones, counts, badges) carried into Sprint 4.
+3. ~~Sprint 4: phone sync (mark texts read on the phone when opened in tug, clear their
+   notifications), accuracy audit fixes, performance, maintainability.~~ (v0.5.4)
+4. ~~Sprint 5: CI on every PR, second bug hunt (3 High / 3 Med / 8 Low fixed), `actor.rs` split
+   into six modules.~~ (shipped alongside v0.5.5)
 
 ## v0.5.7 — calling anyone, and texts in real time (agreed with Dave, 2026-10-05)
-- **Call anyone from tug** (Calls tab, Ctrl+K "call zoe", conversations). Today only missed calls can
-  be called back (iOS's "Dial" action over ANCS); dialing anyone needs the hands-free link, and
-  Windows' own hands-free driver holds it (DeniedBySystem on Dave's PC, even with Handsfree Telephony
-  unticked). The supported route is Windows' calling API (`PhoneLineTransportDevice` + `PhoneLine`,
-  what Phone Link uses), which needs package identity: a sparse package beside the NSIS install (or
-  MSIX), the restricted `phoneLineTransportManagement` capability, and **code signing** (e.g. Azure
-  Trusted Signing). Spike first on Dave's PC; signing also removes SmartScreen's "unknown publisher".
-- **Live texts (MAP notifications / MNS)**: texts land the instant the phone gets them, instead of
-  within ~8 s of polling; sends can show "Sent".
-- **Press and hold volume**: holding Now Playing's volume up/down keeps stepping (AMS VolumeUp/Down
-  repeated, accelerating, stopping on release), instead of one tap per step.
-- **tug pairs for texts itself**: the setup's Texts step pairs the phone's Classic side from inside
-  tug (code shown in tug), instead of sending people to Windows › Add device, always in the order that
-  keeps both pairings (notifications first, then texts).
-- **Auto-updates** from GitHub Releases, once releases are signed (same code-signing work as calling).
-- **Connection health + "Copy diagnostics"**: one Settings panel with each link's state (notifications,
-  media, texts, contacts, calls) and a button that bundles the logs for support. Today's three silent
+
+Two big bets (calling, live texts) plus smaller approved items. Research done 2026-10-05; the
+sequence below front-loads the two hardware spikes that gate the big bets, runs the pure modules in
+parallel while they're pending, and keeps calling's ship behind Dave's signing decision.
+
+### Needs Dave before coding can finish
+- **Hardware (spikes).** Calling and live texts can't be proven without Dave's PC + iPhone; the
+  pure modules land regardless, but the WinRT wiring is spike-gated.
+- **Re-tick Windows "Handsfree Telephony" service.** Dave unticked it today, so
+  `PhoneLineTransportDevice` count is 0; it must be back on before Spike 0, and Phone Link's own
+  calling must be off (one app owns a phone line at a time).
+- **Signing decision + country.** Calling's restricted capability and the installer need a signed
+  build to ship (sideloading the spike doesn't). Options: **Azure Artifact (Trusted) Signing**
+  ~$9.99/mo but **individuals only in US/Canada** — so we need Dave's country — or an **OV
+  certificate** $150–300/yr. Either shows Dave's name as publisher; neither instantly clears
+  SmartScreen — reputation still builds over time (correcting the old "signing removes the warning"
+  wording below). Auto-updates and the calling ship both wait on this.
+
+### Spikes first (Dave's hardware, gate the big items)
+- **Spike 0 — phone line exists.** Re-tick Handsfree Telephony; confirm one `PhoneLineTransportDevice`
+  appears for the iPhone (matched by Bluetooth address).
+- **Spike 1 — sparse package passes the restricted-capability check.** Standalone probe crate, sparse
+  MSIX identity, self-signed cert in `CurrentUser\TrustedPeople` (no admin). Drive the full flow:
+  `RequestAccessAsync` → `RegisterApp` → `ConnectAsync` → `PhoneCallManager.RequestStoreAsync` →
+  `PhoneLineWatcher` → `PhoneLine.DialWithResultAsync` (tug must be foreground) →
+  `ChangeAudioDeviceAsync(RemoteDevice)` to keep audio on the phone. This is the biggest unknown:
+  whether an identity-only sparse package beside an NSIS install satisfies `phoneLineTransportManagement`.
+  **Go/no-go for calling rides on this.**
+
+### Can start now — pure modules, no hardware (parallel)
+These land as tested pure PRs regardless of spike outcome:
+- **Live texts — event parser** (`x-bt/MAP-event-report`: NewMessage, SendingSuccess…) and **OBEX
+  server framing**, both pure + unit-tested.
+- **Calling — pure line-status state machine** (the calling module's core, independent of WinRT).
+- **Texts pairing / remember-by-id — pure pick logic** (`pick_device` prefers a stored id over name;
+  this is also the "remember the phone by id" item).
+
+### Independent features — no spike needed (parallel)
+- **Press-and-hold volume.** Holding Now Playing's volume up/down keeps stepping (AMS VolumeUp/Down
+  repeated, accelerating, stopping on release). Hardware only to verify.
+- **Connection health + "Copy diagnostics".** One Settings panel showing each link's state
+  (notifications, media, texts, contacts, calls) and a button that bundles the logs. Today's silent
   failures (forgotten pairing, Windows closing GATT objects, a broken texts pairing) were log-only.
 - **Start with Windows, minimized to the tray.**
-- **Remember the phone by id, not name** (texts device included), so a rename can't confuse anything.
+- **Remember the phone by id, not name** (texts device included) — see the pure pick logic above.
+
+### Live texts (MAP notifications / MNS) — after the pure modules, hardware to wire
+Texts land the instant the phone gets them instead of within ~8 s of polling; sends show "Sent".
+iOS supports `SetNotificationRegistration`. tug hosts an MNS server (`RfcommServiceProvider` 0x1133 +
+`StreamSocketListener` + SDP: name, MAP profile v1.1), keeping the 8 s poll as a backstop.
+- PRs: event parser (pure) → OBEX server framing (pure) → `SetNotificationRegistration` client call
+  → WinRT MNS listener → wire into the worker with poll fallback → "Sent" status UI.
+- Risks: an RFCOMM **server** from an unpackaged app is unproven; the `PushMessage` handle may not
+  equal the `SendingSuccess` handle (so "Sent" matching may be approximate).
+
+### tug pairs for texts itself — after the pure pick logic, hardware to wire
+The setup's Texts step pairs the phone's Classic side from inside tug (code shown in tug) instead of
+sending people to Windows › Add device. Discover the unpaired Classic iPhone via
+`BluetoothDevice.GetDeviceSelectorFromPairingState(false)` (inquiry; iPhone must have Settings ›
+Bluetooth open), pair with the existing `DeviceInformationCustomPairing` code. Order matters because
+of CTKD — **LE (notifications) first, then Classic (texts)**; persist `TEXTS_DEVICE_ID`.
+- PRs: pure pick logic → texts discovery mode (only during the step) → pair-for-texts command →
+  remember texts device by id → wizard button → ordering guard on re-pair.
+
+### Calling anyone — spike-gated, ships behind signing
+Call anyone from tug (Calls tab, Ctrl+K "call zoe", conversations). Today only missed calls can be
+called back (iOS's "Dial" over ANCS); dialing anyone needs Windows' calling API
+(`PhoneLineTransportDevice` + `PhoneLine`, what Phone Link uses), which requires **package identity**:
+a sparse package (identity-only MSIX manifest registered with `Add-AppxPackage -ExternalLocation` next
+to the NSIS install), capabilities `phoneCall` (general) + `phoneLineTransportManagement` (restricted;
+sideloading needs no Store approval) + `runFullTrust`, and the exe manifest getting an `<msix>` identity
+element via `tauri_build` `WindowsAttributes::app_manifest` (keep Common-Controls v6). `windows` crate
+feature `ApplicationModel_Calls`.
+- PRs (after Spike 1 is a go): identity plumbing → calling module (uses the pure state machine) + UI
+  → installer hooks (`Add-AppxPackage -ExternalLocation`) → production signing (Dave's chosen cert).
+
+### Auto-updates
+From GitHub Releases, **after** releases are signed (same signing work as calling).
 
 ## v0.5.8 — candidates
 - **Reply from the Windows pop-up** (type into the toast, Enter sends; technically risky).
@@ -38,36 +98,35 @@ See docs/STABILIZATION.md for the current backlog.
 - **Calls in Ctrl+K search**: a person's recent calls in their search result.
 
 ## Next — onboarding & distribution (product readiness)
-- **Settings page** — a full page (not the side panel) with a left nav, like Wispr Flow's but tug's
-  own. Built first in this track because the wizard, updates and connectors all need a home:
-  - *General:* start with Windows, notifications/toasts, sounds, zoom, theme.
-  - *iPhone:* paired device, connection status, the three iPhone switches with live ✓, re-pair, forget.
-  - *Connectors:* see below (the section ships empty-but-honest until the first connector lands).
-  - *Data & privacy:* history retention, clear history, export, where data lives (local only).
-  - *About:* version, check for updates, changelog, logs folder.
-- **First-run setup wizard** in the app: Bluetooth check, guided pairing with live status, the three
-  iPhone switches (Share System Notifications, Show Notifications, Sync Contacts) with screenshots and
-  live ✓ detection, and a send-yourself-a-test step.
-- **Pairing without LightBlue** — spike first:
+- ~~**Settings page** — a full page (not the side panel) with a left nav: General, iPhone, Connectors
+  (empty-but-honest), Data & privacy, About.~~ (v0.5.5 — shipped as General, iPhone, Notifications,
+  Weather, Data & privacy, About; Connectors section not built yet, see Later → Connectors.)
+- ~~**First-run setup wizard** in the app: Bluetooth check, guided pairing with live status, the three
+  iPhone switches with live ✓ detection, and a send-yourself-a-test step.~~ (v0.5.5)
+- **Pairing without LightBlue** — spike first. *Partly addressed:* v0.5.7 makes tug pair the Classic
+  (texts) side itself; the LE (notifications) first-pair still needs LightBlue. Remaining options:
   1. Make the PC appear in iOS Settings › Bluetooth (ANCS service-solicitation advert, or Classic
      pairing from the phone with cross-transport keys). No app needed if it works.
   2. Fallback: QR code → Apple App Clip that pairs in one tap (needs Apple Developer account + review).
   3. Long term: companion iOS app (also unlocks exact charging state, clipboard).
-- **Branded installer** (NSIS welcome/finish pages, Start-menu shortcut).
-- **Code signing** (avoid SmartScreen "unknown publisher"), **auto-updates** from GitHub Releases,
-  opt-in diagnostics.
+- **Branded installer** (NSIS welcome/finish pages, Start-menu shortcut). *Partly done:* real app
+  icons shipped (v0.5.6); welcome/finish pages still to do.
+- **Code signing** and **auto-updates** from GitHub Releases, opt-in diagnostics — **pulled forward
+  into v0.5.7** (calling needs the signed, identity-carrying build). Signing shows a named publisher
+  but does not instantly clear SmartScreen; reputation builds over time.
 
 ## Later — product ideas
-The small, curated idea backlog (one-time codes, live texts, Ctrl+K actions, tray, reply from the
-pop-up, the glance strip with weather, welcome back...) and what we decided *not* to build live in
-[docs/PRODUCT.md](docs/PRODUCT.md). Ideas move onto this roadmap only once approved.
+The small, curated idea backlog and what we decided *not* to build live in
+[docs/PRODUCT.md](docs/PRODUCT.md). Shipped from it so far: one-time codes, Ctrl+K actions, tray, the
+glance strip (weather) — all v0.5.5. Still open: live texts (now in v0.5.7), reply from the pop-up,
+welcome back. Ideas move onto this roadmap only once approved.
 
 ## Later — features
-- **Delete conversations:** an ✕ on each conversation to remove it from tug (local, with undo; nothing
-  on the phone is touched). Stretch: notice deletions made on the phone — only partly possible, since
-  message access shows a ~10-message window; a message vanishing from *inside* the window means deleted.
-- **Calls:** recent calls (PBAP call history), dial from the PC (HFP; Windows holds the hands-free link,
-  so start with a feasibility spike); audio on the phone first.
+- ~~**Delete conversations:** an ✕ on each conversation to remove it from tug (local, with undo).~~
+  (v0.5.5) Stretch (notice deletions made on the phone via the ~10-message window) not built.
+- **Calls:** *partly shipped* (v0.5.6) — incoming-call card, recent calls (PBAP), call back a missed
+  call (ANCS "Dial"), experimental hands-free check. **Dialing anyone** is the v0.5.7 calling bet
+  above (Windows calling API, package identity, signing). Audio stays on the phone first.
 - **Connectors:** messages already carry a `source`. Android, then Slack, Teams, WhatsApp, Wispr Flow
   into one inbox. Each gets a card in Settings › Connectors (icon, one-line "what you get", Connect /
   Disconnect, status), built alongside the first real connector so the page is never a list of

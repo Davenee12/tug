@@ -35,20 +35,21 @@ go back to picking up your phone.
 
 ## Product opportunity backlog (keep ≤ 10)
 Scores: value · frequency · delight · complexity. Timing: **Next** = after stabilization, **Later** =
-after onboarding/settings.
+after onboarding/settings. Shipped ideas keep their row with a ✅ status so the history stays honest;
+the ≤10 cap counts only **active** (not-yet-built) ideas — currently 5 (#2 building, #5, #7, #8, #9).
 
 | # | Idea | Problem | Experience | V/F/D/C | Call | Timing |
 |---|---|---|---|---|---|---|
-| 1 | **One-time codes** | Reading a 2FA code off the phone and retyping it | A code in a text/notification gets a Copy chip (and Ctrl+Shift+C); clears the notification after | H/H/H/Low | Build | Next |
-| 2 | **Live texts (MAP notifications)** | Texts can take up to 8 s to appear; no "Sent" confirmation | Texts land the instant the phone gets them; your sends show "Sent" | H/H/M/Med | Build | Next |
-| 3 | **Ctrl+K actions** | Common actions need clicks through views | Type "zoe running late" → send; "pause"; "clear all" | H/M/H/Med | Build | Next |
-| 4 | **Tray presence** | tug is invisible when minimized; no unread signal | Tray icon with unread count; click opens the latest conversation | H/H/M/Low | Build | Next |
-| 5 | **Reply from the Windows pop-up** | Answering a text means opening tug | Type into the toast, Enter sends | H/H/H/Med-High | Prototype (Tauri toast input support is the risk) | Next |
-| 6 | **Glance strip** (widgets, done small) | Glanceable info (phone battery, what's playing, next meeting, weather) is scattered | One quiet row above the Feed; drag a card bigger for more (weather → 7-day), smaller for less | M/H/H/Med | Adapt — one strip, not a widget system | Later (needs Settings) |
-| 7 | **Welcome back** | Coming back to the PC, you don't know what you missed | After 30+ min away, the top of the Feed briefly summarizes who texted and what's waiting | M/M/H/Low-Med | Prototype | Later |
+| 1 | **One-time codes** | Reading a 2FA code off the phone and retyping it | A code in a text/notification gets a Copy chip (and Ctrl+Shift+C); clears the notification after | H/H/H/Low | ✅ Shipped v0.5.5 | — |
+| 2 | **Live texts (MAP notifications / MNS)** | Texts can take up to 8 s to appear; no "Sent" confirmation | Texts land the instant the phone gets them; your sends show "Sent" | H/H/M/Med | 🔨 Building (v0.5.7) | Now |
+| 3 | **Ctrl+K actions** | Common actions need clicks through views | Type "zoe running late" → send; "pause"; "clear all" | H/M/H/Med | ✅ Shipped v0.5.5 (more v0.5.6) | — |
+| 4 | **Tray presence** | tug is invisible when minimized; no unread signal | Tray icon with unread count; click opens the latest conversation | H/H/M/Low | ✅ Shipped v0.5.5 (click → latest unread v0.5.6) | — |
+| 5 | **Reply from the Windows pop-up** | Answering a text means opening tug | Type into the toast, Enter sends | H/H/H/Med-High | Prototype (Tauri toast input support is the risk) | v0.5.8 candidate |
+| 6 | **Glance strip** (widgets, done small) | Glanceable info (phone battery, what's playing, next meeting, weather) is scattered | One quiet row above the Feed; drag a card bigger for more (weather → 7-day), smaller for less | M/H/H/Med | ✅ Partly — weather card shipped v0.5.4–v0.5.5; multi-card strip not built | — |
+| 7 | **Welcome back** | Coming back to the PC, you don't know what you missed | After 30+ min away, the top of the Feed briefly summarizes who texted and what's waiting | M/M/H/Low-Med | Prototype | v0.5.8 candidate |
 | 8 | **Suggested replies** | Typing the same short answers | 2–3 one-tap replies under a new text, learned from your own replies first, AI opt-in | M/M/M/Med | Consider later | Later |
 | 9 | **Mini mode** | Want texts + media visible while working | Small always-on-top window with the latest conversation and controls | M/M/H/Med | Consider later | Later |
-| 10 | **Delete conversations** | Old threads clutter the list | ✕ with undo; local only | M/L/L/Low | Build (already on roadmap) | Next |
+| 10 | **Delete conversations** | Old threads clutter the list | ✕ with undo; local only | M/L/L/Low | ✅ Shipped v0.5.5 | — |
 
 ### Considered and not building (and why)
 - **Read receipts for texts you send** — not possible over Bluetooth: iOS never shares whether the
@@ -76,6 +77,7 @@ Performance impact · Maintenance cost · Recommendation (Build / Prototype / Co
 build) · Why.
 
 ## UX debt noticed (fix as part of sprints)
-- First run still depends on the LightBlue app — the biggest gap between "project" and "product"
-  (onboarding track on the roadmap).
-- Settings live in a side panel; a real Settings page is on the roadmap.
+- First run still depends on the LightBlue app for the **notifications (LE)** pairing — the biggest gap
+  between "project" and "product". v0.5.7 removes LightBlue from the **texts (Classic)** step (tug
+  pairs it itself); the LE first-pair still needs it (see roadmap → Pairing without LightBlue).
+- ~~Settings live in a side panel; a real Settings page is on the roadmap.~~ Shipped (v0.5.5).
