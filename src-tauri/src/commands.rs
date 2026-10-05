@@ -305,7 +305,15 @@ pub fn copy_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
     use tauri::Manager;
 
     let status = state.shared.status();
-    let status_json = serde_json::to_string_pretty(&status).map_err(|e| e.to_string())?;
+    // The phone's name often names a person ("Dave James's iPhone"): keep it out of the report.
+    let phone_names: Vec<String> = status
+        .device
+        .iter()
+        .map(|d| d.name.clone())
+        .chain(status.texts_device.clone())
+        .collect();
+    let status_json =
+        serde_json::to_string_pretty(&diagnostics::anonymize_status(&status)).map_err(|e| e.to_string())?;
     let bluetooth = diagnostics::bluetooth_summary(&status);
     let windows_version = diagnostics::os_version();
 
@@ -335,6 +343,7 @@ pub fn copy_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
         status_json: &status_json,
         settings: &settings,
         log_lines: &log_lines,
+        phone_names: &phone_names,
     }
     .render();
 
