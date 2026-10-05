@@ -16,7 +16,7 @@ import {
   Sun,
 } from "lucide-vue-next";
 import { useWeatherStore } from "../stores/weather";
-import { dayLabel, describe, hourLabel, outlook, searchPlaces, temp, wind, type Place, type Sky } from "../lib/weather";
+import { dayLabel, describe, hourLabel, localTime, outlook, searchPlaces, temp, wind, type Place, type Sky } from "../lib/weather";
 import { relativeTime } from "../lib/format";
 
 const w = useWeatherStore();
@@ -53,17 +53,25 @@ const bar = (low: number, high: number) => ({
 });
 const nowDot = computed(() => (f.value ? `${((f.value.now.temp - range.value.lo) / range.value.span) * 100}%` : "0"));
 
-// ---- Open / close: drag the card down for more, up for less (or just click it) ----
+// The place's clock, ticking on the minute.
+const now = ref(new Date());
+let clock: number | undefined;
+function tick() {
+  now.value = new Date();
+  clock = window.setTimeout(tick, 60_000 - (Date.now() % 60_000) + 50);
+}
+
+// ---- Open / close: drag anywhere on the card, down for more, up for less (or click the top) ----
 const open = ref(false);
+const header = ref<HTMLElement | null>(null);
 const inner = ref<HTMLElement | null>(null);
 const full = ref(0);
 const dragH = ref<number | null>(null);
-let startY = 0;
-let startH = 0;
-let moved = false;
 let ro: ResizeObserver | undefined;
+let gesture: { x: number; y: number; h: number; id: number; onHeader: boolean; dragging: boolean } | null = null;
 
 onMounted(() => {
+  tick();
   ro = new ResizeObserver(() => (full.value = inner.value?.scrollHeight ?? 0));
   watch(
     inner,
@@ -74,31 +82,60 @@ onMounted(() => {
     { immediate: true },
   );
 });
-onUnmounted(() => ro?.disconnect());
+onUnmounted(() => {
+  ro?.disconnect();
+  window.clearTimeout(clock);
+});
 
 const height = computed(() => (dragH.value !== null ? dragH.value : open.value ? full.value : 0));
 
 function down(e: PointerEvent) {
-  if (e.button !== 0) return;
-  startY = e.clientY;
-  startH = open.value ? full.value : 0;
-  moved = false;
-  dragH.value = startH;
-  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  const target = e.target as HTMLElement;
+  if (e.button !== 0 || target.closest("button, input, a")) return;
+  gesture = {
+    x: e.clientX,
+    y: e.clientY,
+    h: open.value ? full.value : 0,
+    id: e.pointerId,
+    onHeader: !!header.value?.contains(target) || !!target.closest("[data-toggle]"),
+    dragging: false,
+  };
+  try {
+    // Track the pointer from the press, so a fast drag that leaves the card still counts.
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  } catch {
+    /* not a capturable pointer; moves inside the card still work */
+  }
 }
 function move(e: PointerEvent) {
-  if (dragH.value === null) return;
-  const dy = e.clientY - startY;
-  if (Math.abs(dy) > 4) moved = true;
-  // A little give past the ends so it feels physical.
-  const raw = startH + dy;
+  const g = gesture;
+  if (!g || e.pointerId !== g.id) return;
+  const dx = e.clientX - g.x;
+  const dy = e.clientY - g.y;
+  if (!g.dragging) {
+    // Sideways means scrolling the hours row, not resizing the card.
+    if (Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy)) return void (gesture = null);
+    if (Math.abs(dy) < 6) return;
+    g.dragging = true;
+  }
+  // Follows the pointer, with a little give past either end so it feels physical.
+  const raw = g.h + dy;
   dragH.value = raw < 0 ? raw / 4 : raw > full.value ? full.value + (raw - full.value) / 4 : raw;
 }
-function up() {
-  if (dragH.value === null) return;
-  const h = dragH.value;
-  if (!moved) open.value = !open.value;
-  else open.value = open.value ? h > full.value * 0.75 : h > full.value * 0.25;
+function up(e: PointerEvent) {
+  const g = gesture;
+  gesture = null;
+  if (!g || e.pointerId !== g.id) return;
+  if (g.dragging) {
+    const h = dragH.value ?? g.h;
+    open.value = open.value ? h > full.value * 0.75 : h > full.value * 0.25;
+    dragH.value = null;
+  } else if (g.onHeader) {
+    open.value = !open.value;
+  }
+}
+function cancel() {
+  gesture = null;
   dragH.value = null;
 }
 function onKey(e: KeyboardEvent) {
@@ -191,17 +228,21 @@ async function change() {
   </section>
 
   <!-- Forecast -->
-  <section v-else-if="place" class="overflow-hidden rounded-xl bg-surface-card select-none">
+  <section
+    v-else-if="place"
+    class="overflow-hidden rounded-xl bg-surface-card select-none"
+    @pointerdown="down"
+    @pointermove="move"
+    @pointerup="up"
+    @pointercancel="cancel"
+  >
     <div
+      ref="header"
       role="button"
       tabindex="0"
       :aria-expanded="open"
       :aria-label="open ? 'Weather: show less' : 'Weather: show the week'"
-      class="cursor-pointer touch-none px-6 pt-5 pb-2 outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
-      @pointerdown="down"
-      @pointermove="move"
-      @pointerup="up"
-      @pointercancel="up"
+      class="cursor-pointer touch-none px-6 pt-5 pb-1 outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
       @keydown="onKey"
     >
       <!-- First load: quiet placeholder in the card's own shape -->
@@ -213,7 +254,7 @@ async function change() {
 
       <div v-else-if="!f" class="flex items-center gap-3 pb-3 text-[13px] text-muted">
         Can't reach the forecast right now.
-        <button class="flex items-center gap-1 text-ink" @pointerdown.stop @click.stop="w.refresh(true)">
+        <button class="flex items-center gap-1 text-ink" @click.stop="w.refresh(true)">
           <RotateCcw :size="12" /> Retry
         </button>
       </div>
@@ -223,7 +264,7 @@ async function change() {
         <div class="flex items-start gap-1.5">
           <p class="headline text-[46px] leading-none" style="letter-spacing: -0.03em">{{ temp(f.now.temp, w.unit) }}</p>
           <!-- Unit switch beside the number: one click, remembered. -->
-          <span class="mt-1 flex gap-1 text-[13px]" @pointerdown.stop>
+          <span class="mt-1 flex gap-1 text-[13px]">
             <button
               v-for="u in ['f', 'c'] as const"
               :key="u"
@@ -240,18 +281,14 @@ async function change() {
           <p class="text-[13px] text-muted">
             <template v-if="today">H {{ t(today.high) }} · L {{ t(today.low) }} · </template>Feels {{ t(f.now.feels) }}
           </p>
+          <p v-if="line" class="truncate text-[13px] font-medium text-body-strong">{{ line }}</p>
         </div>
         <div class="ml-auto min-w-0 text-right">
           <p class="flex items-center justify-end gap-1 truncate text-[13px] text-muted">
             <MapPin :size="12" class="shrink-0" /> {{ place.name }}
           </p>
-          <p v-if="line" class="mt-0.5 truncate text-[13px] font-medium text-body-strong">{{ line }}</p>
+          <p class="mt-0.5 text-[13px] font-medium text-body-strong tabular-nums">{{ localTime(now, f.timezone) }}</p>
         </div>
-      </div>
-
-      <!-- Grabber: drag down for the week -->
-      <div class="flex justify-center pt-3">
-        <span :class="['h-1 w-9 rounded-full transition-colors', dragH !== null ? 'bg-muted-soft' : 'bg-hairline']" />
       </div>
     </div>
 
@@ -261,7 +298,7 @@ async function change() {
       :class="['overflow-hidden', dragH === null ? 'transition-[height] duration-300 ease-[cubic-bezier(.2,.8,.2,1)]' : '']"
       :aria-hidden="!open"
     >
-      <div v-if="f" ref="inner" class="px-6 pt-2 pb-5">
+      <div v-if="f" ref="inner" class="px-6 pt-2 pb-1">
         <ul class="-mx-2 flex gap-1 overflow-x-auto pb-2 [scrollbar-width:none]" @wheel="sideways">
           <li v-for="(h, i) in f.hours" :key="h.time" class="flex w-14 shrink-0 flex-col items-center gap-1.5 rounded-lg py-2">
             <span class="text-[11px] text-muted">{{ i === 0 ? "Now" : hourLabel(h.time) }}</span>
@@ -304,6 +341,11 @@ async function change() {
         </div>
         <p class="mt-1 text-[11px] text-muted-soft">Forecast by Open-Meteo</p>
       </div>
+    </div>
+
+    <!-- Grabber: under the summary when closed, at the bottom when open. Drag either way. -->
+    <div data-toggle class="flex cursor-grab justify-center pt-2 pb-3 active:cursor-grabbing">
+      <span :class="['h-1 w-9 rounded-full transition-colors', dragH !== null ? 'bg-muted-soft' : 'bg-hairline']" />
     </div>
   </section>
 </template>

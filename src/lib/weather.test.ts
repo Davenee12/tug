@@ -1,5 +1,17 @@
 import { describe as group, expect, it } from "vitest";
-import { dayLabel, defaultUnit, describe, hourLabel, outlook, parseForecast, temp, wind, type Forecast } from "./weather";
+import {
+  dayLabel,
+  defaultUnit,
+  describe,
+  hourLabel,
+  localTime,
+  outlook,
+  parseForecast,
+  placeName,
+  temp,
+  wind,
+  type Forecast,
+} from "./weather";
 
 function hours(codes: number[], rain: number[] = []) {
   return codes.map((code, i) => ({
@@ -97,6 +109,40 @@ group("weather", () => {
     expect(f.hours.map((h) => h.time)).toEqual(["2026-10-05T14:00", "2026-10-05T15:00"]);
     expect(f.hours[1]).toMatchObject({ temp: 23, day: false, rain: 60 });
     expect(f.days[1]).toEqual({ date: "2026-10-06", code: 61, high: 19, low: 12, rain: 80 });
+  });
+
+  it("names a located place like a person would", () => {
+    expect(placeName({ city: "Portland", locality: "Pearl District", principalSubdivision: "Oregon", countryCode: "US" })).toBe(
+      "Portland, Oregon",
+    );
+    expect(placeName({ city: "", locality: "Beaverton", principalSubdivision: "Oregon", countryCode: "US" })).toBe(
+      "Beaverton, Oregon",
+    );
+    expect(placeName({ city: "Madrid", principalSubdivision: "Madrid", countryCode: "ES", countryName: "Spain" })).toBe(
+      "Madrid, Spain",
+    );
+    expect(placeName({ countryCode: "US" })).toBeNull();
+  });
+
+  it("shows the time in the place's own zone", () => {
+    const at = new Date("2026-10-05T01:58:00Z");
+    const fmt = (tz: string) => at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: tz });
+    expect(localTime(at, "America/New_York")).toBe(fmt("America/New_York"));
+    expect(localTime(at, "Asia/Tokyo")).toBe(fmt("Asia/Tokyo"));
+    expect(localTime(at, "Not/AZone")).toBe(at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }));
+  });
+
+  it("keeps the place's time zone from the forecast", () => {
+    const f = parseForecast(
+      {
+        timezone: "America/New_York",
+        current: { time: "2026-10-05T21:00", temperature_2m: 1, apparent_temperature: 1, weather_code: 0, is_day: 0, wind_speed_10m: 0, relative_humidity_2m: 0 },
+        hourly: { time: [], temperature_2m: [], weather_code: [], is_day: [] },
+        daily: { time: [], weather_code: [], temperature_2m_max: [], temperature_2m_min: [] },
+      },
+      0,
+    );
+    expect(f.timezone).toBe("America/New_York");
   });
 
   it("labels days", () => {

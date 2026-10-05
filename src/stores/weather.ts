@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { api, errorMessage } from "../lib/ipc";
-import { defaultUnit, fetchForecast, type Forecast, type Place, type Unit } from "../lib/weather";
+import { defaultUnit, fetchForecast, nameFor, type Forecast, type Place, type Unit } from "../lib/weather";
 
 const STALE_MS = 30 * 60 * 1000;
 const CACHE_KEY = "tug.weather.v1";
@@ -83,7 +83,8 @@ export const useWeatherStore = defineStore("weather", () => {
   async function useMyLocation(): Promise<string | null> {
     try {
       const pos = await api.locate();
-      await setPlace({ name: "Near you", ...pos });
+      const name = await nameFor(pos.latitude, pos.longitude).catch(() => null);
+      await setPlace({ name: name ?? "Your location", ...pos });
       return null;
     } catch (e) {
       return errorMessage(e);
