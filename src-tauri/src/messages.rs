@@ -251,17 +251,17 @@ impl Store {
             "INSERT OR IGNORE INTO contacts (address, name)
              SELECT address, name FROM (
                  SELECT m.address AS address,
-                        MIN(trim(n.title)) AS name,
-                        COUNT(DISTINCT trim(n.title)) AS names
+                        MIN(rtrim(replace(trim(n.title), ' replied to you', ''))) AS name,
+                        COUNT(DISTINCT rtrim(replace(trim(n.title), ' replied to you', ''))) AS names
                  FROM messages m
                  JOIN notifications n
-                   ON n.app_id = ?1 AND n.message = m.body AND trim(n.title) <> ''
+                   ON n.app_id = ?1 AND n.message = m.body AND rtrim(replace(trim(n.title), ' replied to you', '')) <> ''
                   AND abs(n.received_at - m.received_at) <= ?2
                  WHERE m.direction = 'in' AND m.body <> ''
                    AND m.address NOT IN (SELECT address FROM contacts)
                    AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
                         WHERE m2.direction = 'in' AND m2.body = m.body) = 1
-                   AND (SELECT COUNT(DISTINCT trim(n2.title)) FROM notifications n2
+                   AND (SELECT COUNT(DISTINCT rtrim(replace(trim(n2.title), ' replied to you', ''))) FROM notifications n2
                         WHERE n2.app_id = ?1 AND n2.message = m.body) = 1
                  GROUP BY m.address
              )
@@ -374,6 +374,15 @@ mod tests {
         m.received_at = 1_000 + LEARN_WINDOW_MS + 1;
         s.insert_incoming(&m).unwrap();
         assert!(s.learn_contacts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn learns_the_sender_not_the_inline_reply_title() {
+        let s = Store::in_memory().unwrap();
+        notify(&s, 1, "tay 🤎 replied to you", "Yes", 990);
+        s.insert_incoming(&incoming("H1", "+13026698133", "Yes")).unwrap();
+        let learned = s.learn_contacts().unwrap();
+        assert_eq!(learned[0].name, "tay 🤎");
     }
 
     #[test]
