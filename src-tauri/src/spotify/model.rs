@@ -237,6 +237,11 @@ pub fn token_expired(expires_at_ms: i64, now_ms: i64, skew_ms: i64) -> bool {
     now_ms + skew_ms >= expires_at_ms
 }
 
+/// Returned when Spotify can't see the iPhone (its Spotify app isn't open). The UI matches on
+/// this exact text to wait for the phone instead of showing an error; keep it in sync with
+/// `SPOTIFY_NO_PHONE` in `src/stores/tug.ts`.
+pub const NO_PHONE: &str = "Open Spotify on your iPhone.";
+
 /// A Spotify Web API error, classified from the HTTP status and body so the connector can react
 /// (refresh on 401, wait on 429) and show the user something plain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,7 +267,7 @@ impl ApiError {
                 format!("Spotify is rate-limiting; try again in {retry_after}s.")
             }
             Self::PremiumRequired => "This needs Spotify Premium on the connected account.".into(),
-            Self::NoActiveDevice => "Open Spotify on your iPhone once, then try again.".into(),
+            Self::NoActiveDevice => NO_PHONE.into(),
             Self::Other { status, message } if message.is_empty() => format!("Spotify error (HTTP {status})."),
             Self::Other { message, .. } => format!("Spotify: {message}"),
         }
