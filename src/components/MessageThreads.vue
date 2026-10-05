@@ -16,10 +16,11 @@ import AppAvatar from "./AppAvatar.vue";
 
 const tug = useTugStore();
 const convs = computed(() => {
-  const list = groupConversations(tug.visible, tug.messages, tug.contacts);
+  const list = groupConversations(tug.notifications, tug.messages, tug.contacts);
   // A conversation started with + shows (empty) until its first message exists.
   const draft = tug.composeTo;
-  if (draft) {
+  // Once a real conversation exists for the draft's number, the draft is done (M9).
+  if (draft && !list.some((c) => c.addresses.includes(draft.address))) {
     const key = threadKey({ appId: "com.apple.MobileSMS", title: draft.name });
     if (!list.some((c) => c.key === key)) {
       const placeholder = { kind: "message", id: "draft", at: new Date(), body: "" } as unknown as ConversationItem;
@@ -66,6 +67,33 @@ watch(
     scroller.value?.scrollTo({ top: scroller.value.scrollHeight });
   },
   { immediate: true },
+);
+
+// When the draft's first message lands under a different name (e.g. a typed number that
+// turns out to be a contact), follow it to the real conversation instead of stranding the user.
+watch(convs, (list) => {
+  const draft = tug.composeTo;
+  if (!draft) return;
+  const real = list.find((c) => c.items.length > 0 && c.addresses.includes(draft.address));
+  if (real) tug.openThread(real.key);
+});
+
+// Arriving from search: scroll to the item and briefly highlight it.
+const flashed = ref<string | null>(null);
+watch(
+  () => [tug.focusItem, selected.value?.key] as const,
+  async ([item]) => {
+    if (!item) return;
+    await nextTick();
+    const el = scroller.value?.querySelector<HTMLElement>(`[data-item="${item}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    flashed.value = item;
+    tug.focusItem = null;
+    window.setTimeout(() => (flashed.value = null), 1800);
+  },
+  // Immediate: search usually sets the target just before this view mounts.
+  { flush: "post", immediate: true },
 );
 
 function showDay(i: number): boolean {
@@ -184,7 +212,14 @@ function onKey(e: KeyboardEvent) {
       <div ref="scroller" class="flex-1 overflow-y-auto px-8 py-6">
         <template v-for="(item, i) in selected.items" :key="item.id">
           <div v-if="showDay(i)" class="caption-upper my-4 text-center text-muted-soft">{{ dayLabel(item.at) }}</div>
-          <div :class="['mb-2 flex max-w-[75%] flex-col', outgoing(item) ? 'ml-auto items-end' : 'items-start']">
+          <div
+            :data-item="item.id"
+            :class="[
+              'mb-2 flex max-w-[75%] flex-col rounded-xl transition-shadow duration-500',
+              outgoing(item) ? 'ml-auto items-end' : 'items-start',
+              flashed === item.id ? 'ring-2 ring-accent-amber ring-offset-4 ring-offset-canvas' : '',
+            ]"
+          >
             <div
               :class="[
                 'selectable rounded-xl px-4 py-2.5 text-[14px] whitespace-pre-line',
