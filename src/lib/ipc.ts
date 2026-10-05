@@ -79,6 +79,7 @@ export const api = {
   spotifyConnect: () => invoke<SpotifyStatus>("spotify_connect"),
   spotifyDisconnect: () => invoke<SpotifyStatus>("spotify_disconnect"),
   spotifyPlaylists: () => invoke<SpotifyPlaylist[]>("spotify_playlists"),
+  spotifyCover: (url: string) => invoke<string | null>("spotify_cover", { url }),
   spotifyPlayPlaylist: (uri: string) => invoke<void>("spotify_play_playlist", { uri }),
   spotifyPlayer: () => invoke<SpotifyPlayer | null>("spotify_player"),
   spotifySetRepeat: (mode: RepeatMode) => invoke<void>("spotify_set_repeat", { mode }),
