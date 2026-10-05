@@ -298,6 +298,8 @@ mod server {
         Connected,
         /// The phone pushed an event report.
         Event(MnsEvent),
+        /// The phone's MNS link ended while tug still wanted it (not when tug stopped it).
+        Disconnected,
     }
 
     /// A running MNS advertisement + listener. Dropping it stops advertising and unhooks the
@@ -346,9 +348,15 @@ mod server {
             // The event fires on a WinRT pool thread; hand the socket to the worker's runtime,
             // which owns all the other MAP I/O.
             runtime.spawn(async move {
-                if let Err(e) = serve_connection(socket, tx, stopped).await {
-                    log::info!("MNS connection ended: {e}");
+                let result = serve_connection(socket, tx.clone(), stopped.clone()).await;
+                if stopped.load(Ordering::SeqCst) {
+                    return;
                 }
+                match result {
+                    Ok(()) => log::info!("MNS connection closed by the iPhone"),
+                    Err(e) => log::info!("MNS connection ended: {e}"),
+                }
+                let _ = tx.send(ServerMessage::Disconnected);
             });
             Ok(())
         }))?;
