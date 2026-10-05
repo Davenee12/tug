@@ -6,7 +6,7 @@
 | 2 | v0.5.2 | H1–H4, M1–M5 (each with a regression test, mutation-checked) |
 | 3 | v0.5.3 | M6 migrations, M7 universal search, M8 store lifecycle, M9 drafts, M10 dialog focus; Vitest harness |
 | 4 | v0.5.4 | Phone sync (clear on open, MAP mark-read), contact renames (aliases), accuracy-audit fixes, M11 measured and not needed (every UI query < 20 ms at 50k notifications), `cargo audit` clean |
-| 5 | — | CI on every PR; bug hunt; `actor.rs` split; remaining lows (in progress) |
+| 5 | (pending) | CI on every PR; second bug hunt (3 reviewers: 3 High, 3 Med, 8 Low found and fixed, each verified first); `actor.rs` split into 6 modules (pure move, verified per function); lows: stale live session, app-name retry, toast bursts, listing `>`, reused send handles |
 
 Lows already fixed along the way: Ctrl+N inside text fields, notification-permission re-prompt,
 unbounded `ui.seen`, listing datetimes with a zone offset. The sections below are the original
