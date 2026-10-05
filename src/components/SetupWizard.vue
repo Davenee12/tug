@@ -103,6 +103,15 @@ async function choose(d: DiscoveredDevice) {
     go("connect");
   }
 }
+// The phone forgot this PC (e.g. Forget This Device): drop Windows' half of the old pairing
+// and pair from scratch, instead of retrying a bond the phone will never accept.
+const repairing = ref(false);
+async function pairAgain() {
+  repairing.value = true;
+  await tug.forget();
+  repairing.value = false;
+  go("connect");
+}
 // Windows asks for the PIN → its own screen; once paired, the device watcher moves on.
 watch(
   () => tug.pairingRequest,
@@ -384,7 +393,13 @@ const SHORTCUTS: Array<[string, string]> = [
               </li>
             </ul>
           </div>
-          <p v-if="connecting" class="mt-6 flex items-center justify-center gap-2 text-[13px] text-muted">
+          <div v-if="s.pairingStale" class="mt-6 flex items-center gap-3 rounded-xl bg-surface-card px-4 py-3">
+            <p class="min-w-0 flex-1 text-[13px] text-body">Your iPhone has forgotten this PC, so it can't connect. Pair again: it takes a few seconds.</p>
+            <button class="btn-primary btn-sm" :disabled="repairing" @click="pairAgain">
+              <LoaderCircle v-if="repairing" :size="13" class="animate-spin" /> Pair again
+            </button>
+          </div>
+          <p v-else-if="connecting" class="mt-6 flex items-center justify-center gap-2 text-[13px] text-muted">
             <LoaderCircle :size="14" class="animate-spin" /> Connecting to your iPhone…
           </p>
           <p v-else-if="sharingDone" class="mt-6 flex items-center justify-center gap-2 text-[14px] font-medium text-ink">

@@ -5,6 +5,8 @@ import { defaultUnit, fetchForecast, nameFor, type Forecast, type Place, type Un
 
 const STALE_MS = 30 * 60 * 1000;
 const CACHE_KEY = "tug.weather.v1";
+/** Shown only until the place's real name comes back ("Portland, Oregon"). */
+const UNNAMED = "Your location";
 
 /**
  * The Feed's weather card. Off until the user picks a place (their location or a city);
@@ -54,7 +56,18 @@ export const useWeatherStore = defineStore("weather", () => {
     timer = window.setInterval(() => void refresh(), STALE_MS);
   }
 
+  /** A failed name lookup at setup must not stick: try again until the place has a name. */
+  async function nameIfNeeded() {
+    const p = place.value;
+    if (!p || p === "off" || p.name !== UNNAMED) return;
+    const name = await nameFor(p.latitude, p.longitude).catch(() => null);
+    if (!name || place.value !== p) return;
+    place.value = { ...p, name };
+    await api.setSetting("ui.weather", JSON.stringify(place.value)).catch(() => undefined);
+  }
+
   async function refresh(force = false) {
+    void nameIfNeeded();
     const p = place.value;
     if (!p || p === "off" || loading.value) return;
     if (!force && forecast.value && Date.now() - forecast.value.fetchedAt < STALE_MS) return;
@@ -84,7 +97,7 @@ export const useWeatherStore = defineStore("weather", () => {
     try {
       const pos = await api.locate();
       const name = await nameFor(pos.latitude, pos.longitude).catch(() => null);
-      await setPlace({ name: name ?? "Your location", ...pos });
+      await setPlace({ name: name ?? UNNAMED, ...pos });
       return null;
     } catch (e) {
       return errorMessage(e);

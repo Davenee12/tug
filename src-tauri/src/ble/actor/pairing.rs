@@ -213,6 +213,7 @@ impl Actor {
             s.device = Some(PairedDevice { id: le_id, name });
             s.connection = ConnectionState::Disconnected;
             s.last_error = None;
+            s.pairing_stale = false;
         });
         Ok(())
     }
@@ -227,6 +228,7 @@ impl Actor {
             s.device = None;
             s.connection = ConnectionState::NoDevice;
             s.last_error = None;
+            s.pairing_stale = false;
         });
         if let Some(id) = id {
             // Best effort: a stale Windows bond makes re-pairing fail silently.
