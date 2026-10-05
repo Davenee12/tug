@@ -33,6 +33,10 @@ iPhone where noted.
 - Setup shows your iPhone once (it could appear twice, and one of the two couldn't pair).
 - The setup checklist's Sync Contacts reflects what the phone is sharing right now, not contacts
   tug saved earlier.
+- **Calls are never ended or declined by tug tidying up.** Dismissing a call notification (the ✕,
+  or opening that person's conversation) could hang up a call in progress, such as a WhatsApp
+  call right after answering it. *(Added to v0.5.8 on 2026-10-05; reinstall 0.5.8 from the
+  release page if you downloaded it earlier.)*
 
 ### Known limits
 - Spotify extras need Spotify Premium; while tug's Spotify app is in Spotify's Development Mode,
