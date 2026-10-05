@@ -122,6 +122,17 @@ mod worker {
             device_id: None,
             next_contacts_sync: Instant::now(),
         };
+        // Old names from renames that happened while tug wasn't keeping track.
+        match w.shared.store.learn_aliases() {
+            Ok(0) => {}
+            Ok(n) => {
+                log::info!("learned {n} earlier contact name(s)");
+                if let Ok(all) = w.shared.store.contacts() {
+                    w.shared.emit(events::CONTACTS, all);
+                }
+            }
+            Err(e) => log::warn!("learning old contact names failed: {e}"),
+        }
         let mut next = Instant::now() + FIRST_SYNC_DELAY;
         loop {
             tokio::select! {
@@ -201,6 +212,10 @@ mod worker {
                     match self.shared.store.save_phonebook(&pairs) {
                         Ok(n) => {
                             log::info!("contacts synced: {} people, {n} numbers", entries.len());
+                            // A rename on the phone may leave history under the old name.
+                            if let Err(e) = self.shared.store.learn_aliases() {
+                                log::warn!("learning old contact names failed: {e}");
+                            }
                             if let Ok(all) = self.shared.store.contacts() {
                                 self.shared.emit(events::CONTACTS, all);
                             }
@@ -276,8 +291,12 @@ mod worker {
                     added += 1;
                 }
             }
-            if added > 0 && !shared.store.learn_contacts()?.is_empty() {
-                shared.emit(events::CONTACTS, shared.store.contacts()?);
+            if added > 0 {
+                let named = !shared.store.learn_contacts()?.is_empty();
+                let aliased = shared.store.learn_aliases()? > 0;
+                if named || aliased {
+                    shared.emit(events::CONTACTS, shared.store.contacts()?);
+                }
             }
             Ok(added)
         }

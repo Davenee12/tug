@@ -261,6 +261,8 @@ export const useTugStore = defineStore("tug", () => {
           // Names are joined into messages server-side; apply them to what's loaded.
           const byAddress = new Map(list.map((c) => [c.address, c.name]));
           for (const m of messages.value) m.contactName = byAddress.get(m.address) ?? m.contactName;
+          // Notifications under a contact's old name come back under the new one.
+          void refreshLoadedNotifications();
         }),
         on("pairing-request", (req) => (pairingRequest.value = req)),
         on("pairing-request-closed", () => (pairingRequest.value = null)),
@@ -299,6 +301,13 @@ export const useTugStore = defineStore("tug", () => {
     if (!page) return;
     for (const n of page) upsert(notifications.value, n);
     hasMore.value = page.length === PAGE;
+  }
+
+  /** Re-read what's loaded (names are resolved server-side, e.g. after a contact is renamed). */
+  async function refreshLoadedNotifications() {
+    const count = Math.min(Math.max(notifications.value.length, PAGE), 500);
+    const fresh = await api.listNotifications(count).catch(() => null);
+    if (fresh) for (const n of fresh) upsert(notifications.value, n);
   }
 
   /** Universal search: people, texts and notifications. */
