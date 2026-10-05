@@ -118,6 +118,13 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX contact_aliases_alias ON contact_aliases (alias);
     "#,
+    // v5: conversations deleted in tug (local only, undoable). Rows are hidden rather than
+    // removed: the phone re-sends its recent texts and on-screen notifications on every
+    // reconnect, and a hidden row keeps those copies hidden instead of reappearing.
+    r#"
+    ALTER TABLE notifications ADD COLUMN hidden_at INTEGER;
+    ALTER TABLE messages ADD COLUMN hidden_at INTEGER;
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
@@ -181,7 +188,8 @@ const SELECT: &str = "SELECT n.id, n.session, n.uid, n.app_id, a.display_name, n
                 WHERE lower(ca.alias) = lower(clean_name(n.title))
                   AND NOT EXISTS (SELECT 1 FROM contacts c2 WHERE lower(c2.name) = lower(ca.alias))
             ), n.title) ELSE n.title END,
-            n.subtitle, n.message, n.posted_at, n.received_at, n.flags, n.positive_label, n.negative_label, n.removed_at
+            n.subtitle, n.message, n.posted_at, n.received_at, n.flags, n.positive_label, n.negative_label, n.removed_at,
+            n.hidden_at
      FROM notifications n LEFT JOIN apps a ON a.app_id = n.app_id";
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -202,6 +210,10 @@ pub struct StoredNotification {
     pub removed_at: Option<i64>,
     /// Still on the phone in the current connection, so actions can be sent.
     pub live: bool,
+    /// Part of a conversation deleted in tug: kept so the phone's re-sent copy stays
+    /// hidden, but never shown.
+    #[serde(skip)]
+    pub hidden: bool,
     #[serde(skip)]
     pub session: String,
     #[serde(skip)]
@@ -364,7 +376,9 @@ impl Store {
         live_session: Option<&str>,
     ) -> Result<Vec<StoredNotification>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare(&format!("{SELECT} WHERE n.id < ?1 ORDER BY n.id DESC LIMIT ?2"))?;
+        let mut stmt = conn.prepare(&format!(
+            "{SELECT} WHERE n.id < ?1 AND n.hidden_at IS NULL ORDER BY n.id DESC LIMIT ?2"
+        ))?;
         let rows = stmt.query_map(params![before_id.unwrap_or(i64::MAX), limit], |r| {
             map_row(r, live_session)
         })?;
@@ -379,12 +393,30 @@ impl Store {
         let like = like_pattern(query);
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
-            "{SELECT} WHERE n.id IN (SELECT rowid FROM notifications_fts WHERE notifications_fts MATCH ?1)
-                 OR a.display_name LIKE ?2 ESCAPE '\\' OR n.app_id LIKE ?2 ESCAPE '\\'
+            "{SELECT} WHERE (n.id IN (SELECT rowid FROM notifications_fts WHERE notifications_fts MATCH ?1)
+                 OR a.display_name LIKE ?2 ESCAPE '\\' OR n.app_id LIKE ?2 ESCAPE '\\')
+               AND n.hidden_at IS NULL
              ORDER BY n.id DESC LIMIT ?3"
         ))?;
         let rows = stmt.query_map(params![fts, like, limit], |r| map_row(r, live_session))?;
         rows.collect()
+    }
+
+    /// Delete a conversation from tug (`Some(time)`), or undo that (`None`). Local only:
+    /// nothing on the phone changes.
+    pub fn set_hidden(&self, notifications: &[i64], messages: &[i64], at: Option<i64>) -> Result<()> {
+        let ids = |v: &[i64]| serde_json::to_string(v).expect("ids serialize");
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE notifications SET hidden_at = ?2 WHERE id IN (SELECT value FROM json_each(?1))",
+            params![ids(notifications), at],
+        )?;
+        tx.execute(
+            "UPDATE messages SET hidden_at = ?2 WHERE id IN (SELECT value FROM json_each(?1))",
+            params![ids(messages), at],
+        )?;
+        tx.commit()
     }
 
     pub fn set_app_name(&self, app_id: &str, name: &str) -> Result<()> {
@@ -449,6 +481,7 @@ fn map_row(r: &Row, live_session: Option<&str>) -> Result<StoredNotification> {
         positive_label: r.get(12)?,
         negative_label: r.get(13)?,
         removed_at,
+        hidden: r.get::<_, Option<i64>>(15)?.is_some(),
     })
 }
 
@@ -551,6 +584,42 @@ mod tests {
         assert_eq!(hits, 1);
         // Running again is a no-op.
         migrate(&mut conn).unwrap();
+    }
+
+    #[test]
+    fn a_deleted_conversation_stays_hidden_when_the_phone_resends_it() {
+        let s = Store::in_memory().unwrap();
+        let jane = insert(
+            &s,
+            "s1",
+            1,
+            EventFlags::default(),
+            &attrs("com.apple.MobileSMS", "Jane", "dinner?"),
+        );
+        let sam = insert(
+            &s,
+            "s1",
+            2,
+            EventFlags::default(),
+            &attrs("com.apple.MobileSMS", "Sam", "yo"),
+        );
+        s.set_hidden(&[jane.id], &[], Some(5_000)).unwrap();
+        let ids = |rows: Vec<StoredNotification>| rows.into_iter().map(|r| r.id).collect::<Vec<_>>();
+        assert_eq!(ids(s.recent(10, None, None).unwrap()), vec![sam.id]);
+        assert!(s.search("dinner", 10, None).unwrap().is_empty(), "not in search either");
+        // Reconnect: iOS replays it under a new session and UID; it must not come back.
+        let replay = EventFlags {
+            pre_existing: true,
+            ..Default::default()
+        };
+        let again = insert(&s, "s2", 9, replay, &attrs("com.apple.MobileSMS", "Jane", "dinner?"));
+        assert_eq!(again.id, jane.id);
+        assert!(again.hidden, "the actor skips emitting it");
+        assert_eq!(ids(s.recent(10, None, None).unwrap()), vec![sam.id]);
+        // Undo.
+        s.set_hidden(&[jane.id], &[], None).unwrap();
+        assert_eq!(ids(s.recent(10, None, None).unwrap()), vec![sam.id, jane.id]);
+        assert_eq!(ids(s.search("dinner", 10, None).unwrap()), vec![jane.id]);
     }
 
     #[test]

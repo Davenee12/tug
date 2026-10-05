@@ -73,6 +73,7 @@ pub fn run() {
             commands::send_message,
             commands::refresh_messages,
             commands::copy_text,
+            commands::set_hidden,
             commands::locate,
             commands::mark_read,
         ])
