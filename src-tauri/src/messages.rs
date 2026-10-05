@@ -251,7 +251,8 @@ impl Store {
     pub fn recent_messages(&self, limit: u32) -> Result<Vec<StoredMessage>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
-            "SELECT * FROM ({SELECT} ORDER BY m.received_at DESC, m.id DESC LIMIT ?1) ORDER BY received_at, id"
+            "SELECT * FROM ({SELECT} WHERE m.hidden_at IS NULL ORDER BY m.received_at DESC, m.id DESC LIMIT ?1)
+             ORDER BY received_at, id"
         ))?;
         let rows = stmt.query_map([limit], map_row)?;
         rows.collect()
@@ -265,6 +266,7 @@ impl Store {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "{SELECT} WHERE m.id IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1)
+               AND m.hidden_at IS NULL
              ORDER BY m.received_at DESC, m.id DESC LIMIT ?2"
         ))?;
         let rows = stmt.query_map(params![fts, limit], map_row)?;
@@ -714,6 +716,31 @@ mod tests {
             .is_none());
         assert!(s.has_message(SOURCE_IPHONE_MAP, "H1").unwrap());
         assert!(!s.has_message(SOURCE_IPHONE_MAP, "H2").unwrap());
+    }
+
+    #[test]
+    fn deleted_texts_stay_hidden_and_arent_synced_again() {
+        let s = Store::in_memory().unwrap();
+        let a = s
+            .insert_incoming(&incoming("H1", "+13025550100", "dinner?"))
+            .unwrap()
+            .unwrap();
+        let b = s
+            .insert_incoming(&incoming("H2", "+13025550199", "hello"))
+            .unwrap()
+            .unwrap();
+        s.set_hidden(&[], &[a.id], Some(5_000)).unwrap();
+        let bodies = |v: Vec<StoredMessage>| v.into_iter().map(|m| m.body).collect::<Vec<_>>();
+        assert_eq!(bodies(s.recent_messages(10).unwrap()), vec!["hello"]);
+        assert!(s.search_messages("dinner", 10).unwrap().is_empty());
+        // The phone still lists it; the sync sees it's stored and doesn't bring it back.
+        assert!(s.has_message(SOURCE_IPHONE_MAP, "H1").unwrap());
+        assert!(s
+            .insert_incoming(&incoming("H1", "+13025550100", "dinner?"))
+            .unwrap()
+            .is_none());
+        s.set_hidden(&[], &[a.id], None).unwrap();
+        assert_eq!(s.recent_messages(10).unwrap().len(), 2);
     }
 
     #[test]

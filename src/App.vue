@@ -19,6 +19,16 @@ const wide = ref(window.matchMedia(WIDE).matches);
 const panelInline = computed(() => wide.value && tug.status.connection !== "connected");
 const mq = window.matchMedia(WIDE);
 const onMq = (e: MediaQueryListEvent) => (wide.value = e.matches);
+// The toast keeps showing (and acting on) its last message while it fades out, so a
+// click on Undo during the fade still works instead of hitting an emptied message.
+const shown = ref(tug.flash);
+watch(
+  () => tug.flash,
+  (f) => {
+    if (f) shown.value = f;
+  },
+);
+
 // Once the panel sits inline it no longer covers anything.
 watch(panelInline, (inline) => {
   if (inline) tug.panelOpen = false;
@@ -94,8 +104,15 @@ onUnmounted(() => {
         role="status"
         class="fixed bottom-6 left-1/2 z-50 flex max-w-[560px] -translate-x-1/2 items-center gap-2.5 rounded-xl bg-surface-dark px-5 py-3 text-[14px] text-on-dark"
       >
-        <CircleAlert v-if="tug.flash.kind === 'error'" :size="16" class="shrink-0 text-error" />
-        <span class="selectable">{{ tug.flash.text }}</span>
+        <CircleAlert v-if="shown?.kind === 'error'" :size="16" class="shrink-0 text-error" />
+        <span class="selectable">{{ shown?.text }}</span>
+        <button
+          v-if="shown?.action"
+          class="-my-1 ml-2 rounded-md px-2 py-1 font-medium text-accent-amber active:bg-surface-dark-elevated"
+          @click="shown.action.run()"
+        >
+          {{ shown.action.label }}
+        </button>
       </div>
     </Transition>
   </div>

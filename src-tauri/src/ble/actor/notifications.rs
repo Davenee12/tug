@@ -223,6 +223,10 @@ impl Actor {
                     received_at: now_ms(),
                 });
                 match stored {
+                    // Re-sent by the phone, but part of a conversation deleted in tug.
+                    Ok(n) if n.hidden => {
+                        a.rows.insert(uid, n.id);
+                    }
                     Ok(n) => {
                         // A new text: pull it (and anything else new) over MAP right away.
                         if n.app_id == "com.apple.MobileSMS" {
