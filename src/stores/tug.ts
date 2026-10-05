@@ -46,6 +46,7 @@ import type {
   UiSettings,
 } from "../types/protocol";
 import { nextRepeat } from "../lib/spotify";
+import { nextShowConnect } from "../lib/connectFlow";
 
 const PAGE = 100;
 
@@ -205,23 +206,19 @@ export const useTugStore = defineStore("tug", () => {
   /** Start with Windows. Mirrors the real autostart registry entry, not a stored setting. */
   const autostartEnabled = ref(false);
   const zoom = ref(1);
-  /** First-run setup finished (or skipped). Until then, with no iPhone paired, setup shows. */
-  const onboarded = ref(true);
-  /** Setup opened on purpose (Settings › iPhone › Run setup again). */
-  const setupRequested = ref(false);
   /**
-   * First run: nothing paired and setup never finished. Latched once it starts, because
-   * pairing mid-setup gives us a device, and setup still has steps to go after that.
+   * The "Connect your iPhone" panel stands in for the Feed while the user sets up their iPhone, and
+   * yields once notifications work (lib/connectFlow). The latch only engages when there's no device
+   * after the real status is known, so an upgrader whose paired phone is merely reconnecting at
+   * launch lands straight on the Feed and never sees it; Start over clears the device and brings it
+   * back. Settings › iPhone shows the same panel component regardless of this flag.
    */
-  const setupActive = ref(false);
+  const showConnect = ref(false);
   watch(
-    [onboarded, () => status.value.device],
-    ([done, device]) => {
-      if (!done && device == null) setupActive.value = true;
-    },
+    [statusKnown, () => status.value.device, () => status.value.connection, () => status.value.services.notifications],
+    () => (showConnect.value = nextShowConnect(showConnect.value, statusKnown.value, status.value)),
     { immediate: true },
   );
-  const showSetup = computed(() => setupRequested.value || setupActive.value);
   const flash = ref<{ kind: "error" | "info"; text: string; action?: { label: string; run: () => void } } | null>(null);
   let flashTimer: number | undefined;
   let spotifyPoll: number | undefined;
@@ -764,9 +761,6 @@ export const useTugStore = defineStore("tug", () => {
 
   async function loadSettings() {
     const raw = await api.getSettings();
-    // Set this first: on a fresh install `ui.onboarded` is absent, and if a later await in here
-    // threw, onboarded stayed at its optimistic default (true) and the wizard never opened.
-    onboarded.value = raw["ui.onboarded"] === "1";
     zoom.value = Number(raw["ui.zoom"]) || 1;
     applyZoom(zoom.value);
     seen.value = raw["ui.seen"] ? (JSON.parse(raw["ui.seen"]) as Record<string, number>) : {};
@@ -790,7 +784,6 @@ export const useTugStore = defineStore("tug", () => {
       knownSenders: raw["ui.knownSenders"] ? (JSON.parse(raw["ui.knownSenders"]) as string[]) : [],
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
-    onboarded.value = raw["ui.onboarded"] === "1";
   }
 
   // Listeners and shortcuts are installed once and torn down by dispose(), so a
@@ -937,14 +930,6 @@ export const useTugStore = defineStore("tug", () => {
   async function setSetting<K extends keyof UiSettings>(key: K, value: UiSettings[K]) {
     settings.value = { ...settings.value, [key]: value };
     await attempt(() => api.setSetting(`ui.${key}`, typeof value === "string" ? value : JSON.stringify(value)));
-  }
-
-  /** Setup is done (or skipped): don't show it again on its own. */
-  function finishSetup() {
-    onboarded.value = true;
-    setupRequested.value = false;
-    setupActive.value = false;
-    void attempt(() => api.setSetting("ui.onboarded", "1"));
   }
 
   /** App zoom from Settings (Ctrl +/−/0 does the same from anywhere). */
@@ -1177,10 +1162,7 @@ export const useTugStore = defineStore("tug", () => {
     closeSettings,
     zoom,
     setZoom,
-    onboarded,
-    setupRequested,
-    showSetup,
-    finishSetup,
+    showConnect,
     focusItem,
     seen,
     connected,
@@ -1231,8 +1213,8 @@ export const useTugStore = defineStore("tug", () => {
     },
     async pair(id: string) {
       const ok = await attempt(() => api.pairDevice(id).then(() => true));
-      // Setup shows this itself; a toast over it would just cover the screen.
-      if (ok && !showSetup.value) notify("info", "Paired. Connecting to your iPhone…");
+      // The Connect panel shows this itself; a toast over it would just cover the screen.
+      if (ok && !showConnect.value) notify("info", "Paired. Connecting to your iPhone…");
       return ok === true;
     },
     async useDevice(id: string) {

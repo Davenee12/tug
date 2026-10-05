@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Search, Settings2 } from "lucide-vue-next";
+import { Search, Settings2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { dayLabel, entryLatest, groupFeed, notificationTime, type FeedEntry } from "../lib/format";
+import { optionalNudge } from "../lib/connectFlow";
 import type { CodeEntry } from "../lib/codeFeed";
 import { preservedScrollTop } from "../lib/scroll";
 import CallsPanel from "./CallsPanel.vue";
@@ -88,7 +89,11 @@ onMounted(() => {
 });
 onUnmounted(() => observer?.disconnect());
 
-const setUp = computed(() => tug.status.device != null);
+// Once notifications are working, the optional switches (texts, contacts) still off show as a
+// compact, dismissible nudge at the top of the Feed instead of blocking the way in. Dismiss lasts
+// the session; it comes back next launch if the switch is still off.
+const nudge = computed(() => optionalNudge(tug.status));
+const nudgeDismissed = ref(false);
 </script>
 
 <template>
@@ -122,20 +127,23 @@ const setUp = computed(() => tug.status.device != null);
       </button>
     </header>
 
-    <!-- First run: nothing paired yet. -->
-    <div v-if="!setUp && tug.notifications.length === 0" class="flex flex-1 items-center justify-center px-10">
-      <div class="max-w-lg">
-        <p class="caption-upper text-muted">Bluetooth LE · no app on your phone</p>
-        <p class="headline mt-3 text-[48px] leading-[1.08]">Your iPhone's notifications, on your desk.</p>
-        <p class="mt-4 text-[16px] text-body">
-          tug pairs with your iPhone over Bluetooth and mirrors every notification here, keeps a searchable history
-          after the phone has cleared it, and gives you play, pause and skip for whatever's playing.
-        </p>
-        <button class="btn-primary mt-8" @click="tug.openSettings('iphone')">Set up your iPhone</button>
+    <!-- Optional switches still off, once notifications work: a nudge, not a blocker. -->
+    <div v-if="tug.view === 'feed' && nudge.length && !nudgeDismissed" class="border-b border-hairline bg-surface-soft px-8 py-3">
+      <div class="mx-auto flex w-full max-w-3xl items-start gap-3">
+        <div class="min-w-0 flex-1 text-[13px] text-body">
+          <p class="font-medium text-ink">Get more from tug</p>
+          <p class="mt-0.5">
+            On your iPhone, under <strong class="font-medium text-body-strong">Settings › Bluetooth › ⓘ</strong> next to this PC, turn on
+            {{ nudge.map((x) => x.label).join(" and ") }} — {{ nudge.map((x) => x.why.toLowerCase()).join(", and ") }}.
+          </p>
+        </div>
+        <button class="btn-secondary btn-sm shrink-0" aria-label="Dismiss" @click="nudgeDismissed = true">
+          <X :size="13" />
+        </button>
       </div>
     </div>
 
-    <MessageThreads v-else-if="tug.view === 'messages'" />
+    <MessageThreads v-if="tug.view === 'messages'" />
 
     <CallsPanel v-else-if="tug.view === 'calls'" />
 
