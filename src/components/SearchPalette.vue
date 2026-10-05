@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { MessageSquare, Plus, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, Volume1, Volume2, X } from "lucide-vue-next";
+import { Bell, CheckCheck, Copy, MessageSquare, Moon, Phone, Plus, Repeat, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
-import { parseActions, type Action, type Person } from "../lib/commands";
+import { parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
 import {
   appLabel,
+  canClear,
   cleanName,
   clockTime,
   dayLabel,
@@ -78,9 +79,27 @@ const people = computed<Person[]>(() => {
   return [...byAddress.values()];
 });
 
+// What's waiting right now, so the one-off actions can say exactly what they'll do.
+const ctx = computed<ActionContext>(() => {
+  const feed = tug.notifications.filter((n) => n.removedAt == null);
+  const conversations = groupConversations(tug.notifications, tug.messages, tug.contacts);
+  // One row per app, newest first (notifications are already newest-first), to scroll to.
+  const apps = new Map<string, { appId: string; label: string; focusId: number }>();
+  for (const n of feed) if (!apps.has(n.appId)) apps.set(n.appId, { appId: n.appId, label: appLabel(n), focusId: n.id });
+  return {
+    code: tug.latestCode(),
+    clearable: feed.filter(canClear),
+    doNotDisturb: tug.settings.doNotDisturb,
+    unread: conversations.filter((c) => tug.newCount(c.key, c.notifications) > 0).length,
+    apps: [...apps.values()],
+    canDial: tug.canDial,
+    notifications: tug.notifications,
+  };
+});
+
 // Actions answer as you type (no search round-trip), above the results.
 const actions = computed<Option[]>(() =>
-  parseActions(query.value, people.value).map((a, i) => ({ kind: "action" as const, key: `a:${i}:${a.label}`, a })),
+  parseActions(query.value, people.value, ctx.value).map((a, i) => ({ kind: "action" as const, key: `a:${i}:${a.label}`, a })),
 );
 
 const options = computed<Option[]>(() => {
@@ -109,15 +128,26 @@ const MEDIA_ICONS = {
   previousTrack: SkipBack,
   volumeUp: Volume2,
   volumeDown: Volume1,
+  advanceRepeatMode: Repeat,
 };
 function actionIcon(a: Action) {
   if (a.kind === "send") return SendHorizontal;
+  if (a.kind === "call" || a.kind === "call-setup") return Phone;
   if (a.kind === "open-chat") return MessageSquare;
   if (a.kind === "media") return MEDIA_ICONS[a.command];
+  if (a.kind === "copy-code") return Copy;
+  if (a.kind === "clear-all") return Trash2;
+  if (a.kind === "mark-all-read") return CheckCheck;
+  if (a.kind === "dnd") return Moon;
+  if (a.kind === "show-app") return Bell;
   return a.target === "settings" ? Settings2 : Plus;
 }
 /** Several people match a "text …": Enter waits until one is picked on purpose. */
-const ambiguous = computed(() => actions.value.filter((o) => o.kind === "action" && o.a.kind === "send").length > 1);
+const picksPerson = (a: Action) => a.kind === "send" || a.kind === "call";
+const ambiguous = computed(() => {
+  const rows = actions.value.filter((o) => o.kind === "action" && picksPerson(o.a));
+  return rows.length > 1;
+});
 const showHeader = (i: number) => i === 0 || options.value[i].kind !== options.value[i - 1].kind;
 
 const messageName = (m: SmsMessage) => cleanName(m.contactName ?? formatAddress(m.address));
@@ -148,6 +178,21 @@ async function run(a: Action) {
     openConversation(a.person.address, cleanName(a.person.name));
   } else if (a.kind === "media") {
     void tug.media(a.command);
+  } else if (a.kind === "call") {
+    void tug.callPerson(a.person.name, a.person.address);
+  } else if (a.kind === "call-setup") {
+    tug.openSettings("iphone");
+  } else if (a.kind === "copy-code") {
+    if (a.code) void tug.copyCode(a.code, a.from);
+  } else if (a.kind === "clear-all") {
+    if (a.items.length) void tug.clearItems(a.items);
+  } else if (a.kind === "mark-all-read") {
+    if (a.count) tug.markAllRead();
+  } else if (a.kind === "dnd") {
+    void tug.setSetting("doNotDisturb", a.enabled);
+  } else if (a.kind === "show-app") {
+    tug.view = "feed";
+    tug.focusItem = `n${a.focusId}`;
   } else if (a.target === "new-message") {
     tug.view = "messages";
     tug.pickerOpen = true;
@@ -195,7 +240,7 @@ function onKey(e: KeyboardEvent) {
   else if (e.key === "ArrowUp") void move(-1);
   else if (e.key === "Enter") {
     const o = options.value[active.value];
-    if (o?.kind === "action" && o.a.kind === "send" && ambiguous.value && !chose.value) {
+    if (o?.kind === "action" && picksPerson(o.a) && ambiguous.value && !chose.value) {
       tug.notify("info", "More than one person matches. Pick one with ↑↓, then Enter.");
     } else pick(o);
   }
@@ -239,7 +284,9 @@ function onKey(e: KeyboardEvent) {
             Or do something:
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">text zoe on my way</kbd>
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">pause</kbd>
-            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">next</kbd>
+            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">copy code</kbd>
+            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">clear all</kbd>
+            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">dnd</kbd>
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">new message</kbd>
           </p>
         </li>
@@ -275,7 +322,7 @@ function onKey(e: KeyboardEvent) {
 
               <!-- Person -->
               <template v-else-if="o.kind === 'person'">
-                <AppAvatar app-id="com.apple.MobileSMS" :label="o.c.name" size="sm" />
+                <AppAvatar app-id="com.apple.MobileSMS" :label="o.c.name" person size="sm" />
                 <span class="min-w-0 flex-1">
                   <span class="block truncate text-[14px] font-medium text-ink">
                     <template v-for="(r, j) in highlight(cleanName(o.c.name), query)" :key="j">

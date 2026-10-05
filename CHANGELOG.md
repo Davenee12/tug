@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.5.6 — 2026-10-05
+
+Calls, real app icons and a steadier connection. Tested on Jordan's iPhone.
+
+### New
+- **Incoming calls ring as a card over tug:** the caller's name large, rings rippling out, how long
+  it's been ringing. **Answer** or **Decline** (Enter answers after a beat; Esc only hides the card,
+  the phone keeps ringing). It goes as soon as the call does; the Windows pop-up still rings from the
+  tray.
+- **Calls tab:** your iPhone's recent calls (incoming, outgoing, missed), named from your contacts,
+  kept current while it's open. Needs **Sync Contacts**.
+- **Call back from tug:** any missed call still on your phone can be called back, from the Calls
+  tab, the Feed ("Call back") or Ctrl+K (`call zoe`). Calling anyone else comes in v0.5.7.
+- **Real app icons** in the Feed (Gmail, Instagram, LinkedIn…), fetched once per app from Apple's App
+  Store; people keep their initials. Switch off in Data & privacy.
+- **More Ctrl+K actions:** `copy code`, `clear all` (never a ringing call), `dnd`, `mark all read`,
+  and typing an app's name jumps to its notifications.
+- **Tray:** clicking the icon with unread texts opens the newest unread conversation.
+- **Now Playing:** ↺ restarts the song.
+
+### Fixed
+- **tug reconnects by itself** when Windows closes its Bluetooth connection objects (e.g. after
+  changing the iPhone's services in Windows), instead of silently missing notifications and calls.
+- **"Texts stopped connecting"** shows in Settings when the texts pairing breaks, with how to fix it.
+- **Renaming your iPhone** shows up in tug without re-pairing; contact changes arrive within 15 minutes.
+- Logs keep five 2 MB files, so the minutes before a problem are still there.
+
+### Developer
+- `map/calls.rs` (PBAP call history), `map/health.rs` (texts pairing health), `app_icons.rs`
+  (App Store lookup + cache), `hfp/` (experimental hands-free dialing; Windows' own hands-free driver
+  blocks it on most PCs, see ROADMAP v0.5.7), all pure-tested; `cargo run --example hfp_probe`.
+- New commands `get_calls`, `refresh_calls`, `dial`, `app_icon`, `place_lookup`, `set_watching`;
+  status `textsPairing`/`textsDevice`/`pairingStale`; settings `ui.dialing`, `ui.appIcons`.
+
 ## v0.5.5 — 2026-10-05
 
 Setup, settings and everyday shortcuts (Sprints 5–7), plus fixes from a full fresh-install test.

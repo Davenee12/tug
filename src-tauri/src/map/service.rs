@@ -1,11 +1,15 @@
 //! Background message service: keeps a MAP session with the iPhone, pulls new
-//! inbox messages into the store and sends replies.
+//! inbox messages into the store and sends replies. It also owns the phone's other
+//! Classic Bluetooth services: contacts and recent calls (PBAP), and the experimental
+//! hands-free dialing (`crate::hfp`).
 //!
 //! The inbox is polled (MAP only exposes a small recent window, and iOS posts
 //! no notification for a conversation that's open on the phone), and a
-//! Messages notification from ANCS triggers an immediate refresh.
+//! Messages notification from ANCS triggers an immediate refresh. Recent calls
+//! are pulled every few minutes, and soon after a call rings out on ANCS.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -14,12 +18,21 @@ use crate::state::Shared;
 
 pub enum MapCommand {
     Refresh,
+    /// Pull recent calls once `after` has passed (a call that just ended needs a moment to
+    /// reach the phone's log).
+    RefreshCalls(Duration),
     /// Mark these stored messages read on the phone (those it still lists as unread).
     MarkRead(Vec<i64>),
     Send {
         address: String,
         text: String,
         reply: oneshot::Sender<Result<StoredMessage, String>>,
+    },
+    /// Experimental: open the iPhone's hands-free link and, given a number, dial it.
+    /// Without one it's the check Settings runs before turning Call buttons on.
+    Dial {
+        number: Option<String>,
+        reply: oneshot::Sender<Result<(), String>>,
     },
 }
 
@@ -33,6 +46,10 @@ impl MapHandle {
         let _ = self.tx.send(MapCommand::Refresh);
     }
 
+    pub fn refresh_calls(&self, after: Duration) {
+        let _ = self.tx.send(MapCommand::RefreshCalls(after));
+    }
+
     pub fn mark_read(&self, ids: Vec<i64>) {
         let _ = self.tx.send(MapCommand::MarkRead(ids));
     }
@@ -41,6 +58,14 @@ impl MapHandle {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(MapCommand::Send { address, text, reply })
+            .map_err(|_| "Message service stopped".to_string())?;
+        rx.await.map_err(|_| "Message service stopped".to_string())?
+    }
+
+    pub async fn dial(&self, number: Option<String>) -> Result<(), String> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(MapCommand::Dial { number, reply })
             .map_err(|_| "Message service stopped".to_string())?;
         rx.await.map_err(|_| "Message service stopped".to_string())?
     }
@@ -68,8 +93,14 @@ pub fn start(shared: Arc<Shared>) -> MapHandle {
         let mut rx = rx;
         tauri::async_runtime::spawn(async move {
             while let Some(cmd) = rx.recv().await {
-                if let MapCommand::Send { reply, .. } = cmd {
-                    let _ = reply.send(Err("Messaging is only supported on Windows".into()));
+                match cmd {
+                    MapCommand::Send { reply, .. } => {
+                        let _ = reply.send(Err("Messaging is only supported on Windows".into()));
+                    }
+                    MapCommand::Dial { reply, .. } => {
+                        let _ = reply.send(Err("Calling is only supported on Windows".into()));
+                    }
+                    _ => {}
                 }
             }
         });
@@ -87,11 +118,12 @@ mod worker {
 
     use super::MapCommand;
     use crate::map::address::normalize;
+    use crate::map::health::{Attempt, Health, TextsPairing};
     use crate::map::listing;
     use crate::map::obex::RSP_NOT_FOUND;
-    use crate::map::session::{find_devices, pull_contacts, MapError, MapSession};
+    use crate::map::session::{find_devices, pull_call_history, pull_contacts, MapDevice, MapError, MapSession};
     use crate::messages::{IncomingMessage, Status, StoredMessage, SOURCE_IPHONE_MAP};
-    use crate::state::{events, Shared};
+    use crate::state::{events, ConnectionState, Shared};
 
     const FIRST_SYNC_DELAY: Duration = Duration::from_secs(3);
     const POLL_CONNECTED: Duration = Duration::from_secs(8);
@@ -104,13 +136,27 @@ mod worker {
     /// Once per launch, page further back than that: a fresh install otherwise only sees the
     /// last few texts, often all from one person, and other recent chats never show up.
     const BACKFILL_MAX: u16 = 100;
-    const CONTACTS_RESYNC: Duration = Duration::from_secs(6 * 60 * 60);
+    /// The phone sends nothing when a contact is added or renamed, so look again this often
+    /// (a pull of a few hundred contacts takes about a second).
+    const CONTACTS_RESYNC: Duration = Duration::from_secs(15 * 60);
     const CONTACTS_RETRY: Duration = Duration::from_secs(10 * 60);
     /// An empty phonebook or a refusal means Sync Contacts is still off: it's often switched
     /// on moments after messages connect, so look again soon, then back off.
     const CONTACTS_UNSHARED_RETRY: Duration = Duration::from_secs(20);
     const CONTACTS_UNSHARED_QUICK_TRIES: u32 = 15;
     const CONTACTS_PULL_TIMEOUT: Duration = Duration::from_secs(90);
+    /// How many recent calls to show, like the phone's own Recents screen.
+    const CALLS_MAX: u16 = 50;
+    const CALLS_RESYNC: Duration = Duration::from_secs(5 * 60);
+    /// Each pull is a whole PBAP session: however often one is asked for, this far apart is plenty.
+    const CALLS_MIN_GAP: Duration = Duration::from_secs(10);
+    const CALLS_PULL_TIMEOUT: Duration = Duration::from_secs(45);
+    /// Connect, hands-free setup, dial and a moment to hear the call start, end to end. Kept
+    /// short: texts (send, sync, mark read) wait on this worker while a call is being placed.
+    const DIAL_TIMEOUT: Duration = Duration::from_secs(15);
+    /// How long to keep the hands-free link after dialing, so the call is under way before
+    /// tug lets go of it.
+    const DIAL_HOLD: Duration = Duration::from_secs(3);
 
     fn now_ms() -> i64 {
         SystemTime::now()
@@ -127,6 +173,11 @@ mod worker {
         next_contacts_sync: Instant,
         unshared_contact_pulls: u32,
         backfilled: bool,
+        health: Health,
+        /// The phone Windows has paired for texts, found even when connecting to it fails.
+        texts_device: Option<String>,
+        next_calls_sync: Instant,
+        last_calls_pull: Option<Instant>,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -137,6 +188,10 @@ mod worker {
             next_contacts_sync: Instant::now(),
             unshared_contact_pulls: 0,
             backfilled: false,
+            health: Health::default(),
+            texts_device: None,
+            next_calls_sync: Instant::now(),
+            last_calls_pull: None,
         };
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
@@ -155,9 +210,14 @@ mod worker {
                 cmd = commands.recv() => match cmd {
                     None => break,
                     Some(MapCommand::Refresh) => w.refresh().await,
+                    // Wake for it: the next refresh pulls the calls once they're due.
+                    Some(MapCommand::RefreshCalls(after)) => next = next.min(w.calls_soon(after)),
                     Some(MapCommand::MarkRead(ids)) => w.mark_read(&ids).await,
                     Some(MapCommand::Send { address, text, reply }) => {
                         let _ = reply.send(w.send(&address, &text).await);
+                    }
+                    Some(MapCommand::Dial { number, reply }) => {
+                        let _ = reply.send(w.dial(number.as_deref()).await);
                     }
                 },
                 _ = tokio::time::sleep_until(next) => w.refresh().await,
@@ -176,6 +236,34 @@ mod worker {
     }
 
     impl Worker {
+        /// Track whether the texts pairing works, so a broken one is shown instead of only logged.
+        fn record_health(&mut self, result: &Result<usize, MapError>) {
+            // WSAENETUNREACH: what a connection to a phone that no longer accepts the pairing gives.
+            const NET_UNREACHABLE: windows::core::HRESULT = windows::core::HRESULT(0x8007_2743_u32 as i32);
+            let attempt = match result {
+                Ok(_) => Attempt::Connected,
+                Err(MapError::NoDevice) => Attempt::NoDevice,
+                Err(MapError::Consent) => Attempt::Answered,
+                Err(MapError::NoService) => Attempt::Unreachable,
+                Err(MapError::Win(e)) if e.code() == NET_UNREACHABLE => Attempt::Unreachable,
+                Err(_) => Attempt::Other,
+            };
+            let linked = self.shared.status().connection == ConnectionState::Connected;
+            let before = self.health.state();
+            let state = self.health.record(attempt, linked, std::time::Instant::now());
+            if state == TextsPairing::Broken && before != TextsPairing::Broken {
+                log::warn!("texts pairing looks broken: the phone is nearby but won't take the connection");
+            }
+            if attempt == Attempt::NoDevice {
+                self.texts_device = None;
+            }
+            let device = self.texts_device.clone();
+            self.shared.update_status(|s| {
+                s.texts_pairing = state;
+                s.texts_device = device;
+            });
+        }
+
         fn set_state(&self, connected: bool, error: Option<String>) {
             self.shared.update_status(|s| {
                 s.services.messages = connected;
@@ -183,17 +271,24 @@ mod worker {
             });
         }
 
+        /// The paired Classic device that is this iPhone.
+        async fn pick_device(&self) -> Result<MapDevice, MapError> {
+            let devices = find_devices().await?;
+            // Prefer the phone tug is paired with; the Classic and LE names usually match.
+            let wanted = self.shared.status().device.map(|d| d.name);
+            // With no name match, only a lone phone is a safe guess; never pick one of several.
+            devices
+                .iter()
+                .find(|d| wanted.as_deref() == Some(d.name.as_str()))
+                .or(if devices.len() == 1 { devices.first() } else { None })
+                .cloned()
+                .ok_or(MapError::NoDevice)
+        }
+
         async fn ensure(&mut self) -> Result<&mut MapSession, MapError> {
             if self.session.is_none() {
-                let devices = find_devices().await?;
-                // Prefer the phone tug is paired with; the Classic and LE names usually match.
-                let wanted = self.shared.status().device.map(|d| d.name);
-                // With no name match, only a lone phone is a safe guess; never pick one of several.
-                let device = devices
-                    .iter()
-                    .find(|d| wanted.as_deref() == Some(d.name.as_str()))
-                    .or(if devices.len() == 1 { devices.first() } else { None })
-                    .ok_or(MapError::NoDevice)?;
+                let device = self.pick_device().await?;
+                self.texts_device = Some(device.name.clone());
                 let session = MapSession::connect(&device.id).await?;
                 log::info!("message access connected to {}", device.name);
                 self.device_id = Some(device.id.clone());
@@ -267,6 +362,8 @@ mod worker {
                     }
                     self.shared.update_status(|s| s.contacts_error = None);
                     self.next_contacts_sync = Instant::now() + CONTACTS_RESYNC;
+                    // Recent calls sit behind the same switch: if it just came on, they're there too.
+                    self.next_calls_sync = Instant::now();
                 }
                 Err(e) => {
                     log::info!("contacts sync failed: {e}");
@@ -280,10 +377,84 @@ mod worker {
             }
         }
 
+        /// Pull recent calls no sooner than `after` from now (nor `CALLS_MIN_GAP` after the
+        /// last pull); returns when.
+        fn calls_soon(&mut self, after: Duration) -> Instant {
+            let mut at = Instant::now() + after;
+            if let Some(last) = self.last_calls_pull {
+                at = at.max(last + CALLS_MIN_GAP);
+            }
+            self.next_calls_sync = self.next_calls_sync.min(at);
+            self.next_calls_sync
+        }
+
+        /// Pull the phone's recent calls (PBAP call history) when they're due.
+        async fn sync_calls_if_due(&mut self) {
+            let Some(device_id) = self.device_id.clone() else {
+                return;
+            };
+            if Instant::now() < self.next_calls_sync {
+                return;
+            }
+            self.last_calls_pull = Some(Instant::now());
+            self.next_calls_sync = Instant::now() + CALLS_RESYNC;
+            let pulled = tokio::time::timeout(CALLS_PULL_TIMEOUT, pull_call_history(&device_id, CALLS_MAX))
+                .await
+                .unwrap_or(Err(MapError::Timeout));
+            match pulled {
+                // Like the phonebook, an empty answer is how Sync Contacts being off looks, so
+                // it never wipes a list tug already has. (A refusal shows as the contacts error.)
+                Ok(calls) if calls.is_empty() && !self.shared.calls().is_empty() => {
+                    log::info!("the iPhone shared no recent calls; keeping the ones tug has");
+                }
+                Ok(calls) => {
+                    log::info!("recent calls synced: {}", calls.len());
+                    self.shared.set_calls(calls);
+                }
+                Err(e) => log::info!("recent calls sync failed: {e}"),
+            }
+        }
+
+        /// Experimental hands-free dialing (`crate::hfp`); without a number, only the check.
+        async fn dial(&mut self, number: Option<&str>) -> Result<(), String> {
+            let device_id = match self.device_id.clone() {
+                Some(id) => id,
+                None => self.pick_device().await.map_err(|e| e.to_string())?.id,
+            };
+            let hold = if number.is_some() { DIAL_HOLD } else { Duration::ZERO };
+            let result = tokio::time::timeout(DIAL_TIMEOUT, crate::hfp::session::run(&device_id, number, hold))
+                .await
+                .unwrap_or(Err(crate::hfp::session::HfpError::Timeout));
+            match result {
+                Ok(report) => {
+                    log::info!(
+                        "hands-free {}: phone features {:?}, call {:?}",
+                        if number.is_some() { "dial" } else { "check" },
+                        report.ag_features,
+                        report.progress
+                    );
+                    Ok(())
+                }
+                Err(e) => {
+                    log::warn!(
+                        "hands-free {}: {e}",
+                        if number.is_some() {
+                            "dial failed"
+                        } else {
+                            "check failed"
+                        }
+                    );
+                    Err(e.to_string())
+                }
+            }
+        }
+
         async fn refresh(&mut self) {
             let result = self.sync().await;
+            self.record_health(&result);
             if result.is_ok() {
                 self.sync_contacts_if_due().await;
+                self.sync_calls_if_due().await;
             }
             match result {
                 Ok(0) => {}
