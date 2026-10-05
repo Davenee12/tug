@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { Music2, Pause, Play, RotateCcw, SkipBack, SkipForward, Volume1, Volume2 } from "lucide-vue-next";
+import { Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, RotateCcw, Shuffle, SkipBack, SkipForward, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { duration } from "../lib/format";
-import { canRestart, createHoldRepeater } from "../lib/media";
+import { canRestart, createHoldRepeater, repeatLabel } from "../lib/media";
 
 const tug = useTugStore();
 const np = computed(() => tug.nowPlaying);
 const available = computed(() => tug.status.services.media && np.value.title != null);
 const playing = computed(() => np.value.state === "playing");
+
+// Spotify augmentation: only when connected and Spotify is the AMS player (see the store).
+const sp = computed(() => (tug.spotifyActive ? tug.spotifyPlayer : null));
+const art = computed(() => sp.value?.albumArt ?? null);
 
 // AMS only reports elapsed time on state changes; advance it locally while playing.
 const now = ref(Date.now());
@@ -94,15 +98,29 @@ function restart() {
           <RotateCcw :size="15" />
         </button>
       </template>
+      <button
+        v-if="tug.spotify.connected"
+        class="rounded-full p-1.5 normal-case text-on-dark-soft active:text-on-dark"
+        aria-label="Your playlists"
+        title="Your Spotify playlists"
+        @click="tug.spotifyPanelOpen = true"
+      >
+        <ListMusic :size="15" />
+      </button>
     </div>
 
     <template v-if="available">
-      <p class="truncate font-display text-[22px] leading-tight text-on-dark" style="letter-spacing: -0.01em">
-        {{ np.title }}
-      </p>
-      <p class="mt-0.5 truncate text-[13px] text-on-dark-soft">
-        {{ [np.artist, np.album].filter(Boolean).join(" — ") || "Unknown artist" }}
-      </p>
+      <div class="flex items-center gap-3">
+        <img v-if="art" :src="art" alt="" class="size-12 shrink-0 rounded-md object-cover" />
+        <div class="min-w-0 flex-1">
+          <p class="truncate font-display text-[22px] leading-tight text-on-dark" style="letter-spacing: -0.01em">
+            {{ np.title }}
+          </p>
+          <p class="mt-0.5 truncate text-[13px] text-on-dark-soft">
+            {{ [np.artist, np.album].filter(Boolean).join(" — ") || "Unknown artist" }}
+          </p>
+        </div>
+      </div>
 
       <div class="mt-4 h-1 overflow-hidden rounded-full bg-surface-dark-soft">
         <!-- Keyed by track so a new song starts at its position instead of sliding back. -->
@@ -163,6 +181,39 @@ function restart() {
           @keyup="holdUp.stop"
         >
           <Volume2 :size="18" />
+        </button>
+      </div>
+
+      <!-- Spotify-only: repeat/shuffle (AMS can't), and Like the current song. -->
+      <div v-if="sp" class="mt-3 flex items-center justify-between border-t border-surface-dark-soft pt-3">
+        <button
+          class="rounded-full p-2 active:bg-surface-dark-soft"
+          :class="sp.shuffle ? 'text-on-dark' : 'text-on-dark-soft/50'"
+          :aria-pressed="sp.shuffle"
+          aria-label="Shuffle"
+          :title="sp.shuffle ? 'Shuffle on' : 'Shuffle off'"
+          @click="tug.toggleSpotifyShuffle()"
+        >
+          <Shuffle :size="17" />
+        </button>
+        <button
+          class="rounded-full p-2 active:bg-surface-dark-soft"
+          :class="sp.repeat && sp.repeat !== 'off' ? 'text-on-dark' : 'text-on-dark-soft/50'"
+          aria-label="Repeat"
+          :title="repeatLabel(sp.repeat)"
+          @click="tug.cycleSpotifyRepeat()"
+        >
+          <Repeat1 v-if="sp.repeat === 'one'" :size="17" />
+          <Repeat v-else :size="17" />
+        </button>
+        <button
+          class="rounded-full p-2 text-on-dark active:bg-surface-dark-soft"
+          :aria-pressed="sp.saved === true"
+          aria-label="Like song"
+          title="Save to your Liked Songs"
+          @click="tug.toggleSpotifyLike()"
+        >
+          <Heart :size="17" :fill="sp.saved ? 'currentColor' : 'none'" />
         </button>
       </div>
     </template>

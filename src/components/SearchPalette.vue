@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Bell, CheckCheck, Copy, MessageSquare, Moon, Phone, Plus, Repeat, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
+import { Bell, CheckCheck, Copy, ListMusic, MessageSquare, Moon, Phone, Plus, Repeat, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
 import { parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
@@ -94,6 +94,7 @@ const ctx = computed<ActionContext>(() => {
     apps: [...apps.values()],
     canDial: tug.canDial,
     notifications: tug.notifications,
+    playlists: tug.playlists,
   };
 });
 
@@ -135,6 +136,7 @@ function actionIcon(a: Action) {
   if (a.kind === "call" || a.kind === "call-setup") return Phone;
   if (a.kind === "open-chat") return MessageSquare;
   if (a.kind === "media") return MEDIA_ICONS[a.command];
+  if (a.kind === "play-playlist") return ListMusic;
   if (a.kind === "copy-code") return Copy;
   if (a.kind === "clear-all") return Trash2;
   if (a.kind === "mark-all-read") return CheckCheck;
@@ -178,6 +180,8 @@ async function run(a: Action) {
     openConversation(a.person.address, cleanName(a.person.name));
   } else if (a.kind === "media") {
     void tug.media(a.command);
+  } else if (a.kind === "play-playlist") {
+    void tug.playPlaylist(a.uri, a.name);
   } else if (a.kind === "call") {
     void tug.callPerson(a.person.name, a.person.address);
   } else if (a.kind === "call-setup") {
