@@ -160,40 +160,36 @@ async function clearHistory() {
       <p class="mt-auto px-3 font-mono text-[11px] text-muted-soft">tug {{ version ?? "" }}</p>
     </nav>
 
-    <main class="min-w-0 flex-1 overflow-y-auto">
-      <div class="mx-auto max-w-2xl px-10 pt-8 pb-16">
-        <header class="mb-6 flex items-center">
+    <!-- The frame never scrolls; each section is built to fit. The iPhone section is being rebuilt
+         on another branch, so it keeps its own scroll until that lands. -->
+    <main :class="['min-w-0 flex-1', current.id === 'iphone' ? 'overflow-y-auto' : 'overflow-hidden']">
+      <div class="mx-auto max-w-3xl px-8 pt-6 pb-8">
+        <header class="mb-5 flex items-center">
           <h1 class="headline text-[36px] leading-none">{{ current.label }}</h1>
           <button class="btn-secondary btn-sm ml-auto" title="Back (Esc)" @click="tug.closeSettings()">
             <X :size="14" /> Done
           </button>
         </header>
 
-        <!-- General -->
+        <!-- General: two columns of rows on wide windows so the whole section fits without scrolling. -->
         <template v-if="current.id === 'general'">
-          <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
-            <SettingsRow label="Windows alerts" description="Pop up new notifications on this PC.">
+          <div class="grid grid-cols-1 gap-px overflow-hidden rounded-xl bg-hairline-soft lg:grid-cols-2">
+            <SettingsRow class="bg-surface-card" label="Windows alerts" description="Pop up new notifications on this PC.">
               <SettingsSwitch v-model="toasts" label="Windows alerts" />
             </SettingsRow>
-            <SettingsRow label="Do not disturb" description="Keep collecting, stop popping up.">
+            <SettingsRow class="bg-surface-card" label="Do not disturb" description="Keep collecting, stop popping up.">
               <SettingsSwitch v-model="dnd" label="Do not disturb" :disabled="!tug.settings.toasts" />
             </SettingsRow>
-            <SettingsRow label="Low phone battery" description="Pop up when your iPhone drops to 20% and again at 10%.">
+            <SettingsRow class="bg-surface-card" label="Low phone battery" description="Pop up at 20%, then again at 10%.">
               <SettingsSwitch v-model="lowBattery" label="Low phone battery" :disabled="!tug.settings.toasts" />
             </SettingsRow>
-            <SettingsRow
-              label="Keep running when closed"
-              description="Closing the window keeps tug in the tray, still mirroring your iPhone. Quit from the tray menu."
-            >
+            <SettingsRow class="bg-surface-card" label="Keep running when closed" description="Closing keeps tug in the tray. Quit from there.">
               <SettingsSwitch v-model="closeToTray" label="Keep running when closed" />
             </SettingsRow>
-            <SettingsRow
-              label="Start with Windows"
-              description="Open tug when you sign in, hidden in the tray so it's mirroring your iPhone from the start."
-            >
+            <SettingsRow class="bg-surface-card" label="Start with Windows" description="Opens hidden in the tray when you sign in.">
               <SettingsSwitch v-model="startWithWindows" label="Start with Windows" />
             </SettingsRow>
-            <SettingsRow label="Zoom" description="Ctrl + and Ctrl − work from anywhere.">
+            <SettingsRow class="bg-surface-card" label="Zoom" description="Ctrl + and Ctrl − work from anywhere.">
               <div class="flex items-center gap-1">
                 <button class="btn-secondary btn-sm w-8 px-0" aria-label="Zoom out" @click="tug.setZoom(stepZoom(tug.zoom, -1))">
                   <Minus :size="14" />
@@ -208,9 +204,9 @@ async function clearHistory() {
             </SettingsRow>
           </div>
 
-          <p class="caption-upper mt-8 mb-2 px-1 text-muted">Keyboard</p>
-          <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
-            <div v-for="[what, keys] in SHORTCUTS" :key="what" class="flex items-center px-5 py-3 text-[14px] text-ink">
+          <p class="caption-upper mt-6 mb-2 px-1 text-muted">Keyboard</p>
+          <div class="grid grid-cols-1 gap-px overflow-hidden rounded-xl bg-hairline-soft lg:grid-cols-2">
+            <div v-for="[what, keys] in SHORTCUTS" :key="what" class="flex items-center bg-surface-card px-5 py-2.5 text-[14px] text-ink">
               {{ what }}
               <span class="ml-auto flex gap-1">
                 <kbd v-for="k in keys" :key="k" class="rounded border border-hairline bg-canvas px-1.5 font-mono text-[12px] text-body">{{ k }}</kbd>

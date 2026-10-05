@@ -9,7 +9,7 @@ const model = defineModel<boolean>({ required: true });
     role="switch"
     :aria-checked="model"
     :disabled="disabled"
-    class="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors active:bg-surface-dark-elevated disabled:opacity-50"
+    class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors active:bg-surface-dark-elevated disabled:opacity-50"
     @click="model = !model"
   >
     <span class="min-w-0 flex-1">
