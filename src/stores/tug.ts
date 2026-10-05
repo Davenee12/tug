@@ -21,9 +21,12 @@ import { toastSpec } from "../lib/toastSpec";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
+import { codeEntries, codeToastForMessage, newestCode, type CodeEntry } from "../lib/codeFeed";
+import { MESSAGES_APP } from "../lib/format";
 import { batteryAlert } from "../lib/battery";
 import { copyText } from "../lib/clipboard";
-import { normalizeAddress } from "../lib/address";
+import { isAddressLike, normalizeAddress } from "../lib/address";
+import type { ToastSpec } from "../types/protocol";
 import { isKnownConversation, outgoingAddresses, senderIndex, senderMayToast, threadCounts } from "../lib/senders";
 import type {
   CallRecord,
@@ -48,6 +51,16 @@ const PAGE = 100;
 
 export type SettingsSection = "general" | "iphone" | "notifications" | "spotify" | "weather" | "privacy" | "about";
 const SEEN_KEEP = 300;
+/** How many cleared-code message ids to remember (they expire from the Feed in minutes anyway). */
+const CLEARED_CODES_KEEP = 200;
+/** A text and an ANCS notification carry the same code if they're this close: don't pop up twice. */
+const CODE_TOAST_WINDOW_MS = 10 * 60 * 1000;
+/**
+ * Toast ids for code texts are their message id plus this base, so they never collide with a real
+ * notification's id: a press on one finds no notification to act on (the code was copied by the
+ * backend regardless), which is exactly right — a text has nothing to clear in the Feed.
+ */
+const CODE_TEXT_TOAST_BASE = 1_000_000_000;
 
 const EMPTY_STATUS: DeviceStatus = {
   radio: "unknown",
@@ -265,6 +278,24 @@ export const useTugStore = defineStore("tug", () => {
   const seen = ref<Record<string, number>>({});
   /** History from before tug started tracking "seen" never counts as new. */
   const seenSince = ref(Date.now());
+  /** Code-text rows the user cleared from the Feed (hidden, not deleted); persisted in `ui.clearedCodes`. */
+  const clearedCodes = ref<number[]>([]);
+  /** Ticks each minute so the code Feed drops rows once their texts age out of the recency window. */
+  const clock = ref(Date.now());
+  let clockTimer: number | undefined;
+
+  /**
+   * Verification codes that arrived as texts but never raised a notification, shown in the Feed with
+   * a Copy code button. Derived from messages, de-duped against any notification that carried the
+   * same code, and filtered by the cleared list — no stored state beyond the handful of cleared ids.
+   */
+  const codeFeed = computed<CodeEntry[]>(() =>
+    codeEntries(messages.value, notifications.value, {
+      now: clock.value,
+      cleared: clearedCodes.value,
+      contacts: contacts.value,
+    }),
+  );
 
   const connected = computed(() => status.value.connection === "connected");
 
@@ -297,10 +328,15 @@ export const useTugStore = defineStore("tug", () => {
     return true;
   }
 
-  function upsertMessage(m: SmsMessage) {
+  /** Returns true when the message is new (so a live code text can pop up; an update doesn't). */
+  function upsertMessage(m: SmsMessage): boolean {
     const i = messages.value.findIndex((x) => x.id === m.id);
-    if (i >= 0) messages.value[i] = m;
-    else messages.value.push(m);
+    if (i >= 0) {
+      messages.value[i] = m;
+      return false;
+    }
+    messages.value.push(m);
+    return true;
   }
 
   // Windows notification permission: ask once per launch, not on every notification.
@@ -332,25 +368,72 @@ export const useTugStore = defineStore("tug", () => {
     sendNotification({ title: "iPhone battery low", body: `${level}% left. Time to charge it.` });
   }
 
+  // A one-time code shouldn't pop up twice when it arrives on both an ANCS notification and a MAP
+  // text: whichever fires first records the code here and the other stands down for the window.
+  const codeToastedAt = new Map<string, number>();
+  function recentlyCodeToasted(code: string, now = Date.now()): boolean {
+    const last = codeToastedAt.get(code);
+    return last !== undefined && now - last < CODE_TOAST_WINDOW_MS;
+  }
+  function markCodeToasted(code: string, now = Date.now()) {
+    codeToastedAt.set(code, now);
+    for (const [c, at] of codeToastedAt) if (now - at > CODE_TOAST_WINDOW_MS) codeToastedAt.delete(c);
+  }
+
+  /** Calls always ring through; everything else is rate-limited and the overflow summed up once. */
+  function admitToast(isCall: boolean): boolean {
+    if (isCall || toasts.admit(Date.now())) return true;
+    if (toastSummary === undefined) {
+      toastSummary = window.setTimeout(() => {
+        toastSummary = undefined;
+        const held = toasts.takeHeld();
+        if (held > 0) sendNotification({ title: "tug", body: `${held} more notification${held === 1 ? "" : "s"}` });
+      }, toasts.windowMs);
+    }
+    return false;
+  }
+
   async function maybeToast(n: PhoneNotification) {
     if (n.flags.silent || n.flags.preExisting || settings.value.mutedApps.includes(n.appId)) return;
     // Unknown senders wait quietly in their own list, unless the text carries a one-time code.
     if (settings.value.filterUnknown && !senderMayToast(n, senders.value)) return;
+    const code = findCode(n.message || n.subtitle)?.code ?? null;
+    if (code !== null && recentlyCodeToasted(code)) return; // a text pop-up already carried this code
     if (!(await canToast())) return;
-    // Calls always ring through; everything else is rate-limited and summed up.
-    if (n.category !== "incomingCall" && !toasts.admit(Date.now())) {
-      if (toastSummary === undefined) {
-        toastSummary = window.setTimeout(() => {
-          toastSummary = undefined;
-          const held = toasts.takeHeld();
-          if (held > 0) sendNotification({ title: "tug", body: `${held} more notification${held === 1 ? "" : "s"}` });
-        }, toasts.windowMs);
-      }
-      return;
-    }
+    if (!admitToast(n.category === "incomingCall")) return;
+    if (code !== null) markCodeToasted(code);
     // With buttons for what applies (reply, mark read, copy code, call back, clear); the
     // backend falls back to a plain pop-up itself if Windows won't take that one.
     const spec = toastSpec(n, messages.value, contacts.value);
+    api.showToast(spec).catch(() => sendNotification({ title: spec.title, body: spec.body }));
+  }
+
+  /**
+   * A text just arrived live (not startup backlog) carrying a code, and no ANCS notification popped
+   * it: raise a pop-up with Copy code, respecting the toast settings, Do-not-disturb and the limiter.
+   * The toast's id is the message id offset into its own range, so a press has no notification to act
+   * on — the backend copies the code itself, and a code text has nothing to clear in the Feed.
+   */
+  async function maybeToastMessage(m: SmsMessage) {
+    if (settings.value.mutedApps.includes(MESSAGES_APP)) return;
+    const code = codeToastForMessage(m, notifications.value, { contacts: contacts.value });
+    if (code === null || recentlyCodeToasted(code)) return;
+    if (!(await canToast())) return;
+    if (!admitToast(false)) return;
+    markCodeToasted(code);
+    const known = m.contactName ?? contacts.value.find((c) => c.address === m.address)?.name;
+    const name = known && !isAddressLike(known) ? cleanName(known) : formatAddress(m.address);
+    const spec: ToastSpec = {
+      id: CODE_TEXT_TOAST_BASE + m.id,
+      title: ["Messages", name].filter(Boolean).join(" · "),
+      body: m.body,
+      name,
+      replyTo: null,
+      markRead: false,
+      code,
+      callBack: false,
+      clear: false,
+    };
     api.showToast(spec).catch(() => sendNotification({ title: spec.title, body: spec.body }));
   }
 
@@ -479,20 +562,14 @@ export const useTugStore = defineStore("tug", () => {
 
   /** The newest code that arrived in the last few minutes, from a notification or a text. */
   function latestCode(maxAgeMs = 10 * 60 * 1000): { code: string; from: PhoneNotification[] } | null {
-    const since = Date.now() - maxAgeMs;
-    type Hit = { code: string; at: number; from: PhoneNotification[] };
-    let best: Hit | null = null;
-    for (const n of notifications.value) {
-      if (n.receivedAt < since) break; // newest first
-      const found = findCode(n.message || n.subtitle);
-      if (found && (!best || n.receivedAt > best.at)) best = { code: found.code, at: n.receivedAt, from: [n] };
-    }
-    for (const m of messages.value) {
-      if (m.direction !== "in" || m.receivedAt < since) continue;
-      const found = findCode(m.body);
-      if (found && (!best || m.receivedAt > best.at)) best = { code: found.code, at: m.receivedAt, from: [] };
-    }
-    return best && { code: best.code, from: best.from };
+    return newestCode(notifications.value, messages.value, { maxAgeMs });
+  }
+
+  /** Hide a code-text row from the Feed (every text behind it); the texts stay in Messages. */
+  function clearCode(entry: CodeEntry) {
+    const next = [...new Set([...clearedCodes.value, ...entry.messageIds])].slice(-CLEARED_CODES_KEEP);
+    clearedCodes.value = next;
+    void attempt(() => api.setSetting("ui.clearedCodes", JSON.stringify(next)));
   }
 
   /**
@@ -676,6 +753,7 @@ export const useTugStore = defineStore("tug", () => {
       filterUnknown: raw["ui.filterUnknown"] !== "false",
       knownSenders: raw["ui.knownSenders"] ? (JSON.parse(raw["ui.knownSenders"]) as string[]) : [],
     };
+    clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
     onboarded.value = raw["ui.onboarded"] === "1";
   }
 
@@ -683,6 +761,8 @@ export const useTugStore = defineStore("tug", () => {
   // remount (or dev hot-reload) can't double every toast and keypress.
   let teardown: Array<UnlistenFn | (() => void)> = [];
   let started = false;
+  /** True once the startup backlog has loaded, so a live code text can pop up but backlog can't. */
+  let messagesReady = false;
 
   async function init() {
     if (started) return;
@@ -727,7 +807,11 @@ export const useTugStore = defineStore("tug", () => {
           for (const n of notifications.value) if (n.appId === appId) n.appName = appName;
         }),
         on("discovered-devices", (list) => (discovered.value = list)),
-        on("message", upsertMessage),
+        on("message", (m) => {
+          const added = upsertMessage(m);
+          // Only live arrivals pop up; the startup backlog (loaded below) must stay quiet.
+          if (added && messagesReady) void maybeToastMessage(m);
+        }),
         on("contacts", (list) => {
           contacts.value = list;
           // Names are joined into messages server-side; apply them to what's loaded.
@@ -763,6 +847,10 @@ export const useTugStore = defineStore("tug", () => {
     statusKnown.value = true;
     nowPlaying.value = np;
     hasMore.value = first.length === PAGE;
+    // The backlog is in; from here a newly delivered code text is a live arrival that may pop up.
+    messagesReady = true;
+    // Let code rows age out of the Feed's recency window even when nothing else changes.
+    clockTimer = window.setInterval(() => (clock.value = Date.now()), 60_000);
     await attempt(loadSettings);
     void loadSpotify();
   }
@@ -777,8 +865,11 @@ export const useTugStore = defineStore("tug", () => {
     window.clearInterval(spotifyPoll);
     window.clearTimeout(flashTimer);
     window.clearInterval(watchRenew);
+    window.clearInterval(clockTimer);
     toastSummary = undefined;
     watchRenew = undefined;
+    clockTimer = undefined;
+    messagesReady = false;
     started = false;
   }
 
@@ -1038,6 +1129,8 @@ export const useTugStore = defineStore("tug", () => {
     markAllRead,
     copyCode,
     latestCode,
+    codeFeed,
+    clearCode,
     deleteConversation,
     appNameFor,
     /** Send through the iPhone. The pending message appears via the `message` event. */
