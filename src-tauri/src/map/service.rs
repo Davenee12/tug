@@ -121,9 +121,10 @@ mod worker {
     use crate::map::health::{Attempt, Health, TextsPairing};
     use crate::map::listing;
     use crate::map::obex::RSP_NOT_FOUND;
+    use crate::map::pick::choose_device;
     use crate::map::session::{find_devices, pull_call_history, pull_contacts, MapDevice, MapError, MapSession};
     use crate::messages::{IncomingMessage, Status, StoredMessage, SOURCE_IPHONE_MAP};
-    use crate::state::{events, ConnectionState, Shared};
+    use crate::state::{events, keys, ConnectionState, Shared};
 
     const FIRST_SYNC_DELAY: Duration = Duration::from_secs(3);
     const POLL_CONNECTED: Duration = Duration::from_secs(8);
@@ -274,15 +275,33 @@ mod worker {
         /// The paired Classic device that is this iPhone.
         async fn pick_device(&self) -> Result<MapDevice, MapError> {
             let devices = find_devices().await?;
-            // Prefer the phone tug is paired with; the Classic and LE names usually match.
+            // Prefer the phone we last connected to by id (survives a rename); then the
+            // notifications phone's name; then a lone phone. Logic (and its tests) in `pick`.
+            let stored = self.shared.store.setting(keys::TEXTS_DEVICE_ID).ok().flatten();
             let wanted = self.shared.status().device.map(|d| d.name);
-            // With no name match, only a lone phone is a safe guess; never pick one of several.
-            devices
-                .iter()
-                .find(|d| wanted.as_deref() == Some(d.name.as_str()))
-                .or(if devices.len() == 1 { devices.first() } else { None })
+            choose_device(&devices, stored.as_deref(), wanted.as_deref())
                 .cloned()
                 .ok_or(MapError::NoDevice)
+        }
+
+        /// Remember the phone a MAP session just connected to, so later picks prefer it by id
+        /// even if it's renamed. Written only when it changes (the first connection, or a
+        /// different phone).
+        fn remember_texts_device(&self, id: &str) {
+            if self
+                .shared
+                .store
+                .setting(keys::TEXTS_DEVICE_ID)
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some(id)
+            {
+                return;
+            }
+            if let Err(e) = self.shared.store.set_setting(keys::TEXTS_DEVICE_ID, id) {
+                log::warn!("remembering the texts device failed: {e}");
+            }
         }
 
         async fn ensure(&mut self) -> Result<&mut MapSession, MapError> {
@@ -291,6 +310,8 @@ mod worker {
                 self.texts_device = Some(device.name.clone());
                 let session = MapSession::connect(&device.id).await?;
                 log::info!("message access connected to {}", device.name);
+                // Only once connecting worked: a device that won't connect isn't "the phone".
+                self.remember_texts_device(&device.id);
                 self.device_id = Some(device.id.clone());
                 self.session = Some(session);
                 self.set_state(true, None);

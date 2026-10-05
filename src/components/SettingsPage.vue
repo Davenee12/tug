@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { Bell, Check, CloudSun, Info, Minus, Plus, ShieldCheck, SlidersHorizontal, Smartphone, X } from "lucide-vue-next";
-import { api } from "../lib/ipc";
+import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Minus, Plus, ShieldCheck, SlidersHorizontal, Smartphone, X } from "lucide-vue-next";
+import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
+import { connectionHealth, errorAge, type HealthLink, type LinkState } from "../lib/health";
 import { stepZoom } from "../lib/zoom";
 import PhoneSetup from "./PhoneSetup.vue";
 import SettingsRow from "./SettingsRow.vue";
@@ -31,17 +32,60 @@ function onKey(e: KeyboardEvent) {
   }
 }
 const version = ref<string | null>(null);
+// A slow clock so the last-error "3m ago" stays roughly current while Settings is open.
+const now = ref(Date.now());
+let clock: number | undefined;
 onMounted(async () => {
   window.addEventListener("keydown", onKey);
+  clock = window.setInterval(() => (now.value = Date.now()), 30_000);
   version.value = await getVersion().catch(() => null);
 });
-onUnmounted(() => window.removeEventListener("keydown", onKey));
+onUnmounted(() => {
+  window.removeEventListener("keydown", onKey);
+  window.clearInterval(clock);
+});
+
+// ---- iPhone: Connection health ----
+const health = computed<HealthLink[]>(() =>
+  connectionHealth(tug.status, { contacts: tug.contacts.length, calls: tug.calls.length }),
+);
+const lastErrorAge = computed(() => errorAge(tug.status.lastErrorAt, now.value));
+const STATE_META: Record<LinkState, { dot: string; label: string }> = {
+  ok: { dot: "bg-accent-teal", label: "Connected" },
+  off: { dot: "bg-accent-amber", label: "Needs attention" },
+  error: { dot: "bg-error", label: "Problem" },
+  waiting: { dot: "bg-muted-soft", label: "Waiting" },
+};
+
+const diagnostics = ref<"idle" | "copying" | "done">("idle");
+async function copyDiagnostics() {
+  diagnostics.value = "copying";
+  try {
+    await api.copyDiagnostics();
+    diagnostics.value = "done";
+    tug.notify("info", "Diagnostics copied. Paste them into your support message.");
+    window.setTimeout(() => (diagnostics.value = "idle"), 2500);
+  } catch (e) {
+    diagnostics.value = "idle";
+    tug.notify("error", errorMessage(e));
+  }
+}
+async function openLogs() {
+  try {
+    await api.openLogsFolder();
+  } catch (e) {
+    tug.notify("error", errorMessage(e));
+  }
+}
 
 // ---- General ----
 const toasts = computed({ get: () => tug.settings.toasts, set: (v) => void tug.setSetting("toasts", v) });
+const lowBattery = computed({ get: () => tug.settings.lowBattery, set: (v) => void tug.setSetting("lowBattery", v) });
 const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tug.setSetting("doNotDisturb", v) });
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
+const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) => void tug.setAutostart(v) });
 const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
+const filterUnknown = computed({ get: () => tug.settings.filterUnknown, set: (v) => void tug.setSetting("filterUnknown", v) });
 const advertise = computed({ get: () => tug.advertiseEnabled, set: (v) => void tug.setAdvertising(v) });
 const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
 
@@ -150,11 +194,20 @@ async function clearHistory() {
             <SettingsRow label="Do not disturb" description="Keep collecting, stop popping up.">
               <SettingsSwitch v-model="dnd" label="Do not disturb" :disabled="!tug.settings.toasts" />
             </SettingsRow>
+            <SettingsRow label="Low phone battery" description="Pop up when your iPhone drops to 20% and again at 10%.">
+              <SettingsSwitch v-model="lowBattery" label="Low phone battery" :disabled="!tug.settings.toasts" />
+            </SettingsRow>
             <SettingsRow
               label="Keep running when closed"
               description="Closing the window keeps tug in the tray, still mirroring your iPhone. Quit from the tray menu."
             >
               <SettingsSwitch v-model="closeToTray" label="Keep running when closed" />
+            </SettingsRow>
+            <SettingsRow
+              label="Start with Windows"
+              description="Open tug when you sign in, hidden in the tray so it's mirroring your iPhone from the start."
+            >
+              <SettingsSwitch v-model="startWithWindows" label="Start with Windows" />
             </SettingsRow>
             <SettingsRow label="Zoom" description="Ctrl + and Ctrl − work from anywhere.">
               <div class="flex items-center gap-1">
@@ -184,6 +237,45 @@ async function clearHistory() {
 
         <!-- iPhone -->
         <template v-else-if="current.id === 'iphone'">
+          <!-- Connection: each link's state, a plain-English reason/fix, and the diagnostics tools -->
+          <div class="mb-6">
+            <p class="caption-upper mb-2 px-1 text-muted">Connection</p>
+            <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
+              <div v-for="l in health" :key="l.key" class="flex items-start gap-3 px-5 py-3">
+                <span class="mt-[7px] size-2 shrink-0 rounded-full" :class="STATE_META[l.state].dot" aria-hidden="true" />
+                <div class="min-w-0 flex-1">
+                  <p class="text-[14px] font-medium text-ink">{{ l.label }}</p>
+                  <p class="mt-0.5 text-[13px] leading-snug text-muted">{{ l.detail }}</p>
+                </div>
+                <span class="shrink-0 pt-0.5 text-[12px] text-muted-soft">{{ STATE_META[l.state].label }}</span>
+              </div>
+            </div>
+
+            <div
+              v-if="tug.status.lastError"
+              class="mt-3 flex items-start gap-2.5 rounded-xl border border-error/30 bg-canvas px-4 py-3 text-[13px] text-body-strong"
+            >
+              <CircleAlert :size="16" class="mt-0.5 shrink-0 text-error" />
+              <div class="min-w-0 flex-1">
+                <p class="selectable">{{ tug.status.lastError }}</p>
+                <p v-if="lastErrorAge" class="mt-0.5 text-[12px] text-muted">Last error {{ lastErrorAge }}</p>
+              </div>
+            </div>
+
+            <div class="mt-3 flex flex-wrap gap-2">
+              <button class="btn-secondary btn-sm" :disabled="diagnostics === 'copying'" @click="copyDiagnostics">
+                <ClipboardList :size="14" /> {{ diagnostics === "done" ? "Copied" : "Copy diagnostics" }}
+              </button>
+              <button class="btn-secondary btn-sm" @click="openLogs">
+                <FolderOpen :size="14" /> Open logs folder
+              </button>
+            </div>
+            <p class="mt-2 px-1 text-[12px] text-muted-soft">
+              Copy diagnostics puts your connection state and recent logs on the clipboard for support, with phone numbers, names and
+              message contents removed.
+            </p>
+          </div>
+
           <!-- Texts pairing missing, or broken (Windows' half no longer works): say what to do -->
           <div
             v-if="tug.status.device && (tug.status.textsPairing === 'missing' || tug.status.textsPairing === 'broken')"
@@ -257,6 +349,14 @@ async function clearHistory() {
 
         <!-- Notifications -->
         <template v-else-if="current.id === 'notifications'">
+          <div class="mb-4 rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Filter unknown senders"
+              description="Texts from numbers that aren't in your contacts, and that you've never texted, wait in their own list in Messages: no badge, no pop-up. Texts with a code still pop up."
+            >
+              <SettingsSwitch v-model="filterUnknown" label="Filter unknown senders" />
+            </SettingsRow>
+          </div>
           <div class="rounded-xl bg-surface-card px-5 py-4">
             <p class="text-[14px] font-medium text-ink">Muted on this PC</p>
             <p class="mt-0.5 text-[13px] text-muted">
@@ -350,6 +450,14 @@ async function clearHistory() {
               label="Credits"
               description="Forecasts by Open-Meteo (CC BY 4.0). Place names by BigDataCloud. Icons by Lucide."
             />
+            <SettingsRow
+              label="Copy diagnostics"
+              description="Connection state and recent logs on the clipboard for support, with phone numbers, names and message contents removed."
+            >
+              <button class="btn-secondary btn-sm" :disabled="diagnostics === 'copying'" @click="copyDiagnostics">
+                <ClipboardList :size="14" /> {{ diagnostics === "done" ? "Copied" : "Copy diagnostics" }}
+              </button>
+            </SettingsRow>
           </div>
         </template>
       </div>
