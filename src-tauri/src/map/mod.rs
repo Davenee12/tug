@@ -14,6 +14,7 @@ pub mod health;
 pub mod listing;
 pub mod mns_event;
 pub mod obex;
+pub mod pick;
 pub mod service;
 #[cfg(windows)]
 pub mod session;
