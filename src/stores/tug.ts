@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
-import { appLabel, groupThreads, newestUnreadThread, threadKey } from "../lib/format";
+import { appLabel, canClear, groupConversations, groupThreads, newestUnreadThread, threadKey } from "../lib/format";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
@@ -259,7 +259,7 @@ export const useTugStore = defineStore("tug", () => {
 
   /** Clear every notification in a row that's still on the phone and clearable. */
   async function clearItems(items: PhoneNotification[], { quiet = false } = {}) {
-    const clearable = items.filter((n) => n.live && n.removedAt == null && n.flags.negativeAction);
+    const clearable = items.filter(canClear);
     let failure: unknown = null;
     // One that's already gone from the phone mustn't stop the rest from clearing.
     for (const n of clearable) {
@@ -346,6 +346,18 @@ export const useTugStore = defineStore("tug", () => {
   function readConversation(notifications: PhoneNotification[], messageIds: number[]) {
     void clearItems(notifications, { quiet: true });
     if (messageIds.length) api.markRead(messageIds).catch(() => undefined);
+  }
+
+  /**
+   * Mark everything read at once: every conversation counts as seen in tug, and its texts
+   * are marked read and its notifications cleared on the phone — exactly as opening each would.
+   */
+  function markAllRead() {
+    for (const c of groupConversations(notifications.value, messages.value, contacts.value)) {
+      markSeen(c.key);
+      const ids = messages.value.filter((m) => m.direction === "in" && c.addresses.includes(m.address)).map((m) => m.id);
+      readConversation(c.notifications, ids);
+    }
   }
 
   /** Display name for a bundle id, from the history tug has seen. */
@@ -584,6 +596,7 @@ export const useTugStore = defineStore("tug", () => {
     startConversation,
     clearItems,
     readConversation,
+    markAllRead,
     copyCode,
     latestCode,
     deleteConversation,

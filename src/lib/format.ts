@@ -358,3 +358,11 @@ export function snippet(text: string, query: string, width = 90): string {
   const end = Math.min(flat.length, start + width);
   return `${start > 0 ? "…" : ""}${flat.slice(start, end).trim()}${end < flat.length ? "…" : ""}`;
 }
+
+/**
+ * Can tug clear this notification on the phone? Only while it's still there and offers a
+ * clear. Never a ringing call: its "negative" action is Decline, which only its own button sends.
+ */
+export function canClear(n: PhoneNotification): boolean {
+  return n.live && n.removedAt == null && n.flags.negativeAction && n.category !== "incomingCall";
+}
