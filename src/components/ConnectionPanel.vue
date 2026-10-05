@@ -2,13 +2,22 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { CircleAlert, LoaderCircle, RefreshCw, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { useWeatherStore } from "../stores/weather";
 import type { DiscoveredDevice } from "../types/protocol";
 
 defineProps<{ closable: boolean }>();
 const emit = defineEmits<{ close: [] }>();
 
 const tug = useTugStore();
+const weather = useWeatherStore();
 const s = computed(() => tug.status);
+
+/** Back to the set-up card on the Feed. */
+function showWeather() {
+  weather.reset();
+  tug.view = "feed";
+  emit("close");
+}
 const scanning = ref(false);
 const busyId = ref<string | null>(null);
 
@@ -198,6 +207,22 @@ const advertisingLabel = computed(
             </button>
           </li>
         </ul>
+      </section>
+
+      <section>
+        <p class="caption-upper mb-2 text-muted">Weather</p>
+        <p class="text-[13px] text-muted">
+          <template v-if="weather.place === 'off'">Hidden from the Feed.</template>
+          <template v-else-if="weather.place">On the Feed for {{ weather.place.name }}.</template>
+          <template v-else>Not set up yet.</template>
+        </p>
+        <div class="mt-3 flex gap-2">
+          <button v-if="weather.place === 'off'" class="btn-secondary btn-sm" @click="showWeather">Show on the Feed</button>
+          <template v-else-if="weather.place">
+            <button class="btn-secondary btn-sm" @click="showWeather">Change place</button>
+            <button class="btn-secondary btn-sm" @click="weather.hide()">Hide</button>
+          </template>
+        </div>
       </section>
 
       <section>

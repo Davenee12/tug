@@ -3,6 +3,7 @@ mod ancs;
 mod ancs_queue;
 mod ble;
 mod commands;
+mod location;
 pub mod map;
 mod messages;
 mod state;
@@ -68,6 +69,7 @@ pub fn run() {
             commands::get_contacts,
             commands::send_message,
             commands::refresh_messages,
+            commands::locate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

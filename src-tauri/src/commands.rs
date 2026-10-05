@@ -158,6 +158,14 @@ pub async fn send_message(state: State<'_, AppState>, address: String, text: Str
     map.send(address, text).await
 }
 
+/// The PC's location, for the weather widget. Only called when the user asks.
+#[tauri::command]
+pub async fn locate() -> Result<crate::location::Position> {
+    tauri::async_runtime::spawn_blocking(crate::location::locate)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub fn refresh_messages(state: State<'_, AppState>) {
     if let Some(map) = state.shared.map.get() {
