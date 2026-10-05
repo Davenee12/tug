@@ -79,6 +79,14 @@ const checks = computed<Check[]>(() => {
   ];
 });
 
+// ---- iPhone: experimental calling, on only after the hands-free check passes ----
+const checkingCalls = ref(false);
+async function checkCalls() {
+  checkingCalls.value = true;
+  await tug.checkDialing();
+  checkingCalls.value = false;
+}
+
 // ---- Weather ----
 function changePlace() {
   weather.reset();
@@ -194,6 +202,25 @@ async function clearHistory() {
           <div class="mb-6 divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow label="Visible to iPhone" description="Lets your phone find and reconnect to this PC.">
               <SettingsSwitch v-model="advertise" label="Visible to iPhone" />
+            </SettingsRow>
+          </div>
+
+          <p class="caption-upper mb-2 px-1 text-muted">Calls</p>
+          <div class="mb-6 divide-y divide-hairline-soft rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Call from tug"
+              description="Places calls on your iPhone over its hands-free link, from recent calls, conversations and contacts. You talk on the phone. Call buttons only appear once this PC passes the check."
+            >
+              <template #below>
+                <p class="mt-1 text-[12px] text-muted-soft">Experimental: not yet tried with a real iPhone.</p>
+              </template>
+              <div v-if="tug.canDial" class="flex items-center gap-3">
+                <span class="flex items-center gap-1.5 text-[13px] font-medium text-ink"><Check :size="15" class="text-accent-teal" /> On</span>
+                <button class="btn-secondary btn-sm" @click="tug.setSetting('dialing', false)">Turn off</button>
+              </div>
+              <button v-else class="btn-secondary btn-sm" :disabled="checkingCalls || !tug.status.device" @click="checkCalls">
+                {{ checkingCalls ? "Checking…" : "Check" }}
+              </button>
             </SettingsRow>
           </div>
 
