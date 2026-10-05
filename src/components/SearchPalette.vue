@@ -93,6 +93,7 @@ const ctx = computed<ActionContext>(() => {
     unread: conversations.filter((c) => tug.newCount(c.key, c.notifications) > 0).length,
     apps: [...apps.values()],
     canDial: tug.canDial,
+    notifications: tug.notifications,
   };
 });
 
@@ -178,7 +179,7 @@ async function run(a: Action) {
   } else if (a.kind === "media") {
     void tug.media(a.command);
   } else if (a.kind === "call") {
-    void tug.call(a.person.address, cleanName(a.person.name));
+    void tug.callPerson(a.person.name, a.person.address);
   } else if (a.kind === "call-setup") {
     tug.openSettings("iphone");
   } else if (a.kind === "copy-code") {

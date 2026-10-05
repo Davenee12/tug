@@ -163,9 +163,24 @@ describe("call", () => {
     expect(parseActions("call 302 555 0100", people, dial)[0]).toMatchObject({ kind: "call", person: { address: "3025550100" } });
   });
 
-  it("points to Settings instead of offering a call that can't work", () => {
+  it("says why instead of offering a call that can't work", () => {
     expect(parseActions("call priya", people, {})).toEqual([
-      { kind: "call-setup", label: "Calling from tug is off: check it in Settings › iPhone" },
+      { kind: "call-setup", label: "Can't call Priya yet: only missed calls can be called back" },
+    ]);
+  });
+
+  it("calls back from a missed call without hands-free", () => {
+    const missed = {
+      id: 9,
+      category: "missedCall",
+      title: "Priya",
+      live: true,
+      removedAt: null,
+      receivedAt: 1,
+      flags: { positiveAction: true },
+    } as unknown as PhoneNotification;
+    expect(parseActions("call priya", people, { notifications: [missed] })).toEqual([
+      { kind: "call", person: people[1], label: "Call Priya back", detail: "From their missed call" },
     ]);
   });
 
