@@ -7,6 +7,7 @@ use tauri::State;
 
 use crate::ams::{NowPlaying, RemoteCommand};
 use crate::ble::{BleHandle, Command};
+use crate::map::calls::CallRecord;
 use crate::messages::{Contact, StoredMessage};
 use crate::state::{DeviceStatus, Shared};
 use crate::store::StoredNotification;
@@ -156,6 +157,29 @@ pub fn get_contacts(state: State<'_, AppState>) -> Result<Vec<Contact>> {
 pub async fn send_message(state: State<'_, AppState>, address: String, text: String) -> Result<StoredMessage> {
     let map = state.shared.map.get().cloned().ok_or("Message service isn't running")?;
     map.send(address, text).await
+}
+
+/// The phone's recent calls (PBAP call history), newest first.
+#[tauri::command]
+pub fn get_calls(state: State<'_, AppState>) -> Vec<CallRecord> {
+    state.shared.calls()
+}
+
+/// Recent calls are on screen: pull them again soon (throttled in the service).
+#[tauri::command]
+pub fn refresh_calls(state: State<'_, AppState>) {
+    if let Some(map) = state.shared.map.get() {
+        map.refresh_calls(std::time::Duration::ZERO);
+    }
+}
+
+/// Experimental: place a call on the iPhone over its hands-free link (see `hfp`). Without a
+/// number it only checks that the link can be opened, which Settings does before Call
+/// buttons are shown.
+#[tauri::command]
+pub async fn dial(state: State<'_, AppState>, number: Option<String>) -> Result<()> {
+    let map = state.shared.map.get().cloned().ok_or("Message service isn't running")?;
+    map.dial(number).await
 }
 
 /// The PC's location, for the weather widget. Only called when the user asks.
