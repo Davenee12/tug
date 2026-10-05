@@ -30,31 +30,10 @@ See docs/STABILIZATION.md for the current backlog.
 - **Code signing** (avoid SmartScreen "unknown publisher"), **auto-updates** from GitHub Releases,
   opt-in diagnostics.
 
-## Later — widgets & "out of the ordinary"
-tug shouldn't just mirror the phone; it should be the most useful thing on the desk. These need the
-Settings page first (every one that touches location, accounts or the PC is opt-in there).
-
-- **Widgets row above the Feed.** Cards you add, remove, reorder and resize, iPhone-style: small shows
-  the glance, drag it bigger and it reveals more. Persisted per user.
-  - *Weather:* small = now + high/low for your location; drag bigger → hourly, then 7-day. Location is
-    opt-in (Windows Location, or type a city); free forecast API with no key (Open-Meteo).
-  - *Phone:* battery, connection, Now Playing; bigger → queue position, shuffle/repeat, volume.
-  - *Next up:* next meeting from a calendar connector, with a join button.
-  - *People:* pinned favourites with unread dots; tap to open, hold to text.
-- **One-time codes:** spot verification codes in texts/notifications and offer one-click Copy (and
-  auto-clear the notification after).
-- **Reply from the Windows toast:** type straight into the pop-up notification without opening tug.
-- **While you were away:** when you come back to the PC, a short digest — who texted, what's still
-  waiting, missed calls.
-- **Focus-aware:** when Windows Focus / Do Not Disturb is on, tug holds pop-ups and shows the digest
-  after; VIPs can break through.
-- **Phone-nearby lock:** lock the PC when the iPhone walks away (Bluetooth signal), opt-in.
-- **Mini mode:** a small always-on-top window (or tray pop-up) with the latest texts and media
-  controls; tray icon shows the unread count.
-- **Send later:** schedule a text (sent through the phone at that time while tug is running).
-- **Ctrl+K actions:** not just search — "text Tay running late", "play/pause", "clear all".
-- **Smart extras (opt-in):** suggested quick replies, detect tracking numbers and dates in texts
-  ("add to calendar"), link previews.
+## Later — product ideas
+The small, curated idea backlog (one-time codes, live texts, Ctrl+K actions, tray, reply from the
+pop-up, the glance strip with weather, welcome back...) and what we decided *not* to build live in
+[docs/PRODUCT.md](docs/PRODUCT.md). Ideas move onto this roadmap only once approved.
 
 ## Later — features
 - **Delete conversations:** an ✕ on each conversation to remove it from tug (local, with undo; nothing
