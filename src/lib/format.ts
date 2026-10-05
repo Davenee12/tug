@@ -135,6 +135,21 @@ export function groupThreads(notifications: PhoneNotification[]): Thread[] {
   return [...threads.values()].sort((a, b) => byTime(b.latest, a.latest));
 }
 
+/**
+ * The newest conversation that still has unread texts, or null if none. `groupThreads`
+ * is already newest-first, so this is the first thread with a fresh count — the one the
+ * tray opens on click. `newCount` is the store's (it knows what's been seen).
+ */
+export function newestUnreadThread(
+  notifications: PhoneNotification[],
+  newCount: (key: string, items: PhoneNotification[]) => number,
+): string | null {
+  for (const t of groupThreads(notifications)) {
+    if (newCount(t.key, t.items) > 0) return t.key;
+  }
+  return null;
+}
+
 export interface AppStack {
   key: string;
   appId: string;

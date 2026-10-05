@@ -24,6 +24,8 @@ pub mod events {
     pub const PAIRING_REQUEST_CLOSED: &str = "pairing-request-closed";
     pub const MESSAGE: &str = "message";
     pub const CONTACTS: &str = "contacts";
+    /// Tray click/Open with unread texts: the frontend opens the newest unread conversation.
+    pub const OPEN_LATEST_CONVERSATION: &str = "open-latest-conversation";
 }
 
 /// Settings keys stored in SQLite.

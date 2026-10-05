@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
-import { appLabel, groupThreads, threadKey } from "../lib/format";
+import { appLabel, groupThreads, newestUnreadThread, threadKey } from "../lib/format";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
@@ -348,6 +348,22 @@ export const useTugStore = defineStore("tug", () => {
     markSeen(key);
   }
 
+  /**
+   * Clicking the tray (or its Open) with unread texts: open the newest conversation that
+   * has unread, as if it were clicked, so it's read and cleared normally. The backend only
+   * emits this when there are unread; if nothing's unread by the time it arrives, do nothing
+   * and leave the user where they were. An overlay or Settings would hide the conversation,
+   * so close those first (but not a pairing dialog, which needs an answer).
+   */
+  function openLatestConversation() {
+    const key = newestUnreadThread(notifications.value, newCount);
+    if (!key) return;
+    searchOpen.value = false;
+    pickerOpen.value = false;
+    closeSettings();
+    openThread(key);
+  }
+
   async function loadSettings() {
     const raw = await api.getSettings();
     zoom.value = Number(raw["ui.zoom"]) || 1;
@@ -423,6 +439,7 @@ export const useTugStore = defineStore("tug", () => {
         }),
         on("pairing-request", (req) => (pairingRequest.value = req)),
         on("pairing-request-closed", () => (pairingRequest.value = null)),
+        on("open-latest-conversation", openLatestConversation),
       ])),
     );
     const [s, np, first, msgs, people] = await Promise.all([
