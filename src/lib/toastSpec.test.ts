@@ -58,10 +58,11 @@ describe("replyAddress", () => {
   });
 
   it("uses the number or email iOS shows for someone not in contacts", () => {
-    expect(replyAddress(note("+1 (302) 555-0199", "who dis"), [], contacts)).toBe("+1 (302) 555-0199");
+    expect(replyAddress(note("+1 (302) 555-0199", "who dis"), [], contacts)).toBe("+13025550199");
     expect(replyAddress(note("pat@icloud.com", "hi"), [], contacts)).toBe("pat@icloud.com");
     expect(replyAddress(note("Pat", "hi"), [], contacts)).toBeNull();
-    expect(replyAddress(note("12 34", "hi"), [], contacts)).toBeNull();
+    // Short codes are real senders (reply STOP); they reply to their digits.
+    expect(replyAddress(note("12 34", "hi"), [], contacts)).toBe("1234");
   });
 
   it("only offers replies for Messages (that's what message access sends)", () => {
