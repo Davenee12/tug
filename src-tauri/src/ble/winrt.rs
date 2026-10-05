@@ -29,6 +29,14 @@ impl BleError {
     pub fn is_stale_bond(&self) -> bool {
         matches!(self, Self::Win(e) if e.code() == STALE_BOND)
     }
+
+    /// The ATT error code the peripheral answered with, when it answered with one.
+    pub fn att_code(&self) -> Option<u8> {
+        match self {
+            Self::Protocol(code) => *code,
+            _ => None,
+        }
+    }
 }
 
 impl From<windows::core::Error> for BleError {
