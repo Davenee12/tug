@@ -186,6 +186,20 @@ fn on_activated(app: &AppHandle, arguments: String, input: Option<String>) {
     }
 }
 
+/// True the first time this reply (same notification, same text) is pressed within a minute.
+fn first_reply(id: i64, text: &str) -> bool {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static RECENT_REPLIES: Mutex<Vec<(i64, String, Instant)>> = Mutex::new(Vec::new());
+    let mut recent = RECENT_REPLIES.lock().unwrap_or_else(|e| e.into_inner());
+    recent.retain(|(_, _, at)| at.elapsed() < Duration::from_secs(60));
+    if recent.iter().any(|(i, t, _)| *i == id && t == text) {
+        return false;
+    }
+    recent.push((id, text.to_string(), Instant::now()));
+    true
+}
+
 #[cfg(windows)]
 async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
     use tauri::{Emitter, Manager};
@@ -227,6 +241,14 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 pressed(PressKind::Open);
                 return;
             }
+            let text = text.trim().to_string();
+            // A double-press, or pressing Send again from Action Center before Windows dismissed
+            // the pop-up, must not text them twice: take the pop-up down and drop a repeat.
+            if !first_reply(id, &text) {
+                log::info!("ignored a repeated reply press (row {id})");
+                return;
+            }
+            withdraw(&app, id);
             let sent = match shared.map.get().cloned() {
                 Some(map) => map.send(to, text.clone()).await.map(|_| ()),
                 None => Err("Message service isn't running".to_string()),
@@ -234,12 +256,12 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
             match sent {
                 Ok(()) => {
                     log::info!("sent a reply from a pop-up (row {id})");
-                    note(&app, id, &format!("Sent to {who}"), text.trim(), true);
+                    note(&app, id, &format!("Sent to {who}"), &text, true);
                     pressed(PressKind::Replied);
                 }
                 Err(e) => {
                     log::info!("reply from a pop-up not sent (row {id}): {e}");
-                    let body = format!("{e}\n\u{201c}{}\u{201d}", text.trim());
+                    let body = format!("{e}\n\u{201c}{text}\u{201d}");
                     note(&app, id, &format!("Couldn't send to {who}"), &body, false);
                 }
             }
@@ -306,6 +328,26 @@ fn note(app: &AppHandle, id: i64, title: &str, body: &str, quiet: bool) {
     if let Err(e) = show_native(app, &xml, &tag, GROUP_NOTES, quiet.then_some(SENT_NOTE_TTL)) {
         log::warn!("follow-up pop-up failed ({}); showing a plain one", e.message());
         plain(app, title, body);
+    }
+}
+
+#[cfg(test)]
+mod reply_tests {
+    #[test]
+    fn a_repeated_reply_press_is_dropped() {
+        assert!(super::first_reply(9_001, "on my way"));
+        assert!(
+            !super::first_reply(9_001, "on my way"),
+            "same reply again within a minute"
+        );
+        assert!(
+            super::first_reply(9_001, "actually 5 min"),
+            "a different reply still goes"
+        );
+        assert!(
+            super::first_reply(9_002, "on my way"),
+            "another notification is separate"
+        );
     }
 }
 
