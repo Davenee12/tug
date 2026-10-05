@@ -149,9 +149,19 @@ impl ObexLink {
             max_packet: 255,
         };
         let resp = link.exchange(&obex::connect(target), true).await?;
+        if !resp.is_success() {
+            let ids: Vec<String> = resp.headers.iter().map(|h| format!("{:#04x}", h.id())).collect();
+            log::info!(
+                "OBEX CONNECT refused: code {:#04x}, headers [{}]",
+                resp.code,
+                ids.join(", ")
+            );
+        }
         match resp.code {
             obex::RSP_SUCCESS => {}
-            obex::RSP_FORBIDDEN => return Err(forbidden),
+            // iOS answers Forbidden or (for PBAP) Unauthorized while the user hasn't
+            // allowed this PC; both mean "turn the switch on", not a protocol error.
+            obex::RSP_FORBIDDEN | obex::RSP_UNAUTHORIZED => return Err(forbidden),
             code => return Err(MapError::Obex { op: "CONNECT", code }),
         }
         link.connection_id = resp.connection_id().unwrap_or(0);

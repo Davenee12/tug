@@ -69,6 +69,8 @@ export const useTugStore = defineStore("tug", () => {
   const selectedThread = ref<string | null>(null);
   /** A new conversation being started from the + button, before any message exists. */
   const composeTo = ref<{ address: string; name: string } | null>(null);
+  /** The New message picker (+ or Ctrl+N). */
+  const pickerOpen = ref(false);
 
   /** When each feed entry (conversation or app stack) was last looked at. */
   const seen = ref<Record<string, number>>({});
@@ -301,6 +303,7 @@ export const useTugStore = defineStore("tug", () => {
     view,
     selectedThread,
     composeTo,
+    pickerOpen,
     seen,
     connected,
     visible,
