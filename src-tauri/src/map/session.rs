@@ -431,14 +431,15 @@ impl MapSession {
 }
 
 /// The SetNotificationRegistration PUT, kept pure so its bytes can be tested. iOS exposes a
-/// single MAS, instance 0. The End-of-Body is empty, as working iOS clients send it; MAP's
-/// other "no object" PUTs (UpdateInbox, SetMessageStatus) carry a 0x30 filler byte instead.
+/// single MAS, instance 0. The End-of-Body carries MAP's 0x30 filler byte, like the spec, BlueZ,
+/// and tug's own UpdateInbox / SetMessageStatus PUTs, which Jordan's iPhone already accepts
+/// (another iOS client sends it empty; try that if iOS ever refuses the registration).
 fn notification_registration_request(connection_id: u32, on: bool) -> Vec<u8> {
     let headers = [
         Header::connection_id(connection_id),
         Header::type_("x-bt/MAP-NotificationRegistration"),
         obex::app_params(&[(AP_NOTIFICATION_STATUS, &[on as u8]), (AP_MAS_INSTANCE_ID, &[0])]),
-        Header::Bytes(obex::HI_END_OF_BODY, Vec::new()),
+        Header::Bytes(obex::HI_END_OF_BODY, vec![0x30]),
     ];
     obex::request(obex::OP_PUT_FINAL, &[], &headers)
 }
@@ -519,7 +520,7 @@ mod tests {
         expected.extend_from_slice(&[obex::HI_TYPE, 0, (ty.len() + 3) as u8]);
         expected.extend_from_slice(ty);
         expected.extend_from_slice(&[obex::HI_APP_PARAMS, 0, 9, 0x0E, 0x01, 0x01, 0x0F, 0x01, 0x00]);
-        expected.extend_from_slice(&[obex::HI_END_OF_BODY, 0, 3]);
+        expected.extend_from_slice(&[obex::HI_END_OF_BODY, 0, 4, 0x30]);
         let len = expected.len() as u16;
         expected[1..3].copy_from_slice(&len.to_be_bytes());
         assert_eq!(p, expected);
@@ -534,6 +535,6 @@ mod tests {
         assert_eq!(r.app_param(AP_NOTIFICATION_STATUS), Some(&[0u8][..]));
         assert_eq!(r.app_param(AP_MAS_INSTANCE_ID), Some(&[0u8][..]));
         assert!(r.has_end_of_body());
-        assert!(r.body().is_empty());
+        assert_eq!(r.body(), &[0x30][..]);
     }
 }
