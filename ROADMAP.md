@@ -18,15 +18,14 @@ press-and-hold volume, connection health + Copy diagnostics, start with Windows,
 plus a stabilization pass (Settings flicker, per-conversation drafts, bounded Bluetooth calls,
 calmer polling). See CHANGELOG.md.
 
-## v0.5.8 — stability, setup, live texts, Spotify — merged, release pending (2026-10-05)
-All merged to main (#48–#59); the release (version bump, build, GitHub release) is next. See
-CHANGELOG "Unreleased (v0.5.8)".
+## ~~v0.5.8 — stability, setup, live texts, Spotify~~ (released 2026-10-05)
+#48–#61. See CHANGELOG v0.5.8.
 - ~~Stabilization leftovers~~ (#50): Feed keeps its place, Messages sticks to newest, symmetric
   store teardown.
 - ~~Setup, ironed out~~ (#49, #53, #59): human-sized Bluetooth time limits, tap-Allow hint, switch
   checklist, Start over, real phone name, MAP gated until a phone is chosen, wizard scans for an
-  unpaired iPhone (Classic) and adopts the LE bond CTKD creates. **To verify:** one fresh setup
-  using tug's own Pair (not the Windows pop-up).
+  unpaired iPhone (Classic) and adopts the LE bond CTKD creates (proven in two clean setups);
+  one row per iPhone, Classic preferred for an unpaired phone (#61).
 - ~~Live texts~~ (#51, #54): MNS server, instant delivery, Sent status; idle link no longer timed
   out; a dropped link reopens message access (at most once a minute). Proven: iOS connects to an
   unpackaged app's RFCOMM server.
@@ -45,6 +44,10 @@ CHANGELOG "Unreleased (v0.5.8)".
   MNS link dies; reopening the session fixes it (#54).
 
 ## v0.5.9 — candidates
+- **One-screen connect** (Dave, 2026-10-05): no separate setup wizard. After install tug opens on
+  the main window with a "Connect your iPhone" panel: open Settings › Bluetooth on the iPhone,
+  Pair (code in tug), tap Allow, the three switches tick green, then the panel becomes the Feed.
+  The same panel lives in Settings › iPhone for re-pairing and Start over.
 - **More connectors** in Settings › Connectors. Slack first, once its job is decided (iPhone
   notifications already show Slack messages; a connector would need to add replying, status, etc.).
 - **Join a FaceTime link** from a text ("Join in browser"). Starting a FaceTime call from tug isn't
