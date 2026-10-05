@@ -249,10 +249,6 @@ export interface SpotifyStatus {
   connected: boolean;
   /** The connected account's display name, when connected. */
   account: string | null;
-  /** The Client ID the owner pasted (null until set). */
-  clientId: string | null;
-  /** The exact Redirect URI to register in the Spotify dashboard. */
-  redirectUri: string;
 }
 
 /** One of the user's own or followed playlists. */

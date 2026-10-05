@@ -155,7 +155,6 @@ pub fn run() {
             commands::copy_diagnostics,
             commands::open_logs_folder,
             commands::spotify_status,
-            commands::spotify_set_client_id,
             commands::spotify_connect,
             commands::spotify_disconnect,
             commands::spotify_playlists,
