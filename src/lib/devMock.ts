@@ -2,8 +2,14 @@
 // a plain browser (`npm run dev`) without Bluetooth or an iPhone. Loaded from
 // main.ts only when Tauri isn't present; never included in `tauri build`.
 //
-//   http://localhost:1420/            connected iPhone with sample history
-//   http://localhost:1420/?setup      first run, nothing paired (scripted: pair, PIN, sharing, first notification)
+//   http://localhost:1420/            connected iPhone with sample history (Settings › iPhone shows
+//                                     the Connect panel's paired state)
+//   http://localhost:1420/?setup      first run, nothing paired: the Feed is replaced by the
+//                                     "Connect your iPhone" panel (scripted: pair, code, Allow, the
+//                                     switches tick green, it yields to the Feed, optional switches
+//                                     then arrive as the Feed nudge, first notification lands)
+//   http://localhost:1420/?nudge      connected, notifications on, but texts/contacts off: the Feed's
+//                                     dismissible "Get more from tug" nudge
 //   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
 //   http://localhost:1420/?call       a call rings 1.5 s after load (rings out after 30 s, as a missed call)
@@ -106,13 +112,15 @@ const status: DeviceStatus = setup
       device: { id: "mock", name: "Dave's iPhone" },
       connection: "connected",
       battery: 76,
-      services: { notifications: true, media: true, battery: true, messages: true },
+      // ?nudge: notifications work but the optional switches are off, so the Feed shows its
+      // dismissible "Get more from tug" nudge (texts + names) without blocking the way in.
+      services: { notifications: true, media: true, battery: true, messages: !params.has("nudge") },
       lastError: params.has("lasterror") ? "Couldn't advertise to the iPhone: the radio is busy" : null,
       lastErrorAt: params.has("lasterror") ? now - 4 * min : null,
       pairingStale: false,
       awaitingPhoneAllow: false,
-      messagesError: null,
-      contactsError: null,
+      messagesError: params.has("nudge") ? "the iPhone refused message access; turn on Show Notifications for this PC" : null,
+      contactsError: params.has("nudge") ? "the iPhone refused contact access" : null,
       contactsShared: false,
       textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
       textsDevice: setup ? null : "Dave's iPhone",
@@ -145,13 +153,25 @@ const nowPlaying: NowPlaying = setup
       ],
     };
 
-// A connected keyboard listed first: setup must still offer only the iPhone.
-const discovered: DiscoveredDevice[] = [
-  { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
-  { id: "a", name: "Dave's iPhone", transport: "le", paired: false, connected: true, canPair: true, kind: "phone" },
-  { id: "b", name: "WH-1000XM5", transport: "classic", paired: true, connected: false, canPair: false, kind: "accessory" },
-  { id: "c", name: "LE-Bose Flex", transport: "le", paired: false, connected: false, canPair: true, kind: "accessory" },
-];
+// A connected keyboard listed first: the Connect panel must still offer only iPhones. In ?setup the
+// iPhone arrives nameless (shown as "iPhone" right away, named in place a moment later), alongside an
+// old bond for another phone that belongs under "Paired before".
+const discovered: DiscoveredDevice[] = setup
+  ? [
+      { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
+      { id: "a", name: "", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" },
+      { id: "old", name: "DTD iPhone Max 15 Pro", transport: "classic", paired: true, connected: false, canPair: false, kind: "phone" },
+    ]
+  : [
+      { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
+      { id: "a", name: "Dave's iPhone", transport: "le", paired: false, connected: true, canPair: true, kind: "phone" },
+      { id: "b", name: "WH-1000XM5", transport: "classic", paired: true, connected: false, canPair: false, kind: "accessory" },
+      { id: "c", name: "LE-Bose Flex", transport: "le", paired: false, connected: false, canPair: true, kind: "accessory" },
+    ];
+// The same discovery list once the iPhone's name has filled in (emitted a couple of seconds later).
+const namedLater: DiscoveredDevice[] | null = setup
+  ? discovered.map((d) => (d.id === "a" ? { ...d, name: "Dave's iPhone" } : d))
+  : null;
 
 // seenSince 0: everything still on the phone counts as new, so badges show in the preview.
 // Message access (MAP): Tay's texts, including ones read in the open chat that
@@ -239,7 +259,7 @@ const spotifyPlaylists: SpotifyPlaylist[] = [
 // notification arrives.
 let finishPairing: ((ok: boolean) => void) | null = null;
 function simulateConnect(id: string) {
-  const name = discovered.find((d) => d.id === id)?.name ?? "iPhone";
+  const name = (namedLater ?? discovered).find((d) => d.id === id)?.name || "Dave's iPhone";
   const send = () => void emit("device-status", { ...status, services: { ...status.services } });
   status.device = { id, name };
   status.connection = "connecting";
@@ -405,6 +425,20 @@ mockIPC(
         return null;
       case "app_website":
         return "https://www.example.com/";
+      case "contact_photo": {
+        // Stand-in contact photos so the avatar path is visible without a phone: a couple of mock
+        // people have one, the rest fall back to initials (as iOS contacts without a photo would).
+        const key = String(a.key ?? "");
+        const withPhoto = new Set([TAY, "Tay", "+19725550111", "Dave Smith", "+19725550123", "Mum"]);
+        if (!withPhoto.has(key)) return null;
+        const hue = [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+        const svg =
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">` +
+          `<rect width="64" height="64" fill="hsl(${hue} 55% 60%)"/>` +
+          `<circle cx="32" cy="25" r="12" fill="hsl(${hue} 45% 88%)"/>` +
+          `<path d="M12 60c0-13 9-20 20-20s20 7 20 20z" fill="hsl(${hue} 45% 88%)"/></svg>`;
+        return `data:image/svg+xml;base64,${btoa(svg)}`;
+      }
       case "place_lookup":
         return JSON.stringify({ city: "Dallas", principalSubdivision: "Texas", countryCode: "US" });
       case "locate":
@@ -412,6 +446,8 @@ mockIPC(
         return new Promise((resolve) => setTimeout(() => resolve({ latitude: 32.78, longitude: -96.8 }), 4500));
       case "start_discovery":
         setTimeout(() => void emit("discovered-devices", discovered), 400);
+        // The iPhone's name arrives a little after it's first seen; the row updates in place.
+        if (namedLater) setTimeout(() => void emit("discovered-devices", namedLater), 2600);
         return null;
       case "pair_device":
         // Like Windows: the PIN shows on both screens; the call returns once it's answered.

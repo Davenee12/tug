@@ -125,6 +125,11 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE notifications ADD COLUMN hidden_at INTEGER;
     ALTER TABLE messages ADD COLUMN hidden_at INTEGER;
     "#,
+    // v6: a reference (content hash) to the contact's photo from the phone (PBAP PHOTO), when it
+    // shares one. The bytes live in files under <app data>/contacts; NULL means initials.
+    r#"
+    ALTER TABLE contacts ADD COLUMN photo TEXT;
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,

@@ -5,6 +5,7 @@ mod app_icons;
 mod ble;
 mod clipboard;
 mod commands;
+mod contact_photos;
 mod device_kind;
 mod diagnostics;
 pub mod hfp;
@@ -146,6 +147,7 @@ pub fn run() {
             commands::place_lookup,
             commands::app_icon,
             commands::app_website,
+            commands::contact_photo,
             commands::mark_read,
             commands::set_watching,
             commands::get_calls,

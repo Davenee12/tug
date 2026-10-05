@@ -587,13 +587,37 @@ mod worker {
                 Ok(entries) => {
                     self.unshared_contact_pulls = 0;
                     self.set_contacts_shared(true);
-                    let pairs: Vec<(String, String)> = entries
-                        .iter()
-                        .flat_map(|e| e.numbers.iter().map(move |n| (normalize(n), e.name.clone())))
-                        .collect();
-                    match self.shared.store.save_phonebook(&pairs) {
+                    // A photo the phone inlined is validated and written to its own file; the row
+                    // keeps only the reference, so the contacts list sent to the UI stays small.
+                    use tauri::Manager as _;
+                    let photos_dir = self.shared.app.path().app_data_dir().ok();
+                    let mut photos = 0usize;
+                    let mut rows: Vec<(String, String, Option<String>)> = Vec::new();
+                    for e in &entries {
+                        let key = match (&e.photo, &photos_dir) {
+                            (Some(bytes), Some(dir)) => crate::contact_photos::store_photo(dir, bytes),
+                            _ => None,
+                        };
+                        if key.is_some() {
+                            photos += 1;
+                        }
+                        for n in &e.numbers {
+                            rows.push((normalize(n), e.name.clone(), key.clone()));
+                        }
+                    }
+                    match self.shared.store.save_phonebook(&rows) {
                         Ok(n) => {
-                            log::info!("contacts synced: {} people, {n} numbers", entries.len());
+                            // One line per sync so Dave's hardware run shows whether iOS sends photos.
+                            log::info!(
+                                "contacts synced: {} people, {n} numbers, {photos} photos",
+                                entries.len()
+                            );
+                            // Drop photo files no contact points at any more (removed or re-shot).
+                            if let Some(dir) = &photos_dir {
+                                if let Ok(keep) = self.shared.store.photo_keys() {
+                                    crate::contact_photos::cleanup(dir, &keep);
+                                }
+                            }
                             // A rename on the phone may leave history under the old name.
                             if let Err(e) = self.shared.store.learn_aliases() {
                                 log::warn!("learning old contact names failed: {e}");
