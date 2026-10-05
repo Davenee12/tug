@@ -18,52 +18,42 @@ press-and-hold volume, connection health + Copy diagnostics, start with Windows,
 plus a stabilization pass (Settings flicker, per-conversation drafts, bounded Bluetooth calls,
 calmer polling). See CHANGELOG.md.
 
-## v0.5.8 — stability, setup, live texts, Spotify (agreed with Dave, 2026-10-05)
+## v0.5.8 — stability, setup, live texts, Spotify — merged, release pending (2026-10-05)
+All merged to main (#48–#59); the release (version bump, build, GitHub release) is next. See
+CHANGELOG "Unreleased (v0.5.8)".
+- ~~Stabilization leftovers~~ (#50): Feed keeps its place, Messages sticks to newest, symmetric
+  store teardown.
+- ~~Setup, ironed out~~ (#49, #53, #59): human-sized Bluetooth time limits, tap-Allow hint, switch
+  checklist, Start over, real phone name, MAP gated until a phone is chosen, wizard scans for an
+  unpaired iPhone (Classic) and adopts the LE bond CTKD creates. **To verify:** one fresh setup
+  using tug's own Pair (not the Windows pop-up).
+- ~~Live texts~~ (#51, #54): MNS server, instant delivery, Sent status; idle link no longer timed
+  out; a dropped link reopens message access (at most once a minute). Proven: iOS connects to an
+  unpackaged app's RFCOMM server.
+- ~~Spotify connector~~ (#52, #55, #57, #58): Settings › Connectors, built-in Client ID (one-click
+  Connect), Feb 2026 API fixes (`items.total`, `/me/library?uris=`), playlist covers, waits for
+  Spotify to open on the iPhone. Redirect `http://127.0.0.1:8972/callback` (the dashboard rejects
+  port-less loopback URIs).
+- ~~Codes from texts in the Feed~~ (#56).
 
-### 1. Finish the stabilization pass (first)
-- Feed scroll resets to the top when entries update.
-- Messages doesn't jump to the newest text when a conversation opens or a text arrives.
-- freshTimer / listener setup isn't symmetric with teardown in the store.
-
-### 2. Setup, ironed out (added after Dave's rough re-pair, 2026-10-05)
-- **"Look at your iPhone and tap Allow"** while iOS holds the notifications subscribe open on a new
-  pairing (it looked stuck; #49 stops the 10 s give-up that tore the link down).
-- **Live switch checklist**: Share System Notifications, Show Notifications, Sync Contacts, each
-  read from real signals, naming the one that's off.
-- **Old or duplicate pairings** detected, with one confirmed "Start over" that removes both of the
-  phone's pairings; implausible transient phone names ignored.
-- **tug pairs for texts itself** (pulled back from v0.5.9): discover the unpaired Classic iPhone
-  during the Texts step, pair with a PIN shown in tug, **LE (notifications) first, then Classic
-  (texts)** because of CTKD; Windows › Add device stays as a fallback.
-
-### 3. Live texts (MAP notifications / MNS) — hardware to prove
-Texts land the instant the phone gets them instead of within ~8 s of polling; sends show "Sent".
-iOS supports `SetNotificationRegistration`. tug hosts an MNS server (`RfcommServiceProvider` 0x1133 +
-`StreamSocketListener` + SDP: name, MAP profile v1.1), keeping the 8 s poll as a backstop.
-- Pure pieces shipped in v0.5.7 (event parser, OBEX server framing, registration request).
-- Left: WinRT MNS listener → wire into the worker with poll fallback → "Sent" status UI.
-- Risks: an RFCOMM **server** from an unpackaged app is unproven; the `PushMessage` handle may not
-  equal the `SendingSuccess` handle (so "Sent" matching may be approximate).
-
-### 4. Spotify connector (new)
-Connect Spotify in Settings, then: your own playlists in tug (tap to play on the iPhone), repeat
-and shuffle that work (AMS gives Spotify none), like the current song, album art on Now Playing,
-Ctrl+K "play <playlist>". Spotify Web API from Rust, OAuth with PKCE (no client secret).
-- Spotify's February 2026 Development Mode rules: the app owner needs **Premium** (Dave has it),
-  **5 users per developer app**, so each person brings their own free Client ID. A personal feature
-  until Spotify grants more.
-- Still available in Development Mode: `/me/playlists`, playlist items, play/resume with a
-  playlist, repeat, shuffle, devices, transfer playback, `/me/library`, queue.
-- Risk: playing on the iPhone needs Spotify Connect to see it, which may need the phone's Spotify
-  app opened recently.
-
-### Needs Dave
-- Create a free Spotify developer app and paste its Client ID into tug (steps in the PR).
-- Hardware runs for live texts and Spotify-on-iPhone.
+### Hardware facts learned
+- Working setup: iPhone on Settings › Bluetooth → Windows "Add a device" pop-up (or tug's Pair) →
+  confirm code → one pairing gives Classic + LE (CTKD) → notifications, music, battery, texts.
+- A PC whose iPhone forgot it keeps stale bonds that make the phone connect then drop (LightBlue
+  too); remove both Windows entries before re-pairing.
+- After registering for notifications, an open MAP session's inbox listing can go stale if the
+  MNS link dies; reopening the session fixes it (#54).
 
 ## v0.5.9 — candidates
+- **More connectors** in Settings › Connectors. Slack first, once its job is decided (iPhone
+  notifications already show Slack messages; a connector would need to add replying, status, etc.).
+- **Join a FaceTime link** from a text ("Join in browser"). Starting a FaceTime call from tug isn't
+  possible (no Apple API); answering one may already work via the incoming-call card — check.
+- **Calls list scroll** can jump when a new call arrives (row keys include the index; #50 note).
 - **Welcome back**: after 30+ min away, who texted and called.
 - **Calls in Ctrl+K search**: a person's recent calls in their search result.
+- **Spotify for everyone** needs Spotify's Extended Quota (registered business, 250k monthly
+  users); until then, add testers by email in the Spotify dashboard.
 
 ## Waiting on code signing (Dave isn't buying it for now)
 - **Auto-updates** from GitHub Releases, once releases are signed. Dave is in the US, so Azure
