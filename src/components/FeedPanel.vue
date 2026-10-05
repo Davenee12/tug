@@ -8,8 +8,6 @@ import MessageThreads from "./MessageThreads.vue";
 import WeatherCard from "./WeatherCard.vue";
 import { useWeatherStore } from "../stores/weather";
 
-defineProps<{ panelInline: boolean }>();
-const emit = defineEmits<{ openPanel: [] }>();
 
 const tug = useTugStore();
 const weather = useWeatherStore();
@@ -77,7 +75,7 @@ const setUp = computed(() => tug.status.device != null);
         <span class="flex-1 truncate">Search everything</span>
         <kbd class="rounded border border-hairline px-1.5 font-mono text-[11px]">Ctrl K</kbd>
       </button>
-      <button v-if="!panelInline" class="btn-secondary w-10 px-0" aria-label="Connection and settings" @click="emit('openPanel')">
+      <button class="btn-secondary w-10 px-0" aria-label="Settings" title="Settings (Ctrl+,)" @click="tug.openSettings()">
         <Settings2 :size="16" />
       </button>
     </header>
@@ -91,7 +89,7 @@ const setUp = computed(() => tug.status.device != null);
           tug pairs with your iPhone over Bluetooth and mirrors every notification here, keeps a searchable history
           after the phone has cleared it, and gives you play, pause and skip for whatever's playing.
         </p>
-        <button class="btn-primary mt-8" @click="emit('openPanel')">Set up your iPhone</button>
+        <button class="btn-primary mt-8" @click="tug.openSettings('iphone')">Set up your iPhone</button>
       </div>
     </div>
 

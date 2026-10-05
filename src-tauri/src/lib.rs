@@ -53,10 +53,20 @@ pub fn run() {
         // menu), so the phone stays mirrored and notifications keep arriving.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" && tray::installed() {
+                if window.label() != "main" || !tray::installed() {
+                    return;
+                }
+                let state = window.app_handle().try_state::<AppState>();
+                // Settings › General › Keep running when closed (on unless switched off).
+                let keep = state
+                    .as_ref()
+                    .and_then(|s| s.shared.store.setting("ui.closeToTray").ok().flatten())
+                    .as_deref()
+                    != Some("false");
+                if keep {
                     api.prevent_close();
                     let _ = window.hide();
-                    if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    if let Some(state) = state {
                         tray::hint_once(window.app_handle(), &state.shared.store);
                     }
                 }

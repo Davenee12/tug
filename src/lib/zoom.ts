@@ -7,7 +7,7 @@ export function applyZoom(factor: number) {
   document.documentElement.style.zoom = String(factor);
 }
 
-function step(current: number, dir: 1 | -1): number {
+export function stepZoom(current: number, dir: 1 | -1): number {
   const i = STEPS.findIndex((s) => s >= current - 0.001);
   const at = i < 0 ? STEPS.length - 1 : i;
   return STEPS[Math.min(STEPS.length - 1, Math.max(0, at + dir))];
@@ -22,8 +22,8 @@ export function installZoomShortcuts(get: () => number, onChange: (factor: numbe
   };
   const onKey = (e: KeyboardEvent) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-    if (e.key === "=" || e.key === "+") set(step(get(), 1));
-    else if (e.key === "-" || e.key === "_") set(step(get(), -1));
+    if (e.key === "=" || e.key === "+") set(stepZoom(get(), 1));
+    else if (e.key === "-" || e.key === "_") set(stepZoom(get(), -1));
     else if (e.key === "0") set(1);
     else return;
     e.preventDefault();
@@ -31,7 +31,7 @@ export function installZoomShortcuts(get: () => number, onChange: (factor: numbe
   const onWheel = (e: WheelEvent) => {
     if (!e.ctrlKey) return;
     e.preventDefault();
-    set(step(get(), e.deltaY < 0 ? 1 : -1));
+    set(stepZoom(get(), e.deltaY < 0 ? 1 : -1));
   };
   window.addEventListener("keydown", onKey);
   window.addEventListener("wheel", onWheel, { passive: false });
