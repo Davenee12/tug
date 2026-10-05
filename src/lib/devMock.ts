@@ -315,6 +315,13 @@ mockIPC(
           Object.assign(nowPlaying, { elapsed: 0, elapsedAt: Date.now() });
           void emit("now-playing", { ...nowPlaying });
         }
+        // One AMS VolumeUp/VolumeDown is one phone step; iOS reports volume as a 0–1 fraction,
+        // ~16 steps. Clamp at the ends so press-and-hold stops there, as it would on hardware.
+        if (a.command === "volumeUp" || a.command === "volumeDown") {
+          const step = (a.command === "volumeUp" ? 1 : -1) / 16;
+          nowPlaying.volume = Math.min(1, Math.max(0, (nowPlaying.volume ?? 0.5) + step));
+          void emit("now-playing", { ...nowPlaying });
+        }
         return null;
       case "place_lookup":
         return JSON.stringify({ city: "Dallas", principalSubdivision: "Texas", countryCode: "US" });
