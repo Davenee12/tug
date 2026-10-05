@@ -40,7 +40,19 @@ export const useWeatherStore = defineStore("weather", () => {
     }
   }
 
+  /**
+   * Called each time the Feed mounts, which is every trip back from Settings. The saved
+   * choice is read once: re-reading it each time could land before a change just made in
+   * Settings was saved (Weather › Change place snapping back to the old place) and repainted
+   * the card from the cache for nothing. Later calls only restart the refresh clock.
+   */
   async function init() {
+    if (ready.value) {
+      void refresh();
+      window.clearInterval(timer);
+      timer = window.setInterval(() => void refresh(), STALE_MS);
+      return;
+    }
     try {
       const raw = await api.getSettings();
       const saved = raw["ui.weather"];
