@@ -54,7 +54,7 @@ async function act(positive: boolean) {
             :disabled="busy !== null"
             @click="act(true)"
           >
-            {{ n.positiveLabel || "Accept" }}
+            {{ n.category === "missedCall" ? "Call back" : n.positiveLabel || "Accept" }}
           </button>
           <button v-if="n.flags.negativeAction" class="btn-secondary btn-sm" :disabled="busy !== null" @click="act(false)">
             {{ n.negativeLabel || "Dismiss" }}

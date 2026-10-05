@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { cleanName, groupConversations, groupFeed, highlight, initials, snippet, threadKey } from "./format";
-import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
+import {
+  callName,
+  callTime,
+  canClear,
+  cleanName,
+  groupCalls,
+  groupConversations,
+  groupFeed,
+  highlight,
+  initials,
+  missedCallFor,
+  newestUnreadThread,
+  snippet,
+  threadKey,
+} from "./format";
+import type { CallRecord, Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const T0 = Date.parse("2026-10-05T12:00:00");
 const min = 60_000;
@@ -136,6 +150,27 @@ describe("groupFeed", () => {
   });
 });
 
+describe("the tray's newest unread conversation", () => {
+  const key = (title: string) => threadKey({ appId: "com.apple.MobileSMS", title });
+
+  it("picks the newest thread that still has unread texts", () => {
+    // Jane is newer overall, but all read; Tay is older and unread → Tay wins.
+    const notes = [note("Jane Doe", "see you at 5", 10), note("Tay", "omw 🚗", 4), note("Tay", "did you see?", 2)];
+    const unread = new Set([key("Tay")]);
+    expect(newestUnreadThread(notes, (k) => (unread.has(k) ? 1 : 0))).toBe(key("Tay"));
+  });
+
+  it("prefers the newest when several conversations are unread", () => {
+    const notes = [note("Tay", "older", 2), note("Jane Doe", "newer", 9)];
+    expect(newestUnreadThread(notes, () => 1)).toBe(key("Jane Doe"));
+  });
+
+  it("returns null when nothing is unread", () => {
+    expect(newestUnreadThread([note("Tay", "hi", 1)], () => 0)).toBeNull();
+    expect(newestUnreadThread([], () => 1)).toBeNull();
+  });
+});
+
 describe("search presentation", () => {
   it("highlights every typed word, case-insensitively", () => {
     const runs = highlight("Dinner at 7? See you at dinner", "din AT");
@@ -154,5 +189,82 @@ describe("search presentation", () => {
     expect(s).toContain("dinner");
     expect(s.startsWith("…") && s.endsWith("…")).toBe(true);
     expect(snippet("short text", "x")).toBe("short text");
+  });
+});
+
+describe("canClear", () => {
+  it("clears what's still on the phone and offers a clear", () => {
+    expect(canClear(note("Tay", "hey", 0))).toBe(true);
+    expect(canClear(note("Tay", "hey", 0, { live: false }))).toBe(false);
+    expect(canClear(note("Tay", "hey", 0, { removedAt: T0 }))).toBe(false);
+  });
+
+  it("never clears a ringing call (its negative action is Decline)", () => {
+    const ringing = note("Mum", "Incoming call", 0, { appId: "com.apple.mobilephone", category: "incomingCall", negativeLabel: "Decline" });
+    expect(canClear(ringing)).toBe(false);
+    expect(canClear({ ...ringing, category: "missedCall" })).toBe(true);
+  });
+});
+
+describe("recent calls", () => {
+  const call = (number: string | null, name: string | null, at: string | null, direction: CallRecord["direction"] = "incoming"): CallRecord => ({
+    direction,
+    name,
+    number,
+    at,
+  });
+
+  it("names a call by the contact first, then the phone's name, then the number", () => {
+    const nameFor = new Map([["+13025550142", "Tay 🤎 "]]);
+    expect(callName(call("+13025550142", "Taylor", null), nameFor)).toBe("Tay 🤎");
+    expect(callName(call("+12145550199", "Dave Smith", null), nameFor)).toBe("Dave Smith");
+    expect(callName(call("+12145550199", null, null), nameFor)).toBe("(214) 555-0199");
+    expect(callName(call(null, null, null), nameFor)).toBe("No caller ID");
+  });
+
+  it("groups by day, newest first, with untimed calls at the end", () => {
+    const now = new Date("2026-10-05T18:00:00");
+    const groups = groupCalls(
+      [
+        call("+1", null, "2026-10-05T09:30:00", "missed"),
+        call("+2", null, "2026-10-05T08:00:00"),
+        call("+3", null, "2026-10-04T21:00:00", "outgoing"),
+        call("+4", null, null),
+        call("+5", null, "not a time"),
+      ],
+      now,
+    );
+    expect(groups.map((g) => [g.label, g.calls.map((c) => c.number)])).toEqual([
+      ["Today", ["+1", "+2"]],
+      ["Yesterday", ["+3"]],
+      ["Earlier", ["+4", "+5"]],
+    ]);
+    expect(callTime(call("+1", null, "2026-10-04T18:15:00Z"))?.toISOString()).toBe("2026-10-04T18:15:00.000Z");
+  });
+});
+
+describe("missedCallFor", () => {
+  const missed = (title: string, atMin: number, extra: Partial<PhoneNotification> = {}) =>
+    note(title, "Missed Call", atMin, {
+      appId: "com.apple.mobilephone",
+      category: "missedCall",
+      positiveLabel: "Dial",
+      flags: { silent: false, important: false, preExisting: false, positiveAction: true, negativeAction: true },
+      ...extra,
+    });
+
+  it("finds the newest missed call still on the phone, by name or number", () => {
+    const old = missed("tay 🤎", 0);
+    const recent = missed("tay 🤎", 5);
+    expect(missedCallFor([old, recent], { name: "Tay 🤎", address: "+13026698133" })).toBe(recent);
+    const byNumber = missed("(302) 669-8133", 1);
+    expect(missedCallFor([byNumber], { name: "Someone else", address: "+13026698133" })).toBe(byNumber);
+  });
+
+  it("ignores missed calls that are gone or can't be dialed, and other people", () => {
+    expect(missedCallFor([missed("tay 🤎", 0, { removedAt: T0 })], { name: "tay 🤎", address: null })).toBeNull();
+    expect(missedCallFor([missed("tay 🤎", 0, { live: false })], { name: "tay 🤎", address: null })).toBeNull();
+    expect(missedCallFor([missed("Daviel", 0)], { name: "tay 🤎", address: "+13026698133" })).toBeNull();
+    expect(missedCallFor([note("tay 🤎", "hey", 0)], { name: "tay 🤎", address: null })).toBeNull();
   });
 });

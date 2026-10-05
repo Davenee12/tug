@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseActions, type Person } from "./commands";
+import { parseActions, type ActionContext, type Person } from "./commands";
+import type { PhoneNotification } from "../types/protocol";
 
 const people: Person[] = [
   { name: "tay 🤎", address: "+13026698133" },
@@ -9,6 +10,21 @@ const people: Person[] = [
   { name: "Mary Ann", address: "+15550000003" },
   { name: "Mary", address: "+15550000004" },
 ];
+
+// Shape doesn't matter for the parse: it only counts clearable and carries them through.
+const noteIds = (n: number): PhoneNotification[] =>
+  Array.from({ length: n }, (_, i) => ({ id: i }) as unknown as PhoneNotification);
+
+const ctx: ActionContext = {
+  code: { code: "591204", from: noteIds(1) },
+  clearable: noteIds(7),
+  doNotDisturb: false,
+  unread: 3,
+  apps: [
+    { appId: "com.google.Gmail", label: "Gmail", focusId: 42 },
+    { appId: "com.linkedin.LinkedIn", label: "LinkedIn", focusId: 43 },
+  ],
+};
 
 describe("parseActions", () => {
   it("sends a text to someone by name, emoji and all", () => {
@@ -59,5 +75,118 @@ describe("parseActions", () => {
     expect(parseActions("text", people)).toEqual([]);
     expect(parseActions("text nobody hello", people)).toEqual([]);
     expect(parseActions("", people)).toEqual([]);
+  });
+
+  it("copies the newest one-time code", () => {
+    expect(parseActions("copy code", people, ctx)[0]).toMatchObject({ kind: "copy-code", code: "591204" });
+    expect(parseActions("code", people, ctx)[0]).toMatchObject({ kind: "copy-code", code: "591204", label: "Copy code 591204" });
+    expect(parseActions("copy code", people, ctx)[0]).toMatchObject({ from: [{ id: 0 }] });
+  });
+
+  it("still offers copy code when there's none, but harmlessly", () => {
+    const [a] = parseActions("code", people, { ...ctx, code: null });
+    expect(a).toMatchObject({ kind: "copy-code", code: null, label: "No recent code to copy" });
+  });
+
+  it("doesn't mistake a longer search for the copy-code verb", () => {
+    expect(parseActions("zip code 32801", people, ctx)).toEqual([]);
+    expect(parseActions("promo code", people, ctx)).toEqual([]);
+    expect(parseActions("decode this", people, ctx)).toEqual([]);
+  });
+
+  it("clears everything, saying exactly how many", () => {
+    const [a] = parseActions("clear all", people, ctx);
+    expect(a).toMatchObject({ kind: "clear-all", label: "Clear 7 notifications on your iPhone" });
+    expect(a.kind === "clear-all" && a.items).toHaveLength(7);
+    expect(parseActions("clear all", people, { ...ctx, clearable: noteIds(1) })[0].label).toBe(
+      "Clear 1 notification on your iPhone",
+    );
+    expect(parseActions("clear all", people, { ...ctx, clearable: [] })[0].label).toBe("Nothing to clear on your iPhone");
+  });
+
+  it("never clears on a partial match", () => {
+    expect(parseActions("clear", people, ctx)).toEqual([]);
+    expect(parseActions("clear the table", people, ctx)).toEqual([]);
+  });
+
+  it("marks everything read, stating the count", () => {
+    expect(parseActions("mark all read", people, ctx)[0]).toMatchObject({ kind: "mark-all-read", count: 3, label: "Mark 3 conversations read" });
+    expect(parseActions("mark all as read", people, { ...ctx, unread: 1 })[0].label).toBe("Mark 1 conversation read");
+    expect(parseActions("mark all read", people, { ...ctx, unread: 0 })[0].label).toBe("Everything's already read");
+    expect(parseActions("mark", people, ctx)).toEqual([]);
+  });
+
+  it("toggles do not disturb and shows the resulting state", () => {
+    expect(parseActions("dnd", people, ctx)[0]).toMatchObject({ kind: "dnd", enabled: true, label: "Turn on Do not disturb" });
+    expect(parseActions("do not disturb", people, ctx)[0]).toMatchObject({ enabled: true });
+    expect(parseActions("dnd", people, { ...ctx, doNotDisturb: true })[0]).toMatchObject({ enabled: false, label: "Turn off Do not disturb" });
+    expect(parseActions("dnd on", people, { ...ctx, doNotDisturb: true })[0]).toMatchObject({ enabled: true });
+    expect(parseActions("do not disturb off", people, ctx)[0]).toMatchObject({ enabled: false });
+    expect(parseActions("dndx", people, ctx)).toEqual([]);
+  });
+
+  it("jumps the feed to an app's notifications, matched on its name", () => {
+    expect(parseActions("gmail", people, ctx)[0]).toMatchObject({
+      kind: "show-app",
+      appId: "com.google.Gmail",
+      focusId: 42,
+      label: "Show Gmail notifications",
+    });
+    expect(parseActions("linked", people, ctx)[0]).toMatchObject({ appId: "com.linkedin.LinkedIn" });
+  });
+
+  it("only offers apps that actually have notifications, and not inside a longer search", () => {
+    expect(parseActions("facebook", people, ctx)).toEqual([]);
+    expect(parseActions("gmail is down", people, ctx)).toEqual([]);
+    expect(parseActions("gmail", people, {})).toEqual([]);
+    // A single letter would match too much to be a real choice.
+    expect(parseActions("g", people, ctx)).toEqual([]);
+  });
+});
+
+describe("call", () => {
+  const dial = { canDial: true };
+
+  it("calls a person by their whole name, once calling from tug works", () => {
+    expect(parseActions("call daviel", people, dial)).toEqual([
+      { kind: "call", person: people[1], label: "Call Daviel", detail: "(214) 223-0313" },
+    ]);
+    expect(parseActions("ring tay", people, dial)[0]).toMatchObject({ kind: "call", label: "Call tay 🤎" });
+  });
+
+  it("offers each match for a shared name, so one is picked on purpose", () => {
+    const rows = parseActions("call jo", people, dial);
+    expect(rows.map((r) => r.kind)).toEqual(["call", "call"]);
+  });
+
+  it("dials a typed number", () => {
+    expect(parseActions("call 302 555 0100", people, dial)[0]).toMatchObject({ kind: "call", person: { address: "3025550100" } });
+  });
+
+  it("says why instead of offering a call that can't work", () => {
+    expect(parseActions("call daviel", people, {})).toEqual([
+      { kind: "call-setup", label: "Can't call Daviel yet: only missed calls can be called back" },
+    ]);
+  });
+
+  it("calls back from a missed call without hands-free", () => {
+    const missed = {
+      id: 9,
+      category: "missedCall",
+      title: "Daviel",
+      live: true,
+      removedAt: null,
+      receivedAt: 1,
+      flags: { positiveAction: true },
+    } as unknown as PhoneNotification;
+    expect(parseActions("call daviel", people, { notifications: [missed] })).toEqual([
+      { kind: "call", person: people[1], label: "Call Daviel back", detail: "From their missed call" },
+    ]);
+  });
+
+  it("never fires on a near miss", () => {
+    expect(parseActions("call daviel later today", people, dial)).toEqual([]);
+    expect(parseActions("call nobody", people, dial)).toEqual([]);
+    expect(parseActions("callback", people, dial)).toEqual([]);
   });
 });

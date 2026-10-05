@@ -3,10 +3,13 @@
 //!
 //! Layering: `obex` (framing) → `session` (RFCOMM transport + MAP operations),
 //! with `bmessage` and `listing` as the two MAP object formats. Everything but
-//! `session` is pure and unit-tested.
+//! `session` is pure and unit-tested. PBAP (contacts in `vcard`, call history in `calls`)
+//! rides the same Classic pairing and OBEX code.
 
 pub mod address;
 pub mod bmessage;
+pub mod calls;
+pub mod health;
 pub mod listing;
 pub mod obex;
 pub mod service;

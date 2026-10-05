@@ -1,10 +1,12 @@
 mod ams;
 mod ancs;
 mod ancs_queue;
+mod app_icons;
 mod ble;
 mod clipboard;
 mod commands;
 mod device_kind;
+pub mod hfp;
 mod location;
 pub mod map;
 mod messages;
@@ -30,7 +32,11 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show(app)))
         .plugin(
             // Logs land in %LOCALAPPDATA%\dev.davejames.tug\logs for hardware debugging.
+            // Keep a few rotated files: the default (one 40 KB file) had already thrown away
+            // the minutes before a failure by the time anyone looked.
             tauri_plugin_log::Builder::new()
+                .max_file_size(2_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5))
                 .level(log::LevelFilter::Info)
                 .level_for("tug_lib", log::LevelFilter::Debug)
                 .build(),
@@ -101,8 +107,12 @@ pub fn run() {
             commands::open_windows_settings,
             commands::locate,
             commands::place_lookup,
+            commands::app_icon,
             commands::mark_read,
             commands::set_watching,
+            commands::get_calls,
+            commands::refresh_calls,
+            commands::dial,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -3,12 +3,13 @@ import { computed, ref, watch } from "vue";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
-import { appLabel, groupThreads, threadKey } from "../lib/format";
+import { appLabel, canClear, cleanName, formatAddress, groupConversations, groupThreads, missedCallFor, newestUnreadThread, threadKey } from "../lib/format";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
 import { copyText } from "../lib/clipboard";
 import type {
+  CallRecord,
   Contact,
   DeviceStatus,
   SmsMessage,
@@ -38,6 +39,8 @@ const EMPTY_STATUS: DeviceStatus = {
   pairingStale: false,
   messagesError: null,
   contactsError: null,
+  textsPairing: "unknown",
+  textsDevice: null,
 };
 
 const EMPTY_NOW_PLAYING: NowPlaying = {
@@ -51,6 +54,7 @@ const EMPTY_NOW_PLAYING: NowPlaying = {
   artist: null,
   album: null,
   duration: null,
+  repeat: null,
   available: [],
 };
 
@@ -62,10 +66,29 @@ export const useTugStore = defineStore("tug", () => {
   /** Messages from message access (MAP), oldest first. */
   const messages = ref<SmsMessage[]>([]);
   const contacts = ref<Contact[]>([]);
+  /** The phone's recent calls (PBAP call history), newest first. */
+  const calls = ref<CallRecord[]>([]);
   const hasMore = ref(true);
   const discovered = ref<DiscoveredDevice[]>([]);
   const pairingRequest = ref<PairingRequest | null>(null);
-  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [], closeToTray: true });
+  const settings = ref<UiSettings>({ toasts: true, doNotDisturb: false, mutedApps: [], closeToTray: true, appIcons: true, dialing: false });
+
+  /** App icons as data URIs by app id; null = the App Store has none (initials instead). */
+  const appIcons = ref<Record<string, string | null>>({});
+  const iconRequests = new Set<string>();
+  /** The app's real icon, asked for the first time it's needed (then cached on disk by the backend). */
+  function iconFor(appId: string): string | null {
+    if (!settings.value.appIcons) return null;
+    if (!(appId in appIcons.value) && !iconRequests.has(appId)) {
+      iconRequests.add(appId);
+      api
+        .appIcon(appId)
+        .then((uri) => (appIcons.value = { ...appIcons.value, [appId]: uri }))
+        // Offline or the lookup failed: initials for now, asked again next launch.
+        .catch(() => undefined);
+    }
+    return appIcons.value[appId] ?? null;
+  }
   const advertiseEnabled = ref(true);
   const zoom = ref(1);
   /** First-run setup finished (or skipped). Until then, with no iPhone paired, setup shows. */
@@ -85,10 +108,10 @@ export const useTugStore = defineStore("tug", () => {
   let flashTimer: number | undefined;
 
   /** Middle-panel view, and the conversation open in Messages. */
-  const view = ref<"feed" | "messages" | "settings">("feed");
+  const view = ref<"feed" | "messages" | "calls" | "settings">("feed");
   const settingsSection = ref<SettingsSection>("general");
   /** Where Settings returns to. */
-  let viewBeforeSettings: "feed" | "messages" = "feed";
+  let viewBeforeSettings: "feed" | "messages" | "calls" = "feed";
   const selectedThread = ref<string | null>(null);
   /** A new conversation being started from the + button, before any message exists. */
   const composeTo = ref<{ address: string; name: string } | null>(null);
@@ -96,8 +119,17 @@ export const useTugStore = defineStore("tug", () => {
   const pickerOpen = ref(false);
   /** Universal search (Ctrl+K or the search box). */
   const searchOpen = ref(false);
+  /** Ringing calls whose card was answered or hidden here; their Feed row stays until the phone drops them. */
+  const callsHandled = ref<number[]>([]);
+  /** The call ringing on the phone right now (newest first), for the incoming-call card. */
+  const ringing = computed(
+    () =>
+      notifications.value.find(
+        (n) => n.category === "incomingCall" && n.live && n.removedAt == null && !callsHandled.value.includes(n.id),
+      ) ?? null,
+  );
   /** Something is covering the main view, so whatever is behind it isn't being looked at. */
-  const overlayOpen = computed(() => searchOpen.value || pickerOpen.value || !!pairingRequest.value);
+  const overlayOpen = computed(() => searchOpen.value || pickerOpen.value || !!pairingRequest.value || !!ringing.value);
 
   function openSettings(section?: SettingsSection) {
     if (view.value !== "settings") viewBeforeSettings = view.value;
@@ -240,7 +272,7 @@ export const useTugStore = defineStore("tug", () => {
 
   /** Clear every notification in a row that's still on the phone and clearable. */
   async function clearItems(items: PhoneNotification[], { quiet = false } = {}) {
-    const clearable = items.filter((n) => n.live && n.removedAt == null && n.flags.negativeAction);
+    const clearable = items.filter(canClear);
     let failure: unknown = null;
     // One that's already gone from the phone mustn't stop the rest from clearing.
     for (const n of clearable) {
@@ -329,6 +361,118 @@ export const useTugStore = defineStore("tug", () => {
     if (messageIds.length) api.markRead(messageIds).catch(() => undefined);
   }
 
+  /**
+   * Mark everything read at once: every conversation counts as seen in tug, and its texts
+   * are marked read and its notifications cleared on the phone — exactly as opening each would.
+   */
+  function markAllRead() {
+    for (const c of groupConversations(notifications.value, messages.value, contacts.value)) {
+      markSeen(c.key);
+      const ids = messages.value.filter((m) => m.direction === "in" && c.addresses.includes(m.address)).map((m) => m.id);
+      readConversation(c.notifications, ids);
+    }
+  }
+
+  /** Take the ringing card down here; the phone keeps ringing (and the Feed row stays). */
+  function hideCall(id: number) {
+    if (!callsHandled.value.includes(id)) callsHandled.value = [...callsHandled.value.slice(-20), id];
+  }
+
+  /**
+   * Answer or decline on the phone (ANCS positive/negative action). The card goes once the
+   * phone takes it; answering doesn't always remove the notification right away, so it's
+   * taken down here too. The call's audio stays on the iPhone.
+   */
+  async function respondToCall(n: PhoneNotification, answer: boolean): Promise<boolean> {
+    const ok = await attempt(() => api.performAction(n.id, answer).then(() => true));
+    if (!ok) return false;
+    hideCall(n.id);
+    if (answer) notify("info", "Answered. Talk on your iPhone.");
+    return true;
+  }
+
+  /** The number being dialed, while the iPhone sets the call up. */
+  const calling = ref<string | null>(null);
+  /**
+   * Calling from tug can work here: the experimental hands-free check in Settings › iPhone
+   * passed on this PC. Anything that offers a Call action (rows, Ctrl+K) shows it only then.
+   */
+  const canDial = computed(() => settings.value.dialing);
+
+  /**
+   * Experimental: place a call on the iPhone over its hands-free link; you talk on the phone.
+   * `name` defaults to the contact's name for that number. Refuses (with a message) unless
+   * `canDial`, and a failure always says why: it never fails silently.
+   */
+  async function call(number: string, name?: string): Promise<boolean> {
+    name ??= contacts.value.find((c) => c.address === number)?.name ?? formatAddress(number);
+    if (!canDial.value) {
+      notify("error", "Calling from tug is off. Check it under Settings › iPhone › Calls.");
+      return false;
+    }
+    if (calling.value) return false;
+    calling.value = number;
+    notify("info", `Calling ${name} on your iPhone…`);
+    try {
+      await api.dial(number);
+      notify("info", `Calling ${name}. Talk on your iPhone.`);
+      return true;
+    } catch (e) {
+      notify("error", `Couldn't call ${name}: ${errorMessage(e)}`);
+      return false;
+    } finally {
+      calling.value = null;
+    }
+  }
+
+  /** A missed call from this person still on the phone, to call back from (no hands-free needed). */
+  function missedCallFrom(name: string | null, address: string | null): PhoneNotification | null {
+    return missedCallFor(notifications.value, { name, address });
+  }
+
+  /** How tug can call this person right now: back from their missed call, by dialing, or not yet. */
+  function callRoute(name: string | null, address: string | null): "back" | "dial" | null {
+    if (missedCallFrom(name, address)) return "back";
+    return canDial.value && address ? "dial" : null;
+  }
+
+  /**
+   * Call someone from tug, the same way everywhere (Ctrl+K, Calls tab, Feed): press "Dial" on
+   * their missed call if the phone still has one (works today, no hands-free link), else dial
+   * over hands-free when that check has passed, else say why not. Never fails silently.
+   */
+  async function callPerson(name: string, address: string | null): Promise<boolean> {
+    const missed = missedCallFrom(name, address);
+    if (missed) {
+      const ok = await attempt(() => api.performAction(missed.id, true).then(() => true));
+      if (!ok) return false;
+      notify("info", `Calling ${cleanName(name)} back on your iPhone.`);
+      // The phone logs the call a moment later; show it in Calls without waiting.
+      window.setTimeout(() => void api.refreshCalls().catch(() => undefined), 6000);
+      return true;
+    }
+    if (canDial.value && address) return call(address, name);
+    notify(
+      "error",
+      `tug can't call ${cleanName(name)} yet: Windows is holding your iPhone's calling connection. Missed calls still on your phone can be called back.`,
+    );
+    return false;
+  }
+
+  /** Settings › iPhone › Calls: open the hands-free link without calling. Only a pass turns Call buttons on. */
+  async function checkDialing(): Promise<boolean> {
+    try {
+      await api.dial(null);
+      await setSetting("dialing", true);
+      notify("info", "The hands-free link works. Call buttons are on.");
+      return true;
+    } catch (e) {
+      await setSetting("dialing", false);
+      notify("error", `Calling anyone from tug isn't available here: ${errorMessage(e)}. Calling back missed calls still works.`);
+      return false;
+    }
+  }
+
   /** Display name for a bundle id, from the history tug has seen. */
   function appNameFor(appId: string): string {
     const n = notifications.value.find((x) => x.appId === appId);
@@ -348,6 +492,22 @@ export const useTugStore = defineStore("tug", () => {
     markSeen(key);
   }
 
+  /**
+   * Clicking the tray (or its Open) with unread texts: open the newest conversation that
+   * has unread, as if it were clicked, so it's read and cleared normally. The backend only
+   * emits this when there are unread; if nothing's unread by the time it arrives, do nothing
+   * and leave the user where they were. An overlay or Settings would hide the conversation,
+   * so close those first (but not a pairing dialog, which needs an answer).
+   */
+  function openLatestConversation() {
+    const key = newestUnreadThread(notifications.value, newCount);
+    if (!key) return;
+    searchOpen.value = false;
+    pickerOpen.value = false;
+    closeSettings();
+    openThread(key);
+  }
+
   async function loadSettings() {
     const raw = await api.getSettings();
     zoom.value = Number(raw["ui.zoom"]) || 1;
@@ -364,6 +524,8 @@ export const useTugStore = defineStore("tug", () => {
       doNotDisturb: raw["ui.doNotDisturb"] === "true",
       mutedApps: raw["ui.mutedApps"] ? (JSON.parse(raw["ui.mutedApps"]) as string[]) : [],
       closeToTray: raw["ui.closeToTray"] !== "false",
+      appIcons: raw["ui.appIcons"] !== "false",
+      dialing: raw["ui.dialing"] === "true",
     };
     onboarded.value = raw["ui.onboarded"] === "1";
   }
@@ -421,17 +583,21 @@ export const useTugStore = defineStore("tug", () => {
           // Notifications under a contact's old name come back under the new one.
           void refreshLoadedNotifications();
         }),
+        on("calls", (list) => (calls.value = list)),
         on("pairing-request", (req) => (pairingRequest.value = req)),
         on("pairing-request-closed", () => (pairingRequest.value = null)),
+        on("open-latest-conversation", openLatestConversation),
       ])),
     );
-    const [s, np, first, msgs, people] = await Promise.all([
+    const [s, np, first, msgs, people, recent] = await Promise.all([
       api.getStatus(),
       api.getNowPlaying(),
       api.listNotifications(PAGE),
       api.listMessages(2000),
       api.getContacts(),
+      api.getCalls(),
     ]);
+    if (calls.value.length === 0) calls.value = recent;
     // Merge rather than replace: events may have arrived while these loaded.
     for (const n of first) upsert(notifications.value, n);
     const live = new Set(messages.value.map((m) => m.id));
@@ -507,10 +673,21 @@ export const useTugStore = defineStore("tug", () => {
     notifications,
     messages,
     contacts,
+    calls,
+    calling,
+    canDial,
+    call,
+    checkDialing,
+    /** Recent calls are on screen: ask the phone again (the backend throttles it). */
+    refreshCalls: () => void api.refreshCalls().catch(() => undefined),
+    missedCallFrom,
+    callRoute,
+    callPerson,
     hasMore,
     discovered,
     pairingRequest,
     settings,
+    iconFor,
     advertiseEnabled,
     flash,
     view,
@@ -519,6 +696,9 @@ export const useTugStore = defineStore("tug", () => {
     pickerOpen,
     searchOpen,
     unreadTexts,
+    ringing,
+    hideCall,
+    respondToCall,
     overlayOpen,
     settingsSection,
     openSettings,
@@ -546,6 +726,7 @@ export const useTugStore = defineStore("tug", () => {
     startConversation,
     clearItems,
     readConversation,
+    markAllRead,
     copyCode,
     latestCode,
     deleteConversation,
@@ -561,7 +742,10 @@ export const useTugStore = defineStore("tug", () => {
       }
     },
     performAction: (id: number, positive: boolean) => attempt(() => api.performAction(id, positive)),
-    media: (command: MediaCommand) => attempt(() => api.mediaCommand(command)),
+    /** True once the phone accepted the write (which isn't the player acting on it). */
+    async media(command: MediaCommand): Promise<boolean> {
+      return (await attempt(() => api.mediaCommand(command).then(() => true))) === true;
+    },
     startDiscovery: () => attempt(api.startDiscovery),
     stopDiscovery: () => {
       discovered.value = [];

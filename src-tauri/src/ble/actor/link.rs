@@ -22,6 +22,29 @@ impl Actor {
         });
     }
 
+    /// Drop the link and connect again on the next tick.
+    pub(super) fn relink(&mut self, why: &str) {
+        log::warn!("{why}; reconnecting");
+        self.drop_link();
+        self.retry_in = 0;
+    }
+
+    /// The phone's name as it is now: saved, and shown everywhere tug names the phone.
+    pub(super) fn set_device_name(&mut self, name: &str) {
+        let name = name.trim();
+        let current = self.shared.status().device.map(|d| d.name);
+        if name.is_empty() || current.as_deref() == Some(name) {
+            return;
+        }
+        log::info!("the iPhone is now called {name}");
+        let _ = self.shared.store.set_setting(keys::DEVICE_NAME, name);
+        self.shared.update_status(|s| {
+            if let Some(d) = s.device.as_mut() {
+                d.name = name.to_string();
+            }
+        });
+    }
+
     pub(super) async fn connect(&mut self) {
         let Some(id) = self.device_id.clone() else { return };
         log::debug!("connecting to {id}");
@@ -99,6 +122,19 @@ impl Actor {
                 Ok(())
             }),
         )?;
+        // A rename on the phone shows up without waiting for a reconnect.
+        let tx = self.tx.clone();
+        device.NameChanged(
+            &TypedEventHandler::<BluetoothLEDevice, windows::core::IInspectable>::new(move |d, _| {
+                if let Some(name) = d.as_ref().and_then(|d| d.Name().ok()) {
+                    let _ = tx.send(Event::Name {
+                        gen,
+                        name: name.to_string(),
+                    });
+                }
+                Ok(())
+            }),
+        )?;
         // Ask Windows to keep the link up and re-establish it when the phone returns.
         let gatt_session = match async { GattSession::FromDeviceIdAsync(&device.BluetoothDeviceId()?)?.await }.await {
             Ok(s) => {
@@ -112,15 +148,7 @@ impl Actor {
         };
         let connected = device.ConnectionStatus()? == BluetoothConnectionStatus::Connected;
         if let Ok(name) = device.Name() {
-            let name = name.to_string();
-            if !name.is_empty() {
-                let _ = self.shared.store.set_setting(keys::DEVICE_NAME, &name);
-                self.shared.update_status(|s| {
-                    if let Some(d) = s.device.as_mut() {
-                        d.name = name;
-                    }
-                });
-            }
+            self.set_device_name(&name.to_string());
         }
         Ok(Link {
             gen,
@@ -232,6 +260,7 @@ impl Actor {
         };
         let control_point = a.control_point.clone();
         let idle = a.requests.inflight().is_none();
+        let mut closed = false;
         for (name, ch) in [
             ("data source", a.data_source.characteristic().clone()),
             ("notification source", a.notification_source.characteristic().clone()),
@@ -244,8 +273,18 @@ impl Actor {
                         log::warn!("ANCS {name}: re-enable failed: {e}");
                     }
                 }
-                Err(e) => log::warn!("ANCS {name}: couldn't read subscription state: {e}"),
+                Err(e) => {
+                    closed |= e.is_closed();
+                    log::warn!("ANCS {name}: couldn't read subscription state: {e}");
+                }
             }
+        }
+        // Seen on hardware: unticking a service in the iPhone's Windows device properties closed
+        // every GATT object while the link stayed "connected", so notifications (calls included)
+        // and media silently stopped until tug was restarted. Rebuild the link instead.
+        if closed {
+            self.relink("Windows closed tug's Bluetooth objects for the iPhone");
+            return;
         }
         // Only probe between requests so the probe can't interleave with a real response.
         if idle {
