@@ -40,6 +40,9 @@ pub mod keys {
     /// The Classic (texts) device id tug last connected a MAP session to. Remembered so a
     /// phone rename can't make tug follow the old name onto the wrong device.
     pub const TEXTS_DEVICE_ID: &str = "texts_device_id";
+    /// Unix ms of the last successful contact-photo pull (the slow WITH-PHOTO PBAP pass). Persisted
+    /// so the photo pass runs at most once a day instead of on every connect and 15-min resync.
+    pub const LAST_PHOTO_SYNC: &str = "last_photo_sync";
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
