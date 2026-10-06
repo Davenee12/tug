@@ -1,23 +1,46 @@
 # Changelog
 
-## Unreleased
+## v0.5.9 — 2026-10-05
+
+Easier connecting, a full Spotify panel, quiet hours, and contact photos. Merged as #63–#75.
+Tried on Jordan's iPhone where noted; Spotify search was built and reviewed but Spotify's rate limit
+blocked a live test tonight.
 
 ### New
-- **A full Spotify panel**, opened from the Spotify button on Now Playing or with Ctrl+K. It has
-  tabs for **Search**, **Playlists**, **Recently played**, **Your top** songs and artists (last
-  4 weeks / 6 months / all time), and **Up next** (your current queue).
-- **Search and play any song.** Type to search songs, albums, artists and playlists; play a song
-  (it keeps going through its album), add it to your queue, save it to Liked Songs, add it to one
-  of your playlists, or open its album or artist. "Show more" loads further results.
-- **Album and artist pages** with Back: an album's songs, an artist's albums.
-- **Open a playlist to see and play its songs** (for playlists you own or collaborate on);
-  followed playlists play with one tap.
-- **Scrub the Now Playing bar** to seek when Spotify is playing — click or drag.
-- **Play on**: pick where to play from the panel — your iPhone (the default) or another device
-  running Spotify, like Spotify on this PC.
-- **Ctrl+K** learned "**play &lt;song or artist&gt;**" (plays the best match), "**queue
-  &lt;song&gt;**", and "**spotify**" to open the panel. "play &lt;playlist&gt;" still matches a
-  playlist by name.
+- **One-screen connect** replaces the setup wizard: tug opens on its main window with a
+  "Connect your iPhone" panel that finds your phone, pairs with the code shown in tug, asks you to
+  tap Allow, and waits until all three iPhone switches are on (or "Skip for now") before turning
+  into your Feed. The same panel lives in Settings › iPhone. *(Proven in several clean setups.)*
+- **Spotify panel:** search and play any song (it continues through its album), add to queue,
+  save to Liked Songs, add to your playlists, album and artist pages, Recently played, Your top,
+  Up next, drag-to-seek on Now Playing, and **Play on** to choose your iPhone or another Spotify
+  device. Ctrl+K: "play <song or artist>", "queue <song>", "spotify".
+- **Quiet hours, app mute and VIPs** in Settings › Notifications: hold pop-ups on a schedule, mute
+  pop-ups per app, and let chosen people always get through. Calls still ring unless you turn on
+  Mute calls.
+- **Contact photos** from your iPhone in Messages, Calls, the Feed and Ctrl+K. *(27 photos came
+  through on Jordan's iPhone.)*
+- **More music controls:** skip back/forward 15 seconds, and Like/Dislike in Apple Music, shown only
+  when the player supports them.
+- **What's new** card once after each update, and in Settings › About.
+
+### Fixed
+- **Connecting:** the panel keeps scanning so a phone made findable later still shows; waits up to
+  15 s for the notifications side after pairing; spots a leftover Windows pairing and offers Use or
+  Remove; switches go green within about 10 s of being turned on.
+- **Texts are never held up by contacts:** contacts re-sync in about a second and photos load
+  separately in the background (they had blocked texts for a minute).
+- **Low-battery alert** now actually pops up (it used a pop-up path that didn't show).
+- **Spotify** stops asking while Spotify says to slow down, asks far less often, and explains a
+  wait in plain words.
+- One row per iPhone in setup, and the Sync Contacts check reflects what the phone shares now.
+- The sidebar no longer scrolls; Settings sections fit better.
+
+### Known limits
+- iOS reports every message as a text over Bluetooth, so tug can't tell iMessage from SMS
+  (bubbles stay neutral).
+- Spotify extras need Premium and, while tug's Spotify app is in Development Mode, a listener
+  added in its Spotify dashboard.
 
 ## v0.5.8 — 2026-10-05
 
