@@ -10,6 +10,9 @@
 //                                     then arrive as the Feed nudge, first notification lands)
 //   http://localhost:1420/?nudge      connected, notifications on, but texts/contacts off: the Feed's
 //                                     dismissible "Get more from tug" nudge
+//   http://localhost:1420/?whatsnew   the "What's new" card on launch, previewing 0.5.9 with the
+//                                     earlier 0.5.8 update collapsed (version faked to 0.5.9, last
+//                                     seen 0.5.7). Reopen it any time from Settings › About.
 //   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
 //   http://localhost:1420/?call       a call rings 1.5 s after load (rings out after 30 s, as a missed call)
@@ -25,6 +28,10 @@ const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
 const noRepeat = params.has("norepeat");
 const repeatIgnored = params.has("repeatignored");
+// ?whatsnew: fake the app version to 0.5.9 so the upcoming entry shows too; otherwise report the
+// shipping version so Settings › About and the card read a real number in the browser preview.
+const whatsNewPreview = params.has("whatsnew");
+const appVersion = whatsNewPreview ? "0.5.9" : "0.5.8";
 const now = Date.now();
 const min = 60_000;
 
@@ -227,6 +234,10 @@ const calls: CallRecord[] = setup
     ];
 
 const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
+// ?whatsnew: an older last-seen version so the card greets you on launch (0.5.9 + a collapsed 0.5.8).
+// Otherwise record the current version, as a returning user would have, so it doesn't pop every run.
+if (whatsNewPreview) settings["ui.lastSeenVersion"] = "0.5.7";
+else if (!setup) settings["ui.lastSeenVersion"] = appVersion;
 let autostart = false;
 
 // Spotify connector: connected by default so its UI can be reviewed in the browser; ?spotifyoff
@@ -308,6 +319,10 @@ mockIPC(
   (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (cmd) {
+      // getVersion() from @tauri-apps/api/app, so Settings › About and the "What's new" card read
+      // a real version in the browser preview (unmocked, it rejects and both fall back to "dev").
+      case "plugin:app|version":
+        return appVersion;
       case "get_status":
         return status;
       case "get_now_playing":
