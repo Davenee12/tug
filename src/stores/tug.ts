@@ -18,7 +18,9 @@ import {
   type Conversation,
   type Thread,
 } from "../lib/format";
-import { toastSpec } from "../lib/toastSpec";
+import { replyAddress, toastSpec } from "../lib/toastSpec";
+import { shouldPopUp, type PopupEvent } from "../lib/popup";
+import { isVip, vipIndex } from "../lib/vips";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
@@ -56,6 +58,9 @@ import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../l
 export type SpotifyTab = "search" | "playlists" | "recent" | "top" | "queue";
 
 const PAGE = 100;
+
+/** A fresh quiet-hours schedule, off, defaulting to a typical overnight window. */
+const DEFAULT_QUIET_HOURS = { enabled: false, start: "22:00", end: "07:00", days: [] as number[] };
 
 /** What the backend says when Spotify can't see the iPhone (mirrors `model::NO_PHONE`). */
 const SPOTIFY_NO_PHONE = "Open Spotify on your iPhone.";
@@ -131,6 +136,9 @@ export const useTugStore = defineStore("tug", () => {
     toasts: true,
     doNotDisturb: false,
     mutedApps: [],
+    quietHours: { ...DEFAULT_QUIET_HOURS },
+    vips: [],
+    muteCalls: false,
     closeToTray: true,
     appIcons: true,
     lowBattery: true,
@@ -138,6 +146,18 @@ export const useTugStore = defineStore("tug", () => {
     filterUnknown: true,
     knownSenders: [],
   });
+
+  /** Who is a VIP (always let through), rebuilt when the list or the contacts change. */
+  const vips = computed(() => vipIndex(settings.value.vips, contacts.value));
+  /** The pop-up policy event for a notification: its app, whether it's a call, and VIP status. */
+  function popupEventFor(n: PhoneNotification): PopupEvent {
+    const address = n.appId === MESSAGES_APP ? replyAddress(n, messages.value, contacts.value) : null;
+    return {
+      appId: n.appId,
+      isCall: n.category === "incomingCall",
+      isVip: isVip(vips.value, { name: n.title, address }),
+    };
+  }
 
   // --- Spotify connector ---
   const spotify = ref<SpotifyStatus>({ connected: false, account: null });
@@ -435,15 +455,15 @@ export const useTugStore = defineStore("tug", () => {
   let toastPermission: boolean | null = null;
   const toasts = new ToastLimiter();
   let toastSummary: number | undefined;
-  /** Windows pop-ups are on, not held by Do not disturb, and allowed by Windows. */
-  async function canToast(): Promise<boolean> {
-    const s = settings.value;
-    if (!s.toasts || s.doNotDisturb) return false;
+  /** Windows will show pop-ups (permission granted). The settings policy is `shouldPopUp`. */
+  async function hasToastPermission(): Promise<boolean> {
     if (toastPermission === null) {
       toastPermission = (await isPermissionGranted()) || (await requestPermission()) === "granted";
     }
     return toastPermission;
   }
+  /** Whether the settings let a pop-up through right now, for a given event (see lib/popup). */
+  const popupAllowed = (event: PopupEvent) => shouldPopUp(event, settings.value, new Date());
 
   // Low phone battery: one pop-up at 20% and one at 10% per discharge (see lib/battery).
   let batteryAlerted: number | null = null;
@@ -455,7 +475,10 @@ export const useTugStore = defineStore("tug", () => {
       batteryAlerted = r.alerted;
       return;
     }
-    if (!settings.value.lowBattery || !(await canToast())) return;
+    // A low-battery alert is a system pop-up (no app, no VIP): held by Windows alerts off, DND or
+    // quiet hours, like any other.
+    if (!settings.value.lowBattery) return;
+    if (!popupAllowed({ appId: "", isCall: false, isVip: false }) || !(await hasToastPermission())) return;
     batteryAlerted = r.alerted;
     // Through tug's own Windows toast like every other pop-up: the generic notification call
     // never showed on Dave's PC at 20%. Its id sits outside notification ids, so pressing it
@@ -500,13 +523,16 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   async function maybeToast(n: PhoneNotification) {
-    if (n.flags.silent || n.flags.preExisting || settings.value.mutedApps.includes(n.appId)) return;
+    if (n.flags.silent || n.flags.preExisting) return;
     // Unknown senders wait quietly in their own list, unless the text carries a one-time code.
     if (settings.value.filterUnknown && !senderMayToast(n, senders.value)) return;
+    // Settings policy: muted apps, Do not disturb, quiet hours, VIP let-through, call handling.
+    const event = popupEventFor(n);
+    if (!popupAllowed(event)) return;
     const code = findCode(n.message || n.subtitle)?.code ?? null;
     if (code !== null && recentlyCodeToasted(code)) return; // a text pop-up already carried this code
-    if (!(await canToast())) return;
-    if (!admitToast(n.category === "incomingCall")) return;
+    if (!(await hasToastPermission())) return;
+    if (!admitToast(event.isCall)) return;
     if (code !== null) markCodeToasted(code);
     // With buttons for what applies (reply, mark read, copy code, call back, clear); the
     // backend falls back to a plain pop-up itself if Windows won't take that one.
@@ -521,10 +547,12 @@ export const useTugStore = defineStore("tug", () => {
    * on — the backend copies the code itself, and a code text has nothing to clear in the Feed.
    */
   async function maybeToastMessage(m: SmsMessage) {
-    if (settings.value.mutedApps.includes(MESSAGES_APP)) return;
     const code = codeToastForMessage(m, notifications.value, { contacts: contacts.value });
     if (code === null || recentlyCodeToasted(code)) return;
-    if (!(await canToast())) return;
+    // A code text obeys the same policy as a notification carrying a code (Messages app, no call).
+    const event: PopupEvent = { appId: MESSAGES_APP, isCall: false, isVip: isVip(vips.value, { name: m.contactName, address: m.address }) };
+    if (!popupAllowed(event)) return;
+    if (!(await hasToastPermission())) return;
     if (!admitToast(false)) return;
     markCodeToasted(code);
     const known = m.contactName ?? contacts.value.find((c) => c.address === m.address)?.name;
@@ -852,6 +880,11 @@ export const useTugStore = defineStore("tug", () => {
       toasts: raw["ui.toasts"] !== "false",
       doNotDisturb: raw["ui.doNotDisturb"] === "true",
       mutedApps: raw["ui.mutedApps"] ? (JSON.parse(raw["ui.mutedApps"]) as string[]) : [],
+      quietHours: raw["ui.quietHours"]
+        ? { ...DEFAULT_QUIET_HOURS, ...(JSON.parse(raw["ui.quietHours"]) as Partial<UiSettings["quietHours"]>) }
+        : { ...DEFAULT_QUIET_HOURS },
+      vips: raw["ui.vips"] ? (JSON.parse(raw["ui.vips"]) as string[]) : [],
+      muteCalls: raw["ui.muteCalls"] === "true",
       closeToTray: raw["ui.closeToTray"] !== "false",
       lowBattery: raw["ui.lowBattery"] !== "false",
       appIcons: raw["ui.appIcons"] !== "false",
@@ -1081,6 +1114,17 @@ export const useTugStore = defineStore("tug", () => {
   function toggleMuted(appId: string) {
     const muted = settings.value.mutedApps;
     void setSetting("mutedApps", muted.includes(appId) ? muted.filter((a) => a !== appId) : [...muted, appId]);
+  }
+
+  /** Add someone to "Always let through" (VIPs), by their normalised address. No-op if already there. */
+  function addVip(address: string) {
+    const a = normalizeAddress(address);
+    if (!a || settings.value.vips.includes(a)) return;
+    void setSetting("vips", [...settings.value.vips, a]);
+  }
+
+  function removeVip(address: string) {
+    void setSetting("vips", settings.value.vips.filter((v) => v !== normalizeAddress(address)));
   }
 
   // --- Spotify connector ---------------------------------------------------------------
@@ -1444,6 +1488,8 @@ export const useTugStore = defineStore("tug", () => {
     searchAll,
     setSetting,
     toggleMuted,
+    addVip,
+    removeVip,
     isKnown,
     moveToConversations,
     notify,

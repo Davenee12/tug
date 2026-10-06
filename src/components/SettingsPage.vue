@@ -8,6 +8,9 @@ import { useWeatherStore } from "../stores/weather";
 import { connectionHealth, errorAge, type HealthLink, type LinkState } from "../lib/health";
 import { stepZoom } from "../lib/zoom";
 import { escClosesSettings } from "../lib/escape";
+import { formatAddress } from "../lib/format";
+import { normalizeAddress } from "../lib/address";
+import AppAvatar from "./AppAvatar.vue";
 import ConnectPanel from "./ConnectPanel.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsSwitch from "./SettingsSwitch.vue";
@@ -90,6 +93,60 @@ const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void t
 const filterUnknown = computed({ get: () => tug.settings.filterUnknown, set: (v) => void tug.setSetting("filterUnknown", v) });
 const advertise = computed({ get: () => tug.advertiseEnabled, set: (v) => void tug.setAdvertising(v) });
 const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
+
+// ---- Notifications ----
+// Quiet hours: one schedule, held like Do not disturb (see lib/popup). Empty day list = every day.
+const qh = computed(() => tug.settings.quietHours);
+const setQuiet = (patch: Partial<typeof tug.settings.quietHours>) => void tug.setSetting("quietHours", { ...tug.settings.quietHours, ...patch });
+const quietEnabled = computed({ get: () => qh.value.enabled, set: (v) => setQuiet({ enabled: v }) });
+const DAYS: Array<[string, number]> = [["S", 0], ["M", 1], ["T", 2], ["W", 3], ["T", 4], ["F", 5], ["S", 6]];
+const dayOn = (d: number) => qh.value.days.length === 0 || qh.value.days.includes(d);
+function toggleDay(d: number) {
+  const current = qh.value.days.length ? qh.value.days : [0, 1, 2, 3, 4, 5, 6];
+  const next = current.includes(d) ? current.filter((x) => x !== d) : [...current, d].sort((a, b) => a - b);
+  setQuiet({ days: next.length === 7 ? [] : next });
+}
+const muteCalls = computed({ get: () => tug.settings.muteCalls, set: (v) => void tug.setSetting("muteCalls", v) });
+
+// Mute pop-ups per app: every app tug has seen in the Feed, with a toggle each.
+const seenApps = computed(() => {
+  const ids = new Set<string>();
+  const out: Array<{ appId: string; name: string }> = [];
+  for (const n of tug.notifications) {
+    if (!ids.has(n.appId)) {
+      ids.add(n.appId);
+      out.push({ appId: n.appId, name: tug.appNameFor(n.appId) });
+    }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+});
+const isMuted = (appId: string) => tug.settings.mutedApps.includes(appId);
+
+// Always let through (VIPs): picked from contacts by name or number.
+const vipQuery = ref("");
+const vipMatches = computed(() => {
+  const q = vipQuery.value.trim().toLowerCase();
+  if (!q) return [];
+  const digits = q.replace(/\D/g, "");
+  const have = new Set(tug.settings.vips);
+  return tug.contacts
+    .filter(
+      (c) =>
+        !have.has(normalizeAddress(c.address)) &&
+        (c.name.toLowerCase().includes(q) || (digits.length >= 3 && c.address.replace(/\D/g, "").includes(digits))),
+    )
+    .slice(0, 6);
+});
+const vipList = computed(() =>
+  tug.settings.vips.map((address) => {
+    const c = tug.contacts.find((c) => normalizeAddress(c.address) === address);
+    return { address, name: c?.name ?? formatAddress(address) };
+  }),
+);
+function addVip(c: { address: string }) {
+  tug.addVip(c.address);
+  vipQuery.value = "";
+}
 
 const SHORTCUTS: Array<[string, string[]]> = [
   ["Search, or type an action", ["Ctrl", "K"]],
@@ -313,31 +370,111 @@ async function clearHistory() {
 
         <!-- Notifications -->
         <template v-else-if="current.id === 'notifications'">
-          <div class="mb-4 rounded-xl bg-surface-card">
+          <div class="mb-4 divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow
               label="Filter unknown senders"
               description="Texts from numbers that aren't in your contacts, and that you've never texted, wait in their own list in Messages: no badge, no pop-up. Texts with a code still pop up."
             >
               <SettingsSwitch v-model="filterUnknown" label="Filter unknown senders" />
             </SettingsRow>
+            <SettingsRow label="Mute calls" description="Hold call pop-ups too. Off: calls ring through quiet hours. People you always let through still ring.">
+              <SettingsSwitch v-model="muteCalls" label="Mute calls" />
+            </SettingsRow>
           </div>
-          <div class="rounded-xl bg-surface-card px-5 py-4">
-            <p class="text-[14px] font-medium text-ink">Muted on this PC</p>
-            <p class="mt-0.5 text-[13px] text-muted">
-              Muted apps still collect in tug and on your phone; they just don't pop up here. Mute an app with the bell on any of its
-              notifications.
-            </p>
-            <p v-if="tug.settings.mutedApps.length === 0" class="mt-3 text-[13px] text-muted-soft">Nothing muted.</p>
-            <ul v-else class="mt-3 flex flex-wrap gap-1.5">
-              <li v-for="app in tug.settings.mutedApps" :key="app">
+
+          <!-- Quiet hours: a schedule that holds pop-ups, like Do not disturb. -->
+          <div class="mb-4 rounded-xl bg-surface-card">
+            <SettingsRow label="Quiet hours" description="Hold Windows pop-ups on a schedule. Notifications still collect in the Feed. People you always let through still get through.">
+              <SettingsSwitch v-model="quietEnabled" label="Quiet hours" :disabled="!tug.settings.toasts" />
+            </SettingsRow>
+            <div v-if="qh.enabled" class="flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-hairline-soft px-5 py-4">
+              <label class="flex items-center gap-2 text-[13px] text-body">
+                From
+                <input
+                  type="time"
+                  :value="qh.start"
+                  class="rounded-md border border-hairline bg-canvas px-2 py-1 font-mono text-[13px] text-ink"
+                  @change="setQuiet({ start: ($event.target as HTMLInputElement).value })"
+                />
+                to
+                <input
+                  type="time"
+                  :value="qh.end"
+                  class="rounded-md border border-hairline bg-canvas px-2 py-1 font-mono text-[13px] text-ink"
+                  @change="setQuiet({ end: ($event.target as HTMLInputElement).value })"
+                />
+              </label>
+              <div class="flex items-center gap-1.5">
                 <button
-                  class="pill bg-canvas text-ink active:bg-surface-cream-strong"
-                  :title="`Unmute ${tug.appNameFor(app)}`"
-                  @click="tug.toggleMuted(app)"
+                  v-for="([letter, d], i) in DAYS"
+                  :key="i"
+                  type="button"
+                  :class="[
+                    'size-7 rounded-full text-[12px] font-medium transition-colors',
+                    dayOn(d) ? 'bg-ink text-on-dark' : 'bg-canvas text-muted active:bg-surface-cream-strong',
+                  ]"
+                  :aria-pressed="dayOn(d)"
+                  :title="`Run on this day`"
+                  @click="toggleDay(d)"
                 >
-                  {{ tug.appNameFor(app) }}
+                  {{ letter }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Always let through (VIPs). -->
+          <div class="mb-4 rounded-xl bg-surface-card px-5 py-4">
+            <p class="text-[14px] font-medium text-ink">Always let through</p>
+            <p class="mt-0.5 text-[13px] text-muted">
+              These people's texts and calls pop up even during quiet hours or Do not disturb.
+            </p>
+            <ul v-if="vipList.length" class="mt-3 flex flex-wrap gap-1.5">
+              <li v-for="v in vipList" :key="v.address">
+                <button class="pill bg-canvas text-ink active:bg-surface-cream-strong" :title="`Remove ${v.name}`" @click="tug.removeVip(v.address)">
+                  {{ v.name }}
                   <X :size="12" />
                 </button>
+              </li>
+            </ul>
+            <div class="relative mt-3 max-w-xs">
+              <input
+                v-model="vipQuery"
+                type="text"
+                placeholder="Add someone by name or number"
+                class="input"
+                aria-label="Add someone to always let through"
+              />
+              <ul
+                v-if="vipMatches.length"
+                class="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-hairline bg-canvas shadow-lg"
+              >
+                <li v-for="c in vipMatches" :key="c.address">
+                  <button class="flex w-full items-center gap-3 px-3 py-2 text-left text-[14px] text-ink active:bg-surface-card" @click="addVip(c)">
+                    <AppAvatar app-id="com.apple.MobileSMS" :label="c.name" :photo-key="c.address" person size="sm" />
+                    <span class="min-w-0 flex-1 truncate">{{ c.name }}</span>
+                    <span class="shrink-0 font-mono text-[12px] text-muted-soft">{{ formatAddress(c.address) }}</span>
+                  </button>
+                </li>
+              </ul>
+            </div>
+            <p v-if="tug.contacts.length === 0" class="mt-2 text-[12px] text-muted-soft">
+              Your iPhone's contacts load once it's connected and sharing them.
+            </p>
+          </div>
+
+          <!-- Mute pop-ups per app: every app seen in the Feed, with a toggle. -->
+          <div class="rounded-xl bg-surface-card px-5 py-4">
+            <p class="text-[14px] font-medium text-ink">Mute pop-ups</p>
+            <p class="mt-0.5 text-[13px] text-muted">
+              A muted app still collects in tug and on your phone; it just doesn't pop up here.
+            </p>
+            <p v-if="seenApps.length === 0" class="mt-3 text-[13px] text-muted-soft">No apps yet.</p>
+            <ul v-else class="mt-3 max-h-64 divide-y divide-hairline-soft overflow-y-auto">
+              <li v-for="app in seenApps" :key="app.appId" class="flex items-center gap-3 py-2">
+                <AppAvatar :app-id="app.appId" :label="app.name" size="sm" />
+                <span class="min-w-0 flex-1 truncate text-[14px] text-ink">{{ app.name }}</span>
+                <SettingsSwitch :model-value="isMuted(app.appId)" :label="`Mute ${app.name}`" @update:model-value="tug.toggleMuted(app.appId)" />
               </li>
             </ul>
           </div>

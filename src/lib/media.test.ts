@@ -7,7 +7,12 @@ import {
   HOLD_REPEAT_MS,
   repeatIgnoredMessage,
   repeatLabel,
+  SKIP_SECONDS,
+  supportsDislike,
+  supportsLike,
   supportsRepeat,
+  supportsSkipBack,
+  supportsSkipForward,
   type HoldTimers,
 } from "./media";
 
@@ -35,6 +40,33 @@ describe("repeatIgnoredMessage", () => {
   it("names the player", () => {
     expect(repeatIgnoredMessage("Spotify")).toBe("Spotify didn't change repeat from your PC");
     expect(repeatIgnoredMessage(null)).toBe("The player didn't change repeat from your PC");
+  });
+});
+
+describe("extra AMS controls appear only when the player lists them", () => {
+  it("skip ±15 s follows skipBackward / skipForward", () => {
+    const apple = { available: ["play", "pause", "skipForward", "skipBackward", "likeTrack", "dislikeTrack"] };
+    expect(supportsSkipBack(apple)).toBe(true);
+    expect(supportsSkipForward(apple)).toBe(true);
+    const spotify = { available: ["play", "pause", "skipForward", "skipBackward"] };
+    expect(supportsSkipForward(spotify)).toBe(true);
+    expect(supportsLike(spotify)).toBe(false);
+  });
+
+  it("like / dislike follow likeTrack / dislikeTrack", () => {
+    const apple = { available: ["likeTrack", "dislikeTrack"] };
+    expect(supportsLike(apple)).toBe(true);
+    expect(supportsDislike(apple)).toBe(true);
+    expect(supportsLike({ available: ["play"] })).toBe(false);
+  });
+
+  it("nothing shows before the command list arrives", () => {
+    const none = { available: [] };
+    expect(supportsSkipBack(none)).toBe(false);
+    expect(supportsSkipForward(none)).toBe(false);
+    expect(supportsLike(none)).toBe(false);
+    expect(supportsDislike(none)).toBe(false);
+    expect(SKIP_SECONDS).toBe(15);
   });
 });
 

@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, RotateCcw, Shuffle, SkipBack, SkipForward, Volume1, Volume2 } from "lucide-vue-next";
+import { FastForward, Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, Rewind, RotateCcw, Shuffle, SkipBack, SkipForward, ThumbsDown, ThumbsUp, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { duration } from "../lib/format";
-import { canRestart, createHoldRepeater, repeatLabel } from "../lib/media";
+import { canRestart, createHoldRepeater, repeatLabel, SKIP_SECONDS, supportsDislike, supportsLike, supportsSkipBack, supportsSkipForward } from "../lib/media";
 import { seekFraction } from "../lib/spotify";
 
 const tug = useTugStore();
@@ -100,6 +100,15 @@ const progress = computed(() =>
       : 0,
 );
 const can = (c: string) => np.value.available.length === 0 || np.value.available.includes(c as never);
+
+// Extra AMS controls, shown only when the current player lists them (see lib/media). Skip ±15 s is
+// offered by Apple Music and Spotify; Like/Dislike by Apple Music. Spotify keeps its own Web API
+// Like (the heart next to the title), so AMS Like is suppressed while Spotify is the active player.
+const skipBack = computed(() => supportsSkipBack(np.value));
+const skipForward = computed(() => supportsSkipForward(np.value));
+const amsLike = computed(() => !tug.spotifyActive && supportsLike(np.value));
+const amsDislike = computed(() => !tug.spotifyActive && supportsDislike(np.value));
+const hasExtraControls = computed(() => skipBack.value || skipForward.value || amsLike.value || amsDislike.value);
 
 // Start the song over with Back, only where Back restarts rather than skips (see canRestart).
 function restart() {
@@ -265,6 +274,50 @@ function restart() {
             <Repeat v-else :size="16" />
           </button>
         </div>
+      </div>
+
+      <!-- Extra controls the player supports over AMS: skip ±15 s and (Apple Music) Like/Dislike.
+           A compact second row, shown only when at least one applies, so the sidebar doesn't grow
+           for players (or phones) that offer none. -->
+      <div v-if="hasExtraControls" class="mt-2 flex items-center justify-center gap-1">
+        <button
+          v-if="amsDislike"
+          class="rounded-full p-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
+          aria-label="Dislike song"
+          title="Dislike this song"
+          @click="tug.media('dislikeTrack')"
+        >
+          <ThumbsDown :size="16" />
+        </button>
+        <button
+          v-if="skipBack"
+          class="flex items-center gap-0.5 rounded-full px-2 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
+          :aria-label="`Back ${SKIP_SECONDS} seconds`"
+          :title="`Back ${SKIP_SECONDS} seconds`"
+          @click="tug.media('skipBackward')"
+        >
+          <Rewind :size="15" />
+          <span class="font-mono text-[10px]">{{ SKIP_SECONDS }}</span>
+        </button>
+        <button
+          v-if="skipForward"
+          class="flex items-center gap-0.5 rounded-full px-2 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
+          :aria-label="`Forward ${SKIP_SECONDS} seconds`"
+          :title="`Forward ${SKIP_SECONDS} seconds`"
+          @click="tug.media('skipForward')"
+        >
+          <span class="font-mono text-[10px]">{{ SKIP_SECONDS }}</span>
+          <FastForward :size="15" />
+        </button>
+        <button
+          v-if="amsLike"
+          class="rounded-full p-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
+          aria-label="Like song"
+          title="Like this song"
+          @click="tug.media('likeTrack')"
+        >
+          <ThumbsUp :size="16" />
+        </button>
       </div>
     </template>
 

@@ -88,6 +88,9 @@ pub struct StoredMessage {
     pub sent_at: Option<String>,
     pub received_at: i64,
     pub status: Status,
+    /// The MAP message type the phone reported (SMS_GSM, SMS_CDMA, MMS, EMAIL, IM); `None` for
+    /// history from before tug stored it, and for messages tug sent.
+    pub msg_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -107,10 +110,12 @@ pub struct IncomingMessage<'a> {
     pub received_at: i64,
     /// The phone lists it as unread.
     pub unread_on_phone: bool,
+    /// The listing's `type` attribute (SMS_GSM, IM, …); `None` when the phone didn't give one.
+    pub msg_type: Option<&'a str>,
 }
 
 // A name the phone sent with the message stands in until the number is a known contact.
-const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address, COALESCE(c.name, m.sender_name), m.body, m.sent_at, m.received_at, m.status
+const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address, COALESCE(c.name, m.sender_name), m.body, m.sent_at, m.received_at, m.status, m.msg_type
      FROM messages m LEFT JOIN contacts c ON c.address = m.address";
 
 fn map_row(r: &Row) -> Result<StoredMessage> {
@@ -130,6 +135,7 @@ fn map_row(r: &Row) -> Result<StoredMessage> {
         sent_at: r.get(6)?,
         received_at: r.get(7)?,
         status: Status::parse(&status),
+        msg_type: r.get(9)?,
     })
 }
 
@@ -167,8 +173,8 @@ impl Store {
             return Ok(None);
         }
         let inserted = conn.execute(
-            "INSERT OR IGNORE INTO messages (source, handle, direction, address, sender_name, body, sent_at, received_at, status, unread_on_phone)
-             VALUES (?1, ?2, 'in', ?3, ?4, ?5, ?6, ?7, 'received', ?8)",
+            "INSERT OR IGNORE INTO messages (source, handle, direction, address, sender_name, body, sent_at, received_at, status, unread_on_phone, msg_type)
+             VALUES (?1, ?2, 'in', ?3, ?4, ?5, ?6, ?7, 'received', ?8, ?9)",
             params![
                 m.source,
                 m.handle,
@@ -177,7 +183,8 @@ impl Store {
                 m.body,
                 m.sent_at,
                 m.received_at,
-                m.unread_on_phone
+                m.unread_on_phone,
+                m.msg_type
             ],
         )?;
         if inserted == 0 {
@@ -503,6 +510,7 @@ mod tests {
             sent_at: Some("2026-10-04T19:11:17"),
             received_at: 1_000,
             unread_on_phone: false,
+            msg_type: None,
         }
     }
 
@@ -542,6 +550,36 @@ mod tests {
         let mut undated = incoming("H3", "+13025550100", "ok");
         undated.sent_at = None;
         assert!(s.insert_incoming(&undated).unwrap().is_some());
+    }
+
+    #[test]
+    fn stores_and_returns_the_message_type() {
+        let s = Store::in_memory().unwrap();
+        let imessage = IncomingMessage {
+            msg_type: Some("IM"),
+            ..incoming("H1", "+13025550100", "sent blue")
+        };
+        let stored = s.insert_incoming(&imessage).unwrap().unwrap();
+        assert_eq!(stored.msg_type.as_deref(), Some("IM"));
+        // A plain SMS, and one the phone didn't type, round-trip too.
+        let sms = IncomingMessage {
+            msg_type: Some("SMS_GSM"),
+            ..incoming("H2", "+13025550100", "sent green")
+        };
+        assert_eq!(
+            s.insert_incoming(&sms).unwrap().unwrap().msg_type.as_deref(),
+            Some("SMS_GSM")
+        );
+        assert_eq!(
+            s.insert_incoming(&incoming("H3", "+13025550100", "no type"))
+                .unwrap()
+                .unwrap()
+                .msg_type,
+            None
+        );
+        // It survives a reload (recent_messages reads the same column).
+        let types: Vec<_> = s.recent_messages(10).unwrap().into_iter().map(|m| m.msg_type).collect();
+        assert_eq!(types, vec![Some("IM".into()), Some("SMS_GSM".into()), None]);
     }
 
     #[test]
