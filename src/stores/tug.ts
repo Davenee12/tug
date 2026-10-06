@@ -1145,8 +1145,26 @@ export const useTugStore = defineStore("tug", () => {
   async function chooseDevice(device: SpotifyDevice | null): Promise<boolean> {
     if (!device) {
       spotifyDevice.value = null;
-      notify("info", "Playing on your iPhone.");
-      return true;
+      // Move what's playing back to the iPhone now, not just the next play (prefer the paired
+      // phone by name among Spotify's smartphones).
+      const devices = await api.spotifyDevices().catch(() => [] as SpotifyDevice[]);
+      const phones = devices.filter((d) => d.kind.toLowerCase() === "smartphone");
+      const name = status.value.device?.name?.toLowerCase();
+      const phone = phones.find((d) => d.name.toLowerCase() === name) ?? phones[0];
+      if (!phone) {
+        notify("info", "Open Spotify on your iPhone to move the music there.");
+        return true;
+      }
+      if (phone.isActive) {
+        notify("info", "Playing on your iPhone.");
+        return true;
+      }
+      const ok = await attempt(() => api.spotifyTransfer(phone.id).then(() => true));
+      if (ok === true) {
+        notify("info", "Playing on your iPhone.");
+        void refreshSpotifyPlayer();
+      }
+      return ok === true;
     }
     const ok = await attempt(() => api.spotifyTransfer(device.id).then(() => true));
     if (ok === true) {
