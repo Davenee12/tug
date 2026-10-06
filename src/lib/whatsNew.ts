@@ -22,13 +22,14 @@ export interface ReleaseNote {
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
     version: "0.5.9",
-    title: "Easier connecting and a lot more Spotify",
+    title: "Easier connecting, quiet hours, and a lot more Spotify",
     highlights: [
       "Connect your iPhone on one screen that waits for each switch to come on.",
       "Spotify: search and play, line up a queue, browse albums and artists, scrub the track, and pick where it plays.",
-      "Your conversations now show contact photos from your iPhone.",
-      "The sidebar stays put and never scrolls.",
-      "Pairing is quicker.",
+      "Quiet hours, mute noisy apps, and let favourite people always get through.",
+      "Your contacts' photos show up in Messages, Calls and the Feed.",
+      "Skip 15 seconds and like songs in Apple Music, right from Now Playing.",
+      "The low-battery alert now pops up, and the sidebar never scrolls.",
     ],
   },
   {

@@ -43,20 +43,34 @@ calmer polling). See CHANGELOG.md.
 - After registering for notifications, an open MAP session's inbox listing can go stale if the
   MNS link dies; reopening the session fixes it (#54).
 
-## v0.5.9 — candidates
-- **One-screen connect** (Dave, 2026-10-05): no separate setup wizard. After install tug opens on
-  the main window with a "Connect your iPhone" panel: open Settings › Bluetooth on the iPhone,
-  Pair (code in tug), tap Allow, the three switches tick green, then the panel becomes the Feed.
-  The same panel lives in Settings › iPhone for re-pairing and Start over.
-- **More connectors** in Settings › Connectors. Slack first, once its job is decided (iPhone
-  notifications already show Slack messages; a connector would need to add replying, status, etc.).
-- **Join a FaceTime link** from a text ("Join in browser"). Starting a FaceTime call from tug isn't
-  possible (no Apple API); answering one may already work via the incoming-call card — check.
-- **Calls list scroll** can jump when a new call arrives (row keys include the index; #50 note).
-- **Welcome back**: after 30+ min away, who texted and called.
-- **Calls in Ctrl+K search**: a person's recent calls in their search result.
-- **Spotify for everyone** needs Spotify's Extended Quota (registered business, 250k monthly
-  users); until then, add testers by email in the Spotify dashboard.
+## Release cadence (Dave, 2026-10-05)
+Every fifth version is **bug fixing only**: **v0.5.10, v0.5.15, v0.5.20, …** — a stabilization
+pass (hardware logs, independent review, known issues), no new features. Features go in the
+versions between.
+
+## ~~v0.5.9 — one-screen connect, Spotify panel, quiet hours, contact photos~~ (released 2026-10-05)
+#63–#75. See CHANGELOG v0.5.9.
+
+## v0.5.10 — bug fixing only
+- **Spotify: no polling** (ready on branch `fix/spotify-no-poll`): read Spotify only once per song
+  (the iPhone reports song changes) and on user actions. Even a 30 s poll kept the request count up.
+- **Verify on hardware:** Spotify search/queue/seek/Play on (blocked tonight by a 19-hour rate
+  limit), the Classic rescan, leftover-pairing Remove, low-battery pop-up, quiet hours/VIPs, the
+  What's new card on an update from 0.5.8.
+- **Sidebar height at ~720 px** with Spotify or Apple Music (the extra controls row may clip at
+  the bottom; it can't scroll by design).
+- **One WebView2 crash** at a contacts+photos sync (00:14 UTC, 2026-10-06), not reproduced since;
+  watch for it.
+- Calls list scroll can jump when a new call arrives (row keys include the index).
+- Cap the image caches (album art, covers, contact photos) so they can't grow without limit.
+
+## Later — candidates
+- **Connectors:** Google Calendar (meeting reminders with Join; needs a Google Cloud OAuth
+  client; Testing-mode tokens expire every 7 days) and Slack (decide its job first).
+- **Join a FaceTime link** from a text in the browser. Starting a FaceTime call isn't possible.
+- **Clear "can't connect" help** when a PC's Bluetooth can't work with an iPhone.
+- **Welcome back** digest; **Calls in Ctrl+K search**; **Send later**; **Remind me to call back**.
+- **Spotify for everyone** needs Spotify's Extended Quota (registered business, 250k users).
 
 ## Waiting on code signing (Dave isn't buying it for now)
 - **Auto-updates** from GitHub Releases, once releases are signed. Dave is in the US, so Azure
