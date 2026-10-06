@@ -192,7 +192,14 @@ const contacts: Contact[] = setup
       { address: "+19725550111", name: "Dave Smith" },
     ];
 let nextMsg = 1;
-const sms = (direction: "in" | "out", body: string, agoMin: number, address = TAY, contactName: string | null = "Tay"): SmsMessage => ({
+const sms = (
+  direction: "in" | "out",
+  body: string,
+  agoMin: number,
+  address = TAY,
+  contactName: string | null = "Tay",
+  msgType: string | null = "IM",
+): SmsMessage => ({
   id: nextMsg++,
   source: "iphone-map",
   direction,
@@ -202,19 +209,22 @@ const sms = (direction: "in" | "out", body: string, agoMin: number, address = TA
   sentAt: null,
   receivedAt: now - agoMin * min,
   status: direction === "in" ? "received" : "accepted",
+  msgType,
 });
 const messages: SmsMessage[] = setup
   ? []
   : [
+      // Tay is on iMessage (IM → blue); the spammer and short code are plain texts (SMS → green),
+      // so the dev view shows the blue/green tinting when the phone distinguishes them.
       sms("in", "are you coming tonight?", 40),
       sms("out", "yeah! leaving soon", 38),
       sms("in", "did you see the photos I sent?", 4),
       sms("in", "omw, 10 mins 🚗", 1),
       // The spammer's earlier text, read over MAP: same conversation as their notification.
-      sms("in", "Final notice: your car warranty is about to expire. Call now.", 60 * 3, "+15550132244", null),
+      sms("in", "Final notice: your car warranty is about to expire. Call now.", 60 * 3, "+15550132244", null, "SMS_GSM"),
       // A code that arrived as a text with no notification (the iPhone showed no banner): it shows
       // in the Feed with Copy code, even though the short code is an unknown sender.
-      sms("in", "480579 is your Amazon OTP. Do not share it with anyone.", 2, "98626", null),
+      sms("in", "480579 is your Amazon OTP. Do not share it with anyone.", 2, "98626", null, "SMS_GSM"),
     ];
 
 // Recents (PBAP call history): phone-local times, newest first, as the iPhone sends them.

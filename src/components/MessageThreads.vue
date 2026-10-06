@@ -4,6 +4,7 @@ import { ChevronRight, Info, Phone, Plus, RotateCcw, SendHorizontal, ShieldQuest
 import { useTugStore } from "../stores/tug";
 import { clockTime, dayLabel, formatAddress, groupConversations, threadKey, type Conversation, type ConversationItem } from "../lib/format";
 import { shouldStickToBottom } from "../lib/scroll";
+import { bubbleKind, distinguishesIMessage } from "../lib/messageType";
 import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import ConversationRow from "./ConversationRow.vue";
@@ -160,6 +161,20 @@ function showDay(i: number): boolean {
 }
 
 const outgoing = (i: ConversationItem) => i.kind === "message" && i.m.direction === "out";
+// Only tint when the phone actually distinguishes iMessage from text (both seen); otherwise the
+// bubbles keep today's neutral ink. Decided once over all messages, not per conversation.
+const distinguishes = computed(() => distinguishesIMessage(tug.messages));
+// The outgoing bubble colour: iMessage blue, text green, or null for the neutral ink default.
+function outgoingTint(i: ConversationItem): "imessage" | "sms" | null {
+  return i.kind === "message" ? bubbleKind(i.m, distinguishes.value) : null;
+}
+// Bubble background: incoming is the card; outgoing is ink, or blue/green when tinted.
+function bubbleClass(i: ConversationItem): string {
+  if (!outgoing(i)) return "rounded-bl-sm bg-surface-card text-ink";
+  const tint = outgoingTint(i);
+  const bg = tint === "imessage" ? "bg-imessage" : tint === "sms" ? "bg-sms" : "bg-ink";
+  return `rounded-br-sm text-on-dark ${bg}`;
+}
 const codeIn = (i: ConversationItem) => findCode(i.body);
 const statusLabel = (i: ConversationItem) => {
   if (i.kind !== "message" || i.m.direction !== "out") return "";
@@ -309,7 +324,7 @@ function onKey(e: KeyboardEvent) {
             <div
               :class="[
                 'selectable rounded-xl px-4 py-2.5 text-[14px] whitespace-pre-line',
-                outgoing(item) ? 'rounded-br-sm bg-ink text-on-dark' : 'rounded-bl-sm bg-surface-card text-ink',
+                bubbleClass(item),
                 item.kind === 'message' && item.m.status === 'pending' ? 'opacity-70' : '',
               ]"
             >

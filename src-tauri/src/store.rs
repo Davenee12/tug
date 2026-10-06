@@ -130,6 +130,11 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE contacts ADD COLUMN photo TEXT;
     "#,
+    // v7: the MAP message type the phone reported (SMS_GSM, SMS_CDMA, MMS, EMAIL, IM), so tug can
+    // tell iMessage (IM) from a plain text. NULL for history from before this, and for sends.
+    r#"
+    ALTER TABLE messages ADD COLUMN msg_type TEXT;
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
