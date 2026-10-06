@@ -103,7 +103,11 @@ export type MediaCommand =
   | "previousTrack"
   | "volumeUp"
   | "volumeDown"
-  | "advanceRepeatMode";
+  | "advanceRepeatMode"
+  | "skipForward"
+  | "skipBackward"
+  | "likeTrack"
+  | "dislikeTrack";
 
 export interface NowPlaying {
   player: string | null;

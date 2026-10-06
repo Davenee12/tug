@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Bell, CheckCheck, Copy, ListMusic, MessageSquare, Moon, Phone, Plus, Repeat, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
+import { Bell, CheckCheck, Copy, FastForward, ListMusic, MessageSquare, Moon, Phone, Plus, Repeat, Rewind, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, ThumbsDown, ThumbsUp, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
 import { parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
@@ -130,6 +130,10 @@ const MEDIA_ICONS = {
   volumeUp: Volume2,
   volumeDown: Volume1,
   advanceRepeatMode: Repeat,
+  skipForward: FastForward,
+  skipBackward: Rewind,
+  likeTrack: ThumbsUp,
+  dislikeTrack: ThumbsDown,
 };
 function actionIcon(a: Action) {
   if (a.kind === "send") return SendHorizontal;

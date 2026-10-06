@@ -1,5 +1,22 @@
 // Now Playing rules that don't need the DOM, so they can be tested.
-import type { NowPlaying, RepeatMode } from "../types/protocol";
+import type { MediaCommand, NowPlaying, RepeatMode } from "../types/protocol";
+
+/**
+ * The extra AMS controls (skip ±15 s, like/dislike) appear only when the current player lists the
+ * command — unlike the transport buttons, which show on an empty list (before it arrives). A button
+ * that does nothing is worse than no button, and iOS only lists what the player actually accepts.
+ */
+export function lists(np: { available: readonly string[] }, command: MediaCommand): boolean {
+  return np.available.includes(command);
+}
+
+/** How far skipBackward/skipForward jump, for the button labels (iOS uses a 15 s step). */
+export const SKIP_SECONDS = 15;
+
+export const supportsSkipBack = (np: { available: readonly string[] }): boolean => lists(np, "skipBackward");
+export const supportsSkipForward = (np: { available: readonly string[] }): boolean => lists(np, "skipForward");
+export const supportsLike = (np: { available: readonly string[] }): boolean => lists(np, "likeTrack");
+export const supportsDislike = (np: { available: readonly string[] }): boolean => lists(np, "dislikeTrack");
 
 /**
  * The loop button only appears when the player lists AdvanceRepeatMode. A repeat value on its
