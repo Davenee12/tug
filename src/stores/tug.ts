@@ -532,9 +532,11 @@ export const useTugStore = defineStore("tug", () => {
     if (!popupAllowed(event)) return;
     const code = findCode(n.message || n.subtitle)?.code ?? null;
     if (code !== null && recentlyCodeToasted(code)) return; // a text pop-up already carried this code
+    // Claim the code before awaiting: the notification and the text for one code can arrive in the
+    // same tick, and both would pass the check above if the claim came after the await.
+    if (code !== null) markCodeToasted(code);
     if (!(await hasToastPermission())) return;
     if (!admitToast(event.isCall)) return;
-    if (code !== null) markCodeToasted(code);
     // With buttons for what applies (reply, mark read, copy code, call back, clear); the
     // backend falls back to a plain pop-up itself if Windows won't take that one.
     const spec = toastSpec(n, messages.value, contacts.value);
@@ -553,9 +555,9 @@ export const useTugStore = defineStore("tug", () => {
     // A code text obeys the same policy as a notification carrying a code (Messages app, no call).
     const event: PopupEvent = { appId: MESSAGES_APP, isCall: false, isVip: isVip(vips.value, { name: m.contactName, address: m.address }) };
     if (!popupAllowed(event)) return;
+    markCodeToasted(code); // claimed before the await (see maybeToast)
     if (!(await hasToastPermission())) return;
     if (!admitToast(false)) return;
-    markCodeToasted(code);
     const known = m.contactName ?? contacts.value.find((c) => c.address === m.address)?.name;
     const name = known && !isAddressLike(known) ? cleanName(known) : formatAddress(m.address);
     const spec: ToastSpec = {
@@ -1013,9 +1015,8 @@ export const useTugStore = defineStore("tug", () => {
           // A resync may have added, changed or removed photos: drop the cache so avatars re-ask.
           contactPhotos.value = {};
           photoRequests.clear();
-          // Names are joined into messages server-side; apply them to what's loaded.
-          const byAddress = new Map(list.map((c) => [c.address, c.name]));
-          for (const m of messages.value) m.contactName = byAddress.get(m.address) ?? m.contactName;
+          // Names are joined into messages server-side; re-read them for what's loaded.
+          void refreshLoadedMessageNames();
           // Notifications under a contact's old name come back under the new one.
           void refreshLoadedNotifications();
         }),
@@ -1086,6 +1087,18 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   /** Re-read what's loaded (names are resolved server-side, e.g. after a contact is renamed). */
+  /**
+   * Take each loaded text's name from the server, which knows the whole story: the contact's
+   * name when there is one, else the name the iPhone sent with the text. Guessing from the
+   * contacts list alone wiped phone-sent names and brought deleted contacts back on restart.
+   */
+  async function refreshLoadedMessageNames() {
+    const fresh = await api.listMessages(Math.max(messages.value.length, 2000)).catch(() => null);
+    if (!fresh) return;
+    const names = new Map(fresh.map((m) => [m.id, m.contactName]));
+    for (const m of messages.value) if (names.has(m.id)) m.contactName = names.get(m.id) ?? null;
+  }
+
   async function refreshLoadedNotifications() {
     const count = Math.min(Math.max(notifications.value.length, PAGE), 500);
     const fresh = await api.listNotifications(count).catch(() => null);
