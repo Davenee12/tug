@@ -172,6 +172,19 @@ mod worker {
     /// At most one "reopen message access" per this long after the MNS link drops, so a phone
     /// that keeps dropping it can't make tug reconnect in a loop.
     const MNS_REOPEN_GAP: Duration = Duration::from_secs(60);
+    /// When the iPhone is reachable but isn't offering message access (Classic/MAP not up — e.g.
+    /// locked after a restart), retrying every POLL_DISCONNECTED all night is pointless (Dave's log
+    /// had ~839 of these in 21 h). Back off progressively from there to a few minutes, while still
+    /// retrying on a real change (BLE link up, PC resume, Bluetooth on, user on Settings › iPhone).
+    const MAP_RETRY_BASE: Duration = Duration::from_secs(30);
+    const MAP_RETRY_CAP: Duration = Duration::from_secs(5 * 60);
+
+    /// How long to wait before the next message-access attempt after `failures` in a row: the base
+    /// delay doubling each time, capped. Pure, so the backoff is unit-tested.
+    fn map_retry_delay(failures: u32) -> Duration {
+        let doublings = failures.saturating_sub(1).min(5);
+        (MAP_RETRY_BASE * (1u32 << doublings)).min(MAP_RETRY_CAP)
+    }
 
     fn now_ms() -> i64 {
         SystemTime::now()
@@ -219,6 +232,11 @@ mod worker {
         photo_pass_started: bool,
         /// Last logged message-type counts, so the "message types" line logs only on change.
         last_type_counts: Option<(u32, u32, u32)>,
+        /// Consecutive message-access failures while the phone is reachable but not offering it,
+        /// and when to try again. Drives a progressive backoff so tug isn't retrying every 30 s all
+        /// night; reset on success and bypassed on a real change (see the poll loop and `map.refresh`).
+        connect_failures: u32,
+        next_retry: Option<Instant>,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -248,6 +266,8 @@ mod worker {
             photo_task: None,
             photo_pass_started: false,
             last_type_counts: None,
+            connect_failures: 0,
+            next_retry: None,
         };
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
@@ -282,6 +302,11 @@ mod worker {
             }
             if Instant::now() >= next {
                 next = Instant::now() + mns::poll_after(w.shared.watching(), w.session.is_some(), w.live_fresh());
+                // Honour the message-access backoff, unless the user is on the iPhone screens
+                // (watching), when they want prompt retries while flipping switches.
+                if let Some(retry) = w.next_retry.filter(|_| !w.shared.watching()) {
+                    next = next.max(retry);
+                }
             }
         }
         // Sender dropped (app exiting): deregister on the phone and stop advertising cleanly.
@@ -806,14 +831,40 @@ mod worker {
             }
             self.check_mns_grace();
             match result {
-                Ok(0) => {}
-                Ok(n) => log::info!("{n} new message(s) from the iPhone"),
-                Err(MapError::NoDevice) => self.set_state(false, None),
+                Ok(0) => self.note_sync_ok(),
+                Ok(n) => {
+                    self.note_sync_ok();
+                    log::info!("{n} new message(s) from the iPhone");
+                }
+                // No paired phone to reach yet: nothing to back off from.
+                Err(MapError::NoDevice) => {
+                    self.note_sync_ok();
+                    self.set_state(false, None);
+                }
                 Err(e) => {
-                    log::debug!("message sync failed: {e}");
+                    self.note_sync_failure(&e);
                     self.fail(&e);
                 }
             }
+        }
+
+        /// Message access is up: clear the backoff so the next change retries promptly.
+        fn note_sync_ok(&mut self) {
+            self.connect_failures = 0;
+            self.next_retry = None;
+        }
+
+        /// Message access failed (phone reachable but not offering it, or the connection dropped):
+        /// back off progressively and log the first few, then a periodic summary, instead of a line
+        /// every poll all night.
+        fn note_sync_failure(&mut self, e: &MapError) {
+            self.connect_failures = self.connect_failures.saturating_add(1);
+            if self.connect_failures <= 3 || self.connect_failures.is_multiple_of(10) {
+                log::info!("message access retry failed ({} in a row): {e}", self.connect_failures);
+            } else {
+                log::debug!("message sync failed ({} in a row): {e}", self.connect_failures);
+            }
+            self.next_retry = Some(Instant::now() + map_retry_delay(self.connect_failures));
         }
 
         /// If registration went out but the phone still hasn't connected to the MNS, say so once
@@ -1083,7 +1134,21 @@ mod worker {
 
     #[cfg(test)]
     mod tests {
-        use super::photo_sync_due;
+        use super::{map_retry_delay, photo_sync_due, MAP_RETRY_CAP};
+        use std::time::Duration;
+
+        #[test]
+        fn map_retry_backs_off_to_minutes_then_caps() {
+            // The overnight "isn't offering this service" loop: climb off 30 s instead of retrying
+            // every 30 s forever, capped at a few minutes.
+            let secs: Vec<u64> = (1..=8).map(|f| map_retry_delay(f).as_secs()).collect();
+            assert_eq!(secs, vec![30, 60, 120, 240, 300, 300, 300, 300]);
+            assert!(
+                (1..=1000).all(|f| map_retry_delay(f) <= MAP_RETRY_CAP),
+                "never over the cap"
+            );
+            assert_eq!(map_retry_delay(0), Duration::from_secs(30), "no underflow at zero");
+        }
 
         #[test]
         fn photo_sync_due_is_daily_and_survives_a_clock_jump() {
