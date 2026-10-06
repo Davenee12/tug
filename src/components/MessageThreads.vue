@@ -164,16 +164,15 @@ const outgoing = (i: ConversationItem) => i.kind === "message" && i.m.direction 
 // Only tint when the phone actually distinguishes iMessage from text (both seen); otherwise the
 // bubbles keep today's neutral ink. Decided once over all messages, not per conversation.
 const distinguishes = computed(() => distinguishesIMessage(tug.messages));
-// The outgoing bubble colour: iMessage blue, text green, or null for the neutral ink default.
-function outgoingTint(i: ConversationItem): "imessage" | "sms" | null {
-  return i.kind === "message" ? bubbleKind(i.m, distinguishes.value) : null;
-}
-// Bubble background: incoming is the card; outgoing is ink, or blue/green when tinted.
+// Bubble background. Only received messages carry the phone's type (sent rows have none), so the
+// tint goes on incoming bubbles: blue when that person reached you over iMessage, green for a
+// text. Neutral unless the phone distinguishes the two (Jordan's iPhone reports every one as
+// SMS_GSM, so today it stays neutral).
 function bubbleClass(i: ConversationItem): string {
-  if (!outgoing(i)) return "rounded-bl-sm bg-surface-card text-ink";
-  const tint = outgoingTint(i);
-  const bg = tint === "imessage" ? "bg-imessage" : tint === "sms" ? "bg-sms" : "bg-ink";
-  return `rounded-br-sm text-on-dark ${bg}`;
+  if (outgoing(i)) return "rounded-br-sm bg-ink text-on-dark";
+  const tint = i.kind === "message" ? bubbleKind(i.m, distinguishes.value) : null;
+  const bg = tint === "imessage" ? "bg-imessage text-on-dark" : tint === "sms" ? "bg-sms text-on-dark" : "bg-surface-card text-ink";
+  return `rounded-bl-sm ${bg}`;
 }
 const codeIn = (i: ConversationItem) => findCode(i.body);
 const statusLabel = (i: ConversationItem) => {
