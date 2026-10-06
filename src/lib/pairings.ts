@@ -113,6 +113,24 @@ export function pairingProblem(discovered: DiscoveredDevice[], rememberedId: str
 }
 
 /**
+ * A pairing left behind from a previous install. On a fresh tug install nothing is remembered
+ * (`rememberedId` null), yet Windows can still hold a bond for an iPhone from before — and if the
+ * iPhone has since forgotten this PC, that bond is dead weight that stops a clean re-pair. When
+ * one exists, return the phone to offer with Use (adopt the old bond — works if the phone still
+ * trusts this PC) and Remove (unpair it and scan fresh). Returns null once tug remembers a phone
+ * of its own (then `pairingProblem`/`bondHint` cover the messy cases), or when nothing is paired.
+ *
+ * The LE and Classic sides share a name; the LE side is returned (notifications adopt the LE bond),
+ * and Remove unpairs both by name on the backend. Pure, so the classification is unit-tested.
+ */
+export function leftoverPhone(discovered: DiscoveredDevice[], rememberedId: string | null): DiscoveredDevice | null {
+  if (rememberedId) return null;
+  const paired = pairedPhones(discovered);
+  if (paired.length === 0) return null;
+  return paired.find((d) => d.transport === "le") ?? paired[0];
+}
+
+/**
  * A device went from unpaired to paired without tug starting the pairing — Windows' own system
  * dialog did it (phone-initiated, e.g. the user tapped this PC in the iPhone's Bluetooth list).
  * An unpackaged app can't intercept that, so the code shows in Windows, not in tug; the UI uses
