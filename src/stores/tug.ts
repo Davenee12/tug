@@ -1378,27 +1378,26 @@ export const useTugStore = defineStore("tug", () => {
     if (ok !== true && spotifyPlayer.value) spotifyPlayer.value.saved = previous;
   }
 
-  // Poll /me/player lightly, only while tug is visible and Spotify is the active player.
-  // Spotify rate-limits hard (Dave hit a 19-hour timeout polling every 5 s): what's playing is
-  // re-read every 30 s while visible, and right away when the song changes (below).
-  const SPOTIFY_POLL_MS = 30_000;
-  // A new song (from the phone's own media updates) re-reads Spotify once, so Like and art follow
-  // without polling fast.
-  watch(
-    () => `${nowPlaying.value.title}|${nowPlaying.value.artist}`,
-    () => {
-      if (pageVisible.value && spotifyActive.value) void refreshSpotifyPlayer();
-    },
-  );
+  // No polling: Spotify rate-limits hard (Dave hit a 19-hour timeout polling every 5 s, then
+  // still while polling every 30 s). The iPhone already says when the song changes, so tug reads
+  // Spotify's extras (art, Like, shuffle/repeat) once per song, and otherwise only when you act.
+  let spotifyReadFor = "";
+  const songKey = () => `${nowPlaying.value.title}|${nowPlaying.value.artist}`;
+  function refreshForSong() {
+    if (!pageVisible.value || !spotifyActive.value) return;
+    const key = songKey();
+    if (key === spotifyReadFor) return; // already read for this song (e.g. window shown again)
+    spotifyReadFor = key;
+    void refreshSpotifyPlayer();
+  }
+  watch(songKey, refreshForSong);
   watch(
     () => pageVisible.value && spotifyActive.value,
     (on) => {
-      window.clearInterval(spotifyPoll);
-      if (on) {
-        void refreshSpotifyPlayer();
-        spotifyPoll = window.setInterval(() => void refreshSpotifyPlayer(), SPOTIFY_POLL_MS);
-      } else {
+      if (on) refreshForSong();
+      else if (!spotifyActive.value) {
         spotifyPlayer.value = null;
+        spotifyReadFor = "";
       }
     },
     { immediate: true },
