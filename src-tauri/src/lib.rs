@@ -7,6 +7,7 @@ mod cache_trim;
 mod clipboard;
 mod commands;
 mod contact_photos;
+mod device_info;
 mod device_kind;
 mod diagnostics;
 mod frontend_log;

@@ -26,6 +26,9 @@
 //   http://localhost:1420/?nodial     Settings › iPhone › Calls check fails, like a blocked hands-free link
 //   http://localhost:1420/?norepeat   player doesn't list AdvanceRepeatMode: no loop button
 //   http://localhost:1420/?repeatignored   player lists it but ignores it: the "didn't change" toast
+//   http://localhost:1420/?model=iPhone12,8   the phone reports that model identifier (default iPhone16,2)
+//   http://localhost:1420/?nomodel    the phone hasn't reported its model (generic picture, no model line)
+//   http://localhost:1420/?away       the phone is out of range: disconnected, last known model kept
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
@@ -40,6 +43,8 @@ const forgotten = params.has("forgotten");
 const noPhone = setup || leftover || latephone;
 const noRepeat = params.has("norepeat");
 const repeatIgnored = params.has("repeatignored");
+// The model identifier the mock phone reports over its Device Information Service.
+const model = params.has("nomodel") ? null : params.get("model") || "iPhone16,2";
 // ?whatsnew: fake the app version to 0.5.9 so the upcoming entry shows too; otherwise report the
 // shipping version so Settings › About and the card read a real number in the browser preview.
 const whatsNewPreview = params.has("whatsnew");
@@ -131,7 +136,7 @@ const status: DeviceStatus = noPhone
       radio: "on",
       peripheralSupported: true,
       advertising: "on",
-      device: { id: "mock", name: "Dave's iPhone" },
+      device: { id: "mock", name: "Dave's iPhone", model },
       connection: "disconnected",
       battery: null,
       services: { notifications: false, media: false, battery: false, messages: false },
@@ -151,7 +156,7 @@ const status: DeviceStatus = noPhone
       radio: "on",
       peripheralSupported: true,
       advertising: "on",
-      device: { id: "mock", name: "Dave's iPhone" },
+      device: { id: "mock", name: "Dave's iPhone", model },
       connection: "connected",
       battery: 76,
       // ?nudge: notifications work but the optional switches are off, so the Feed shows its
@@ -169,6 +174,16 @@ const status: DeviceStatus = noPhone
       textsDevice: setup ? null : "Dave's iPhone",
       liveTexts: params.has("livetexts") ? "active" : "off",
     };
+
+// ?away: the phone is out of range. The sidebar keeps its name and last known model.
+if (params.has("away") && status.device) {
+  Object.assign(status, {
+    connection: "disconnected",
+    battery: null,
+    services: { notifications: false, media: false, battery: false, messages: false },
+    liveTexts: "off",
+  } satisfies Partial<DeviceStatus>);
+}
 
 // ?applemusic swaps Spotify for Apple Music, which lists skip ±15 s and Like/Dislike over AMS
 // (and no working repeat), so those controls can be reviewed in the browser.
@@ -394,7 +409,8 @@ let finishPairing: ((ok: boolean) => void) | null = null;
 function simulateConnect(id: string) {
   const name = (namedLater ?? discovered).find((d) => d.id === id)?.name || "Dave's iPhone";
   const send = () => void emit("device-status", { ...status, services: { ...status.services } });
-  status.device = { id, name };
+  // The model arrives a moment after connecting (read once the services are up).
+  status.device = { id, name, model: null };
   status.connection = "connecting";
   // On a fresh bond iOS holds the ANCS subscribe open until "Allow" is tapped: the UI should
   // prompt to look at the phone during this window.
@@ -411,6 +427,7 @@ function simulateConnect(id: string) {
   }, 900);
   setTimeout(() => {
     status.services = { ...status.services, notifications: true };
+    if (status.device) status.device = { ...status.device, model };
     send();
   }, 2400);
   setTimeout(() => {
