@@ -337,16 +337,32 @@ impl Actor {
         let cp = a.control_point.clone();
         let what = if positive { "positive" } else { "clear" };
         let result = winrt::write(&cp, &ancs::perform_action(uid, positive)).await;
-        if result.is_ok() {
-            log::info!("asked the iPhone to {what} notification {uid} (row {id})");
+        match action_outcome(result, positive)? {
+            true => log::info!("asked the iPhone to {what} notification {uid} (row {id})"),
+            false => log::info!("notification {uid} (row {id}) was already gone from the iPhone"),
         }
-        result.map_err(|e| match e {
-            BleError::Protocol(Some(ancs::ERR_ACTION_FAILED)) => "The iPhone couldn't perform that action".to_string(),
-            BleError::Protocol(Some(ancs::ERR_UNKNOWN_COMMAND | ancs::ERR_INVALID_COMMAND)) => {
-                "This iOS version doesn't support notification actions".to_string()
-            }
-            other => other.to_string(),
-        })
+        Ok(())
+    }
+}
+
+/// What a Perform Notification Action write means for the user: Ok(true) when the phone
+/// took it, Ok(false) when a clear found the notification already gone (0xA2: the phone
+/// dropped it between our list and the tap, e.g. mid batch-clear), which is what the
+/// user wanted anyway, so it mustn't surface as an error.
+fn action_outcome(result: Result<(), BleError>, positive: bool) -> Result<bool, String> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(BleError::Protocol(Some(ancs::ERR_INVALID_PARAMETER))) if !positive => Ok(false),
+        Err(BleError::Protocol(Some(ancs::ERR_INVALID_PARAMETER))) => {
+            Err("That notification is no longer on the iPhone".to_string())
+        }
+        Err(BleError::Protocol(Some(ancs::ERR_ACTION_FAILED))) => {
+            Err("The iPhone couldn't perform that action".to_string())
+        }
+        Err(BleError::Protocol(Some(ancs::ERR_UNKNOWN_COMMAND | ancs::ERR_INVALID_COMMAND))) => {
+            Err("This iOS version doesn't support notification actions".to_string())
+        }
+        Err(other) => Err(other.to_string()),
     }
 }
 
@@ -355,5 +371,23 @@ pub(super) fn expect(reassembler: &mut ancs::Reassembler, req: &Request) {
     match req {
         Request::Notification(uid) => reassembler.expect_notification(*uid),
         Request::App(app_id) => reassembler.expect_app(app_id),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clearing_a_notification_the_phone_already_dropped_is_not_an_error() {
+        let gone = || Err(BleError::Protocol(Some(ancs::ERR_INVALID_PARAMETER)));
+        assert_eq!(action_outcome(gone(), false), Ok(false));
+        assert_eq!(
+            action_outcome(gone(), true),
+            Err("That notification is no longer on the iPhone".to_string())
+        );
+        assert_eq!(action_outcome(Ok(()), false), Ok(true));
+        let failed = action_outcome(Err(BleError::Protocol(Some(ancs::ERR_ACTION_FAILED))), true);
+        assert_eq!(failed, Err("The iPhone couldn't perform that action".to_string()));
     }
 }
