@@ -205,11 +205,30 @@ export interface SearchResults {
   notifications: PhoneNotification[];
 }
 
+/**
+ * A quiet-hours schedule: during it, Windows pop-ups are held (notifications still collect in the
+ * Feed, like Do not disturb). VIPs and calls still come through (see `shouldPopUp`).
+ */
+export interface QuietHours {
+  enabled: boolean;
+  /** 24-hour "HH:MM" local time. */
+  start: string;
+  end: string;
+  /** Days the schedule runs, 0 = Sunday … 6 = Saturday. Empty means every day. */
+  days: number[];
+}
+
 /** UI preferences persisted in SQLite under the `ui.` prefix. */
 export interface UiSettings {
   toasts: boolean;
   doNotDisturb: boolean;
   mutedApps: string[];
+  /** A schedule during which Windows pop-ups are held (like Do not disturb). */
+  quietHours: QuietHours;
+  /** People whose texts and calls pop up even during quiet hours or Do not disturb (normalised addresses). */
+  vips: string[];
+  /** Hold incoming-call pop-ups too (off by default: calls ring through quiet hours and DND). */
+  muteCalls: boolean;
   /** Closing the window keeps tug running in the tray (read by the backend too). */
   closeToTray: boolean;
   /** Real app icons in the Feed, fetched once per app from Apple's App Store. */

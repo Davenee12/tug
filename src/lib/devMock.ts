@@ -243,7 +243,15 @@ const calls: CallRecord[] = setup
       { direction: "outgoing", name: null, number: "+18005550100", at: localIso(60 * 50) },
     ];
 
-const settings: Record<string, string> = { advertise: "true", "ui.toasts": "true", "ui.seenSince": "0" };
+const settings: Record<string, string> = {
+  advertise: "true",
+  "ui.toasts": "true",
+  "ui.seenSince": "0",
+  // Quiet hours, VIPs and a mute, so Settings › Notifications has something to show in the browser.
+  "ui.quietHours": setup ? "" : JSON.stringify({ enabled: true, start: "22:00", end: "07:00", days: [0, 1, 2, 3, 4] }),
+  "ui.vips": setup ? "" : JSON.stringify([ZOE]),
+  "ui.mutedApps": setup ? "" : JSON.stringify(["com.burbn.instagram"]),
+};
 let autostart = false;
 
 // Spotify connector: connected by default so its UI can be reviewed in the browser; ?spotifyoff
