@@ -1014,10 +1014,8 @@ export const useTugStore = defineStore("tug", () => {
           // A resync may have added, changed or removed photos: drop the cache so avatars re-ask.
           contactPhotos.value = {};
           photoRequests.clear();
-          // Names are joined into messages server-side; apply them to what's loaded.
-          const byAddress = new Map(list.map((c) => [c.address, c.name]));
-          // A contact deleted on the phone drops its name too (not just renames picking up the new one).
-          for (const m of messages.value) m.contactName = byAddress.get(m.address) ?? null;
+          // Names are joined into messages server-side; re-read them for what's loaded.
+          void refreshLoadedMessageNames();
           // Notifications under a contact's old name come back under the new one.
           void refreshLoadedNotifications();
         }),
@@ -1087,6 +1085,18 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   /** Re-read what's loaded (names are resolved server-side, e.g. after a contact is renamed). */
+  /**
+   * Take each loaded text's name from the server, which knows the whole story: the contact's
+   * name when there is one, else the name the iPhone sent with the text. Guessing from the
+   * contacts list alone wiped phone-sent names and brought deleted contacts back on restart.
+   */
+  async function refreshLoadedMessageNames() {
+    const fresh = await api.listMessages(Math.max(messages.value.length, 2000)).catch(() => null);
+    if (!fresh) return;
+    const names = new Map(fresh.map((m) => [m.id, m.contactName]));
+    for (const m of messages.value) if (names.has(m.id)) m.contactName = names.get(m.id) ?? null;
+  }
+
   async function refreshLoadedNotifications() {
     const count = Math.min(Math.max(notifications.value.length, PAGE), 500);
     const fresh = await api.listNotifications(count).catch(() => null);
