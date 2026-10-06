@@ -277,10 +277,12 @@ impl Actor {
         }
     }
 
-    /// Send the next queued Control Point request if none is in flight.
+    /// Send the next queued Control Point request if none is in flight. Holds off while the link
+    /// is down (inside the blip grace): writes would fail fast and burn every request's attempts,
+    /// giving up on them. The blip's link-up pumps again; a real outage drops the queue anyway.
     pub(super) async fn pump(&mut self) {
         loop {
-            let Some(a) = self.link.as_mut().and_then(|l| l.ancs.as_mut()) else {
+            let Some(a) = self.link.as_mut().filter(|l| l.connected).and_then(|l| l.ancs.as_mut()) else {
                 return;
             };
             let Some(req) = a.requests.start_next(Instant::now()) else {
@@ -316,9 +318,11 @@ impl Actor {
     }
 
     pub(super) async fn perform_action(&mut self, id: i64, positive: bool) -> Result<(), String> {
+        // Inside the blip grace ANCS is kept but the link is down: the write can't land.
         let a = self
             .link
             .as_ref()
+            .filter(|l| l.connected)
             .and_then(|l| l.ancs.as_ref())
             .ok_or_else(|| "iPhone isn't connected".to_string())?;
         let uid = a

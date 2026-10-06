@@ -33,6 +33,8 @@ export interface DeviceStatus {
   pairingStale: boolean;
   /** iOS is holding the ANCS subscribe open until "Allow" is tapped on the phone: prompt for it. */
   awaitingPhoneAllow: boolean;
+  /** The iPhone is connected but locked (no ANCS yet): tell the user to unlock it to reconnect. */
+  awaitingUnlock: boolean;
   /** Why message access isn't available, when the user can fix it. */
   messagesError: string | null;
   /** Why the phone's contacts aren't available, when the user can fix it. */
@@ -389,5 +391,7 @@ export interface SpotifyPlayer {
   albumArt: string | null;
   /** The playing track's URI (what Like saves/removes). */
   trackUri: string | null;
+  /** The playing track's name, checked against the phone's title before Like is offered. */
+  trackName: string | null;
   deviceName: string | null;
 }

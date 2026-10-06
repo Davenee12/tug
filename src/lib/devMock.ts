@@ -117,6 +117,7 @@ const status: DeviceStatus = noPhone
       lastErrorAt: null,
       pairingStale: false,
       awaitingPhoneAllow: false,
+      awaitingUnlock: false,
       messagesError: null,
       contactsError: null,
       contactsShared: false,
@@ -138,6 +139,7 @@ const status: DeviceStatus = noPhone
       lastErrorAt: now - min,
       pairingStale: true,
       awaitingPhoneAllow: false,
+      awaitingUnlock: false,
       messagesError: null,
       contactsError: null,
       contactsShared: false,
@@ -159,6 +161,7 @@ const status: DeviceStatus = noPhone
       lastErrorAt: params.has("lasterror") ? now - 4 * min : null,
       pairingStale: false,
       awaitingPhoneAllow: false,
+      awaitingUnlock: false,
       messagesError: params.has("nudge") ? "the iPhone refused message access; turn on Show Notifications for this PC" : null,
       contactsError: params.has("nudge") ? "the iPhone refused contact access" : null,
       contactsShared: false,
@@ -323,6 +326,8 @@ const spotifyPlayer: SpotifyPlayer = {
   saved: false,
   albumArt: `data:image/svg+xml;base64,${btoa(artSvg)}`,
   trackUri: "spotify:track:mock123",
+  // The same song as the mock Now Playing, so the Like button and art show.
+  trackName: "Teardrop",
   deviceName: "Dave's iPhone",
 };
 const img = (seed: string) => `https://i.scdn.co/mock/${encodeURIComponent(seed)}`;

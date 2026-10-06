@@ -18,7 +18,10 @@ const playing = computed(() => np.value.state === "playing");
 
 // Spotify augmentation: only when connected and Spotify is the AMS player (see the store).
 const sp = computed(() => (tug.spotifyActive ? tug.spotifyPlayer : null));
-const art = computed(() => sp.value?.albumArt ?? null);
+// Art and Like belong to one song: only show them once Spotify reports the song the phone is
+// playing (right after a skip it can still describe the previous one).
+const sameSong = computed(() => !!sp.value && tug.spotifyTrackVerified);
+const art = computed(() => (sameSong.value ? sp.value?.albumArt ?? null : null));
 
 // Click/drag-to-seek: only when Spotify is the player and we know the song length. Otherwise the
 // bar is a plain progress indicator, exactly as before.
@@ -175,7 +178,7 @@ function restart() {
         </div>
         <!-- Like the current song: Spotify only, sat next to the title. -->
         <button
-          v-if="sp"
+          v-if="sp && sameSong"
           class="shrink-0 rounded-full p-1.5 text-on-dark active:bg-surface-dark-soft"
           :aria-pressed="sp.saved === true"
           aria-label="Like song"
