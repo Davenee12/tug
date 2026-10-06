@@ -173,6 +173,11 @@ export interface SmsMessage {
    * accepted; the UI shows both accepted and sent as "Sent".
    */
   status: "received" | "pending" | "accepted" | "sent" | "failed";
+  /**
+   * The MAP message type the phone reported (SMS_GSM, SMS_CDMA, MMS, EMAIL, IM), for telling
+   * iMessage (IM) from a plain text. Null for history from before tug stored it, and for sends.
+   */
+  msgType: string | null;
 }
 
 export interface Contact {

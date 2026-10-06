@@ -19,6 +19,7 @@ function sms(address: string, body: string, atMin = 0, direction: "in" | "out" =
     sentAt: null,
     receivedAt: T0 + atMin * min,
     status: direction === "in" ? "received" : "accepted",
+    msgType: null,
   };
 }
 
