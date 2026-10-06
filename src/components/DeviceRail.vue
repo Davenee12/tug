@@ -10,10 +10,11 @@ const tug = useTugStore();
 const s = computed(() => tug.status);
 
 // The sidebar never scrolls. On a short window, tighten the section gaps, drop the Quick toggles'
-// one-line descriptions (the labels stay) and fold the Now Playing card's extra controls into its
-// transport row, so the card still fits at the bottom. The threshold sits above 768 — the two-row
-// card needs ~780 px, so a 1366×768 laptop (the common case) must use the compact layout to avoid
-// clipping the bottom row, which can't scroll into view.
+// one-line descriptions (the labels stay) and have the Now Playing card drop its second row of extra
+// controls (it tucks them beside the title and between the times), so the card still fits at the
+// bottom. The threshold sits above 768 — the roomy layout with the two-row card needs ~780 px, so a
+// 1366×768 laptop (the common case) must use the compact layout to avoid clipping the bottom row,
+// which can't scroll into view.
 const vh = ref(window.innerHeight);
 const onResize = () => (vh.value = window.innerHeight);
 onMounted(() => window.addEventListener("resize", onResize));
