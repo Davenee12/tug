@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { canSkipSwitches, connectDone, connectStep, nextShowConnect, optionalNudge } from "./connectFlow";
+import {
+  canSkipSwitches,
+  connectDone,
+  connectStep,
+  nextShowConnect,
+  optionalNudge,
+  rescanDue,
+  RESCAN_INTERVAL_MS,
+  shouldWatchSwitches,
+} from "./connectFlow";
 import type { DeviceStatus, PairingRequest } from "../types/protocol";
 
 // A fully connected, everything-on phone; tests override only what they exercise.
@@ -125,6 +134,40 @@ describe("nextShowConnect", () => {
 
   it("re-engages after Start over clears the device", () => {
     expect(nextShowConnect(false, true, FRESH)).toBe(true);
+  });
+});
+
+describe("shouldWatchSwitches", () => {
+  it("watches while the panel is on screen with a switch still off", () => {
+    expect(shouldWatchSwitches({ panelVisible: true, fresh: false, switchesPending: true })).toBe(true);
+  });
+
+  it("stops once every switch is on, even with the panel open", () => {
+    expect(shouldWatchSwitches({ panelVisible: true, fresh: true, switchesPending: false })).toBe(false);
+  });
+
+  it("watches during the fresh window even when the panel is hidden (tug in the tray)", () => {
+    expect(shouldWatchSwitches({ panelVisible: false, fresh: true, switchesPending: true })).toBe(true);
+  });
+
+  it("does not watch when the panel is away and the fresh window has passed", () => {
+    expect(shouldWatchSwitches({ panelVisible: false, fresh: false, switchesPending: true })).toBe(false);
+  });
+});
+
+describe("rescanDue", () => {
+  it("re-inquires once the interval has passed while the find step is up", () => {
+    expect(rescanDue(true, RESCAN_INTERVAL_MS)).toBe(true);
+    expect(rescanDue(true, RESCAN_INTERVAL_MS + 1000)).toBe(true);
+  });
+
+  it("waits until the interval has elapsed", () => {
+    expect(rescanDue(true, RESCAN_INTERVAL_MS - 1)).toBe(false);
+    expect(rescanDue(true, 0)).toBe(false);
+  });
+
+  it("never re-inquires away from the find step (a phone is chosen)", () => {
+    expect(rescanDue(false, RESCAN_INTERVAL_MS * 10)).toBe(false);
   });
 });
 

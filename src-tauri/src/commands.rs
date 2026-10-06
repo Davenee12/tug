@@ -111,6 +111,20 @@ pub fn stop_discovery(state: State<'_, AppState>) {
     state.ble.send(Command::StopDiscovery);
 }
 
+/// Re-run the iPhone inquiry (the find step calls this every ~15 s) so a phone made discoverable
+/// after scanning began still appears, without disturbing the LE watcher or the rows already listed.
+#[tauri::command]
+pub fn rescan_discovery(state: State<'_, AppState>) {
+    state.ble.send(Command::RescanDiscovery);
+}
+
+/// Unpair a leftover phone's LE and Classic bonds (both, matched by name), then keep scanning so it
+/// reappears unpaired and ready to pair fresh.
+#[tauri::command]
+pub async fn remove_pairing(state: State<'_, AppState>, id: String) -> Result<()> {
+    state.ble.request(|reply| Command::RemovePairing { id, reply }).await
+}
+
 #[tauri::command]
 pub async fn pair_device(state: State<'_, AppState>, id: String) -> Result<()> {
     state.ble.request(|reply| Command::Pair { id, reply }).await

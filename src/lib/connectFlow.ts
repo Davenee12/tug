@@ -73,3 +73,27 @@ export function optionalNudge(status: DeviceStatus): PhoneSwitch[] {
   if (!notificationsWorking(status)) return [];
   return switchesOff(phoneSwitches(status)).filter((x) => !x.required);
 }
+
+/**
+ * Whether the backend should run fast checks ("watching"): the iPhone's switches show up green
+ * within ~2 s of being flipped, and contacts are retried every ~10 s. On whenever the Connect
+ * panel is on screen (the Feed stand-in or Settings › iPhone) with a switch still off, and for a
+ * short window after launch/pairing so a switch flipped with tug in the tray still turns green
+ * fast. Off once every switch is on, so an idle, fully set-up phone isn't polled every 2 s.
+ */
+export function shouldWatchSwitches(o: { panelVisible: boolean; fresh: boolean; switchesPending: boolean }): boolean {
+  return o.switchesPending && (o.panelVisible || o.fresh);
+}
+
+/** How often to re-inquire for the iPhone while the find step is up (see `rescanDue`). */
+export const RESCAN_INTERVAL_MS = 15_000;
+
+/**
+ * Whether to restart the iPhone scan now. An AEP watcher for an unpaired Classic device inquires
+ * once when it starts and never again, so an iPhone made discoverable *after* tug began scanning
+ * never appears. While the find step is on screen, re-inquire every ~15 s so a phone that becomes
+ * discoverable later shows up within that window. Pure (time passed in), so the timing is tested.
+ */
+export function rescanDue(findStepVisible: boolean, sinceLastRescanMs: number): boolean {
+  return findStepVisible && sinceLastRescanMs >= RESCAN_INTERVAL_MS;
+}
