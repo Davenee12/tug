@@ -9,7 +9,10 @@ use crate::ams::{NowPlaying, RemoteCommand, RepeatMode};
 use crate::ble::{BleHandle, Command};
 use crate::map::calls::CallRecord;
 use crate::messages::{Contact, StoredMessage};
-use crate::spotify::{Playlist, Spotify, SpotifyPlayer, SpotifyStatus};
+use crate::spotify::{
+    AlbumDetail, Artist, ArtistDetail, Device, Playlist, Queue, Spotify, SpotifyPlayer, SpotifySearch, SpotifyStatus,
+    Track,
+};
 use crate::state::{DeviceStatus, Shared};
 use crate::store::StoredNotification;
 use serde::Serialize;
@@ -581,12 +584,151 @@ pub async fn spotify_cover(state: State<'_, AppState>, url: String) -> Result<Op
         .map_err(|e| e.to_string())
 }
 
-/// Play a playlist on the iPhone (chosen from Spotify's device list, preferring the paired phone).
+/// Play a context (playlist, album or artist) on a device: the one picked, else the iPhone.
 #[tauri::command]
-pub async fn spotify_play_playlist(state: State<'_, AppState>, uri: String) -> Result<()> {
+pub async fn spotify_play_context(state: State<'_, AppState>, uri: String, device_id: Option<String>) -> Result<()> {
     let sp = state.spotify.clone();
     let phone = state.shared.status().device.map(|d| d.name);
-    tauri::async_runtime::spawn_blocking(move || sp.play_playlist(&uri, phone.as_deref()))
+    tauri::async_runtime::spawn_blocking(move || sp.play_context(&uri, device_id.as_deref(), phone.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Play one track, optionally inside a context (its album/playlist) so the queue keeps going.
+#[tauri::command]
+pub async fn spotify_play_track(
+    state: State<'_, AppState>,
+    uri: String,
+    context_uri: Option<String>,
+    device_id: Option<String>,
+) -> Result<()> {
+    let sp = state.spotify.clone();
+    let phone = state.shared.status().device.map(|d| d.name);
+    tauri::async_runtime::spawn_blocking(move || {
+        sp.play_track(&uri, context_uri.as_deref(), device_id.as_deref(), phone.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Search tracks/albums/artists/playlists. `kinds` picks the types; `offset` pages results.
+#[tauri::command]
+pub async fn spotify_search(
+    state: State<'_, AppState>,
+    query: String,
+    kinds: Vec<String>,
+    offset: u32,
+) -> Result<SpotifySearch> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.search(&query, &kinds, offset))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The current playback queue (what's playing and what's next).
+#[tauri::command]
+pub async fn spotify_queue(state: State<'_, AppState>) -> Result<Queue> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.queue())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Add a track to the active device's queue.
+#[tauri::command]
+pub async fn spotify_add_to_queue(state: State<'_, AppState>, uri: String) -> Result<()> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.add_to_queue(&uri))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Recently played tracks, newest first.
+#[tauri::command]
+pub async fn spotify_recently_played(state: State<'_, AppState>) -> Result<Vec<Track>> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.recently_played())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Top tracks over a time range (short_term / medium_term / long_term).
+#[tauri::command]
+pub async fn spotify_top_tracks(state: State<'_, AppState>, time_range: String) -> Result<Vec<Track>> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.top_tracks(&time_range))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Top artists over a time range.
+#[tauri::command]
+pub async fn spotify_top_artists(state: State<'_, AppState>, time_range: String) -> Result<Vec<Artist>> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.top_artists(&time_range))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Devices playback can be sent to, for the "Play on" picker.
+#[tauri::command]
+pub async fn spotify_devices(state: State<'_, AppState>) -> Result<Vec<Device>> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.devices())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Transfer playback to a device, keeping it playing.
+#[tauri::command]
+pub async fn spotify_transfer(state: State<'_, AppState>, device_id: String) -> Result<()> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.transfer(&device_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Seek the active device to a position (ms) in the current track.
+#[tauri::command]
+pub async fn spotify_seek(state: State<'_, AppState>, position_ms: u32) -> Result<()> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.seek(position_ms))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// An album and its songs.
+#[tauri::command]
+pub async fn spotify_album(state: State<'_, AppState>, id: String) -> Result<AlbumDetail> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.album(&id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// An artist and their albums.
+#[tauri::command]
+pub async fn spotify_artist(state: State<'_, AppState>, id: String) -> Result<ArtistDetail> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.artist(&id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The songs in a playlist the user owns or collaborates on (empty for followed playlists).
+#[tauri::command]
+pub async fn spotify_playlist_items(state: State<'_, AppState>, id: String) -> Result<Vec<Track>> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.playlist_items(&id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Add a track to a playlist the user owns.
+#[tauri::command]
+pub async fn spotify_add_to_playlist(state: State<'_, AppState>, playlist_id: String, track_uri: String) -> Result<()> {
+    let sp = state.spotify.clone();
+    tauri::async_runtime::spawn_blocking(move || sp.add_to_playlist(&playlist_id, &track_uri))
         .await
         .map_err(|e| e.to_string())?
 }
