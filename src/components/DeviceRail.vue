@@ -24,7 +24,7 @@ const connectionLabel = computed(() => {
     case "connecting":
       return "Connecting…";
     case "disconnected":
-      return "Waiting for iPhone";
+      return s.value.awaitingUnlock ? "Unlock your iPhone" : "Waiting for iPhone";
     default:
       return "Not set up";
   }

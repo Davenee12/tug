@@ -42,6 +42,11 @@ impl RequestQueue {
         let r = Request::Notification(uid);
         self.queue.retain(|q| *q != r);
         self.attempts.remove(&r);
+        // If it's the one in flight, drop it too so the queue advances now rather than waiting for
+        // its fetch to time out — the phone won't answer for a notification it just removed.
+        if self.inflight() == Some(&r) {
+            self.inflight = None;
+        }
     }
 
     /// Start the next request if none is in flight.
@@ -219,5 +224,18 @@ mod tests {
         q.push(Request::Notification(4));
         q.forget_notification(3);
         assert_eq!(q.start_next(Instant::now()), Some(Request::Notification(4)));
+    }
+
+    #[test]
+    fn forgetting_the_in_flight_notification_advances_without_a_timeout() {
+        let mut q = RequestQueue::default();
+        let now = Instant::now();
+        q.push(Request::Notification(3));
+        q.push(Request::Notification(4));
+        assert_eq!(q.start_next(now), Some(Request::Notification(3)));
+        // Removed on the phone while its fetch was in flight: don't wait for the fetch to time out.
+        q.forget_notification(3);
+        assert_eq!(q.inflight(), None, "in-flight fetch dropped");
+        assert_eq!(q.start_next(now), Some(Request::Notification(4)));
     }
 }
