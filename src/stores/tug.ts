@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
+import { getVersion } from "@tauri-apps/api/app";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
@@ -39,14 +40,20 @@ import type {
   PairingRequest,
   PhoneNotification,
   SearchResults,
+  SpotifyDevice,
   SpotifyPlayer,
   SpotifyPlaylist,
   SpotifyStatus,
+  SpotifyTrack,
   ToastPressed,
   UiSettings,
 } from "../types/protocol";
-import { nextRepeat } from "../lib/spotify";
-import { nextShowConnect } from "../lib/connectFlow";
+import { bestTrack, nextRepeat } from "../lib/spotify";
+import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
+import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
+
+/** The Spotify panel's tabs. */
+export type SpotifyTab = "search" | "playlists" | "recent" | "top" | "queue";
 
 const PAGE = 100;
 
@@ -136,10 +143,14 @@ export const useTugStore = defineStore("tug", () => {
   const spotifyPlayer = ref<SpotifyPlayer | null>(null);
   /** The user's playlists, loaded on connect / first use and cached for Ctrl+K and the panel. */
   const playlists = ref<SpotifyPlaylist[]>([]);
-  /** The Playlists panel (overlay) is open. */
+  /** The Spotify panel (overlay) is open. */
   const spotifyPanelOpen = ref(false);
+  /** Which tab the panel opens on next (Ctrl+K "spotify" vs the Now Playing button). */
+  const spotifyPanelTab = ref<SpotifyTab>("search");
   /** Connect in progress (the browser is open waiting for sign-in). */
   const spotifyConnecting = ref(false);
+  /** The "Play on" target: a chosen device, or null for the iPhone (the default). */
+  const spotifyDevice = ref<SpotifyDevice | null>(null);
 
   /** Who counts as a known sender (contacts, numbers you've texted, ones you moved), for Filter unknown senders. */
   const senders = computed(() => senderIndex(contacts.value, outgoingAddresses(messages.value), settings.value.knownSenders));
@@ -181,6 +192,22 @@ export const useTugStore = defineStore("tug", () => {
     return appIcons.value[appId] ?? null;
   }
 
+  /** Spotify cover art as data URIs by image URL (fetched through tug, cached on disk by the backend). */
+  const spotifyCovers = ref<Record<string, string | null>>({});
+  const coverRequests = new Set<string>();
+  /** A Spotify cover for a row, asked the first time it's shown. Null until it arrives (placeholder meanwhile). */
+  function spotifyCoverFor(url: string | null | undefined): string | null {
+    if (!url) return null;
+    if (!(url in spotifyCovers.value) && !coverRequests.has(url)) {
+      coverRequests.add(url);
+      api
+        .spotifyCover(url)
+        .then((uri) => (spotifyCovers.value = { ...spotifyCovers.value, [url]: uri }))
+        .catch(() => undefined);
+    }
+    return spotifyCovers.value[url] ?? null;
+  }
+
   /** Contact photos as data URIs, keyed by the lookup (a number or a name); null = no photo (initials). */
   const contactPhotos = ref<Record<string, string | null>>({});
   const photoRequests = new Set<string>();
@@ -214,14 +241,33 @@ export const useTugStore = defineStore("tug", () => {
    * back. Settings › iPhone shows the same panel component regardless of this flag.
    */
   const showConnect = ref(false);
+  /** "Skip for now" on the panel's switches: let it yield with optional switches still off. */
+  const connectSkipped = ref(false);
   watch(
-    [statusKnown, () => status.value.device, () => status.value.connection, () => status.value.services.notifications],
-    () => (showConnect.value = nextShowConnect(showConnect.value, statusKnown.value, status.value)),
-    { immediate: true },
+    [statusKnown, status, connectSkipped],
+    () => {
+      showConnect.value = nextShowConnect(showConnect.value, statusKnown.value, status.value, connectSkipped.value);
+      // A new setup (no phone) waits for the switches again.
+      if (status.value.device == null) connectSkipped.value = false;
+    },
+    { immediate: true, deep: true },
   );
   const flash = ref<{ kind: "error" | "info"; text: string; action?: { label: string; run: () => void } } | null>(null);
   let flashTimer: number | undefined;
   let spotifyPoll: number | undefined;
+
+  // --- What's new -----------------------------------------------------------------------
+  /** The running app version (from getVersion), null until read / in a plain-browser dev build. */
+  const appVersion = ref<string | null>(null);
+  /** The newest version whose "What's new" card the user has seen; null until settings load, and
+   *  null again means "fresh install" — the first launch records the version silently. */
+  const lastSeenVersion = ref<string | null>(null);
+  /** The "What's new" card is open. */
+  const whatsNewOpen = ref(false);
+  /** The release notes the open card is showing (newest first). */
+  const whatsNewEntries = ref<ReleaseNote[]>([]);
+  /** Notes waiting to be shown once the Connect panel is out of the way (see maybeShowWhatsNew). */
+  const pendingWhatsNew = ref<ReleaseNote[]>([]);
 
   /** Middle-panel view, and the conversation open in Messages. */
   const view = ref<"feed" | "messages" | "calls" | "settings">("feed");
@@ -246,7 +292,13 @@ export const useTugStore = defineStore("tug", () => {
   );
   /** Something is covering the main view, so whatever is behind it isn't being looked at. */
   const overlayOpen = computed(
-    () => searchOpen.value || pickerOpen.value || spotifyPanelOpen.value || !!pairingRequest.value || !!ringing.value,
+    () =>
+      searchOpen.value ||
+      pickerOpen.value ||
+      spotifyPanelOpen.value ||
+      whatsNewOpen.value ||
+      !!pairingRequest.value ||
+      !!ringing.value,
   );
 
   function openSettings(section?: SettingsSection) {
@@ -258,11 +310,6 @@ export const useTugStore = defineStore("tug", () => {
   function closeSettings() {
     if (view.value === "settings") view.value = viewBeforeSettings;
   }
-  /**
-   * The iPhone's switches are on screen (Settings, or setup's sharing step) and tug is visible:
-   * the app checks them every couple of seconds so flipping one on the phone shows up at once.
-   */
-  const setupSharingShown = ref(false);
   let watchRenew: number | undefined;
   const pageVisible = ref(document.visibilityState === "visible");
   // Registered in init() and removed in dispose(), so it's torn down with the rest (see teardown).
@@ -287,10 +334,23 @@ export const useTugStore = defineStore("tug", () => {
     const s = status.value;
     return !!s.device && (!s.services.notifications || !s.services.messages || contacts.value.length === 0);
   });
+  /**
+   * The Connect panel is on screen and tug is visible: the Feed stand-in (showConnect) outside
+   * Settings, or Settings › iPhone. The same component shows in both places; watching keys off its
+   * visibility so flipping a switch on the phone turns green within a couple of seconds.
+   */
+  const connectPanelVisible = computed(
+    () =>
+      pageVisible.value &&
+      (view.value === "settings" ? settingsSection.value === "iphone" : showConnect.value),
+  );
   watch(
     () =>
-      (pageVisible.value && (view.value === "settings" || setupSharingShown.value)) ||
-      (fresh.value && switchesPending.value),
+      shouldWatchSwitches({
+        panelVisible: connectPanelVisible.value,
+        fresh: fresh.value,
+        switchesPending: switchesPending.value,
+      }),
     (on) => {
       void api.setWatching(on).catch(() => undefined);
       // The backend lets fast checks lapse after 90 s unless renewed, so a missed "off"
@@ -784,6 +844,59 @@ export const useTugStore = defineStore("tug", () => {
       knownSenders: raw["ui.knownSenders"] ? (JSON.parse(raw["ui.knownSenders"]) as string[]) : [],
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
+    // A missing key is a fresh install: null (not ""), so the first launch records the version
+    // silently instead of greeting a brand-new user with a card about changes they never saw.
+    lastSeenVersion.value = "ui.lastSeenVersion" in raw ? raw["ui.lastSeenVersion"] : null;
+  }
+
+  /** Remember the version whose card the user has now seen, so it doesn't show again. */
+  async function recordSeenVersion(version: string) {
+    lastSeenVersion.value = version;
+    await attempt(() => api.setSetting("ui.lastSeenVersion", version));
+  }
+
+  /** Open the card on these notes and mark the current version seen (so launch won't repeat it). */
+  function showWhatsNew(entries: ReleaseNote[]) {
+    if (entries.length === 0) return;
+    whatsNewEntries.value = entries;
+    whatsNewOpen.value = true;
+    if (appVersion.value) void recordSeenVersion(appVersion.value);
+  }
+
+  /**
+   * After an update, show the "What's new" card once — but not while the Connect panel owns the
+   * main area (a fresh install or Start over). In that case the notes wait and the watcher below
+   * shows them the moment setup is done, so the card never interrupts connecting. A fresh install
+   * has no last-seen version, so it records silently here and shows nothing at all.
+   */
+  async function checkWhatsNew() {
+    appVersion.value = await getVersion().catch(() => null);
+    const version = appVersion.value;
+    if (!version) return; // plain-browser dev build: no native version to compare against
+    if (lastSeenVersion.value === null) {
+      await recordSeenVersion(version); // fresh install: record quietly, don't greet with a card
+      return;
+    }
+    const entries = whatsNewToShow(RELEASE_NOTES, version, lastSeenVersion.value);
+    if (entries.length === 0) return;
+    if (showConnect.value) pendingWhatsNew.value = entries;
+    else showWhatsNew(entries);
+  }
+
+  // Held-back notes (fresh install / Start over) show once the Connect panel yields to the Feed.
+  watch(showConnect, (connecting) => {
+    if (!connecting && pendingWhatsNew.value.length && !whatsNewOpen.value) {
+      const entries = pendingWhatsNew.value;
+      pendingWhatsNew.value = [];
+      showWhatsNew(entries);
+    }
+  });
+
+  /** Settings › About: reopen the card any time, showing every release up to the current version. */
+  function openWhatsNew() {
+    const notes = appVersion.value ? notesUpTo(RELEASE_NOTES, appVersion.value) : RELEASE_NOTES;
+    whatsNewEntries.value = notes.length ? notes : RELEASE_NOTES;
+    whatsNewOpen.value = true;
   }
 
   // Listeners and shortcuts are installed once and torn down by dispose(), so a
@@ -884,6 +997,8 @@ export const useTugStore = defineStore("tug", () => {
     // Let code rows age out of the Feed's recency window even when nothing else changes.
     clockTimer = window.setInterval(() => (clock.value = Date.now()), 60_000);
     await attempt(loadSettings);
+    // Settings are in (so lastSeenVersion is known): decide whether to greet with "What's new".
+    void checkWhatsNew();
     void loadSpotify();
   }
 
@@ -992,21 +1107,28 @@ export const useTugStore = defineStore("tug", () => {
     if (s) spotify.value = s;
     playlists.value = [];
     spotifyPlayer.value = null;
+    spotifyDevice.value = null;
   }
 
-  /** Start a playlist on the iPhone (used by the panel and Ctrl+K). Never fails silently. */
-  /**
-   * Start a playlist on the iPhone. Spotify can only reach the phone while its Spotify app is
-   * open, so when it isn't, ask the person to open it and start the playlist as soon as the
-   * phone shows up (no second tap). Resolves true once playing or waiting, false on an error.
-   */
+  /** The current "Play on" target id for playback calls (null = the iPhone default). */
+  const spotifyTargetId = computed(() => spotifyDevice.value?.id ?? null);
+  /** The name of the current target, for messages ("Playing on <device>"). */
+  const spotifyTargetName = computed(() => spotifyDevice.value?.name ?? status.value.device?.name ?? "your iPhone");
+
   /** Bumped to cancel a pending "start when Spotify opens on the iPhone". */
   let spotifyWait = 0;
-  async function playPlaylist(uri: string, name?: string): Promise<boolean> {
-    const playing = () => notify("info", name ? `Playing ${name} on your iPhone.` : "Playing on your iPhone.");
+  /**
+   * Run a playback call, handling the iPhone's "open Spotify first" case. Spotify can only reach the
+   * phone while its Spotify app is open, so when it isn't (`SPOTIFY_NO_PHONE`), ask the person to
+   * open it and retry until it shows up (no second tap). An explicit non-phone device never waits.
+   * Resolves true once playing or waiting, false on an error.
+   */
+  async function startPlayback(doPlay: () => Promise<void>, what: string): Promise<boolean> {
+    const onDevice = spotifyDevice.value ? ` on ${spotifyTargetName.value}` : " on your iPhone";
+    const playing = () => notify("info", `Playing ${what}${onDevice}.`);
     const tryPlay = async (): Promise<"ok" | "no-phone" | string> => {
       try {
-        await api.spotifyPlayPlaylist(uri);
+        await doPlay();
         return "ok";
       } catch (e) {
         const msg = errorMessage(e);
@@ -1016,6 +1138,7 @@ export const useTugStore = defineStore("tug", () => {
     const first = await tryPlay();
     if (first === "ok") {
       playing();
+      void refreshSpotifyPlayer();
       return true;
     }
     if (first !== "no-phone") {
@@ -1023,7 +1146,7 @@ export const useTugStore = defineStore("tug", () => {
       return false;
     }
     const waitId = ++spotifyWait;
-    notify("info", "Open Spotify on your iPhone. Your playlist starts as soon as it's open.", {
+    notify("info", "Open Spotify on your iPhone. It starts as soon as it's open.", {
       label: "Cancel",
       run: () => {
         if (spotifyWait === waitId) spotifyWait++;
@@ -1036,12 +1159,116 @@ export const useTugStore = defineStore("tug", () => {
         if (spotifyWait !== waitId) return;
         const result = await tryPlay();
         if (spotifyWait !== waitId) return;
-        if (result === "ok") return playing();
+        if (result === "ok") {
+          void refreshSpotifyPlayer();
+          return playing();
+        }
         if (result !== "no-phone") return notify("error", result);
       }
       if (spotifyWait === waitId) notify("error", "Couldn't reach Spotify on your iPhone. Open it and try again.");
     })();
     return true;
+  }
+
+  /** Start a playlist/album/artist context (panel and Ctrl+K). Never fails silently. */
+  function playContext(uri: string, name?: string): Promise<boolean> {
+    return startPlayback(() => api.spotifyPlayContext(uri, spotifyTargetId.value), name ?? "it");
+  }
+  /** Backwards-compatible name (playlists are contexts). */
+  const playPlaylist = playContext;
+
+  /** Play one track; `contextUri` (its album/playlist) keeps the following songs going. */
+  function playTrack(track: Pick<SpotifyTrack, "uri" | "name">, contextUri?: string | null): Promise<boolean> {
+    return startPlayback(() => api.spotifyPlayTrack(track.uri, contextUri ?? null, spotifyTargetId.value), track.name);
+  }
+
+  /** Ctrl+K "play <song or artist>": search tracks and play the best match in its album. */
+  async function playFromSearch(query: string): Promise<boolean> {
+    const r = await attempt(() => api.spotifySearch(query, ["track"], 0));
+    const best = r ? bestTrack(query, r.tracks) : null;
+    if (!best) {
+      notify("error", `No song on Spotify matches “${query}”.`);
+      return false;
+    }
+    return playTrack(best, best.albumUri);
+  }
+
+  /** Add a track to the queue (panel and Ctrl+K "queue <song>"). */
+  async function addToQueue(track: Pick<SpotifyTrack, "uri" | "name">): Promise<boolean> {
+    const ok = await attempt(() => api.spotifyAddToQueue(track.uri).then(() => true));
+    if (ok === true) notify("info", `Queued ${track.name}.`);
+    return ok === true;
+  }
+
+  /** Ctrl+K "queue <song>": search and queue the best track match. */
+  async function queueFromSearch(query: string): Promise<boolean> {
+    const r = await attempt(() => api.spotifySearch(query, ["track"], 0));
+    const best = r ? bestTrack(query, r.tracks) : null;
+    if (!best) {
+      notify("error", `No song on Spotify matches “${query}”.`);
+      return false;
+    }
+    return addToQueue(best);
+  }
+
+  /** Add a track to one of the user's own playlists. */
+  async function addToPlaylist(playlistId: string, playlistName: string, track: Pick<SpotifyTrack, "uri" | "name">): Promise<boolean> {
+    const ok = await attempt(() => api.spotifyAddToPlaylist(playlistId, track.uri).then(() => true));
+    if (ok === true) notify("info", `Added ${track.name} to ${playlistName}.`);
+    return ok === true;
+  }
+
+  /** Like (save) a track to the library from search/results. */
+  async function likeTrack(track: Pick<SpotifyTrack, "uri" | "name">): Promise<boolean> {
+    const ok = await attempt(() => api.spotifySetSaved(track.uri, true).then(() => true));
+    if (ok === true) notify("info", `Saved ${track.name} to your Liked Songs.`);
+    return ok === true;
+  }
+
+  /** Seek the current Spotify track (the Now Playing bar, when Spotify is the player). */
+  async function spotifySeek(positionMs: number) {
+    const ok = await attempt(() => api.spotifySeek(Math.max(0, Math.round(positionMs))).then(() => true));
+    if (ok === true) void refreshSpotifyPlayer();
+  }
+
+  /** Choose a "Play on" device and transfer playback to it (null = back to the iPhone). */
+  async function chooseDevice(device: SpotifyDevice | null): Promise<boolean> {
+    if (!device) {
+      spotifyDevice.value = null;
+      // Move what's playing back to the iPhone now, not just the next play (prefer the paired
+      // phone by name among Spotify's smartphones).
+      const devices = await api.spotifyDevices().catch(() => [] as SpotifyDevice[]);
+      const phones = devices.filter((d) => d.kind.toLowerCase() === "smartphone");
+      const name = status.value.device?.name?.toLowerCase();
+      const phone = phones.find((d) => d.name.toLowerCase() === name) ?? phones[0];
+      if (!phone) {
+        notify("info", "Open Spotify on your iPhone to move the music there.");
+        return true;
+      }
+      if (phone.isActive) {
+        notify("info", "Playing on your iPhone.");
+        return true;
+      }
+      const ok = await attempt(() => api.spotifyTransfer(phone.id).then(() => true));
+      if (ok === true) {
+        notify("info", "Playing on your iPhone.");
+        void refreshSpotifyPlayer();
+      }
+      return ok === true;
+    }
+    const ok = await attempt(() => api.spotifyTransfer(device.id).then(() => true));
+    if (ok === true) {
+      spotifyDevice.value = device;
+      notify("info", `Playing on ${device.name}.`);
+      void refreshSpotifyPlayer();
+    }
+    return ok === true;
+  }
+
+  /** Open the Spotify panel on a given tab (Now Playing button, Ctrl+K "spotify"). */
+  function openSpotifyPanel(tab: SpotifyTab = "search") {
+    spotifyPanelTab.value = tab;
+    spotifyPanelOpen.value = true;
   }
 
   async function refreshSpotifyPlayer() {
@@ -1088,7 +1315,17 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   // Poll /me/player lightly, only while tug is visible and Spotify is the active player.
-  const SPOTIFY_POLL_MS = 5000;
+  // Spotify rate-limits hard (Dave hit a 19-hour timeout polling every 5 s): what's playing is
+  // re-read every 30 s while visible, and right away when the song changes (below).
+  const SPOTIFY_POLL_MS = 30_000;
+  // A new song (from the phone's own media updates) re-reads Spotify once, so Like and art follow
+  // without polling fast.
+  watch(
+    () => `${nowPlaying.value.title}|${nowPlaying.value.artist}`,
+    () => {
+      if (pageVisible.value && spotifyActive.value) void refreshSpotifyPlayer();
+    },
+  );
   watch(
     () => pageVisible.value && spotifyActive.value,
     (on) => {
@@ -1104,7 +1341,6 @@ export const useTugStore = defineStore("tug", () => {
   );
 
   return {
-    setupSharingShown,
     status,
     statusKnown,
     nowPlaying,
@@ -1115,11 +1351,24 @@ export const useTugStore = defineStore("tug", () => {
     spotifyConnecting,
     playlists,
     spotifyPanelOpen,
+    spotifyPanelTab,
+    spotifyDevice,
+    spotifyTargetName,
     loadSpotify,
     loadPlaylists,
     connectSpotify,
     disconnectSpotify,
     playPlaylist,
+    playContext,
+    playTrack,
+    playFromSearch,
+    addToQueue,
+    queueFromSearch,
+    addToPlaylist,
+    likeTrack,
+    spotifySeek,
+    chooseDevice,
+    openSpotifyPanel,
     refreshSpotifyPlayer,
     cycleSpotifyRepeat,
     toggleSpotifyShuffle,
@@ -1144,6 +1393,7 @@ export const useTugStore = defineStore("tug", () => {
     iconFor,
     websiteFor,
     contactPhoto,
+    spotifyCoverFor,
     advertiseEnabled,
     autostartEnabled,
     flash,
@@ -1163,6 +1413,12 @@ export const useTugStore = defineStore("tug", () => {
     zoom,
     setZoom,
     showConnect,
+    connectSkipped,
+    // What's new
+    appVersion,
+    whatsNewOpen,
+    whatsNewEntries,
+    openWhatsNew,
     focusItem,
     seen,
     connected,
@@ -1211,6 +1467,14 @@ export const useTugStore = defineStore("tug", () => {
       discovered.value = [];
       return attempt(api.stopDiscovery);
     },
+    /**
+     * Re-inquire for the iPhone (the find step calls this every ~15 s). An unpaired-Classic AEP
+     * watcher only inquires once, so a phone made discoverable later never appears without this.
+     * Quiet on failure — it's a background nicety, not something to toast about.
+     */
+    rescan: () => void api.rescanDiscovery().catch(() => undefined),
+    /** Remove a leftover Windows pairing (both the LE and Classic bonds), then keep scanning. */
+    removePairing: (id: string) => attempt(() => api.removePairing(id)),
     async pair(id: string) {
       const ok = await attempt(() => api.pairDevice(id).then(() => true));
       // The Connect panel shows this itself; a toast over it would just cover the screen.
