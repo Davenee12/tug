@@ -446,16 +446,24 @@ fn notification_registration_request(connection_id: u32, on: bool) -> Vec<u8> {
     obex::request(obex::OP_PUT_FINAL, &[], &headers)
 }
 
-/// Pull the iPhone's contacts over PBAP (`telecom/pb.vcf`): names, numbers, and a photo when shared.
-pub async fn pull_contacts(device_id: &str) -> Result<Vec<PhonebookEntry>> {
+/// Pull the iPhone's contacts over PBAP (`telecom/pb.vcf`): names and numbers, plus a photo per
+/// contact when `with_photos` (the phone inlines one when it has it). Photos make the pull far
+/// slower — on Dave's phone ~60 s with photos versus ~14 s without — so the regular (fast) sync
+/// passes `false` and a separate background pass passes `true`; see `map::service`.
+pub async fn pull_contacts(device_id: &str, with_photos: bool) -> Result<Vec<PhonebookEntry>> {
     let mut link = ObexLink::connect(device_id, PSE_UUID, &PBAP_TARGET, MapError::ContactsConsent).await?;
+    let properties = if with_photos {
+        PB_CONTACT_PROPERTIES
+    } else {
+        PB_PROPERTIES
+    };
     let headers = vec![
         link.conn(),
         Header::type_("x-bt/phonebook"),
         Header::Name(Some("telecom/pb.vcf".into())),
         obex::app_params(&[
             (PB_FORMAT, &[PB_FORMAT_VCARD30]),
-            (PB_PROPERTY_SELECTOR, &PB_CONTACT_PROPERTIES.to_be_bytes()),
+            (PB_PROPERTY_SELECTOR, &properties.to_be_bytes()),
             (PB_MAX_LIST_COUNT, &u16::MAX.to_be_bytes()),
         ]),
     ];

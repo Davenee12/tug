@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, X } from "lucide-vue-next";
+import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, X } from "lucide-vue-next";
 import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
@@ -574,6 +574,11 @@ async function clearHistory() {
         <template v-else>
           <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow label="tug" :description="version ? `Version ${version}` : 'Development build'" />
+            <SettingsRow label="What's new" description="See what changed in this and earlier updates.">
+              <button class="btn-secondary btn-sm" @click="tug.openWhatsNew()">
+                <Sparkles :size="14" /> What's new
+              </button>
+            </SettingsRow>
             <SettingsRow
               label="Credits"
               description="Forecasts by Open-Meteo (CC BY 4.0). Place names by BigDataCloud. Icons by Lucide."

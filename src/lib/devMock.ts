@@ -8,8 +8,18 @@
 //                                     "Connect your iPhone" panel (scripted: pair, code, Allow, the
 //                                     switches tick green, it yields to the Feed, optional switches
 //                                     then arrive as the Feed nudge, first notification lands)
+//   http://localhost:1420/?leftover   fresh install, but Windows still has an iPhone paired from
+//                                     before: the find step offers it as "paired before" with Use
+//                                     and Remove (Remove unpairs it, then it reappears to pair fresh)
+//   http://localhost:1420/?latephone  fresh install, no iPhone discoverable yet: it appears a rescan
+//                                     later (the find step re-inquires every ~15 s)
+//   http://localhost:1420/?forgotten  the iPhone forgot this PC while Windows still holds the bond:
+//                                     the "Your iPhone has forgotten this PC" notice, with Remove
 //   http://localhost:1420/?nudge      connected, notifications on, but texts/contacts off: the Feed's
 //                                     dismissible "Get more from tug" nudge
+//   http://localhost:1420/?whatsnew   the "What's new" card on launch, previewing 0.5.9 with the
+//                                     earlier 0.5.8 update collapsed (version faked to 0.5.9, last
+//                                     seen 0.5.7). Reopen it any time from Settings › About.
 //   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
 //   http://localhost:1420/?call       a call rings 1.5 s after load (rings out after 30 s, as a missed call)
@@ -19,12 +29,21 @@
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus } from "../types/protocol";
+import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
+const leftover = params.has("leftover");
+const latephone = params.has("latephone");
+const forgotten = params.has("forgotten");
+// Every first-run-like state: nothing (yet) connected, so the Feed is the Connect panel.
+const noPhone = setup || leftover || latephone;
 const noRepeat = params.has("norepeat");
 const repeatIgnored = params.has("repeatignored");
+// ?whatsnew: fake the app version to 0.5.9 so the upcoming entry shows too; otherwise report the
+// shipping version so Settings › About and the card read a real number in the browser preview.
+const whatsNewPreview = params.has("whatsnew");
+const appVersion = whatsNewPreview ? "0.5.9" : "0.5.8";
 const now = Date.now();
 const min = 60_000;
 
@@ -58,7 +77,7 @@ function n(appId: string, appName: string | null, title: string, message: string
   };
 }
 
-const history: PhoneNotification[] = setup
+const history: PhoneNotification[] = noPhone
   ? []
   : [
       n("com.apple.mobilephone", "Phone", "Mum", "Missed Call", 3, { category: "missedCall", flags: flags({ positiveAction: true }), positiveLabel: "Dial" }),
@@ -85,7 +104,7 @@ const history: PhoneNotification[] = setup
 // Mirrors the backend's reconnect sweep: anything no longer on the phone is cleared.
 for (const x of history) if (!x.live && x.removedAt == null) x.removedAt = x.receivedAt + min;
 
-const status: DeviceStatus = setup
+const status: DeviceStatus = noPhone
   ? {
       radio: "on",
       peripheralSupported: true,
@@ -101,8 +120,29 @@ const status: DeviceStatus = setup
       messagesError: null,
       contactsError: null,
       contactsShared: false,
-      textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
-      textsDevice: setup ? null : "Jordan's iPhone",
+      textsPairing: "missing",
+      textsDevice: null,
+      liveTexts: "off",
+    }
+  : forgotten
+  ? {
+      // The bond lingers in Windows but the iPhone forgot this PC: disconnected, stale, no sharing.
+      radio: "on",
+      peripheralSupported: true,
+      advertising: "on",
+      device: { id: "mock", name: "Jordan's iPhone" },
+      connection: "disconnected",
+      battery: null,
+      services: { notifications: false, media: false, battery: false, messages: false },
+      lastError: "Your iPhone isn't accepting this PC's pairing",
+      lastErrorAt: now - min,
+      pairingStale: true,
+      awaitingPhoneAllow: false,
+      messagesError: null,
+      contactsError: null,
+      contactsShared: false,
+      textsPairing: "broken",
+      textsDevice: "Jordan's iPhone",
       liveTexts: "off",
     }
   : {
@@ -130,7 +170,7 @@ const status: DeviceStatus = setup
 // ?applemusic swaps Spotify for Apple Music, which lists skip ±15 s and Like/Dislike over AMS
 // (and no working repeat), so those controls can be reviewed in the browser.
 const appleMusic = params.has("applemusic");
-const nowPlaying: NowPlaying = setup
+const nowPlaying: NowPlaying = noPhone || forgotten
   ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, repeat: null, available: [] }
   : {
       player: appleMusic ? "Apple Music" : "Spotify",
@@ -169,6 +209,16 @@ const discovered: DiscoveredDevice[] = setup
       { id: "a", name: "", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" },
       { id: "old", name: "Old iPhone", transport: "classic", paired: true, connected: false, canPair: false, kind: "phone" },
     ]
+  : leftover
+  ? // A fresh install with both bonds of a previous iPhone still paired in Windows (same name).
+    [
+      { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
+      { id: "le", name: "Jordan's iPhone", transport: "le", paired: true, connected: false, canPair: false, kind: "phone" },
+      { id: "classic", name: "Jordan's iPhone", transport: "classic", paired: true, connected: false, canPair: false, kind: "phone" },
+    ]
+  : latephone
+  ? // The iPhone isn't discoverable yet; it appears after a rescan (see rescan_discovery below).
+    [{ id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" }]
   : [
       { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
       { id: "a", name: "Jordan's iPhone", transport: "le", paired: false, connected: true, canPair: true, kind: "phone" },
@@ -184,7 +234,7 @@ const namedLater: DiscoveredDevice[] | null = setup
 // Message access (MAP): Zoe's texts, including ones read in the open chat that
 // never became notifications, plus a reply sent from tug.
 const ZOE = "+13025550142";
-const contacts: Contact[] = setup
+const contacts: Contact[] = noPhone
   ? []
   : [
       { address: ZOE, name: "Zoe" },
@@ -211,7 +261,7 @@ const sms = (
   status: direction === "in" ? "received" : "accepted",
   msgType,
 });
-const messages: SmsMessage[] = setup
+const messages: SmsMessage[] = noPhone
   ? []
   : [
       // Zoe is on iMessage (IM → blue); the spammer and short code are plain texts (SMS → green),
@@ -232,7 +282,7 @@ const localIso = (agoMin: number) => {
   const d = new Date(now - agoMin * min);
   return new Date(d.getTime() - d.getTimezoneOffset() * min).toISOString().slice(0, 19);
 };
-const calls: CallRecord[] = setup
+const calls: CallRecord[] = noPhone
   ? []
   : [
       { direction: "missed", name: "Mum", number: "+19725550123", at: localIso(3) },
@@ -252,13 +302,17 @@ const settings: Record<string, string> = {
   "ui.vips": setup ? "" : JSON.stringify([ZOE]),
   "ui.mutedApps": setup ? "" : JSON.stringify(["com.burbn.instagram"]),
 };
+// ?whatsnew: an older last-seen version so the card greets you on launch (0.5.9 + a collapsed 0.5.8).
+// Otherwise record the current version, as a returning user would have, so it doesn't pop every run.
+if (whatsNewPreview) settings["ui.lastSeenVersion"] = "0.5.7";
+else if (!setup) settings["ui.lastSeenVersion"] = appVersion;
 let autostart = false;
 
 // Spotify connector: connected by default so its UI can be reviewed in the browser; ?spotifyoff
 // starts it disconnected (to see Settings › Connectors and the empty states).
 const spotifyState: SpotifyStatus = {
-  connected: !setup && !params.has("spotifyoff"),
-  account: !setup && !params.has("spotifyoff") ? "Jordan Lee" : null,
+  connected: !noPhone && !params.has("spotifyoff"),
+  account: !noPhone && !params.has("spotifyoff") ? "Jordan Lee" : null,
 };
 const artSvg =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="6" fill="#1db954"/><circle cx="24" cy="44" r="7" fill="#0b2e18"/><rect x="29" y="18" width="6" height="26" fill="#0b2e18"/><path d="M35 18 L52 14 V22 L35 26 Z" fill="#0b2e18"/></svg>';
@@ -271,12 +325,61 @@ const spotifyPlayer: SpotifyPlayer = {
   trackUri: "spotify:track:mock123",
   deviceName: "Jordan's iPhone",
 };
+const img = (seed: string) => `https://i.scdn.co/mock/${encodeURIComponent(seed)}`;
 const spotifyPlaylists: SpotifyPlaylist[] = [
-  { uri: "spotify:playlist:1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: null },
-  { uri: "spotify:playlist:2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: null },
-  { uri: "spotify:playlist:3", name: "Discover Weekly", owner: "Spotify", trackCount: 30, imageUrl: null },
-  { uri: "spotify:playlist:4", name: "Coding Flow", owner: "Dave", trackCount: 88, imageUrl: null },
-  { uri: "spotify:playlist:5", name: "Rainy Day Jazz", owner: "Dave", trackCount: 61, imageUrl: null },
+  { uri: "spotify:playlist:1", id: "1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: img("Deep Focus"), owned: false },
+  { uri: "spotify:playlist:2", id: "2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: img("Morning Run"), owned: true },
+  { uri: "spotify:playlist:3", id: "3", name: "Discover Weekly", owner: "Spotify", trackCount: 30, imageUrl: img("Discover Weekly"), owned: false },
+  { uri: "spotify:playlist:4", id: "4", name: "Coding Flow", owner: "Dave", trackCount: 88, imageUrl: img("Coding Flow"), owned: true },
+  { uri: "spotify:playlist:5", id: "5", name: "Rainy Day Jazz", owner: "Dave", trackCount: 61, imageUrl: img("Rainy Day Jazz"), owned: true },
+];
+
+// A small catalogue so every panel tab/view renders in the browser. Searching filters it by name.
+const mockArtist = (id: string, name: string): SpotifyArtist => ({ uri: `spotify:artist:${id}`, id, name, imageUrl: img(`artist ${name}`) });
+const mockAlbum = (id: string, name: string, artists: string, year: string, total: number): SpotifyAlbum => ({
+  uri: `spotify:album:${id}`,
+  id,
+  name,
+  artists,
+  imageUrl: img(`album ${name}`),
+  totalTracks: total,
+  year,
+});
+const mockTrack = (id: string, name: string, artists: string, album: string, ms: number, albumId = id, artistId = id): SpotifyTrack => ({
+  uri: `spotify:track:${id}`,
+  name,
+  artists,
+  artistUri: `spotify:artist:${artistId}`,
+  album,
+  albumUri: `spotify:album:${albumId}`,
+  imageUrl: img(`album ${album}`),
+  durationMs: ms,
+});
+
+const catalogueTracks: SpotifyTrack[] = [
+  mockTrack("t1", "Teardrop", "Massive Attack", "Mezzanine", 330000, "mz", "ma"),
+  mockTrack("t2", "Angel", "Massive Attack", "Mezzanine", 379000, "mz", "ma"),
+  mockTrack("t3", "Midnight City", "M83", "Hurry Up, We're Dreaming", 244000, "m83", "m83a"),
+  mockTrack("t4", "Nightcall", "Kavinsky", "OutRun", 258000, "or", "kav"),
+  mockTrack("t5", "Redbone", "Childish Gambino", "Awaken, My Love!", 327000, "aml", "cg"),
+  mockTrack("t6", "Flume", "Bon Iver", "For Emma, Forever Ago", 199000, "fe", "bi"),
+  mockTrack("t7", "Runaway", "Kanye West", "My Beautiful Dark Twisted Fantasy", 548000, "mbdtf", "kw"),
+  mockTrack("t8", "Teardrops", "Bring Me The Horizon", "Post Human", 210000, "ph", "bmth"),
+];
+const catalogueAlbums: SpotifyAlbum[] = [
+  mockAlbum("mz", "Mezzanine", "Massive Attack", "1998", 11),
+  mockAlbum("m83", "Hurry Up, We're Dreaming", "M83", "2011", 22),
+  mockAlbum("aml", "Awaken, My Love!", "Childish Gambino", "2016", 11),
+];
+const catalogueArtists: SpotifyArtist[] = [
+  mockArtist("ma", "Massive Attack"),
+  mockArtist("m83a", "M83"),
+  mockArtist("cg", "Childish Gambino"),
+];
+const spotifyDevices: SpotifyDevice[] = [
+  { id: "phone", name: "Jordan's iPhone", kind: "Smartphone", isActive: true },
+  { id: "pc", name: "Spotify on this PC", kind: "Computer", isActive: false },
+  { id: "spk", name: "Kitchen speaker", kind: "Speaker", isActive: false },
 ];
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
@@ -333,6 +436,10 @@ mockIPC(
   (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (cmd) {
+      // getVersion() from @tauri-apps/api/app, so Settings › About and the "What's new" card read
+      // a real version in the browser preview (unmocked, it rejects and both fall back to "dev").
+      case "plugin:app|version":
+        return appVersion;
       case "get_status":
         return status;
       case "get_now_playing":
@@ -470,9 +577,40 @@ mockIPC(
         // A real fix takes a few seconds; long enough to see tug's "finding you" lines.
         return new Promise((resolve) => setTimeout(() => resolve({ latitude: 32.78, longitude: -96.8 }), 4500));
       case "start_discovery":
-        setTimeout(() => void emit("discovered-devices", discovered), 400);
+        setTimeout(() => void emit("discovered-devices", [...discovered]), 400);
         // The iPhone's name arrives a little after it's first seen; the row updates in place.
         if (namedLater) setTimeout(() => void emit("discovered-devices", namedLater), 2600);
+        return null;
+      case "stop_discovery":
+        return null;
+      case "rescan_discovery":
+        // ?latephone: the iPhone becomes discoverable only on a later inquiry; surface it now.
+        if (latephone && !discovered.some((d) => d.kind === "phone")) {
+          discovered.push({ id: "late", name: "Jordan's iPhone", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" });
+        }
+        setTimeout(() => void emit("discovered-devices", [...discovered]), 200);
+        return null;
+      case "remove_pairing": {
+        // Unpair both bonds (same name), then the phone reappears unpaired, ready to pair fresh.
+        const name = discovered.find((d) => d.id === a.id)?.name;
+        for (let i = discovered.length - 1; i >= 0; i--) {
+          if (discovered[i].kind === "phone" && discovered[i].paired && discovered[i].name === name) discovered.splice(i, 1);
+        }
+        void emit("discovered-devices", [...discovered]);
+        setTimeout(() => {
+          discovered.push({ id: "fresh", name: name ?? "Jordan's iPhone", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" });
+          void emit("discovered-devices", [...discovered]);
+        }, 1200);
+        return null;
+      }
+      case "forget_device":
+        // Start over / Remove: clear the device and drop back to the find step.
+        status.device = null;
+        status.connection = "noDevice";
+        status.pairingStale = false;
+        status.textsPairing = "missing";
+        status.textsDevice = null;
+        void emit("device-status", { ...status, services: { ...status.services } });
         return null;
       case "pair_device":
         // Like Windows: the PIN shows on both screens; the call returns once it's answered.
@@ -524,10 +662,18 @@ mockIPC(
         return { ...spotifyState };
       case "spotify_playlists":
         return spotifyState.connected ? spotifyPlaylists.map((p) => ({ ...p })) : [];
-      case "spotify_cover":
+      case "spotify_cover": {
+        // Stand-in cover art (the real covers come from Spotify's CDN): a coloured tile per URL.
+        const url = String(a.url ?? "");
+        const hue = [...url].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="hsl(${hue} 55% 45%)"/><circle cx="32" cy="32" r="10" fill="hsl(${hue} 60% 80%)"/></svg>`;
+        return `data:image/svg+xml;base64,${btoa(svg)}`;
+      }
+      case "spotify_play_context":
+        console.log("[devMock] spotify play context", a.uri, "on", a.deviceId ?? "iPhone");
         return null;
-      case "spotify_play_playlist":
-        console.log("[devMock] spotify play", a.uri);
+      case "spotify_play_track":
+        console.log("[devMock] spotify play track", a.uri, "in", a.contextUri, "on", a.deviceId ?? "iPhone");
         return null;
       case "spotify_player":
         return spotifyState.connected ? { ...spotifyPlayer } : null;
@@ -539,6 +685,71 @@ mockIPC(
         return null;
       case "spotify_set_saved":
         spotifyPlayer.saved = Boolean(a.saved);
+        return null;
+      case "spotify_search": {
+        const q = String(a.query ?? "").toLowerCase().trim();
+        const kinds = (a.kinds as string[]) ?? [];
+        const offset = Number(a.offset ?? 0);
+        const want = (k: string) => kinds.length === 0 || kinds.includes(k);
+        const hitT = (t: SpotifyTrack) => `${t.name} ${t.artists}`.toLowerCase().includes(q);
+        const hitA = (al: SpotifyAlbum) => `${al.name} ${al.artists}`.toLowerCase().includes(q);
+        const hitAr = (ar: SpotifyArtist) => ar.name.toLowerCase().includes(q);
+        const hitP = (p: SpotifyPlaylist) => p.name.toLowerCase().includes(q);
+        // Pad the track list so "Show more" can be exercised past the first page of 10.
+        const allTracks = q ? [...catalogueTracks.filter(hitT), ...catalogueTracks.map((t, i) => ({ ...t, uri: `${t.uri}:${i}:${q}` }))] : [];
+        const page = <T>(xs: T[]) => xs.slice(offset, offset + 10);
+        const tracks = want("track") ? page(allTracks) : [];
+        const albums = want("album") ? page(q ? catalogueAlbums.filter(hitA) : []) : [];
+        const artists = want("artist") ? page(q ? catalogueArtists.filter(hitAr) : []) : [];
+        const playlists = want("playlist") ? page(q ? spotifyPlaylists.filter(hitP) : []) : [];
+        return {
+          tracks,
+          albums,
+          artists,
+          playlists,
+          more: {
+            tracks: want("track") && offset + 10 < allTracks.length,
+            albums: false,
+            artists: false,
+            playlists: false,
+          },
+        };
+      }
+      case "spotify_queue":
+        return { currentlyPlaying: catalogueTracks[0], queue: catalogueTracks.slice(1, 6) };
+      case "spotify_add_to_queue":
+        console.log("[devMock] spotify queue", a.uri);
+        return null;
+      case "spotify_recently_played":
+        return catalogueTracks.slice(2, 8);
+      case "spotify_top_tracks":
+        return catalogueTracks.slice(0, 6);
+      case "spotify_top_artists":
+        return catalogueArtists;
+      case "spotify_devices":
+        return spotifyDevices;
+      case "spotify_transfer":
+        console.log("[devMock] spotify transfer to", a.deviceId);
+        return null;
+      case "spotify_seek":
+        nowPlaying.elapsed = Math.round(Number(a.positionMs ?? 0) / 1000);
+        nowPlaying.elapsedAt = Date.now();
+        void emit("now-playing", { ...nowPlaying });
+        return null;
+      case "spotify_album": {
+        const album = catalogueAlbums.find((al) => al.id === a.id) ?? mockAlbum(String(a.id), "Album", "Various", "2020", 3);
+        return { album, tracks: catalogueTracks.slice(0, 4).map((t) => ({ ...t, albumUri: album.uri, album: album.name })) };
+      }
+      case "spotify_artist": {
+        const artist = catalogueArtists.find((ar) => ar.id === a.id) ?? mockArtist(String(a.id), "Artist");
+        return { artist, albums: catalogueAlbums };
+      }
+      case "spotify_playlist_items": {
+        const p = spotifyPlaylists.find((x) => x.id === a.id);
+        return p?.owned ? catalogueTracks.slice(0, 6) : [];
+      }
+      case "spotify_add_to_playlist":
+        console.log("[devMock] spotify add to playlist", a.playlistId, a.trackUri);
         return null;
       default:
         return null;
