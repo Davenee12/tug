@@ -26,7 +26,7 @@
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus } from "../types/protocol";
+import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -289,12 +289,61 @@ const spotifyPlayer: SpotifyPlayer = {
   trackUri: "spotify:track:mock123",
   deviceName: "Jordan's iPhone",
 };
+const img = (seed: string) => `https://i.scdn.co/mock/${encodeURIComponent(seed)}`;
 const spotifyPlaylists: SpotifyPlaylist[] = [
-  { uri: "spotify:playlist:1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: null },
-  { uri: "spotify:playlist:2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: null },
-  { uri: "spotify:playlist:3", name: "Discover Weekly", owner: "Spotify", trackCount: 30, imageUrl: null },
-  { uri: "spotify:playlist:4", name: "Coding Flow", owner: "Dave", trackCount: 88, imageUrl: null },
-  { uri: "spotify:playlist:5", name: "Rainy Day Jazz", owner: "Dave", trackCount: 61, imageUrl: null },
+  { uri: "spotify:playlist:1", id: "1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: img("Deep Focus"), owned: false },
+  { uri: "spotify:playlist:2", id: "2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: img("Morning Run"), owned: true },
+  { uri: "spotify:playlist:3", id: "3", name: "Discover Weekly", owner: "Spotify", trackCount: 30, imageUrl: img("Discover Weekly"), owned: false },
+  { uri: "spotify:playlist:4", id: "4", name: "Coding Flow", owner: "Dave", trackCount: 88, imageUrl: img("Coding Flow"), owned: true },
+  { uri: "spotify:playlist:5", id: "5", name: "Rainy Day Jazz", owner: "Dave", trackCount: 61, imageUrl: img("Rainy Day Jazz"), owned: true },
+];
+
+// A small catalogue so every panel tab/view renders in the browser. Searching filters it by name.
+const mockArtist = (id: string, name: string): SpotifyArtist => ({ uri: `spotify:artist:${id}`, id, name, imageUrl: img(`artist ${name}`) });
+const mockAlbum = (id: string, name: string, artists: string, year: string, total: number): SpotifyAlbum => ({
+  uri: `spotify:album:${id}`,
+  id,
+  name,
+  artists,
+  imageUrl: img(`album ${name}`),
+  totalTracks: total,
+  year,
+});
+const mockTrack = (id: string, name: string, artists: string, album: string, ms: number, albumId = id, artistId = id): SpotifyTrack => ({
+  uri: `spotify:track:${id}`,
+  name,
+  artists,
+  artistUri: `spotify:artist:${artistId}`,
+  album,
+  albumUri: `spotify:album:${albumId}`,
+  imageUrl: img(`album ${album}`),
+  durationMs: ms,
+});
+
+const catalogueTracks: SpotifyTrack[] = [
+  mockTrack("t1", "Teardrop", "Massive Attack", "Mezzanine", 330000, "mz", "ma"),
+  mockTrack("t2", "Angel", "Massive Attack", "Mezzanine", 379000, "mz", "ma"),
+  mockTrack("t3", "Midnight City", "M83", "Hurry Up, We're Dreaming", 244000, "m83", "m83a"),
+  mockTrack("t4", "Nightcall", "Kavinsky", "OutRun", 258000, "or", "kav"),
+  mockTrack("t5", "Redbone", "Childish Gambino", "Awaken, My Love!", 327000, "aml", "cg"),
+  mockTrack("t6", "Flume", "Bon Iver", "For Emma, Forever Ago", 199000, "fe", "bi"),
+  mockTrack("t7", "Runaway", "Kanye West", "My Beautiful Dark Twisted Fantasy", 548000, "mbdtf", "kw"),
+  mockTrack("t8", "Teardrops", "Bring Me The Horizon", "Post Human", 210000, "ph", "bmth"),
+];
+const catalogueAlbums: SpotifyAlbum[] = [
+  mockAlbum("mz", "Mezzanine", "Massive Attack", "1998", 11),
+  mockAlbum("m83", "Hurry Up, We're Dreaming", "M83", "2011", 22),
+  mockAlbum("aml", "Awaken, My Love!", "Childish Gambino", "2016", 11),
+];
+const catalogueArtists: SpotifyArtist[] = [
+  mockArtist("ma", "Massive Attack"),
+  mockArtist("m83a", "M83"),
+  mockArtist("cg", "Childish Gambino"),
+];
+const spotifyDevices: SpotifyDevice[] = [
+  { id: "phone", name: "Jordan's iPhone", kind: "Smartphone", isActive: true },
+  { id: "pc", name: "Spotify on this PC", kind: "Computer", isActive: false },
+  { id: "spk", name: "Kitchen speaker", kind: "Speaker", isActive: false },
 ];
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
@@ -573,10 +622,18 @@ mockIPC(
         return { ...spotifyState };
       case "spotify_playlists":
         return spotifyState.connected ? spotifyPlaylists.map((p) => ({ ...p })) : [];
-      case "spotify_cover":
+      case "spotify_cover": {
+        // Stand-in cover art (the real covers come from Spotify's CDN): a coloured tile per URL.
+        const url = String(a.url ?? "");
+        const hue = [...url].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="hsl(${hue} 55% 45%)"/><circle cx="32" cy="32" r="10" fill="hsl(${hue} 60% 80%)"/></svg>`;
+        return `data:image/svg+xml;base64,${btoa(svg)}`;
+      }
+      case "spotify_play_context":
+        console.log("[devMock] spotify play context", a.uri, "on", a.deviceId ?? "iPhone");
         return null;
-      case "spotify_play_playlist":
-        console.log("[devMock] spotify play", a.uri);
+      case "spotify_play_track":
+        console.log("[devMock] spotify play track", a.uri, "in", a.contextUri, "on", a.deviceId ?? "iPhone");
         return null;
       case "spotify_player":
         return spotifyState.connected ? { ...spotifyPlayer } : null;
@@ -588,6 +645,71 @@ mockIPC(
         return null;
       case "spotify_set_saved":
         spotifyPlayer.saved = Boolean(a.saved);
+        return null;
+      case "spotify_search": {
+        const q = String(a.query ?? "").toLowerCase().trim();
+        const kinds = (a.kinds as string[]) ?? [];
+        const offset = Number(a.offset ?? 0);
+        const want = (k: string) => kinds.length === 0 || kinds.includes(k);
+        const hitT = (t: SpotifyTrack) => `${t.name} ${t.artists}`.toLowerCase().includes(q);
+        const hitA = (al: SpotifyAlbum) => `${al.name} ${al.artists}`.toLowerCase().includes(q);
+        const hitAr = (ar: SpotifyArtist) => ar.name.toLowerCase().includes(q);
+        const hitP = (p: SpotifyPlaylist) => p.name.toLowerCase().includes(q);
+        // Pad the track list so "Show more" can be exercised past the first page of 10.
+        const allTracks = q ? [...catalogueTracks.filter(hitT), ...catalogueTracks.map((t, i) => ({ ...t, uri: `${t.uri}:${i}:${q}` }))] : [];
+        const page = <T>(xs: T[]) => xs.slice(offset, offset + 10);
+        const tracks = want("track") ? page(allTracks) : [];
+        const albums = want("album") ? page(q ? catalogueAlbums.filter(hitA) : []) : [];
+        const artists = want("artist") ? page(q ? catalogueArtists.filter(hitAr) : []) : [];
+        const playlists = want("playlist") ? page(q ? spotifyPlaylists.filter(hitP) : []) : [];
+        return {
+          tracks,
+          albums,
+          artists,
+          playlists,
+          more: {
+            tracks: want("track") && offset + 10 < allTracks.length,
+            albums: false,
+            artists: false,
+            playlists: false,
+          },
+        };
+      }
+      case "spotify_queue":
+        return { currentlyPlaying: catalogueTracks[0], queue: catalogueTracks.slice(1, 6) };
+      case "spotify_add_to_queue":
+        console.log("[devMock] spotify queue", a.uri);
+        return null;
+      case "spotify_recently_played":
+        return catalogueTracks.slice(2, 8);
+      case "spotify_top_tracks":
+        return catalogueTracks.slice(0, 6);
+      case "spotify_top_artists":
+        return catalogueArtists;
+      case "spotify_devices":
+        return spotifyDevices;
+      case "spotify_transfer":
+        console.log("[devMock] spotify transfer to", a.deviceId);
+        return null;
+      case "spotify_seek":
+        nowPlaying.elapsed = Math.round(Number(a.positionMs ?? 0) / 1000);
+        nowPlaying.elapsedAt = Date.now();
+        void emit("now-playing", { ...nowPlaying });
+        return null;
+      case "spotify_album": {
+        const album = catalogueAlbums.find((al) => al.id === a.id) ?? mockAlbum(String(a.id), "Album", "Various", "2020", 3);
+        return { album, tracks: catalogueTracks.slice(0, 4).map((t) => ({ ...t, albumUri: album.uri, album: album.name })) };
+      }
+      case "spotify_artist": {
+        const artist = catalogueArtists.find((ar) => ar.id === a.id) ?? mockArtist(String(a.id), "Artist");
+        return { artist, albums: catalogueAlbums };
+      }
+      case "spotify_playlist_items": {
+        const p = spotifyPlaylists.find((x) => x.id === a.id);
+        return p?.owned ? catalogueTracks.slice(0, 6) : [];
+      }
+      case "spotify_add_to_playlist":
+        console.log("[devMock] spotify add to playlist", a.playlistId, a.trackUri);
         return null;
       default:
         return null;

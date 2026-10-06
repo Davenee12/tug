@@ -192,9 +192,10 @@ describe("call", () => {
 
   it("plays a Spotify playlist by fuzzy name, and 'play' alone is still media", () => {
     const playlists = [
-      { uri: "spotify:playlist:1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: null },
-      { uri: "spotify:playlist:2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: null },
+      { uri: "spotify:playlist:1", id: "1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: null, owned: false },
+      { uri: "spotify:playlist:2", id: "2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: null, owned: true },
     ];
+    // Not connected: a fuzzy playlist match plays the playlist; no song-search row.
     expect(parseActions("play deep", people, { playlists })).toEqual([
       { kind: "play-playlist", uri: "spotify:playlist:1", name: "Deep Focus", label: "Play Deep Focus", detail: "Spotify · 120 songs" },
     ]);
@@ -203,5 +204,38 @@ describe("call", () => {
     // No match, and no playlists loaded, yield nothing.
     expect(parseActions("play nothingmatches", people, { playlists })).toEqual([]);
     expect(parseActions("play deep", people, {})).toEqual([]);
+  });
+});
+
+describe("spotify search actions", () => {
+  const playlists = [
+    { uri: "spotify:playlist:1", id: "1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: null, owned: false },
+  ];
+  const on = { spotifyConnected: true, playlists };
+
+  it("searches and plays the best song when connected, playlists below", () => {
+    const rows = parseActions("play teardrop", people, on);
+    expect(rows[0]).toEqual({ kind: "play-search", query: "teardrop", label: "Play “teardrop”", detail: "Play the top song match on Spotify" });
+  });
+
+  it("offers both a song search and the fuzzy playlist for a partial name", () => {
+    const rows = parseActions("play deep", people, on);
+    expect(rows.map((r) => r.kind)).toEqual(["play-search", "play-playlist"]);
+  });
+
+  it("an exactly-named playlist still wins over a song search", () => {
+    expect(parseActions("play deep focus", people, on)).toEqual([
+      { kind: "play-playlist", uri: "spotify:playlist:1", name: "Deep Focus", label: "Play Deep Focus", detail: "Spotify · 120 songs" },
+    ]);
+  });
+
+  it("queues the best song match, only when connected", () => {
+    expect(parseActions("queue teardrop", people, on)[0]).toMatchObject({ kind: "queue-search", query: "teardrop" });
+    expect(parseActions("queue teardrop", people, { playlists })).toEqual([]);
+  });
+
+  it("opens the Spotify panel, only when connected", () => {
+    expect(parseActions("spotify", people, on)[0]).toMatchObject({ kind: "open", target: "spotify" });
+    expect(parseActions("spotify", people, {})).toEqual([]);
   });
 });
