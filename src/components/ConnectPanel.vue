@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Check, LoaderCircle, RefreshCw, Smartphone } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { bondHint, pairingProblem, setupDeviceLists, startedOutsideTug } from "../lib/pairings";
-import { connectStep } from "../lib/connectFlow";
+import { canSkipSwitches, connectStep } from "../lib/connectFlow";
 import { phoneSwitches } from "../lib/phoneSwitches";
 import { api } from "../lib/ipc";
 import PhoneSwitches from "./PhoneSwitches.vue";
@@ -19,7 +19,8 @@ const props = withDefaults(defineProps<{ context?: "feed" | "settings" }>(), { c
 
 const tug = useTugStore();
 const s = computed(() => tug.status);
-const step = computed(() => connectStep(s.value, tug.pairingRequest));
+const step = computed(() => connectStep(s.value, tug.pairingRequest, tug.connectSkipped));
+const canSkip = computed(() => tug.showConnect && canSkipSwitches(s.value));
 const switches = computed(() => phoneSwitches(s.value));
 
 // Discovery runs only while this panel is on screen (started below, stopped on unmount), so tug
@@ -215,6 +216,13 @@ const connecting = computed(() => s.value.connection !== "connected");
             <strong class="font-medium text-body-strong">ⓘ</strong> next to this PC, and turn these on. They light up here as you do.
           </p>
           <PhoneSwitches :switches="switches" />
+          <button
+            v-if="canSkip"
+            class="mx-auto mt-2 block text-[13px] text-muted underline-offset-2 hover:underline"
+            @click="tug.connectSkipped = true"
+          >
+            Skip for now
+          </button>
         </div>
 
         <button class="btn-secondary btn-sm self-start" :disabled="resetting" @click="startOver">
