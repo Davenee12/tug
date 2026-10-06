@@ -323,6 +323,8 @@ const spotifyPlayer: SpotifyPlayer = {
   saved: false,
   albumArt: `data:image/svg+xml;base64,${btoa(artSvg)}`,
   trackUri: "spotify:track:mock123",
+  // The same song as the mock Now Playing, so the Like button and art show.
+  trackName: "Teardrop",
   deviceName: "Dave's iPhone",
 };
 const img = (seed: string) => `https://i.scdn.co/mock/${encodeURIComponent(seed)}`;

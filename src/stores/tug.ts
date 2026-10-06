@@ -50,7 +50,7 @@ import type {
   ToastPressed,
   UiSettings,
 } from "../types/protocol";
-import { bestTrack, nextRepeat } from "../lib/spotify";
+import { bestTrack, nextRepeat, sameSong } from "../lib/spotify";
 import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 
@@ -161,7 +161,7 @@ export const useTugStore = defineStore("tug", () => {
 
   // --- Spotify connector ---
   const spotify = ref<SpotifyStatus>({ connected: false, account: null });
-  /** The Spotify playback snapshot (repeat/shuffle/like/art), polled only while relevant. */
+  /** The Spotify playback snapshot (repeat/shuffle/like/art), read once per song (no polling). */
   const spotifyPlayer = ref<SpotifyPlayer | null>(null);
   /** The user's playlists, loaded on connect / first use and cached for Ctrl+K and the panel. */
   const playlists = ref<SpotifyPlaylist[]>([]);
@@ -276,7 +276,8 @@ export const useTugStore = defineStore("tug", () => {
   );
   const flash = ref<{ kind: "error" | "info"; text: string; action?: { label: string; run: () => void } } | null>(null);
   let flashTimer: number | undefined;
-  let spotifyPoll: number | undefined;
+  /** The pending once-per-song Spotify read (see refreshForSong). */
+  let spotifySongTimer: number | undefined;
 
   // --- What's new -----------------------------------------------------------------------
   /** The running app version (from getVersion), null until read / in a plain-browser dev build. */
@@ -1063,7 +1064,8 @@ export const useTugStore = defineStore("tug", () => {
     window.clearTimeout(toastSummary);
     spotifyWait++;
     window.clearTimeout(freshTimer);
-    window.clearInterval(spotifyPoll);
+    window.clearTimeout(spotifySongTimer);
+    spotifySongTimer = undefined;
     window.clearTimeout(flashTimer);
     window.clearInterval(watchRenew);
     window.clearInterval(clockTimer);
@@ -1337,7 +1339,7 @@ export const useTugStore = defineStore("tug", () => {
 
   async function refreshSpotifyPlayer() {
     if (!spotifyActive.value) return;
-    // A transient read failure shouldn't nag; the next poll tries again.
+    // A transient read failure shouldn't nag; the next song or action reads again.
     try {
       spotifyPlayer.value = await api.spotifyPlayer();
     } catch {
@@ -1369,7 +1371,8 @@ export const useTugStore = defineStore("tug", () => {
 
   async function toggleSpotifyLike() {
     const p = spotifyPlayer.value;
-    if (!p?.trackUri) return;
+    // Never Like from a snapshot of another song (Spotify lagging the phone after a skip).
+    if (!p?.trackUri || !spotifyTrackVerified.value) return;
     const previous = p.saved ?? false;
     const want = !previous;
     p.saved = want;
@@ -1381,21 +1384,49 @@ export const useTugStore = defineStore("tug", () => {
   // No polling: Spotify rate-limits hard (Dave hit a 19-hour timeout polling every 5 s, then
   // still while polling every 30 s). The iPhone already says when the song changes, so tug reads
   // Spotify's extras (art, Like, shuffle/repeat) once per song, and otherwise only when you act.
+  // Spotify's API often lags the phone by about a second, so the read waits for the song to settle
+  // (which also skips the songs you skip past), and is checked against the phone's title: a
+  // snapshot of the previous song is read once more, and never shown as the current one.
+  /** Wait after a song change before reading Spotify. */
+  const SPOTIFY_SETTLE_MS = 2_500;
+  /** Wait before the one re-read when Spotify still reports a different song. */
+  const SPOTIFY_RECHECK_MS = 3_000;
+  /** The snapshot is the song the phone is playing (so its art and Like belong to it). */
+  const spotifyTrackVerified = computed(
+    () => sameSong(spotifyPlayer.value?.trackName, nowPlaying.value.title) === true,
+  );
   let spotifyReadFor = "";
   const songKey = () => `${nowPlaying.value.title}|${nowPlaying.value.artist}`;
+  function cancelSongRead() {
+    window.clearTimeout(spotifySongTimer);
+    spotifySongTimer = undefined;
+  }
   function refreshForSong() {
+    cancelSongRead();
     if (!pageVisible.value || !spotifyActive.value) return;
     const key = songKey();
-    if (key === spotifyReadFor) return; // already read for this song (e.g. window shown again)
+    // Already read for this song (e.g. window shown again), unless that read was of another song.
+    if (key === spotifyReadFor && spotifyTrackVerified.value) return;
+    spotifySongTimer = window.setTimeout(() => void readForSong(key, true), SPOTIFY_SETTLE_MS);
+  }
+  async function readForSong(key: string, recheck: boolean) {
+    spotifySongTimer = undefined;
+    if (key !== songKey() || !pageVisible.value || !spotifyActive.value) return;
     spotifyReadFor = key;
-    void refreshSpotifyPlayer();
+    await refreshSpotifyPlayer();
+    // The song moved on while reading: its own settle timer takes over.
+    if (key !== songKey() || !pageVisible.value || !spotifyActive.value) return;
+    if (recheck && !spotifyTrackVerified.value) {
+      spotifySongTimer = window.setTimeout(() => void readForSong(key, false), SPOTIFY_RECHECK_MS);
+    }
   }
   watch(songKey, refreshForSong);
   watch(
     () => pageVisible.value && spotifyActive.value,
     (on) => {
-      if (on) refreshForSong();
-      else if (!spotifyActive.value) {
+      if (on) return refreshForSong();
+      cancelSongRead();
+      if (!spotifyActive.value) {
         spotifyPlayer.value = null;
         spotifyReadFor = "";
       }
@@ -1410,6 +1441,7 @@ export const useTugStore = defineStore("tug", () => {
     // Spotify connector
     spotify,
     spotifyPlayer,
+    spotifyTrackVerified,
     spotifyActive,
     spotifyConnecting,
     playlists,
