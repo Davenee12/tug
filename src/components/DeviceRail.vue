@@ -9,13 +9,16 @@ import TugMark from "./TugMark.vue";
 const tug = useTugStore();
 const s = computed(() => tug.status);
 
-// The sidebar never scrolls. On a short window, tighten the section gaps and drop the Quick
-// toggles' one-line descriptions (the labels stay) so the Now Playing card still fits at the bottom.
+// The sidebar never scrolls. On a short window, tighten the section gaps, drop the Quick toggles'
+// one-line descriptions (the labels stay) and fold the Now Playing card's extra controls into its
+// transport row, so the card still fits at the bottom. The threshold sits above 768 — the two-row
+// card needs ~780 px, so a 1366×768 laptop (the common case) must use the compact layout to avoid
+// clipping the bottom row, which can't scroll into view.
 const vh = ref(window.innerHeight);
 const onResize = () => (vh.value = window.innerHeight);
 onMounted(() => window.addEventListener("resize", onResize));
 onUnmounted(() => window.removeEventListener("resize", onResize));
-const compact = computed(() => vh.value < 750);
+const compact = computed(() => vh.value < 800);
 
 const connectionLabel = computed(() => {
   switch (s.value.connection) {
@@ -121,7 +124,7 @@ const dnd = computed({
     </section>
 
     <div :class="compact ? 'mt-auto pt-4' : 'mt-auto pt-6'">
-      <NowPlayingCard />
+      <NowPlayingCard :compact="compact" />
     </div>
   </aside>
 </template>
