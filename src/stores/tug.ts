@@ -531,9 +531,11 @@ export const useTugStore = defineStore("tug", () => {
     if (!popupAllowed(event)) return;
     const code = findCode(n.message || n.subtitle)?.code ?? null;
     if (code !== null && recentlyCodeToasted(code)) return; // a text pop-up already carried this code
+    // Claim the code before awaiting: the notification and the text for one code can arrive in the
+    // same tick, and both would pass the check above if the claim came after the await.
+    if (code !== null) markCodeToasted(code);
     if (!(await hasToastPermission())) return;
     if (!admitToast(event.isCall)) return;
-    if (code !== null) markCodeToasted(code);
     // With buttons for what applies (reply, mark read, copy code, call back, clear); the
     // backend falls back to a plain pop-up itself if Windows won't take that one.
     const spec = toastSpec(n, messages.value, contacts.value);
@@ -552,9 +554,9 @@ export const useTugStore = defineStore("tug", () => {
     // A code text obeys the same policy as a notification carrying a code (Messages app, no call).
     const event: PopupEvent = { appId: MESSAGES_APP, isCall: false, isVip: isVip(vips.value, { name: m.contactName, address: m.address }) };
     if (!popupAllowed(event)) return;
+    markCodeToasted(code); // claimed before the await (see maybeToast)
     if (!(await hasToastPermission())) return;
     if (!admitToast(false)) return;
-    markCodeToasted(code);
     const known = m.contactName ?? contacts.value.find((c) => c.address === m.address)?.name;
     const name = known && !isAddressLike(known) ? cleanName(known) : formatAddress(m.address);
     const spec: ToastSpec = {
@@ -1014,7 +1016,8 @@ export const useTugStore = defineStore("tug", () => {
           photoRequests.clear();
           // Names are joined into messages server-side; apply them to what's loaded.
           const byAddress = new Map(list.map((c) => [c.address, c.name]));
-          for (const m of messages.value) m.contactName = byAddress.get(m.address) ?? m.contactName;
+          // A contact deleted on the phone drops its name too (not just renames picking up the new one).
+          for (const m of messages.value) m.contactName = byAddress.get(m.address) ?? null;
           // Notifications under a contact's old name come back under the new one.
           void refreshLoadedNotifications();
         }),
