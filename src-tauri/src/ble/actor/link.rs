@@ -4,6 +4,7 @@ use super::*;
 
 impl Actor {
     pub(super) fn drop_link(&mut self) {
+        self.link_down_at = None;
         if let Some(link) = self.link.take() {
             let _ = link.device.Close();
         }
@@ -65,7 +66,7 @@ impl Actor {
             match self.open_link(&id).await {
                 Ok(link) => self.link = Some(link),
                 Err(e) => {
-                    self.fail_connect(e.to_string());
+                    self.fail_connect(e.to_string(), false);
                     return;
                 }
             }
@@ -83,7 +84,13 @@ impl Actor {
                     s.connection = ConnectionState::Connected;
                     s.last_error = None;
                     s.pairing_stale = false;
+                    s.awaiting_unlock = false;
                 });
+                // The texts/contacts/calls side sits behind the same phone; a fresh BLE link is a
+                // good moment to retry message access rather than waiting out its own backoff.
+                if let Some(map) = self.shared.map.get() {
+                    map.refresh();
+                }
             }
             Err(e) => {
                 // setup_ancs names the new session before subscribing; if setup then failed,
@@ -94,7 +101,17 @@ impl Actor {
                 }
                 self.shared.set_live_session(None);
                 self.shared.update_status(|s| s.awaiting_phone_allow = false);
-                self.fail_connect(e.to_string());
+                // The iPhone is connected but isn't offering ANCS — it's locked after a restart, or
+                // mid-update before its first unlock. Those attempts can't succeed until it's
+                // unlocked, so back off far and say so instead of a silent 30 s loop all night.
+                let linked = self.link.as_ref().is_some_and(|l| l.connected);
+                let awaiting_unlock = linked && matches!(e, BleError::NotFound(_));
+                if awaiting_unlock && !self.shared.status().awaiting_unlock {
+                    log::info!(
+                        "the iPhone is connected but not sharing notifications yet (locked, or just restarted) — unlock it to reconnect"
+                    );
+                }
+                self.fail_connect(e.to_string(), awaiting_unlock);
                 // One refusal can be a glitch; two in a row means the phone dropped the bond.
                 let stale = e.is_stale_bond() && self.connect_failures >= 2;
                 self.shared.update_status(|s| s.pairing_stale = stale);
@@ -102,7 +119,7 @@ impl Actor {
         }
     }
 
-    pub(super) fn fail_connect(&mut self, message: String) {
+    pub(super) fn fail_connect(&mut self, message: String, awaiting_unlock: bool) {
         self.connect_failures = self.connect_failures.saturating_add(1);
         // A phone at the edge of range fails every few seconds all night: log the first
         // few, then every tenth.
@@ -112,11 +129,20 @@ impl Actor {
             log::debug!("connect attempt failed ({} in a row): {message}", self.connect_failures);
         }
         let linked = self.link.as_ref().is_some_and(|l| l.connected);
-        let base = if linked { RETRY_CONNECTED_SECS } else { RETRY_IDLE_SECS };
-        self.retry_in = retry_delay(base, self.connect_failures);
+        // A connected-but-no-ANCS failure (phone locked/restarting) can't succeed until unlocked:
+        // back off far (up to 5 min). Otherwise the usual short backoff for a reachable/absent phone.
+        let (base, cap) = if awaiting_unlock {
+            (UNLOCK_RETRY_SECS, MAX_UNLOCK_RETRY_SECS)
+        } else if linked {
+            (RETRY_CONNECTED_SECS, MAX_RETRY_SECS)
+        } else {
+            (RETRY_IDLE_SECS, MAX_RETRY_SECS)
+        };
+        self.retry_in = retry_delay(base, self.connect_failures, cap);
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
             s.last_error = Some(message);
+            s.awaiting_unlock = awaiting_unlock;
         });
     }
 
@@ -185,11 +211,24 @@ impl Actor {
     }
 
     pub(super) fn on_connection(&mut self, connected: bool) {
-        log::info!("iPhone link {}", if connected { "up" } else { "down" });
-        let Some(link) = self.link.as_mut() else { return };
-        link.connected = connected;
+        if self.link.is_none() {
+            return;
+        }
         if connected {
-            if link.ancs.is_none() {
+            if let Some(l) = self.link.as_mut() {
+                l.connected = true;
+            }
+            // A sub-second down→up blip: the GATT subscription (and the pre-existing notifications
+            // iOS is replaying on it) survived, so keep ANCS instead of tearing it down and dropping
+            // the replay. Seen on hardware: a reconnect blip lost every waiting notification.
+            let blip = self.link_down_at.take().is_some();
+            let have_ancs = self.link.as_ref().is_some_and(|l| l.ancs.is_some());
+            if blip && have_ancs {
+                log::debug!("iPhone link blip (down then up); keeping notifications subscribed");
+                return;
+            }
+            log::info!("iPhone link up");
+            if !have_ancs {
                 // Normally connect right away. After repeated failures the link is probably
                 // flapping at the edge of range: let it settle instead of retrying on every blip.
                 self.retry_in = if self.connect_failures < FLAPPING_AFTER {
@@ -200,17 +239,38 @@ impl Actor {
             }
             return;
         }
-        // Services and notification UIDs don't survive a disconnect.
-        link.ancs = None;
-        link.media = None;
-        link._battery = None;
-        link.session_id = None;
+        // Defer the teardown: a momentary blip shouldn't drop ANCS or flap the UI. `tick` finishes
+        // the disconnect (`finish_link_down`) once the link has stayed down past the blip grace.
+        if let Some(l) = self.link.as_mut() {
+            l.connected = false;
+        }
+        if self.link_down_at.is_none() {
+            self.link_down_at = Some(Instant::now());
+        }
+    }
+
+    /// A deferred link-down that outlasted the blip grace: really disconnect. Services and the
+    /// notification UIDs don't survive a disconnect, so drop them and let the reconnect loop run.
+    pub(super) fn finish_link_down(&mut self) {
+        self.link_down_at = None;
+        // A link-up arrived first (handled as a blip): nothing to tear down.
+        if self.link.as_ref().is_some_and(|l| l.connected) {
+            return;
+        }
+        log::info!("iPhone link down");
+        if let Some(l) = self.link.as_mut() {
+            l.ancs = None;
+            l.media = None;
+            l._battery = None;
+            l.session_id = None;
+        }
         self.shared.set_live_session(None);
         // Keep any backoff: a link going down mid-flap isn't a reason to hurry.
-        self.retry_in = retry_delay(RETRY_CONNECTED_SECS, self.connect_failures);
+        self.retry_in = retry_delay(RETRY_CONNECTED_SECS, self.connect_failures, MAX_RETRY_SECS);
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
             s.battery = None;
+            s.awaiting_unlock = false;
             s.services = Services {
                 messages: s.services.messages,
                 ..Services::default()
