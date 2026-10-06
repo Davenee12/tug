@@ -144,6 +144,13 @@ mod worker {
     const CONTACTS_UNSHARED_RETRY: Duration = Duration::from_secs(20);
     const CONTACTS_UNSHARED_QUICK_TRIES: u32 = 15;
     const CONTACTS_PULL_TIMEOUT: Duration = Duration::from_secs(90);
+    /// The slow WITH-PHOTO phonebook pull runs off this worker, so give it well over the ~60 s it
+    /// took on Dave's phone for 27 photos — nothing is waiting on it, and a timeout only ends the
+    /// pass cleanly.
+    const PHOTO_PULL_TIMEOUT: Duration = Duration::from_secs(120);
+    /// Contact photos rarely change; pull them at most once a day (the last time is persisted, so
+    /// the pass skips every reconnect and 15-min resync in between).
+    const PHOTO_SYNC_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
     /// How many recent calls to show, like the phone's own Recents screen.
     const CALLS_MAX: u16 = 50;
     const CALLS_RESYNC: Duration = Duration::from_secs(5 * 60);
@@ -203,6 +210,13 @@ mod worker {
         mns_grace_warned: bool,
         /// When the last MNS drop made tug reopen message access (rate-limits that recovery).
         mns_reopened_at: Option<Instant>,
+        /// The background contact-photo pass, on its own thread (the WITH-PHOTO PBAP pull holds
+        /// non-Send WinRT handles, so it can't live on the worker's runtime). Kept only to tell
+        /// whether a previous pass is still running, so two never overlap.
+        photo_task: Option<std::thread::JoinHandle<()>>,
+        /// Whether the photo pass has already been started (or deliberately skipped) on this
+        /// connection, so it runs at most once per connection. Reset when the session drops.
+        photo_pass_started: bool,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -229,6 +243,8 @@ mod worker {
             mns_registered_at: None,
             mns_grace_warned: false,
             mns_reopened_at: None,
+            photo_task: None,
+            photo_pass_started: false,
         };
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
@@ -455,6 +471,7 @@ mod worker {
             }
             // What the phone shares is per connection; ask again on the next one.
             self.set_contacts_shared(false);
+            self.reset_photo_pass();
             self.stop_live_texts();
             let shown = match e {
                 MapError::Consent | MapError::NoService => Some(e.to_string()),
@@ -486,6 +503,7 @@ mod worker {
                     log::info!("live texts: the iPhone dropped the notification link; reopening message access");
                     self.mns_reopened_at = Some(Instant::now());
                     self.session = None;
+                    self.reset_photo_pass();
                     self.stop_live_texts();
                     self.refresh().await;
                 }
@@ -572,8 +590,10 @@ mod worker {
             if Instant::now() < self.next_contacts_sync {
                 return;
             }
-            // Bounded as a whole: the pull runs on the same worker as sending and mark-read.
-            let pulled = tokio::time::timeout(CONTACTS_PULL_TIMEOUT, pull_contacts(&device_id))
+            // Bounded as a whole: the pull runs on the same worker as sending and mark-read. No
+            // photos here (`with_photos: false`) — asking for them made the pull ~4x slower and so
+            // blocked texts; a separate background pass fetches faces off this worker.
+            let pulled = tokio::time::timeout(CONTACTS_PULL_TIMEOUT, pull_contacts(&device_id, false))
                 .await
                 .unwrap_or(Err(MapError::Timeout));
             match pulled {
@@ -587,37 +607,17 @@ mod worker {
                 Ok(entries) => {
                     self.unshared_contact_pulls = 0;
                     self.set_contacts_shared(true);
-                    // A photo the phone inlined is validated and written to its own file; the row
-                    // keeps only the reference, so the contacts list sent to the UI stays small.
-                    use tauri::Manager as _;
-                    let photos_dir = self.shared.app.path().app_data_dir().ok();
-                    let mut photos = 0usize;
-                    let mut rows: Vec<(String, String, Option<String>)> = Vec::new();
+                    // Names and numbers only. save_phonebook never touches the photo column, so the
+                    // references the background photo pass set are preserved across every fast sync.
+                    let mut rows: Vec<(String, String)> = Vec::new();
                     for e in &entries {
-                        let key = match (&e.photo, &photos_dir) {
-                            (Some(bytes), Some(dir)) => crate::contact_photos::store_photo(dir, bytes),
-                            _ => None,
-                        };
-                        if key.is_some() {
-                            photos += 1;
-                        }
                         for n in &e.numbers {
-                            rows.push((normalize(n), e.name.clone(), key.clone()));
+                            rows.push((normalize(n), e.name.clone()));
                         }
                     }
                     match self.shared.store.save_phonebook(&rows) {
                         Ok(n) => {
-                            // One line per sync so Dave's hardware run shows whether iOS sends photos.
-                            log::info!(
-                                "contacts synced: {} people, {n} numbers, {photos} photos",
-                                entries.len()
-                            );
-                            // Drop photo files no contact points at any more (removed or re-shot).
-                            if let Some(dir) = &photos_dir {
-                                if let Ok(keep) = self.shared.store.photo_keys() {
-                                    crate::contact_photos::cleanup(dir, &keep);
-                                }
-                            }
+                            log::info!("contacts synced: {} people, {n} numbers", entries.len());
                             // A rename on the phone may leave history under the old name.
                             if let Err(e) = self.shared.store.learn_aliases() {
                                 log::warn!("learning old contact names failed: {e}");
@@ -632,6 +632,9 @@ mod worker {
                     self.next_contacts_sync = Instant::now() + CONTACTS_RESYNC;
                     // Recent calls sit behind the same switch: if it just came on, they're there too.
                     self.next_calls_sync = Instant::now();
+                    // Faces come from a slower WITH-PHOTO pull on its own PBAP link, off this worker
+                    // so texts keep flowing; start it now that the contact rows exist (at most daily).
+                    self.maybe_sync_photos();
                 }
                 Err(e) => {
                     log::info!("contacts sync failed: {e}");
@@ -646,6 +649,60 @@ mod worker {
                     self.next_contacts_sync = Instant::now() + if consent { self.soon() } else { CONTACTS_RETRY };
                 }
             }
+        }
+
+        /// Start the background contact-photo pass if it's time. It runs off this worker on its own
+        /// PBAP OBEX link (PBAP and MAP are separate RFCOMM services, so they coexist), so it never
+        /// holds up message sync, sending, mark-read or live-text events. Started at most once per
+        /// connection, and — across connections — at most once a day (the last success is persisted).
+        fn maybe_sync_photos(&mut self) {
+            if self.photo_pass_started {
+                return;
+            }
+            // Never two at once: a pass from a quick earlier reconnect may still be finishing.
+            if self.photo_task.as_ref().is_some_and(|h| !h.is_finished()) {
+                return;
+            }
+            let Some(device_id) = self.device_id.clone() else {
+                return;
+            };
+            // One attempt per connection either way: mark it before the due check so a not-due
+            // connection doesn't re-read the setting on every 15-minute resync.
+            self.photo_pass_started = true;
+            let last = self
+                .shared
+                .store
+                .setting(keys::LAST_PHOTO_SYNC)
+                .ok()
+                .flatten()
+                .and_then(|v| v.parse::<i64>().ok());
+            if !photo_sync_due(last, now_ms(), PHOTO_SYNC_INTERVAL.as_millis() as i64) {
+                log::debug!("contact photos synced within the day; skipping the photo pass");
+                return;
+            }
+            let shared = self.shared.clone();
+            // Its own thread with its own current-thread runtime, like the MAP worker: the pull's
+            // WinRT handles aren't Send, so it can't be a task on the worker's runtime, and this
+            // keeps the slow pull entirely off the worker so texts never wait on it.
+            self.photo_task = std::thread::Builder::new()
+                .name("tug-photos".into())
+                .spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_time()
+                        .build()
+                        .expect("build photo runtime");
+                    rt.block_on(sync_contact_photos(shared, device_id));
+                })
+                .map_err(|e| log::warn!("couldn't start the contact-photo pass: {e}"))
+                .ok();
+        }
+
+        /// Let the next connection start a fresh photo pass. A pass already running isn't force
+        /// killed — it's its own thread — but it ends on its own: once the phone is gone the pull
+        /// fails fast (bounded by a timeout anyway), and a failed pull never clears existing photos,
+        /// so a late result is harmless. `maybe_sync_photos` won't start another until it finishes.
+        fn reset_photo_pass(&mut self) {
+            self.photo_pass_started = false;
         }
 
         /// Pull recent calls no sooner than `after` from now (nor `CALLS_MIN_GAP` after the
@@ -924,6 +981,91 @@ mod worker {
                 Some(e) => Err(e),
                 None => Ok(updated),
             }
+        }
+    }
+
+    /// Whether the contact-photo pass is due: never pulled before, or the last successful pull was
+    /// at least `interval_ms` ago. A last-sync time in the future (the clock moved back) also
+    /// counts as due, so a bad clock can't park the photos forever. Pure, so it's unit-tested.
+    fn photo_sync_due(last_sync_ms: Option<i64>, now_ms: i64, interval_ms: i64) -> bool {
+        match last_sync_ms {
+            None => true,
+            Some(last) => now_ms < last || now_ms - last >= interval_ms,
+        }
+    }
+
+    /// The background contact-photo pass: pull the phonebook WITH PHOTO over its own PBAP link,
+    /// store the faces, update only the photo references, then refresh the UI. Bounded by a
+    /// timeout; if the phone has gone the pull just fails and this returns, and the worker aborts
+    /// it on disconnect either way. Only a successful pull records the sync time and runs the
+    /// orphan-file cleanup, so a failed or switched-off pull never clears photos tug already has.
+    async fn sync_contact_photos(shared: Arc<Shared>, device_id: String) {
+        let pulled = tokio::time::timeout(PHOTO_PULL_TIMEOUT, pull_contacts(&device_id, true))
+            .await
+            .unwrap_or(Err(MapError::Timeout));
+        let entries = match pulled {
+            Ok(entries) => entries,
+            Err(e) => return log::info!("contact photos sync failed: {e}"),
+        };
+        // Empty means Sync Contacts went off between the fast sync and now: leave photos as they are.
+        if entries.is_empty() {
+            log::debug!("the iPhone shared no contacts for the photo pass; keeping existing photos");
+            return;
+        }
+        use tauri::Manager as _;
+        let Ok(dir) = shared.app.path().app_data_dir() else {
+            return log::warn!("no app data dir; can't store contact photos");
+        };
+        let mut photos = 0usize;
+        let mut rows: Vec<(String, Option<String>)> = Vec::new();
+        for e in &entries {
+            // Validate and write the inlined face to its own file; the row keeps only the reference.
+            let key = e
+                .photo
+                .as_ref()
+                .and_then(|bytes| crate::contact_photos::store_photo(&dir, bytes));
+            if key.is_some() {
+                photos += 1;
+            }
+            for n in &e.numbers {
+                rows.push((normalize(n), key.clone()));
+            }
+        }
+        match shared.store.update_contact_photos(&rows) {
+            Ok(()) => {
+                log::info!("contact photos synced: {photos} photos");
+                if let Err(e) = shared.store.set_setting(keys::LAST_PHOTO_SYNC, &now_ms().to_string()) {
+                    log::warn!("recording the photo-sync time failed: {e}");
+                }
+                // Only after a successful WITH-PHOTO pull: drop files no contact points at any more.
+                if let Ok(keep) = shared.store.photo_keys() {
+                    crate::contact_photos::cleanup(&dir, &keep);
+                }
+                if let Ok(all) = shared.store.contacts() {
+                    shared.emit(events::CONTACTS, all);
+                }
+            }
+            Err(e) => log::warn!("saving contact photos failed: {e}"),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::photo_sync_due;
+
+        #[test]
+        fn photo_sync_due_is_daily_and_survives_a_clock_jump() {
+            let day = 24 * 60 * 60 * 1000;
+            assert!(photo_sync_due(None, 1_000, day), "never synced: due");
+            assert!(
+                !photo_sync_due(Some(1_000), 1_000 + day - 1, day),
+                "less than a day on: not yet"
+            );
+            assert!(photo_sync_due(Some(1_000), 1_000 + day, day), "a day on: due");
+            assert!(
+                photo_sync_due(Some(5_000), 1_000, day),
+                "clock moved back (last-sync in the future): due"
+            );
         }
     }
 }
