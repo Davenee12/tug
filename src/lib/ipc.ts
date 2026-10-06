@@ -67,6 +67,9 @@ export const api = {
   copyDiagnostics: () => invoke<string>("copy_diagnostics"),
   /** Open tug's log folder in Explorer. */
   openLogsFolder: () => invoke<void>("open_logs_folder"),
+  /** Forward an uncaught frontend error to the Rust log (name/message/stack-top only, no bodies). */
+  logFrontendError: (kind: string, name: string, message: string, source: string) =>
+    invoke<void>("log_frontend_error", { kind, name, message, source }),
   setUnread: (count: number) => invoke<void>("set_unread", { count }),
   openWindowsSettings: (page: "bluetooth" | "location" | "notifications") => invoke<void>("open_windows_settings", { page }),
   /** Open an http(s) link (a notification's "Open in browser") in the default browser. */

@@ -380,6 +380,28 @@ export function groupCalls(calls: CallRecord[], now = new Date()): Array<{ label
   return out;
 }
 
+/** What identifies a call, independent of its position in the list: when, who, which way. */
+export function callKey(c: CallRecord): string {
+  return `${c.at ?? ""}|${c.number ?? ""}|${c.direction}`;
+}
+
+/**
+ * A stable render key per call, parallel to `calls`. Keying on content (not the array index) means
+ * a new call arriving at the top no longer re-keys every row below it — so the list keeps its DOM
+ * and its scroll position instead of fully re-rendering and jumping. The phone can list a run of
+ * genuinely identical calls (same time, number and direction); those get a numeric suffix by order
+ * of appearance, which stays stable as long as the list order does.
+ */
+export function callKeys(calls: CallRecord[]): string[] {
+  const seen = new Map<string, number>();
+  return calls.map((c) => {
+    const base = callKey(c);
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    return n === 0 ? base : `${base}#${n}`;
+  });
+}
+
 /** Words the user typed, for highlighting (same tokens the search matches on). */
 function terms(query: string): string[] {
   return query

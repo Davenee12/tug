@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  callKey,
+  callKeys,
   callName,
   callTime,
   canClear,
@@ -249,6 +251,30 @@ describe("recent calls", () => {
       ["Earlier", ["+4", "+5"]],
     ]);
     expect(callTime(call("+1", null, "2026-10-04T18:15:00Z"))?.toISOString()).toBe("2026-10-04T18:15:00.000Z");
+  });
+
+  it("keys a call on when/who/direction, not its position", () => {
+    const a = call("+13025550142", "Zoey", "2026-10-05T09:30:00", "missed");
+    expect(callKey(a)).toBe("2026-10-05T09:30:00|+13025550142|missed");
+    // A withheld number and no time still key (empty time and number fields), differing by direction.
+    expect(callKey(call(null, null, null, "incoming"))).toBe("||incoming");
+    expect(callKey(call(null, null, null, "outgoing"))).toBe("||outgoing");
+  });
+
+  it("gives every row a stable, unique key even when calls are identical", () => {
+    const newCall = call("+2", null, "2026-10-05T08:00:00");
+    const dupeA = call("+1", null, "2026-10-05T09:30:00", "missed");
+    const dupeB = call("+1", null, "2026-10-05T09:30:00", "missed");
+    const before = [dupeA, dupeB];
+    const after = [newCall, dupeA, dupeB];
+    const keysBefore = callKeys(before);
+    const keysAfter = callKeys(after);
+    // Identical calls are disambiguated by order of appearance.
+    expect(new Set(keysBefore).size).toBe(2);
+    expect(keysBefore[0]).toBe("2026-10-05T09:30:00|+1|missed");
+    expect(keysBefore[1]).toBe("2026-10-05T09:30:00|+1|missed#1");
+    // Prepending a new call doesn't shift the keys of the rows below it (no re-key, no jump).
+    expect(keysAfter.slice(1)).toEqual(keysBefore);
   });
 });
 

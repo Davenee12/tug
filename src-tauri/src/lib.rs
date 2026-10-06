@@ -3,11 +3,13 @@ mod ancs;
 mod ancs_queue;
 mod app_icons;
 mod ble;
+mod cache_trim;
 mod clipboard;
 mod commands;
 mod contact_photos;
 mod device_kind;
 mod diagnostics;
+mod frontend_log;
 pub mod hfp;
 mod location;
 pub mod map;
@@ -20,6 +22,7 @@ mod state;
 mod store;
 pub mod toast;
 mod tray;
+mod webview_watch;
 
 use std::sync::Arc;
 
@@ -75,9 +78,24 @@ pub fn run() {
             // cached under the app-data dir; the refresh token goes to Credential Manager.
             let spotify = Arc::new(spotify::Spotify::new(store, dir.clone()));
             app.manage(AppState { shared, ble, spotify });
+            // Keep the purely-cached image folders (album art/covers, app icons) from growing without
+            // limit: drop the least-recently-used beyond the cap. Off the main thread so a big folder
+            // scan never delays the window. Contact photos aren't capped here — they can't be
+            // re-fetched, and are pruned by reference instead.
+            let icons_dir = dir.join("icons");
+            let art_dir = dir.join("spotify_art");
+            std::thread::spawn(move || {
+                cache_trim::APP_ICONS_TRIM.trim_now(&icons_dir, cache_trim::APP_ICONS_CAP);
+                cache_trim::SPOTIFY_ART_TRIM.trim_now(&art_dir, cache_trim::SPOTIFY_ART_CAP);
+            });
             // Nice to have, never a reason not to start.
             if let Err(e) = tray::install(app.handle()) {
                 log::warn!("tray icon unavailable: {e}");
+            }
+            // Log WebView2 process-failed events (crash/hang of the web content), so the next one
+            // isn't a mystery. Registered whether or not the window is shown now.
+            if let Some(window) = app.get_webview_window("main") {
+                webview_watch::watch(&window);
             }
             // The window is created hidden (see tauri.conf.json). Start in the tray only when
             // asked to (autostart adds `--minimized`) AND there's a tray to come back from;
@@ -182,6 +200,7 @@ pub fn run() {
             commands::spotify_artist,
             commands::spotify_playlist_items,
             commands::spotify_add_to_playlist,
+            commands::log_frontend_error,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

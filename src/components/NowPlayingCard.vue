@@ -6,6 +6,11 @@ import { duration } from "../lib/format";
 import { canRestart, createHoldRepeater, repeatLabel, SKIP_SECONDS, supportsDislike, supportsLike, supportsSkipBack, supportsSkipForward } from "../lib/media";
 import { seekFraction } from "../lib/spotify";
 
+// `compact` (from the sidebar, on short windows) drops the card's second row of extra controls and
+// tucks them into rows that are there anyway, so the card keeps its one-row height and still fits
+// without scrolling (see showExtraRow).
+const props = defineProps<{ compact?: boolean }>();
+
 const tug = useTugStore();
 const np = computed(() => tug.nowPlaying);
 const available = computed(() => tug.status.services.media && np.value.title != null);
@@ -112,6 +117,14 @@ const skipForward = computed(() => supportsSkipForward(np.value));
 const amsLike = computed(() => !tug.spotifyActive && supportsLike(np.value));
 const amsDislike = computed(() => !tug.spotifyActive && supportsDislike(np.value));
 const hasExtraControls = computed(() => skipBack.value || skipForward.value || amsLike.value || amsDislike.value);
+// A standalone second row only when there's room (not compact). When compact the card can't grow (at
+// the 600 px minimum window height even the one-row card only just fits) and the transport row can't
+// widen (for Spotify it already spans the card), so the extras go where they add neither height nor
+// transport-row width: Like/Dislike beside the title (where Spotify's heart sits) and skip ±15 s
+// between the elapsed/total times, with a negative margin so the time row keeps its height.
+const showExtraRow = computed(() => hasExtraControls.value && !props.compact);
+const compactRating = computed(() => !!props.compact && (amsLike.value || amsDislike.value));
+const compactSkip = computed(() => !!props.compact && (skipBack.value || skipForward.value));
 
 // Start the song over with Back, only where Back restarts rather than skips (see canRestart).
 function restart() {
@@ -174,6 +187,27 @@ function restart() {
         >
           <Heart :size="17" :fill="sp.saved ? 'currentColor' : 'none'" />
         </button>
+        <!-- Compact only: Apple Music Like/Dislike sit here instead of on a second row. -->
+        <div v-if="compactRating" class="flex shrink-0 items-center gap-0.5">
+          <button
+            v-if="amsDislike"
+            class="rounded-full p-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
+            aria-label="Dislike song"
+            title="Dislike this song"
+            @click="tug.media('dislikeTrack')"
+          >
+            <ThumbsDown :size="16" />
+          </button>
+          <button
+            v-if="amsLike"
+            class="rounded-full p-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
+            aria-label="Like song"
+            title="Like this song"
+            @click="tug.media('likeTrack')"
+          >
+            <ThumbsUp :size="16" />
+          </button>
+        </div>
       </div>
 
       <!-- When Spotify is the player, click or drag the bar to seek; otherwise it just shows
@@ -198,12 +232,37 @@ function restart() {
           :style="{ width: `${progress}%` }"
         />
       </div>
-      <div class="mt-1.5 flex justify-between font-mono text-[11px] text-on-dark-soft">
+      <div class="mt-1.5 flex items-center justify-between font-mono text-[11px] text-on-dark-soft">
         <span>{{ duration(elapsed) }}</span>
+        <!-- Compact only: skip ±15 s between the times. The negative margin keeps the full-size
+             hit area without making this row any taller than the times alone. -->
+        <div v-if="compactSkip" class="-my-1.5 flex items-center gap-1">
+          <button
+            v-if="skipBack"
+            class="flex items-center gap-0.5 rounded-full px-1.5 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
+            :aria-label="`Back ${SKIP_SECONDS} seconds`"
+            :title="`Back ${SKIP_SECONDS} seconds`"
+            @click="tug.media('skipBackward')"
+          >
+            <Rewind :size="15" />
+            <span class="text-[10px]">{{ SKIP_SECONDS }}</span>
+          </button>
+          <button
+            v-if="skipForward"
+            class="flex items-center gap-0.5 rounded-full px-1.5 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
+            :aria-label="`Forward ${SKIP_SECONDS} seconds`"
+            :title="`Forward ${SKIP_SECONDS} seconds`"
+            @click="tug.media('skipForward')"
+          >
+            <span class="text-[10px]">{{ SKIP_SECONDS }}</span>
+            <FastForward :size="15" />
+          </button>
+        </div>
         <span>{{ duration(np.duration) }}</span>
       </div>
 
-      <!-- One row: playback modes bookend it (Spotify only), volume just inside, transport centred. -->
+      <!-- One row: playback modes bookend it (Spotify only), volume just inside, transport centred.
+           Nothing else goes here: for Spotify it already spans the card's full width. -->
       <div class="mt-3 flex items-center justify-between">
         <div class="flex items-center gap-0.5">
           <button
@@ -280,9 +339,9 @@ function restart() {
       </div>
 
       <!-- Extra controls the player supports over AMS: skip ±15 s and (Apple Music) Like/Dislike.
-           A compact second row, shown only when at least one applies, so the sidebar doesn't grow
-           for players (or phones) that offer none. -->
-      <div v-if="hasExtraControls" class="mt-2 flex items-center justify-center gap-1">
+           A second row shown only when there's room (see showExtraRow); on a short window they move
+           beside the title and between the times instead, so the sidebar never has to clip or scroll. -->
+      <div v-if="showExtraRow" class="mt-2 flex items-center justify-center gap-1">
         <button
           v-if="amsDislike"
           class="rounded-full p-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"

@@ -55,6 +55,9 @@ windows = { version = "0.62", features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 windows-collections = "0.3"
+# Same version Tauri already pulls in (see Cargo.lock), so the WebView2 controller handed back by
+# `with_webview` is the same type: lets us hook ProcessFailed to log web-content crashes.
+webview2-com = "0.39"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
