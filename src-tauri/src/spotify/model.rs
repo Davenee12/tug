@@ -290,13 +290,37 @@ pub enum ApiError {
 }
 
 impl ApiError {
+    /// "about 19 hours" / "about 5 minutes" / "a moment" for a Retry-After in seconds.
+    pub fn wait_phrase(secs: u64) -> String {
+        match secs {
+            0..=59 => "a moment".into(),
+            60..=5399 => {
+                let m = secs.div_ceil(60);
+                if m == 1 {
+                    "about a minute".into()
+                } else {
+                    format!("about {m} minutes")
+                }
+            }
+            _ => {
+                let h = (secs + 1800) / 3600;
+                if h == 1 {
+                    "about an hour".into()
+                } else {
+                    format!("about {h} hours")
+                }
+            }
+        }
+    }
+
     /// A plain-English message for the UI (never contains tokens or the account name).
     pub fn user_message(&self) -> String {
         match self {
             Self::Unauthorized => "Spotify sign-in expired. Reconnect under Settings › Connectors.".into(),
-            Self::RateLimited { retry_after } => {
-                format!("Spotify is rate-limiting; try again in {retry_after}s.")
-            }
+            Self::RateLimited { retry_after } => format!(
+                "Spotify asked tug to slow down. Search and playlists are back in {}; play and pause still work.",
+                Self::wait_phrase(*retry_after)
+            ),
             Self::PremiumRequired => "This needs Spotify Premium on the connected account.".into(),
             Self::NoActiveDevice => NO_PHONE.into(),
             Self::Other { status, message } if message.is_empty() => format!("Spotify error (HTTP {status})."),
@@ -1005,6 +1029,13 @@ mod tests {
         assert_eq!(classify(401, "{}", None), ApiError::Unauthorized);
         assert_eq!(classify(429, "", Some(7)), ApiError::RateLimited { retry_after: 7 });
         assert_eq!(classify(429, "", None), ApiError::RateLimited { retry_after: 1 });
+        assert_eq!(ApiError::wait_phrase(5), "a moment");
+        assert_eq!(ApiError::wait_phrase(61), "about 2 minutes");
+        assert_eq!(ApiError::wait_phrase(3600), "about 60 minutes");
+        assert_eq!(ApiError::wait_phrase(69817), "about 19 hours");
+        assert!(ApiError::RateLimited { retry_after: 69817 }
+            .user_message()
+            .contains("about 19 hours"));
         assert_eq!(
             classify(
                 403,

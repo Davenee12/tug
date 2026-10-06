@@ -1225,7 +1225,17 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   // Poll /me/player lightly, only while tug is visible and Spotify is the active player.
-  const SPOTIFY_POLL_MS = 5000;
+  // Spotify rate-limits hard (Dave hit a 19-hour timeout polling every 5 s): what's playing is
+  // re-read every 30 s while visible, and right away when the song changes (below).
+  const SPOTIFY_POLL_MS = 30_000;
+  // A new song (from the phone's own media updates) re-reads Spotify once, so Like and art follow
+  // without polling fast.
+  watch(
+    () => `${nowPlaying.value.title} ${nowPlaying.value.artist}`,
+    () => {
+      if (pageVisible.value && spotifyActive.value) void refreshSpotifyPlayer();
+    },
+  );
   watch(
     () => pageVisible.value && spotifyActive.value,
     (on) => {
