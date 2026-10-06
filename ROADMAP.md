@@ -51,18 +51,14 @@ versions between.
 ## ~~v0.5.9 — one-screen connect, Spotify panel, quiet hours, contact photos~~ (released 2026-10-05)
 #63–#75. See CHANGELOG v0.5.9.
 
-## v0.5.10 — bug fixing only
-- **Spotify: no polling** (ready on branch `fix/spotify-no-poll`): read Spotify only once per song
-  (the iPhone reports song changes) and on user actions. Even a 30 s poll kept the request count up.
-- **Verify on hardware:** Spotify search/queue/seek/Play on (blocked tonight by a 19-hour rate
-  limit), the Classic rescan, leftover-pairing Remove, low-battery pop-up, quiet hours/VIPs, the
-  What's new card on an update from 0.5.8.
-- **Sidebar height at ~720 px** with Spotify or Apple Music (the extra controls row may clip at
-  the bottom; it can't scroll by design).
-- **One WebView2 crash** at a contacts+photos sync (00:14 UTC, 2026-10-06), not reproduced since;
-  watch for it.
-- Calls list scroll can jump when a new call arrives (row keys include the index).
-- Cap the image caches (album art, covers, contact photos) so they can't grow without limit.
+## v0.5.10 — bug fixing only (release PR open, 2026-10-06)
+#77, #79–#81: reconnect backoff + "Unlock your iPhone", resume on PC wake, link-blip debounce,
+MAP backoff, Spotify read once per song (verified track), sidebar fit at 1366×768, calls scroll,
+image cache caps, crash diagnostics, code pop-up dedupe, contact names. See CHANGELOG v0.5.10.
+- **Still to verify on hardware:** overnight locked-phone behaviour, sleep/wake reconnect, Spotify
+  song changes, the What's new card on an update from 0.5.9; tune LINK_BLIP_GRACE (1.5 s) and
+  RESUME_GAP (10 s) if the log shows false blips or false wakes.
+- **Watch:** the WebView2 crash from 2026-10-06 00:14 UTC — now logged if it happens again.
 
 ## Later — candidates
 - **Connectors:** Google Calendar (meeting reminders with Join; needs a Google Cloud OAuth

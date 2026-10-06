@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.5.10 — 2026-10-06
+
+Bug fixing only (every fifth release is a stabilization release). Merged as #77, #79–#81, after an
+independent code review whose five blocks were all fixed before merge. Built and checked; Dave's
+hands-on testing on the iPhone follows.
+
+### Fixed
+- **No more all-night reconnect loops.** When the iPhone is locked after a restart, tug shows
+  "Unlock your iPhone" and waits longer between tries (up to 2 minutes) instead of retrying every
+  30 seconds all night; texts back off the same way (up to 5 minutes). It still reconnects at once
+  when Bluetooth comes on, the PC wakes, or you open the iPhone screens.
+- **tug reconnects when the PC wakes from sleep**, instead of waiting on an old timer.
+- **A split-second Bluetooth blip no longer loses the notifications already on your phone.** A
+  real disconnect is still handled as one.
+- **Spotify is read once per song** instead of every 30 seconds, so Spotify's rate limit stops
+  biting. tug waits a moment after the song changes and checks it's the right song before showing
+  its cover and Like, so Like can never save the previous song.
+- **Clearing a notification the phone already dropped** no longer shows an "ATT error 0xA2"
+  message; it's simply done.
+- **The sidebar no longer cuts off** Now Playing's bottom controls on 1366×768 laptops; on shorter
+  windows Like/Dislike sit by the title and ±15 s by the times, so every control fits.
+- **The Calls list stays put** when a new call arrives.
+- **A verification code can't pop up twice** when its text and notification arrive together.
+- **Contact names on texts stay right** after contacts change (a deleted contact's name goes,
+  names the phone sends with texts stay).
+- Removing a notification no longer stalls the queue of notification details behind it.
+- After Forget, Settings no longer says the iPhone is locked.
+
+### Developer
+- Image caches are capped (Spotify art 100 MB, app icons 50 MB; contact photos are never trimmed),
+  trimmed at startup and at most once a minute after writes (`cache_trim.rs`).
+- Crash diagnostics: frontend errors and WebView2 process failures are logged (redacted,
+  rate-limited) to tug.log (`frontend_log.rs`, `webview_watch.rs`, `errorReport.ts`).
+- Link events carry their own timestamp, so blip vs real outage is judged on when it happened, not
+  when the actor got to it. Status gains `awaitingUnlock`; Spotify player snapshot gains `trackName`.
+- Docs: `docs/COMPANION-PLAN.md` (companion apps, and the settled tug Drop design for v0.5.11).
+
+### Verify on hardware
+- Overnight with the phone locked: a handful of retries, "Unlock your iPhone" shown, quick
+  reconnect after unlocking.
+- Sleep and wake the PC: tug reconnects within seconds.
+- Spotify: skip songs; cover and Like follow the right song.
+
 ## v0.5.9 — 2026-10-05
 
 Easier connecting, a full Spotify panel, quiet hours, and contact photos. Merged as #63–#75.
