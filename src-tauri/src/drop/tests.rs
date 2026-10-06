@@ -328,3 +328,56 @@ async fn phone_session_over_a_socket() {
     assert!(!folder.join(".incoming").exists());
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Not a test: serves the real built page (`npm run build:drop` first) on 127.0.0.1 for a few
+/// minutes, so it can be driven from a desktop browser against this server. Prints the link.
+///   cargo test --manifest-path src-tauri/Cargo.toml manual_page -- --ignored --nocapture
+/// Received files land in a temp folder (printed); one file is on offer; TUG_DROP_SECS sets how long.
+#[tokio::test]
+#[ignore]
+async fn manual_page() {
+    let root = temp_dir();
+    let folder = root.join("tug Drop");
+    let secret = crypto::new_secret();
+    let session = Arc::new(Session::new(&secret, folder.clone(), Arc::new(TestSink::default())));
+    let offered = root.join("Offered from PC.txt");
+    std::fs::write(&offered, "Hello from tug on the PC.\n".repeat(200_000)).unwrap();
+    session.offer(&[offered]);
+    session.set_pc_text("Text from the PC").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    println!("drop page: http://{addr}/#{}", crypto::b64(&secret));
+    println!("received files: {}", folder.display());
+    let secs = std::env::var("TUG_DROP_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300);
+    let watcher = session.clone();
+    tokio::spawn(async move {
+        let mut last = String::new();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let s = watcher.snapshot();
+            let line = format!(
+                "phone={:?} incoming={:?} texts={:?} downloads={:?}",
+                s.phone,
+                s.incoming
+                    .iter()
+                    .map(|i| (&i.name, i.received, i.size, i.done))
+                    .collect::<Vec<_>>(),
+                s.texts.iter().map(|t| &t.text).collect::<Vec<_>>(),
+                s.outgoing.iter().map(|o| o.downloads).collect::<Vec<_>>()
+            );
+            if line != last {
+                println!("{line}");
+                last = line;
+            }
+        }
+    });
+    server::serve(
+        listener,
+        session,
+        tokio::time::sleep(std::time::Duration::from_secs(secs)),
+    )
+    .await;
+}
