@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
+import { getVersion } from "@tauri-apps/api/app";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
@@ -49,6 +50,7 @@ import type {
 } from "../types/protocol";
 import { bestTrack, nextRepeat } from "../lib/spotify";
 import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
+import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 
 /** The Spotify panel's tabs. */
 export type SpotifyTab = "search" | "playlists" | "recent" | "top" | "queue";
@@ -254,6 +256,19 @@ export const useTugStore = defineStore("tug", () => {
   let flashTimer: number | undefined;
   let spotifyPoll: number | undefined;
 
+  // --- What's new -----------------------------------------------------------------------
+  /** The running app version (from getVersion), null until read / in a plain-browser dev build. */
+  const appVersion = ref<string | null>(null);
+  /** The newest version whose "What's new" card the user has seen; null until settings load, and
+   *  null again means "fresh install" — the first launch records the version silently. */
+  const lastSeenVersion = ref<string | null>(null);
+  /** The "What's new" card is open. */
+  const whatsNewOpen = ref(false);
+  /** The release notes the open card is showing (newest first). */
+  const whatsNewEntries = ref<ReleaseNote[]>([]);
+  /** Notes waiting to be shown once the Connect panel is out of the way (see maybeShowWhatsNew). */
+  const pendingWhatsNew = ref<ReleaseNote[]>([]);
+
   /** Middle-panel view, and the conversation open in Messages. */
   const view = ref<"feed" | "messages" | "calls" | "settings">("feed");
   const settingsSection = ref<SettingsSection>("general");
@@ -277,7 +292,13 @@ export const useTugStore = defineStore("tug", () => {
   );
   /** Something is covering the main view, so whatever is behind it isn't being looked at. */
   const overlayOpen = computed(
-    () => searchOpen.value || pickerOpen.value || spotifyPanelOpen.value || !!pairingRequest.value || !!ringing.value,
+    () =>
+      searchOpen.value ||
+      pickerOpen.value ||
+      spotifyPanelOpen.value ||
+      whatsNewOpen.value ||
+      !!pairingRequest.value ||
+      !!ringing.value,
   );
 
   function openSettings(section?: SettingsSection) {
@@ -823,6 +844,59 @@ export const useTugStore = defineStore("tug", () => {
       knownSenders: raw["ui.knownSenders"] ? (JSON.parse(raw["ui.knownSenders"]) as string[]) : [],
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
+    // A missing key is a fresh install: null (not ""), so the first launch records the version
+    // silently instead of greeting a brand-new user with a card about changes they never saw.
+    lastSeenVersion.value = "ui.lastSeenVersion" in raw ? raw["ui.lastSeenVersion"] : null;
+  }
+
+  /** Remember the version whose card the user has now seen, so it doesn't show again. */
+  async function recordSeenVersion(version: string) {
+    lastSeenVersion.value = version;
+    await attempt(() => api.setSetting("ui.lastSeenVersion", version));
+  }
+
+  /** Open the card on these notes and mark the current version seen (so launch won't repeat it). */
+  function showWhatsNew(entries: ReleaseNote[]) {
+    if (entries.length === 0) return;
+    whatsNewEntries.value = entries;
+    whatsNewOpen.value = true;
+    if (appVersion.value) void recordSeenVersion(appVersion.value);
+  }
+
+  /**
+   * After an update, show the "What's new" card once — but not while the Connect panel owns the
+   * main area (a fresh install or Start over). In that case the notes wait and the watcher below
+   * shows them the moment setup is done, so the card never interrupts connecting. A fresh install
+   * has no last-seen version, so it records silently here and shows nothing at all.
+   */
+  async function checkWhatsNew() {
+    appVersion.value = await getVersion().catch(() => null);
+    const version = appVersion.value;
+    if (!version) return; // plain-browser dev build: no native version to compare against
+    if (lastSeenVersion.value === null) {
+      await recordSeenVersion(version); // fresh install: record quietly, don't greet with a card
+      return;
+    }
+    const entries = whatsNewToShow(RELEASE_NOTES, version, lastSeenVersion.value);
+    if (entries.length === 0) return;
+    if (showConnect.value) pendingWhatsNew.value = entries;
+    else showWhatsNew(entries);
+  }
+
+  // Held-back notes (fresh install / Start over) show once the Connect panel yields to the Feed.
+  watch(showConnect, (connecting) => {
+    if (!connecting && pendingWhatsNew.value.length && !whatsNewOpen.value) {
+      const entries = pendingWhatsNew.value;
+      pendingWhatsNew.value = [];
+      showWhatsNew(entries);
+    }
+  });
+
+  /** Settings › About: reopen the card any time, showing every release up to the current version. */
+  function openWhatsNew() {
+    const notes = appVersion.value ? notesUpTo(RELEASE_NOTES, appVersion.value) : RELEASE_NOTES;
+    whatsNewEntries.value = notes.length ? notes : RELEASE_NOTES;
+    whatsNewOpen.value = true;
   }
 
   // Listeners and shortcuts are installed once and torn down by dispose(), so a
@@ -923,6 +997,8 @@ export const useTugStore = defineStore("tug", () => {
     // Let code rows age out of the Feed's recency window even when nothing else changes.
     clockTimer = window.setInterval(() => (clock.value = Date.now()), 60_000);
     await attempt(loadSettings);
+    // Settings are in (so lastSeenVersion is known): decide whether to greet with "What's new".
+    void checkWhatsNew();
     void loadSpotify();
   }
 
@@ -1338,6 +1414,11 @@ export const useTugStore = defineStore("tug", () => {
     setZoom,
     showConnect,
     connectSkipped,
+    // What's new
+    appVersion,
+    whatsNewOpen,
+    whatsNewEntries,
+    openWhatsNew,
     focusItem,
     seen,
     connected,
