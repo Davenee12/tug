@@ -2,8 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Check, LoaderCircle, RefreshCw, Smartphone } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { bondHint, pairingProblem, setupDeviceLists, startedOutsideTug } from "../lib/pairings";
-import { canSkipSwitches, connectStep } from "../lib/connectFlow";
+import { bondHint, leftoverPhone, pairingProblem, setupDeviceLists, startedOutsideTug } from "../lib/pairings";
+import { canSkipSwitches, connectStep, rescanDue } from "../lib/connectFlow";
 import { phoneSwitches } from "../lib/phoneSwitches";
 import { api } from "../lib/ipc";
 import PhoneSwitches from "./PhoneSwitches.vue";
@@ -54,7 +54,12 @@ const phoneLabel = (d: DiscoveredDevice) => (isNameless(d) ? "iPhone" : d.name);
 // before that isn't the one we remember — an old bond for another phone — goes in a quiet "Paired
 // before" section with Use, so it never crowds the main list.
 const primaryPhones = computed(() => candidates.value.filter((d) => !d.paired || d.id === s.value.device?.id));
-const pairedBefore = computed(() => candidates.value.filter((d) => d.paired && d.id !== s.value.device?.id));
+// A fresh install can still have an iPhone paired from a previous install: offered prominently as
+// `leftover` (Use / Remove) rather than only in the quiet "Paired before" list.
+const leftover = computed(() => (s.value.device ? null : leftoverPhone(tug.discovered, null)));
+const pairedBefore = computed(() =>
+  candidates.value.filter((d) => d.paired && d.id !== s.value.device?.id && d.id !== leftover.value?.id),
+);
 
 const busyId = ref<string | null>(null);
 const connectError = ref<string | null>(null);
@@ -99,8 +104,10 @@ async function choose(d: DiscoveredDevice) {
   if (!d.paired) initiatedPair.add(d.id);
   const ok = d.paired ? await tug.useDevice(d.id) : await tug.pair(d.id);
   busyId.value = null;
+  // A pairing that didn't take (or a bond the phone dropped mid-pairing) leaves no device: stay on
+  // the find step and point back at confirming the code on the iPhone.
   if (!ok && !s.value.device) {
-    connectError.value = "Pairing didn't finish. Keep Settings › Bluetooth open on your iPhone and try Pair again.";
+    connectError.value = "Pairing didn't finish. On your iPhone keep Settings › Bluetooth open, tap Pair again, and confirm the code on both screens.";
   }
 }
 
@@ -109,6 +116,27 @@ async function choose(d: DiscoveredDevice) {
 const bond = computed(() => bondHint(s.value));
 // More than one iPhone paired, or a different one than tug remembers: one clean Start over.
 const problem = computed(() => pairingProblem(tug.discovered, s.value.device?.id ?? null));
+
+// A fresh install can still have an iPhone paired in Windows from a previous install (both bonds):
+// `leftover` (defined above) offers it to adopt (Use) or clear (Remove), rather than leaving it
+// buried under "Paired before" while the panel just searches.
+const confirmRemove = ref(false);
+let removeTimer: number | undefined;
+const removing = ref(false);
+async function removeLeftover(id: string) {
+  // Unpairing is irreversible, so confirm first (same two-tap pattern as Start over).
+  if (!confirmRemove.value) {
+    confirmRemove.value = true;
+    window.clearTimeout(removeTimer);
+    removeTimer = window.setTimeout(() => (confirmRemove.value = false), 4000);
+    return;
+  }
+  confirmRemove.value = false;
+  removing.value = true;
+  connectError.value = null;
+  await tug.removePairing(id);
+  removing.value = false;
+}
 
 // Start over / Forget unpairs the bonds tug made; confirmed first, because unpairing is irreversible.
 const confirmReset = ref(false);
@@ -127,21 +155,26 @@ async function startOver() {
   resetting.value = false;
 }
 
-// While this panel is up and a phone is chosen, the switches are what's left to turn on, so ask the
-// backend to check them promptly (it watches while this is true; cleared on unmount).
-watch(
-  () => !!s.value.device,
-  (hasDevice) => (tug.setupSharingShown = hasDevice),
-  { immediate: true },
-);
+// Fast switch checks ("watching") now key off the panel's visibility in the store, so this panel no
+// longer has to flag itself — see stores/tug connectPanelVisible.
 
+// Re-inquire for the iPhone every ~15 s while the find step is up: an unpaired-Classic AEP watcher
+// inquires once, so a phone made discoverable after scanning began needs a fresh inquiry to appear.
+let lastRescanAt = Date.now();
 onMounted(() => {
-  graceTimer = window.setInterval(() => (graceNow.value = Date.now()), 1000);
+  graceTimer = window.setInterval(() => {
+    const t = Date.now();
+    graceNow.value = t;
+    if (rescanDue(step.value === "find" && scanning.value, t - lastRescanAt)) {
+      lastRescanAt = t;
+      tug.rescan();
+    }
+  }, 1000);
 });
 onUnmounted(() => {
-  tug.setupSharingShown = false;
   window.clearInterval(graceTimer);
   window.clearTimeout(resetTimer);
+  window.clearTimeout(removeTimer);
   if (scanning.value) void tug.stopDiscovery();
 });
 
@@ -171,18 +204,16 @@ const connecting = computed(() => s.value.connection !== "connected");
         </button>
       </div>
 
-      <!-- The phone looks to have forgotten this PC while Windows still holds the bond. -->
+      <!-- The phone looks to have forgotten this PC while Windows still holds the bond: remove it
+           here (unpairs both bonds and scans fresh) rather than leaving them unable to reconnect. -->
       <div v-if="bond" class="flex flex-col gap-2 rounded-xl border border-error/30 bg-canvas px-4 py-3">
         <p class="text-[13px] text-body-strong">
-          <template v-if="bond === 'forgotten'">Your PC still remembers a pairing your iPhone forgot, so they can't reconnect.</template>
-          <template v-else>Your iPhone keeps refusing this PC's pairing — it may have been forgotten on the phone.</template>
-          Remove <strong class="font-medium">{{ s.textsDevice ?? s.device?.name ?? "your iPhone" }}</strong> in Windows Bluetooth settings, or Start
-          over here, then pair again.
+          Your iPhone has forgotten this PC — remove it and pair again.
         </p>
         <div class="flex gap-2">
           <button class="btn-primary btn-sm" :disabled="resetting" @click="startOver">
             <LoaderCircle v-if="resetting" :size="13" class="animate-spin" />
-            {{ confirmReset ? "Tap again to start over" : "Start over" }}
+            {{ confirmReset ? "Tap again to remove" : "Remove" }}
           </button>
           <button class="btn-secondary btn-sm" @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
         </div>
@@ -264,6 +295,31 @@ const connecting = computed(() => s.value.connection !== "connected");
           <p class="min-w-0 flex-1 text-[13px] text-body">
             Windows is pairing your iPhone and will show a code — check it matches your iPhone and confirm on both.
           </p>
+        </div>
+
+        <!-- An iPhone still paired in Windows from a previous install (the phone may have forgotten
+             this PC): adopt it, or remove both bonds and pair fresh. Shown up front, not buried. -->
+        <div v-if="leftover" class="flex flex-col gap-2 rounded-xl border border-hairline bg-surface-card px-4 py-3">
+          <div class="flex items-center gap-3">
+            <span class="flex size-9 shrink-0 items-center justify-center rounded-full bg-canvas"><Smartphone :size="17" class="text-ink" /></span>
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-[14px] font-medium text-ink">{{ phoneLabel(leftover) }}</p>
+              <p class="text-[12px] text-muted">Paired before</p>
+            </div>
+          </div>
+          <p class="text-[13px] text-body">
+            This PC is still paired with it from before. Use it if your iPhone still trusts this PC, or remove it and pair again.
+          </p>
+          <div class="flex gap-2">
+            <button class="btn-primary btn-sm" :disabled="busyId !== null || removing" @click="choose(leftover)">
+              <LoaderCircle v-if="busyId === leftover.id" :size="13" class="animate-spin" />
+              Use
+            </button>
+            <button class="btn-secondary btn-sm" :disabled="busyId !== null || removing" @click="removeLeftover(leftover.id)">
+              <LoaderCircle v-if="removing" :size="13" class="animate-spin" />
+              {{ confirmRemove ? "Tap again to remove" : "Remove" }}
+            </button>
+          </div>
         </div>
 
         <div>
