@@ -72,6 +72,11 @@ versions between.
 - **Welcome back** digest; **Calls in Ctrl+K search**; **Send later**; **Remind me to call back**.
 - **Spotify for everyone** needs Spotify's Extended Quota (registered business, 250k users).
 
+## v0.5.11 — tug Drop (next feature release, after v0.5.10)
+Move photos, files and text between the phone and PC over home Wi-Fi with no app and no fees:
+scan a QR in tug, a tug page opens in Safari, send or receive. See docs/COMPANION-PLAN.md
+"Phase 0.5" for the design and safety notes.
+
 ## Future — companion apps (planned, see docs/COMPANION-PLAN.md)
 tug stays zero-setup on the phone by default. A tug phone app is the step that unlocks files,
 clipboard and Wi-Fi speed. Order: **Phase 0** reliability and polish (now) → **Phase 1** the tug

@@ -30,6 +30,21 @@ v0.5.x, keeping the cadence (every 5th version bug-fix only). Reliability first:
 notifications, PC sleep/wake, polish of setup, texts, notifications and Spotify. Nothing in later
 phases is worth building on an unreliable base.
 
+### Phase 0.5 — tug Drop (v0.5.11) — no app, no fees, works on iPhone
+"AirDrop between your iPhone and your Windows PC." Dave: "game changer" (2026-10-06).
+- Click **Drop** in tug → a QR code → the phone's camera opens a small tug page in Safari (or any
+  browser). Nothing installed on the phone.
+- **Phone → PC:** pick photos/videos/files or paste text; files land in a "tug Drop" folder,
+  text on the PC clipboard. **PC → phone:** drag files onto tug; they appear on the page to save.
+- Over the home Wi-Fi at full speed; never reachable from the internet; no cloud, no account.
+- Safety: tug serves the page only on the local network while Drop is open; the QR carries a
+  one-time secret so only the scanning phone connects; it shuts off when closed or idle; transfers
+  encrypted (design the TLS/certificate approach so Safari doesn't throw scary warnings — e.g. a
+  pairing key in the QR used for an encrypted channel, or a trusted local certificate).
+- Limits: same Wi-Fi only; works while the page is open (iOS allows no background sync without an
+  app); clipboard is one tap, not automatic.
+- It's the first slice of Phase 1: pairing by QR, one-time keys, an encrypted local link.
+
 ### Phase 1 — the tug protocol (Rust, desktop side only)
 The foundation every companion app talks to. Designed once, in Rust, before any phone code.
 - **Device identity:** each device gets its own key pair (Ed25519), stored in Windows Credential
