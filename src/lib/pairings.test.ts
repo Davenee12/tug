@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { bondHint, hasDuplicateIphones, pairedPhones, pairingProblem, setupDeviceLists, startedOutsideTug } from "./pairings";
+import {
+  bondHint,
+  hasDuplicateIphones,
+  leftoverPhone,
+  pairedPhones,
+  pairingProblem,
+  setupDeviceLists,
+  startedOutsideTug,
+} from "./pairings";
 import type { DeviceStatus, DiscoveredDevice } from "../types/protocol";
 
 const CONNECTED: DeviceStatus = {
@@ -203,6 +211,37 @@ describe("setupDeviceLists", () => {
       dev({ id: "here", name: "A iPhone", connected: true, kind: "phone" }),
     ];
     expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["here", "away"]);
+  });
+});
+
+describe("leftoverPhone", () => {
+  it("surfaces an iPhone still paired from a previous install when nothing is remembered", () => {
+    const list = [
+      dev({ id: "le", transport: "le", name: "Jordan's iPhone" }),
+      dev({ id: "classic", transport: "classic", name: "Jordan's iPhone" }),
+    ];
+    // The LE side is offered (notifications adopt the LE bond).
+    expect(leftoverPhone(list, null)?.id).toBe("le");
+  });
+
+  it("returns the Classic side when that's the only paired bond", () => {
+    const list = [dev({ id: "classic", transport: "classic", name: "Jordan's iPhone" })];
+    expect(leftoverPhone(list, null)?.id).toBe("classic");
+  });
+
+  it("stays quiet once tug remembers a phone of its own", () => {
+    const list = [dev({ id: "le", name: "Jordan's iPhone" })];
+    expect(leftoverPhone(list, "le")).toBeNull();
+  });
+
+  it("is null when nothing is paired (only a fresh, unpaired phone to pair)", () => {
+    const list = [dev({ id: "p", paired: false, name: "Jordan's iPhone" })];
+    expect(leftoverPhone(list, null)).toBeNull();
+  });
+
+  it("ignores paired accessories", () => {
+    const list = [dev({ id: "kbd", kind: "accessory", name: "Keychron" })];
+    expect(leftoverPhone(list, null)).toBeNull();
   });
 });
 

@@ -8,6 +8,13 @@
 //                                     "Connect your iPhone" panel (scripted: pair, code, Allow, the
 //                                     switches tick green, it yields to the Feed, optional switches
 //                                     then arrive as the Feed nudge, first notification lands)
+//   http://localhost:1420/?leftover   fresh install, but Windows still has an iPhone paired from
+//                                     before: the find step offers it as "paired before" with Use
+//                                     and Remove (Remove unpairs it, then it reappears to pair fresh)
+//   http://localhost:1420/?latephone  fresh install, no iPhone discoverable yet: it appears a rescan
+//                                     later (the find step re-inquires every ~15 s)
+//   http://localhost:1420/?forgotten  the iPhone forgot this PC while Windows still holds the bond:
+//                                     the "Your iPhone has forgotten this PC" notice, with Remove
 //   http://localhost:1420/?nudge      connected, notifications on, but texts/contacts off: the Feed's
 //                                     dismissible "Get more from tug" nudge
 //   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
@@ -23,6 +30,11 @@ import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, NowPlaying, P
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
+const leftover = params.has("leftover");
+const latephone = params.has("latephone");
+const forgotten = params.has("forgotten");
+// Every first-run-like state: nothing (yet) connected, so the Feed is the Connect panel.
+const noPhone = setup || leftover || latephone;
 const noRepeat = params.has("norepeat");
 const repeatIgnored = params.has("repeatignored");
 const now = Date.now();
@@ -58,7 +70,7 @@ function n(appId: string, appName: string | null, title: string, message: string
   };
 }
 
-const history: PhoneNotification[] = setup
+const history: PhoneNotification[] = noPhone
   ? []
   : [
       n("com.apple.mobilephone", "Phone", "Mum", "Missed Call", 3, { category: "missedCall", flags: flags({ positiveAction: true }), positiveLabel: "Dial" }),
@@ -85,7 +97,7 @@ const history: PhoneNotification[] = setup
 // Mirrors the backend's reconnect sweep: anything no longer on the phone is cleared.
 for (const x of history) if (!x.live && x.removedAt == null) x.removedAt = x.receivedAt + min;
 
-const status: DeviceStatus = setup
+const status: DeviceStatus = noPhone
   ? {
       radio: "on",
       peripheralSupported: true,
@@ -101,8 +113,29 @@ const status: DeviceStatus = setup
       messagesError: null,
       contactsError: null,
       contactsShared: false,
-      textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
-      textsDevice: setup ? null : "Jordan's iPhone",
+      textsPairing: "missing",
+      textsDevice: null,
+      liveTexts: "off",
+    }
+  : forgotten
+  ? {
+      // The bond lingers in Windows but the iPhone forgot this PC: disconnected, stale, no sharing.
+      radio: "on",
+      peripheralSupported: true,
+      advertising: "on",
+      device: { id: "mock", name: "Jordan's iPhone" },
+      connection: "disconnected",
+      battery: null,
+      services: { notifications: false, media: false, battery: false, messages: false },
+      lastError: "Your iPhone isn't accepting this PC's pairing",
+      lastErrorAt: now - min,
+      pairingStale: true,
+      awaitingPhoneAllow: false,
+      messagesError: null,
+      contactsError: null,
+      contactsShared: false,
+      textsPairing: "broken",
+      textsDevice: "Jordan's iPhone",
       liveTexts: "off",
     }
   : {
@@ -127,7 +160,7 @@ const status: DeviceStatus = setup
       liveTexts: params.has("livetexts") ? "active" : "off",
     };
 
-const nowPlaying: NowPlaying = setup
+const nowPlaying: NowPlaying = noPhone || forgotten
   ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, repeat: null, available: [] }
   : {
       player: "Spotify",
@@ -162,6 +195,16 @@ const discovered: DiscoveredDevice[] = setup
       { id: "a", name: "", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" },
       { id: "old", name: "Old iPhone", transport: "classic", paired: true, connected: false, canPair: false, kind: "phone" },
     ]
+  : leftover
+  ? // A fresh install with both bonds of a previous iPhone still paired in Windows (same name).
+    [
+      { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
+      { id: "le", name: "Jordan's iPhone", transport: "le", paired: true, connected: false, canPair: false, kind: "phone" },
+      { id: "classic", name: "Jordan's iPhone", transport: "classic", paired: true, connected: false, canPair: false, kind: "phone" },
+    ]
+  : latephone
+  ? // The iPhone isn't discoverable yet; it appears after a rescan (see rescan_discovery below).
+    [{ id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" }]
   : [
       { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
       { id: "a", name: "Jordan's iPhone", transport: "le", paired: false, connected: true, canPair: true, kind: "phone" },
@@ -177,7 +220,7 @@ const namedLater: DiscoveredDevice[] | null = setup
 // Message access (MAP): Zoe's texts, including ones read in the open chat that
 // never became notifications, plus a reply sent from tug.
 const ZOE = "+13025550142";
-const contacts: Contact[] = setup
+const contacts: Contact[] = noPhone
   ? []
   : [
       { address: ZOE, name: "Zoe" },
@@ -196,7 +239,7 @@ const sms = (direction: "in" | "out", body: string, agoMin: number, address = ZO
   receivedAt: now - agoMin * min,
   status: direction === "in" ? "received" : "accepted",
 });
-const messages: SmsMessage[] = setup
+const messages: SmsMessage[] = noPhone
   ? []
   : [
       sms("in", "are you coming tonight?", 40),
@@ -215,7 +258,7 @@ const localIso = (agoMin: number) => {
   const d = new Date(now - agoMin * min);
   return new Date(d.getTime() - d.getTimezoneOffset() * min).toISOString().slice(0, 19);
 };
-const calls: CallRecord[] = setup
+const calls: CallRecord[] = noPhone
   ? []
   : [
       { direction: "missed", name: "Mum", number: "+19725550123", at: localIso(3) },
@@ -232,8 +275,8 @@ let autostart = false;
 // Spotify connector: connected by default so its UI can be reviewed in the browser; ?spotifyoff
 // starts it disconnected (to see Settings › Connectors and the empty states).
 const spotifyState: SpotifyStatus = {
-  connected: !setup && !params.has("spotifyoff"),
-  account: !setup && !params.has("spotifyoff") ? "Jordan Lee" : null,
+  connected: !noPhone && !params.has("spotifyoff"),
+  account: !noPhone && !params.has("spotifyoff") ? "Jordan Lee" : null,
 };
 const artSvg =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="6" fill="#1db954"/><circle cx="24" cy="44" r="7" fill="#0b2e18"/><rect x="29" y="18" width="6" height="26" fill="#0b2e18"/><path d="M35 18 L52 14 V22 L35 26 Z" fill="#0b2e18"/></svg>';
@@ -494,9 +537,40 @@ mockIPC(
         // A real fix takes a few seconds; long enough to see tug's "finding you" lines.
         return new Promise((resolve) => setTimeout(() => resolve({ latitude: 32.78, longitude: -96.8 }), 4500));
       case "start_discovery":
-        setTimeout(() => void emit("discovered-devices", discovered), 400);
+        setTimeout(() => void emit("discovered-devices", [...discovered]), 400);
         // The iPhone's name arrives a little after it's first seen; the row updates in place.
         if (namedLater) setTimeout(() => void emit("discovered-devices", namedLater), 2600);
+        return null;
+      case "stop_discovery":
+        return null;
+      case "rescan_discovery":
+        // ?latephone: the iPhone becomes discoverable only on a later inquiry; surface it now.
+        if (latephone && !discovered.some((d) => d.kind === "phone")) {
+          discovered.push({ id: "late", name: "Jordan's iPhone", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" });
+        }
+        setTimeout(() => void emit("discovered-devices", [...discovered]), 200);
+        return null;
+      case "remove_pairing": {
+        // Unpair both bonds (same name), then the phone reappears unpaired, ready to pair fresh.
+        const name = discovered.find((d) => d.id === a.id)?.name;
+        for (let i = discovered.length - 1; i >= 0; i--) {
+          if (discovered[i].kind === "phone" && discovered[i].paired && discovered[i].name === name) discovered.splice(i, 1);
+        }
+        void emit("discovered-devices", [...discovered]);
+        setTimeout(() => {
+          discovered.push({ id: "fresh", name: name ?? "Jordan's iPhone", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" });
+          void emit("discovered-devices", [...discovered]);
+        }, 1200);
+        return null;
+      }
+      case "forget_device":
+        // Start over / Remove: clear the device and drop back to the find step.
+        status.device = null;
+        status.connection = "noDevice";
+        status.pairingStale = false;
+        status.textsPairing = "missing";
+        status.textsDevice = null;
+        void emit("device-status", { ...status, services: { ...status.services } });
         return null;
       case "pair_device":
         // Like Windows: the PIN shows on both screens; the call returns once it's answered.
