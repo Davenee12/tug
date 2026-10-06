@@ -1231,7 +1231,7 @@ export const useTugStore = defineStore("tug", () => {
   // A new song (from the phone's own media updates) re-reads Spotify once, so Like and art follow
   // without polling fast.
   watch(
-    () => `${nowPlaying.value.title} ${nowPlaying.value.artist}`,
+    () => `${nowPlaying.value.title}|${nowPlaying.value.artist}`,
     () => {
       if (pageVisible.value && spotifyActive.value) void refreshSpotifyPlayer();
     },
