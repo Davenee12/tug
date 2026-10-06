@@ -127,10 +127,13 @@ const status: DeviceStatus = setup
       liveTexts: params.has("livetexts") ? "active" : "off",
     };
 
+// ?applemusic swaps Spotify for Apple Music, which lists skip ±15 s and Like/Dislike over AMS
+// (and no working repeat), so those controls can be reviewed in the browser.
+const appleMusic = params.has("applemusic");
 const nowPlaying: NowPlaying = setup
   ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, repeat: null, available: [] }
   : {
-      player: "Spotify",
+      player: appleMusic ? "Apple Music" : "Spotify",
       state: "playing",
       rate: 1,
       elapsed: 74,
@@ -149,6 +152,10 @@ const nowPlaying: NowPlaying = setup
         "previousTrack",
         "volumeUp",
         "volumeDown",
+        // Both players offer skip ±15 s; Apple Music adds Like/Dislike.
+        "skipForward",
+        "skipBackward",
+        ...(appleMusic ? (["likeTrack", "dislikeTrack"] as const) : []),
         ...(noRepeat ? [] : (["advanceRepeatMode"] as const)),
       ],
     };
