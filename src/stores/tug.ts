@@ -46,7 +46,7 @@ import type {
   UiSettings,
 } from "../types/protocol";
 import { nextRepeat } from "../lib/spotify";
-import { nextShowConnect } from "../lib/connectFlow";
+import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
 
 const PAGE = 100;
 
@@ -264,11 +264,6 @@ export const useTugStore = defineStore("tug", () => {
   function closeSettings() {
     if (view.value === "settings") view.value = viewBeforeSettings;
   }
-  /**
-   * The iPhone's switches are on screen (Settings, or setup's sharing step) and tug is visible:
-   * the app checks them every couple of seconds so flipping one on the phone shows up at once.
-   */
-  const setupSharingShown = ref(false);
   let watchRenew: number | undefined;
   const pageVisible = ref(document.visibilityState === "visible");
   // Registered in init() and removed in dispose(), so it's torn down with the rest (see teardown).
@@ -293,10 +288,23 @@ export const useTugStore = defineStore("tug", () => {
     const s = status.value;
     return !!s.device && (!s.services.notifications || !s.services.messages || contacts.value.length === 0);
   });
+  /**
+   * The Connect panel is on screen and tug is visible: the Feed stand-in (showConnect) outside
+   * Settings, or Settings › iPhone. The same component shows in both places; watching keys off its
+   * visibility so flipping a switch on the phone turns green within a couple of seconds.
+   */
+  const connectPanelVisible = computed(
+    () =>
+      pageVisible.value &&
+      (view.value === "settings" ? settingsSection.value === "iphone" : showConnect.value),
+  );
   watch(
     () =>
-      (pageVisible.value && (view.value === "settings" || setupSharingShown.value)) ||
-      (fresh.value && switchesPending.value),
+      shouldWatchSwitches({
+        panelVisible: connectPanelVisible.value,
+        fresh: fresh.value,
+        switchesPending: switchesPending.value,
+      }),
     (on) => {
       void api.setWatching(on).catch(() => undefined);
       // The backend lets fast checks lapse after 90 s unless renewed, so a missed "off"
@@ -1110,7 +1118,6 @@ export const useTugStore = defineStore("tug", () => {
   );
 
   return {
-    setupSharingShown,
     status,
     statusKnown,
     nowPlaying,
@@ -1218,6 +1225,14 @@ export const useTugStore = defineStore("tug", () => {
       discovered.value = [];
       return attempt(api.stopDiscovery);
     },
+    /**
+     * Re-inquire for the iPhone (the find step calls this every ~15 s). An unpaired-Classic AEP
+     * watcher only inquires once, so a phone made discoverable later never appears without this.
+     * Quiet on failure — it's a background nicety, not something to toast about.
+     */
+    rescan: () => void api.rescanDiscovery().catch(() => undefined),
+    /** Remove a leftover Windows pairing (both the LE and Classic bonds), then keep scanning. */
+    removePairing: (id: string) => attempt(() => api.removePairing(id)),
     async pair(id: string) {
       const ok = await attempt(() => api.pairDevice(id).then(() => true));
       // The Connect panel shows this itself; a toast over it would just cover the screen.

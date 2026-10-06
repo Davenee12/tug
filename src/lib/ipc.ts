@@ -34,6 +34,10 @@ export const api = {
   mediaCommand: (command: MediaCommand) => invoke<void>("media_command", { command }),
   startDiscovery: () => invoke<void>("start_discovery"),
   stopDiscovery: () => invoke<void>("stop_discovery"),
+  /** Re-run the iPhone inquiry without disturbing the LE watcher or rows already listed. */
+  rescanDiscovery: () => invoke<void>("rescan_discovery"),
+  /** Unpair a leftover phone's LE and Classic bonds, then keep scanning so it shows up fresh. */
+  removePairing: (id: string) => invoke<void>("remove_pairing", { id }),
   pairDevice: (id: string) => invoke<void>("pair_device", { id }),
   confirmPairing: (accept: boolean) => invoke<void>("confirm_pairing", { accept }),
   useDevice: (id: string) => invoke<void>("use_device", { id }),
