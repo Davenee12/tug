@@ -285,13 +285,98 @@ export interface SpotifyStatus {
 export interface SpotifyPlaylist {
   /** `spotify:playlist:…`, played as the `context_uri`. */
   uri: string;
+  /** Bare id, for reading songs and adding to the playlist. */
+  id: string;
   name: string;
   owner: string | null;
   /** Null when Spotify doesn't say (playlists the user doesn't own). */
   trackCount: number | null;
   /** Small cover image URL; shown via `spotifyCover`, never loaded by the webview directly. */
   imageUrl: string | null;
+  /** The user owns or collaborates on it: tug can open its songs and add to it. */
+  owned: boolean;
 }
+
+/** A track as the panel lists it (search, queue, recently played, top, album and playlist songs). */
+export interface SpotifyTrack {
+  uri: string;
+  name: string;
+  /** All artists, joined "A, B". */
+  artists: string;
+  /** The primary artist's `spotify:artist:…`, for "open artist" from a track. */
+  artistUri: string | null;
+  album: string;
+  /** The album's `spotify:album:…`, so a track can play in its album context. */
+  albumUri: string | null;
+  imageUrl: string | null;
+  durationMs: number;
+}
+
+/** An album as search results and artist pages list it. */
+export interface SpotifyAlbum {
+  uri: string;
+  id: string;
+  name: string;
+  artists: string;
+  imageUrl: string | null;
+  totalTracks: number | null;
+  year: string | null;
+}
+
+/** An artist as search results list it and the artist page heads with. */
+export interface SpotifyArtist {
+  uri: string;
+  id: string;
+  name: string;
+  imageUrl: string | null;
+}
+
+/** Whether another page exists per type, so the panel shows "Show more". */
+export interface SpotifySearchMore {
+  tracks: boolean;
+  albums: boolean;
+  artists: boolean;
+  playlists: boolean;
+}
+
+/** A page of Spotify search results across the requested types. */
+export interface SpotifySearch {
+  tracks: SpotifyTrack[];
+  albums: SpotifyAlbum[];
+  artists: SpotifyArtist[];
+  playlists: SpotifyPlaylist[];
+  more: SpotifySearchMore;
+}
+
+/** The current playback queue: what's playing and what's next. */
+export interface SpotifyQueue {
+  currentlyPlaying: SpotifyTrack | null;
+  queue: SpotifyTrack[];
+}
+
+/** A device playback can be sent to, for the "Play on" picker. */
+export interface SpotifyDevice {
+  id: string;
+  name: string;
+  /** Spotify's device type: "Smartphone", "Computer", "Speaker"… */
+  kind: string;
+  isActive: boolean;
+}
+
+/** An album page: the album, plus its songs. */
+export interface SpotifyAlbumDetail {
+  album: SpotifyAlbum;
+  tracks: SpotifyTrack[];
+}
+
+/** An artist page: the artist, plus their albums. */
+export interface SpotifyArtistDetail {
+  artist: SpotifyArtist;
+  albums: SpotifyAlbum[];
+}
+
+/** Which search type kinds the backend accepts. */
+export type SpotifyKind = "track" | "album" | "artist" | "playlist";
 
 /** The Spotify playback snapshot that augments Now Playing (repeat/shuffle/like/art). */
 export interface SpotifyPlayer {
