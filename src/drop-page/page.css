@@ -1,0 +1,82 @@
+@import "tailwindcss" source(none);
+@import "@fontsource/eb-garamond/latin-500.css";
+
+/* Only the page's own files (and the tug mark) are scanned for classes. */
+@source "./";
+@source "../components/TugMark.vue";
+
+/* tug's palette for the phone page: the desktop's cream and coral in light mode, its dark device
+   chrome in dark mode. Components use these tokens, never raw colours. */
+@theme {
+  --color-primary: #cc785c;
+  --color-primary-active: #a9583e;
+  --color-on-primary: #ffffff;
+
+  --color-canvas: #faf9f5;
+  --color-card: #f5f0e8;
+  --color-card-strong: #efe9de;
+  --color-ink: #141413;
+  --color-body: #3d3d3a;
+  --color-muted: #6c6a64;
+  --color-hairline: #e6dfd8;
+  --color-track: #e8e0d2;
+
+  --color-accent-teal: #5db8a6;
+  --color-success: #3f9f5a;
+  --color-error: #c64545;
+
+  --font-display: "EB Garamond", Garamond, "Times New Roman", serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-primary: #d88a6f;
+    --color-primary-active: #cc785c;
+    --color-canvas: #181715;
+    --color-card: #232120;
+    --color-card-strong: #2c2a27;
+    --color-ink: #faf9f5;
+    --color-body: #d9d6cf;
+    --color-muted: #a09d96;
+    --color-hairline: #34312d;
+    --color-track: #3a3733;
+    --color-success: #5db872;
+    --color-error: #e06b6b;
+  }
+}
+
+@layer base {
+  :root {
+    color-scheme: light dark;
+  }
+  body {
+    @apply bg-canvas font-sans text-body antialiased;
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@utility headline {
+  @apply font-display font-medium text-ink;
+  letter-spacing: -0.02em;
+}
+
+@utility card {
+  @apply rounded-2xl bg-card p-4;
+}
+
+@utility btn {
+  @apply inline-flex min-h-12 items-center justify-center gap-2 rounded-xl px-5 text-[16px] leading-none font-medium transition-colors select-none disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-primary text-on-primary active:bg-primary-active;
+}
+@utility btn-secondary {
+  @apply btn border border-hairline bg-canvas text-ink active:bg-card-strong;
+}
+@utility btn-sm {
+  @apply min-h-9 rounded-lg px-3.5 text-[15px];
+}
