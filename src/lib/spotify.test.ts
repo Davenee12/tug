@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bestTrack, idFromUri, matchPlaylists, matchScore, nextRepeat, normalize, playlistDetail, seekFraction, trackLength } from "./spotify";
+import { bestTrack, idFromUri, matchPlaylists, matchScore, nextRepeat, normalize, playlistDetail, sameSong, seekFraction, trackLength } from "./spotify";
 import type { SpotifyPlaylist, SpotifyTrack } from "../types/protocol";
 
 const pl = (name: string): SpotifyPlaylist => ({ uri: `spotify:playlist:${name}`, id: name, name, owner: "Dave", trackCount: 10, imageUrl: null, owned: true });
@@ -118,5 +118,26 @@ describe("seekFraction", () => {
     expect(seekFraction(50, rect)).toBe(0); // before the start, clamped
     expect(seekFraction(400, rect)).toBe(1); // past the end, clamped
     expect(seekFraction(150, { left: 0, width: 0 })).toBe(0); // zero-width guard
+  });
+});
+
+describe("sameSong", () => {
+  it("matches the track name to the phone's title, ignoring case and surrounding spaces", () => {
+    expect(sameSong("Teardrop", "Teardrop")).toBe(true);
+    expect(sameSong("  teardrop ", "TEARDROP")).toBe(true);
+  });
+
+  it("rejects a different song (Spotify still reporting the previous one)", () => {
+    expect(sameSong("Angel", "Teardrop")).toBe(false);
+    // Not a fuzzy match: a different version is a different song.
+    expect(sameSong("Teardrop - Remastered", "Teardrop")).toBe(false);
+  });
+
+  it("is unknown when either side is missing or blank", () => {
+    expect(sameSong(null, "Teardrop")).toBeNull();
+    expect(sameSong(undefined, "Teardrop")).toBeNull();
+    expect(sameSong("   ", "Teardrop")).toBeNull();
+    expect(sameSong("Teardrop", null)).toBeNull();
+    expect(sameSong("Teardrop", "")).toBeNull();
   });
 });
