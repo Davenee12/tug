@@ -9,6 +9,7 @@ mod commands;
 mod contact_photos;
 mod device_kind;
 mod diagnostics;
+mod frontend_log;
 pub mod hfp;
 mod location;
 pub mod map;
@@ -21,6 +22,7 @@ mod state;
 mod store;
 pub mod toast;
 mod tray;
+mod webview_watch;
 
 use std::sync::Arc;
 
@@ -89,6 +91,11 @@ pub fn run() {
             // Nice to have, never a reason not to start.
             if let Err(e) = tray::install(app.handle()) {
                 log::warn!("tray icon unavailable: {e}");
+            }
+            // Log WebView2 process-failed events (crash/hang of the web content), so the next one
+            // isn't a mystery. Registered whether or not the window is shown now.
+            if let Some(window) = app.get_webview_window("main") {
+                webview_watch::watch(&window);
             }
             // The window is created hidden (see tauri.conf.json). Start in the tray only when
             // asked to (autostart adds `--minimized`) AND there's a tray to come back from;
@@ -193,6 +200,7 @@ pub fn run() {
             commands::spotify_artist,
             commands::spotify_playlist_items,
             commands::spotify_add_to_playlist,
+            commands::log_frontend_error,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
