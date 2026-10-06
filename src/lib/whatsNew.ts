@@ -21,6 +21,17 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.10",
+    title: "Steadier connection and a round of fixes",
+    highlights: [
+      "tug reconnects by itself after your PC wakes up, and shows when your iPhone needs unlocking.",
+      "Notifications stay put through a quick Bluetooth hiccup.",
+      "Spotify keeps the right song's cover and Like, and asks Spotify far less often.",
+      "The sidebar fits every music control on laptop screens.",
+      "Smaller fixes: the Calls list stays put, codes pop up once, contact names stay right.",
+    ],
+  },
+  {
     version: "0.5.9",
     title: "Easier connecting, quiet hours, and a lot more Spotify",
     highlights: [
