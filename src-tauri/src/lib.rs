@@ -85,8 +85,8 @@ pub fn run() {
             let icons_dir = dir.join("icons");
             let art_dir = dir.join("spotify_art");
             std::thread::spawn(move || {
-                cache_trim::trim(&icons_dir, cache_trim::APP_ICONS_CAP);
-                cache_trim::trim(&art_dir, cache_trim::SPOTIFY_ART_CAP);
+                cache_trim::APP_ICONS_TRIM.trim_now(&icons_dir, cache_trim::APP_ICONS_CAP);
+                cache_trim::SPOTIFY_ART_TRIM.trim_now(&art_dir, cache_trim::SPOTIFY_ART_CAP);
             });
             // Nice to have, never a reason not to start.
             if let Err(e) = tray::install(app.handle()) {

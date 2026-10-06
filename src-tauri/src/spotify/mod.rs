@@ -606,8 +606,9 @@ impl Spotify {
         let uri = crate::app_icons::data_uri(&bytes)?;
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(&file, &bytes);
-        // A fresh image landed: keep the art cache under its cap, dropping the least-recently-used.
-        crate::cache_trim::trim(&dir, crate::cache_trim::SPOTIFY_ART_CAP);
+        // A fresh image landed: keep the art cache under its cap, dropping the least-recently-used
+        // (throttled, so browsing a page of playlist covers doesn't rescan the folder per cover).
+        crate::cache_trim::SPOTIFY_ART_TRIM.after_write(&dir, crate::cache_trim::SPOTIFY_ART_CAP);
         Some(uri)
     }
 }
