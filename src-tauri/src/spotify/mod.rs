@@ -88,6 +88,11 @@ pub struct Spotify {
     /// tug's app-data dir; album art is cached under `<dir>/spotify_art`.
     cache_dir: PathBuf,
     session: Mutex<Session>,
+    /// Set from a 429's Retry-After: until then tug asks Spotify nothing (asking anyway only
+    /// lengthens the penalty; Dave hit a 19-hour one).
+    blocked_until: Mutex<Option<std::time::Instant>>,
+    /// The last "is this song liked?" answer, so the poll asks only when the song changes.
+    saved_cache: Mutex<Option<(String, bool)>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -104,6 +109,8 @@ impl Spotify {
             store,
             cache_dir,
             session: Mutex::default(),
+            blocked_until: Mutex::new(None),
+            saved_cache: Mutex::new(None),
         }
     }
 
@@ -246,6 +253,14 @@ impl Spotify {
         path: &str,
         body: Option<(&'static str, String)>,
     ) -> Result<http::Response, ApiError> {
+        if let Some(until) = *lock(&self.blocked_until) {
+            let now = std::time::Instant::now();
+            if now < until {
+                return Err(ApiError::RateLimited {
+                    retry_after: (until - now).as_secs().max(1),
+                });
+            }
+        }
         let url = format!("{API_BASE}{path}");
         let token = self.access_token()?;
         let send = |tok: &str| {
@@ -261,7 +276,13 @@ impl Spotify {
         if resp.is_success() {
             Ok(resp)
         } else {
-            Err(model::classify(resp.status, &resp.body, resp.retry_after))
+            let err = model::classify(resp.status, &resp.body, resp.retry_after);
+            if let ApiError::RateLimited { retry_after } = err {
+                *lock(&self.blocked_until) =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(retry_after));
+                log::info!("Spotify rate limit: pausing Spotify requests for {retry_after}s");
+            }
+            Err(err)
         }
     }
 
@@ -530,9 +551,16 @@ impl Spotify {
     }
 
     fn saved_state(&self, uri: &str) -> Option<bool> {
+        if let Some((cached_uri, saved)) = lock(&self.saved_cache).as_ref() {
+            if cached_uri == uri {
+                return Some(*saved);
+            }
+        }
         let path = format!("/me/library/contains?uris={}", pe(uri));
         let resp = self.api(Method::Get, &path, None).ok()?;
-        model::parse_contains(&resp.body)
+        let saved = model::parse_contains(&resp.body)?;
+        *lock(&self.saved_cache) = Some((uri.to_string(), saved));
+        Some(saved)
     }
 
     pub fn set_repeat(&self, mode: RepeatMode) -> Result<(), String> {
@@ -555,7 +583,9 @@ impl Spotify {
         // `uris` is a query parameter (comma-separated); a JSON body gets "Missing required
         // field: uris" (Dave's account, 2026-10-05).
         let path = format!("/me/library?uris={}", pe(uri));
-        self.api(method, &path, None).map(|_| ()).map_err(|e| e.user_message())
+        self.api(method, &path, None).map_err(|e| e.user_message())?;
+        *lock(&self.saved_cache) = Some((uri.to_string(), saved));
+        Ok(())
     }
 
     /// A playlist cover as a `data:` URI (same cache as album art). Only Spotify image hosts.
