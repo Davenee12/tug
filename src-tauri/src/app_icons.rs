@@ -142,6 +142,10 @@ pub fn icon(dir: &Path, app_id: &str) -> Result<Option<String>, String> {
         Some(uri) => {
             std::fs::write(&img, &bytes).map_err(|e| e.to_string())?;
             let _ = std::fs::remove_file(&miss);
+            // A fresh icon landed: keep the folder under its cap by dropping the least-recently-used.
+            if let Some(icons) = img.parent() {
+                crate::cache_trim::trim(icons, crate::cache_trim::APP_ICONS_CAP);
+            }
             Ok(Some(uri))
         }
         None => {
