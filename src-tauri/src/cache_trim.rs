@@ -6,14 +6,69 @@
 //!
 //! The selection of which files to drop is pure (`over_cap`) so it can be unit-tested without a disk;
 //! `trim` is the thin I/O that reads the folder and applies it.
+//!
+//! Each trim rescans the whole folder, so it isn't run after every write: browsing playlist covers
+//! writes dozens of images in a burst, and a rescan per write would make that quadratic. Writers go
+//! through a per-cache `TrimThrottle` instead, which trims at most once per `TRIM_INTERVAL`; the
+//! startup trim runs unconditionally and starts that clock. The cost is that a folder can overshoot
+//! its cap by one interval's worth of downloads until the next trim, which is harmless at these caps.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime};
 
 /// Spotify album art + covers: generous, since a heavy listener browses a lot of artwork.
 pub const SPOTIFY_ART_CAP: u64 = 100 * 1024 * 1024;
 /// App icons: one small icon per app the phone surfaces, so a tighter cap is plenty.
 pub const APP_ICONS_CAP: u64 = 50 * 1024 * 1024;
+
+/// The shortest gap between two write-triggered trims of the same cache.
+pub const TRIM_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Rate-limits the trims of one cache folder (see the module docs). One static per cache.
+pub struct TrimThrottle {
+    last: Mutex<Option<Instant>>,
+}
+
+/// The Spotify art/cover cache's throttle (startup trim in `lib.rs`, writes in `spotify`).
+pub static SPOTIFY_ART_TRIM: TrimThrottle = TrimThrottle::new();
+/// The app icon cache's throttle (startup trim in `lib.rs`, writes in `app_icons`).
+pub static APP_ICONS_TRIM: TrimThrottle = TrimThrottle::new();
+
+impl TrimThrottle {
+    const fn new() -> Self {
+        Self { last: Mutex::new(None) }
+    }
+
+    /// Trim now regardless of the throttle (startup), and start the interval from here.
+    pub fn trim_now(&self, dir: &Path, cap: u64) {
+        self.claim(Instant::now(), Duration::ZERO);
+        trim(dir, cap);
+    }
+
+    /// After a write: trim only if `TRIM_INTERVAL` has passed since this cache was last trimmed.
+    pub fn after_write(&self, dir: &Path, cap: u64) {
+        if self.claim(Instant::now(), TRIM_INTERVAL) {
+            trim(dir, cap);
+        }
+    }
+
+    /// Record a trim at `now` and return true if one is due, else leave the clock alone and return
+    /// false. Claiming under the lock means two writers racing past the interval trim only once.
+    fn claim(&self, now: Instant, interval: Duration) -> bool {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if !trim_due(*last, now, interval) {
+            return false;
+        }
+        *last = Some(now);
+        true
+    }
+}
+
+/// Whether a trim is due at `now` given when the cache was `last` trimmed (never: always due).
+fn trim_due(last: Option<Instant>, now: Instant, interval: Duration) -> bool {
+    last.is_none_or(|t| now.saturating_duration_since(t) >= interval)
+}
 
 /// A cached file as the selector sees it: something to identify it by, its size, and when it was
 /// last read. Generic over the id so tests can use `&str` while the real caller uses a `PathBuf`.
@@ -63,8 +118,10 @@ pub fn trim(dir: &Path, cap: u64) {
         if !meta.is_file() {
             continue;
         }
-        // Access time is the right signal (we want the least-recently-shown art), but Windows can
-        // have last-access updates disabled; fall back to modified, then to the epoch.
+        // Access time is the right signal (we want the least-recently-shown art). But on NTFS with
+        // last-access updates disabled, `accessed()` doesn't fail: it returns a stale time (roughly
+        // when the file was written), so there eviction is roughly oldest-written-first. The
+        // fallback to modified (then the epoch) only covers filesystems that report no access time.
         let accessed = meta
             .accessed()
             .or_else(|_| meta.modified())
@@ -126,6 +183,37 @@ mod tests {
     fn can_empty_a_wildly_oversized_folder() {
         let files = vec![file("a", 200, 1)];
         assert_eq!(over_cap(&files, 100), vec!["a"]);
+    }
+
+    #[test]
+    fn trim_is_due_first_time_then_once_per_interval() {
+        let t0 = Instant::now();
+        let iv = Duration::from_secs(60);
+        assert!(trim_due(None, t0, iv), "never trimmed: due");
+        assert!(!trim_due(Some(t0), t0 + Duration::from_secs(59), iv));
+        assert!(trim_due(Some(t0), t0 + iv, iv), "exactly one interval later: due");
+        // A clock that appears to go backwards never counts as due.
+        assert!(!trim_due(Some(t0 + iv), t0, iv));
+    }
+
+    #[test]
+    fn throttle_claims_once_per_interval_and_startup_resets_the_clock() {
+        let throttle = TrimThrottle::new();
+        let t0 = Instant::now();
+        let iv = Duration::from_secs(60);
+        // The startup trim always runs and starts the clock…
+        assert!(throttle.claim(t0, Duration::ZERO));
+        // …so a burst of writes right after it doesn't rescan the folder each time.
+        for s in [1, 5, 30, 59] {
+            assert!(
+                !throttle.claim(t0 + Duration::from_secs(s), iv),
+                "write at +{s}s skipped"
+            );
+        }
+        // Once the interval has passed, the next write trims, and restarts the interval.
+        assert!(throttle.claim(t0 + iv, iv));
+        assert!(!throttle.claim(t0 + iv + Duration::from_secs(1), iv));
+        assert!(throttle.claim(t0 + iv * 2, iv));
     }
 
     #[test]
