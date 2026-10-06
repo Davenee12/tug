@@ -65,12 +65,15 @@ fn main() {
         };
 
         if pbap_only {
-            println!("pulling contacts (PBAP) from {} ...", device.name);
-            match tug_lib::map::session::pull_contacts(&device.id).await {
+            println!("pulling contacts (PBAP, with photos) from {} ...", device.name);
+            // The probe asks for photos (`true`) so a hardware run shows whether iOS sends them;
+            // the app's regular sync pulls without, and fetches photos on a separate pass.
+            match tug_lib::map::session::pull_contacts(&device.id, true).await {
                 Ok(entries) => println!(
-                    "contacts: {} people, {} numbers",
+                    "contacts: {} people, {} numbers, {} photos",
                     entries.len(),
-                    entries.iter().map(|e| e.numbers.len()).sum::<usize>()
+                    entries.iter().map(|e| e.numbers.len()).sum::<usize>(),
+                    entries.iter().filter(|e| e.photo.is_some()).count()
                 ),
                 Err(e) => println!("contacts failed: {e}"),
             }
