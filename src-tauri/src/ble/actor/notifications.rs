@@ -125,6 +125,7 @@ impl Actor {
             Ok(ev) => ev,
             Err(e) => return log::warn!("bad ANCS notification source packet: {e}"),
         };
+        crate::bt_inventory::record_ancs_event(&ev);
         let Some(link) = self.link.as_mut() else {
             return log::warn!("ANCS event with no link");
         };
@@ -227,6 +228,7 @@ impl Actor {
                 let Some(&(flags, category)) = a.meta.get(&uid) else {
                     return log::debug!("dropping details for {uid}: removed while they were being fetched");
                 };
+                crate::bt_inventory::record_ancs_details(&attrs);
                 let stored = self.shared.store.upsert_notification(&NewNotification {
                     session,
                     uid,

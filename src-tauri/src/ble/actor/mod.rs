@@ -44,6 +44,8 @@ use crate::state::{
 };
 use crate::store::NewNotification;
 
+/// The Bluetooth inventory probe (`crate::bt_inventory`), run off the connect path.
+mod inventory;
 mod link;
 mod media;
 mod notifications;
@@ -272,6 +274,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         cccd_check_in: CCCD_CHECK_SECS,
         optional_retry_at: None,
         link_down_at: None,
+        inventory: inventory::InventoryState::default(),
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -314,6 +317,8 @@ struct Actor {
     /// grace before a real teardown. Set on a disconnect, cleared by the next link-up or by
     /// `finish_link_down`.
     link_down_at: Option<Instant>,
+    /// When the next Bluetooth inventory report is due, and the one running now.
+    inventory: inventory::InventoryState,
 }
 
 fn now_ms() -> i64 {
@@ -473,6 +478,7 @@ impl Actor {
                 }
                 let _ = reply.send(Ok(()));
             }
+            Command::Inventory { reply } => self.request_inventory(reply),
         }
     }
 
@@ -692,6 +698,7 @@ impl Actor {
         }
 
         self.sweep_if_settled();
+        self.inventory_tick();
 
         // While the user is on the iPhone screens (setup/Settings), a connect that's backed off
         // waiting for an unlock should retry promptly — they may be unlocking the phone right now.

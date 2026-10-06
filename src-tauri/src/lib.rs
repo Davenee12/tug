@@ -3,6 +3,7 @@ mod ancs;
 mod ancs_queue;
 mod app_icons;
 mod ble;
+mod bt_inventory;
 mod cache_trim;
 mod clipboard;
 mod commands;
@@ -176,6 +177,7 @@ pub fn run() {
             commands::dial,
             commands::show_toast,
             commands::copy_diagnostics,
+            commands::bt_inventory,
             commands::open_logs_folder,
             commands::spotify_status,
             commands::spotify_connect,

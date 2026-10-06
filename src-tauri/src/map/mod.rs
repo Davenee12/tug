@@ -17,6 +17,8 @@ pub mod mns;
 pub mod mns_event;
 pub mod obex;
 pub mod pick;
+#[cfg(windows)]
+pub mod probe;
 pub mod service;
 #[cfg(windows)]
 pub mod session;
