@@ -39,8 +39,38 @@ phases is worth building on an unreliable base.
 - Over the home Wi-Fi at full speed; never reachable from the internet; no cloud, no account.
 - Safety: tug serves the page only on the local network while Drop is open; the QR carries a
   one-time secret so only the scanning phone connects; it shuts off when closed or idle; transfers
-  encrypted (design the TLS/certificate approach so Safari doesn't throw scary warnings — e.g. a
-  pairing key in the QR used for an encrypted channel, or a trusted local certificate).
+  are encrypted (below).
+- **Design (settled 2026-10-06 from two independent research passes — ChatGPT and Muse):**
+  - **Plain HTTP, no certificates.** Self-signed HTTPS always shows Safari's "not private" warning;
+    the only warning-free TLS (Plex-style public domain + DNS-01 cert) needs a paid domain and
+    servers. Possible v2 upgrade, not v1.
+  - **QR = `http://<PC-IP>:<port>/#<128-bit secret>`.** The part after `#` is never sent over the
+    network or logged. The page encrypts every chunk with XChaCha20-Poly1305 (libsodium/tweetnacl
+    bundled by tug — `crypto.subtle` is unavailable on HTTP; `getRandomValues` works) keyed from
+    that secret; Rust decrypts with RustCrypto. The secret works for one session only.
+  - **Honest limits:** stops anyone passively listening on the Wi-Fi; does not stop an active
+    attacker tampering with the first page load (same trade-off LocalSend's browser mode makes).
+    Never call it end-to-end secure.
+  - **Chunked, resumable uploads** (Safari pauses the page when the phone locks or switches apps);
+    the page says to keep it open. Never buffer a whole video in page memory.
+  - **Photos:** `accept="image/*,video/*"` with no `capture` attribute opens the Photos picker; a
+    visible button (iOS ignores `.click()` on hidden inputs). Photos arrive as original HEIC —
+    keep originals; converting to JPEG is an open choice.
+  - **PC → phone:** files download to Files › Downloads; several files as one server-side zip;
+    "Save to Photos" via the share sheet where Safari allows it (verify on device).
+  - **Clipboard:** no clipboard API on HTTP — phone → PC is a paste box; PC → phone is a Copy
+    button using the older copy fallback.
+  - **Windows Firewall:** tug never adds firewall rules or changes security settings. Windows asks
+    once ("Allow tug"); if the Wi-Fi is set to Public, or the phone can't reach tug, the Drop
+    window explains it in plain words. Listen only on the chosen Wi-Fi address, only while open.
+  - **Finding the PC:** enumerate adapters and pick the one with the default gateway (skip VPN,
+    Hyper-V, Docker); show the address with a manual fallback. Guest Wi-Fi (client isolation), a
+    VPN on the phone or iCloud Private Relay can block it — detect a failed connect and say why.
+    mDNS is a fallback only.
+  - **Stack:** axum (HTTP), qrcode, if-addrs/default-net (adapters), chacha20poly1305 (RustCrypto).
+    No WebRTC in v1 — it adds complexity without adding trust (signaling still runs over the QR page).
+  - **Verify on the iPhone before shipping:** Live Photo upload contents, share-sheet save to Photos
+    over HTTP, behaviour on the current iOS version.
 - Limits: same Wi-Fi only; works while the page is open (iOS allows no background sync without an
   app); clipboard is one tap, not automatic.
 - It's the first slice of Phase 1: pairing by QR, one-time keys, an encrypted local link.
