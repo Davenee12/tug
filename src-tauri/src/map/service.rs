@@ -34,6 +34,10 @@ pub enum MapCommand {
         number: Option<String>,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Bluetooth inventory: the MAP folder names, from the open session (never opens one).
+    InventoryFolders {
+        reply: oneshot::Sender<crate::bt_inventory::Probe<Vec<String>>>,
+    },
 }
 
 #[derive(Clone)]
@@ -68,6 +72,16 @@ impl MapHandle {
             .send(MapCommand::Dial { number, reply })
             .map_err(|_| "Message service stopped".to_string())?;
         rx.await.map_err(|_| "Message service stopped".to_string())?
+    }
+
+    /// The MAP folder names for the Bluetooth inventory.
+    pub async fn inventory_folders(&self) -> crate::bt_inventory::Probe<Vec<String>> {
+        let (reply, rx) = oneshot::channel();
+        if self.tx.send(MapCommand::InventoryFolders { reply }).is_err() {
+            return crate::bt_inventory::Probe::Unavailable("message service stopped".into());
+        }
+        rx.await
+            .unwrap_or_else(|_| crate::bt_inventory::Probe::Unavailable("message service unavailable".into()))
     }
 }
 
@@ -295,6 +309,9 @@ mod worker {
                     Some(MapCommand::Dial { number, reply }) => {
                         let _ = reply.send(w.dial(number.as_deref()).await);
                     }
+                    Some(MapCommand::InventoryFolders { reply }) => {
+                        let _ = reply.send(w.inventory_folders().await);
+                    }
                 },
                 // The phone pushed a live-texts event (or just connected to the MNS).
                 Some(msg) = events_rx.recv() => w.on_mns(msg).await,
@@ -508,6 +525,20 @@ mod worker {
             self.set_state(false, shown);
         }
 
+        /// Bluetooth inventory: list the MAP folders on the open session. A timeout or a closed link
+        /// may leave the session out of step, so it's dropped like any failed sync.
+        async fn inventory_folders(&mut self) -> crate::bt_inventory::Probe<Vec<String>> {
+            use crate::bt_inventory::Probe;
+            let Some(session) = self.session.as_mut() else {
+                return Probe::Unavailable("message access isn't connected right now".into());
+            };
+            let result = crate::map::probe::folders(session).await;
+            if let Err(e @ (MapError::Timeout | MapError::Closed)) = &result {
+                self.fail(e);
+            }
+            Probe::from_result(result)
+        }
+
         /// Handle one message from the MNS server: the phone connecting, or an event report.
         async fn on_mns(&mut self, msg: mns::ServerMessage) {
             match msg {
@@ -536,6 +567,7 @@ mod worker {
                     self.refresh().await;
                 }
                 mns::ServerMessage::Event(event) => {
+                    crate::bt_inventory::record_mns_event(event.kind);
                     self.last_event_at = Some(Instant::now());
                     self.set_live(LiveTexts::Active);
                     log::debug!(
@@ -915,6 +947,7 @@ mod worker {
             // SMS_CDMA, MMS, EMAIL and any the phone left blank.
             let mut type_counts: Option<(u32, u32, u32)> = None;
             if !listed.is_empty() {
+                crate::bt_inventory::record_listing_types(listed.iter().map(|m| m.msg_type.as_str()));
                 let (mut sms_gsm, mut im, mut other) = (0u32, 0u32, 0u32);
                 for m in &listed {
                     match m.msg_type.as_str() {

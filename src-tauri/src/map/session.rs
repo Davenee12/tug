@@ -127,7 +127,7 @@ async fn find_devices_inner() -> Result<Vec<MapDevice>> {
 }
 
 /// One OBEX session over RFCOMM: CONNECT with a target, then request/response.
-struct ObexLink {
+pub(super) struct ObexLink {
     socket: StreamSocket,
     reader: DataReader,
     writer: DataWriter,
@@ -139,7 +139,12 @@ impl ObexLink {
     /// Open RFCOMM to `service_uuid` and run OBEX CONNECT. A fresh grant typically
     /// answers the first CONNECT with Forbidden, which is what makes iOS show its
     /// consent toggle; the caller maps that to the right consent error.
-    async fn connect(device_id: &str, service_uuid: u128, target: &[u8; 16], forbidden: MapError) -> Result<Self> {
+    pub(super) async fn connect(
+        device_id: &str,
+        service_uuid: u128,
+        target: &[u8; 16],
+        forbidden: MapError,
+    ) -> Result<Self> {
         tokio::time::timeout(
             CONNECT_TIMEOUT,
             Self::connect_inner(device_id, service_uuid, target, forbidden),
@@ -202,7 +207,7 @@ impl ObexLink {
         Ok(link)
     }
 
-    fn conn(&self) -> Header {
+    pub(super) fn conn(&self) -> Header {
         Header::connection_id(self.connection_id)
     }
 
@@ -232,7 +237,7 @@ impl ObexLink {
 
     /// Send a request and read its response, bounded as a whole: a stalled write
     /// (full socket buffer, half-dead link) must time out just like a silent peer.
-    async fn exchange(&mut self, packet: &[u8], connect: bool) -> Result<Response> {
+    pub(super) async fn exchange(&mut self, packet: &[u8], connect: bool) -> Result<Response> {
         let raw = tokio::time::timeout(RESPONSE_TIMEOUT, async {
             self.send(packet).await?;
             self.read_packet().await
@@ -242,7 +247,7 @@ impl ObexLink {
         Ok(obex::parse_response(&raw, connect)?)
     }
 
-    async fn set_path(&mut self, name: Option<&str>) -> Result<()> {
+    pub(super) async fn set_path(&mut self, name: Option<&str>) -> Result<()> {
         let headers = [self.conn(), Header::Name(name.map(str::to_string))];
         let resp = self
             .exchange(
@@ -260,7 +265,7 @@ impl ObexLink {
     }
 
     /// OBEX GET, following Continue responses until the object is complete.
-    async fn get(&mut self, op: &'static str, headers: Vec<Header>) -> Result<Vec<u8>> {
+    pub(super) async fn get(&mut self, op: &'static str, headers: Vec<Header>) -> Result<Vec<u8>> {
         let mut body = Vec::new();
         let mut packet = obex::request(obex::OP_GET_FINAL, &[], &headers);
         loop {
@@ -274,7 +279,7 @@ impl ObexLink {
         }
     }
 
-    async fn disconnect(mut self) {
+    pub(super) async fn disconnect(mut self) {
         let packet = obex::request(obex::OP_DISCONNECT, &[], &[self.conn()]);
         let _ = tokio::time::timeout(Duration::from_secs(2), self.exchange(&packet, false)).await;
         let _ = self.socket.Close();
@@ -283,7 +288,7 @@ impl ObexLink {
 
 /// A MAP client session with the iPhone's Message Access Server.
 pub struct MapSession {
-    link: ObexLink,
+    pub(super) link: ObexLink,
 }
 
 impl MapSession {
@@ -469,7 +474,10 @@ pub async fn pull_contacts(device_id: &str, with_photos: bool) -> Result<Vec<Pho
     ];
     let result = link.get("PullPhoneBook", headers).await;
     link.disconnect().await;
-    Ok(vcard::parse(&String::from_utf8_lossy(&result?)))
+    let text = String::from_utf8_lossy(&result?).into_owned();
+    // Bluetooth inventory: which vCard property NAMES this pull carried (counts only).
+    crate::bt_inventory::record_vcard_fields(if with_photos { "contacts+photos" } else { "contacts" }, &text);
+    Ok(vcard::parse(&text))
 }
 
 /// Pull the newest `max` calls over PBAP: the combined list (`telecom/cch.vcf`), or, from a

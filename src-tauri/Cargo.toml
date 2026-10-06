@@ -41,6 +41,7 @@ windows = { version = "0.62", features = [
   "Devices_Geolocation",
   "Devices_Radios",
   "Media",
+  "Media_Audio",
   "Media_Playback",
   "Networking",
   "Networking_Sockets",
