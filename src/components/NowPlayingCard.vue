@@ -4,6 +4,7 @@ import { Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, RotateCcw, Shuf
 import { useTugStore } from "../stores/tug";
 import { duration } from "../lib/format";
 import { canRestart, createHoldRepeater, repeatLabel } from "../lib/media";
+import { seekFraction } from "../lib/spotify";
 
 const tug = useTugStore();
 const np = computed(() => tug.nowPlaying);
@@ -13,6 +14,32 @@ const playing = computed(() => np.value.state === "playing");
 // Spotify augmentation: only when connected and Spotify is the AMS player (see the store).
 const sp = computed(() => (tug.spotifyActive ? tug.spotifyPlayer : null));
 const art = computed(() => sp.value?.albumArt ?? null);
+
+// Click/drag-to-seek: only when Spotify is the player and we know the song length. Otherwise the
+// bar is a plain progress indicator, exactly as before.
+const seekable = computed(() => !!sp.value && tug.connected && (np.value.duration ?? 0) > 0);
+const bar = ref<HTMLElement | null>(null);
+/** The fraction a drag is currently at, so the fill follows the pointer before it commits. */
+const dragFraction = ref<number | null>(null);
+function fractionAt(e: PointerEvent): number {
+  const rect = bar.value?.getBoundingClientRect();
+  return rect ? seekFraction(e.clientX, rect) : 0;
+}
+function seekDown(e: PointerEvent) {
+  if (!seekable.value) return;
+  (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+  dragFraction.value = fractionAt(e);
+}
+function seekMove(e: PointerEvent) {
+  if (dragFraction.value == null) return;
+  dragFraction.value = fractionAt(e);
+}
+function seekUp() {
+  if (dragFraction.value == null) return;
+  const f = dragFraction.value;
+  dragFraction.value = null;
+  if (np.value.duration != null) void tug.spotifySeek(f * np.value.duration * 1000);
+}
 
 // AMS only reports elapsed time on state changes; advance it locally while playing.
 const now = ref(Date.now());
@@ -66,7 +93,11 @@ const elapsed = computed(() => {
   return np.value.duration != null ? Math.min(base + drift, np.value.duration) : base + drift;
 });
 const progress = computed(() =>
-  elapsed.value != null && np.value.duration ? (elapsed.value / np.value.duration) * 100 : 0,
+  dragFraction.value != null
+    ? dragFraction.value * 100
+    : elapsed.value != null && np.value.duration
+      ? (elapsed.value / np.value.duration) * 100
+      : 0,
 );
 const can = (c: string) => np.value.available.length === 0 || np.value.available.includes(c as never);
 
@@ -101,9 +132,9 @@ function restart() {
       <button
         v-if="tug.spotify.connected"
         class="rounded-full p-1.5 normal-case text-on-dark-soft active:text-on-dark"
-        aria-label="Your playlists"
-        title="Your Spotify playlists"
-        @click="tug.spotifyPanelOpen = true"
+        aria-label="Open Spotify"
+        title="Search and play on Spotify"
+        @click="tug.openSpotifyPanel('search')"
       >
         <ListMusic :size="15" />
       </button>
@@ -133,11 +164,25 @@ function restart() {
         </button>
       </div>
 
-      <div class="mt-3 h-1 overflow-hidden rounded-full bg-surface-dark-soft">
+      <!-- When Spotify is the player, click or drag the bar to seek; otherwise it just shows
+           progress. Its box is unchanged either way so the compact card keeps its height. -->
+      <div
+        ref="bar"
+        :class="['mt-3 h-1 overflow-hidden rounded-full bg-surface-dark-soft', seekable ? 'cursor-pointer' : '']"
+        :role="seekable ? 'slider' : undefined"
+        :aria-label="seekable ? 'Seek' : undefined"
+        :aria-valuenow="seekable ? Math.round(progress) : undefined"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        @pointerdown="seekDown"
+        @pointermove="seekMove"
+        @pointerup="seekUp"
+        @pointercancel="seekUp"
+      >
         <!-- Keyed by track so a new song starts at its position instead of sliding back. -->
         <div
           :key="np.title ?? ''"
-          class="h-full rounded-full bg-on-dark transition-[width] duration-1000 ease-linear"
+          :class="['h-full rounded-full bg-on-dark ease-linear', dragFraction == null ? 'transition-[width] duration-1000' : '']"
           :style="{ width: `${progress}%` }"
         />
       </div>

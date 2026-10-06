@@ -30,7 +30,17 @@ pub enum Command {
     },
     StartDiscovery,
     StopDiscovery,
+    /// Re-run the iPhone inquiry without disturbing the LE watcher or the rows already listed, so a
+    /// phone made discoverable after scanning began still shows up (an unpaired-Classic AEP watcher
+    /// only inquires once).
+    RescanDiscovery,
     Pair {
+        id: String,
+        reply: Reply,
+    },
+    /// Unpair a leftover phone's LE and Classic bonds (both, matched by name), then keep scanning so
+    /// it reappears unpaired and ready to pair fresh.
+    RemovePairing {
         id: String,
         reply: Reply,
     },
@@ -99,11 +109,12 @@ pub fn start(shared: Arc<Shared>) -> BleHandle {
                     Command::PerformAction { reply, .. }
                     | Command::Media { reply, .. }
                     | Command::Pair { reply, .. }
+                    | Command::RemovePairing { reply, .. }
                     | Command::UseDevice { reply, .. }
                     | Command::PairTexts { reply }
                     | Command::Forget { reply }
                     | Command::SetAdvertising { reply, .. } => reply,
-                    Command::StartDiscovery | Command::StopDiscovery => continue,
+                    Command::StartDiscovery | Command::StopDiscovery | Command::RescanDiscovery => continue,
                 };
                 let _ = reply.send(Err("Bluetooth is only supported on Windows".into()));
             }

@@ -3,7 +3,7 @@
 
 import type { MediaCommand, PhoneNotification, SpotifyPlaylist } from "../types/protocol";
 import { cleanName, formatAddress, missedCallFor } from "./format";
-import { matchPlaylists, playlistDetail } from "./spotify";
+import { matchPlaylists, normalize, playlistDetail } from "./spotify";
 
 export interface Person {
   name: string;
@@ -39,6 +39,8 @@ export interface ActionContext {
   notifications?: PhoneNotification[];
   /** The user's Spotify playlists, for "play <name>" (empty/absent when not connected). */
   playlists?: SpotifyPlaylist[];
+  /** Spotify is connected, so "play <song>", "queue <song>" and "spotify" are offered. */
+  spotifyConnected?: boolean;
 }
 
 export type Action =
@@ -49,12 +51,16 @@ export type Action =
   | { kind: "call-setup"; label: string }
   | { kind: "media"; command: MediaCommand; label: string }
   | { kind: "play-playlist"; uri: string; name: string; label: string; detail: string }
+  /** "play <song>": search Spotify and play the best track match. */
+  | { kind: "play-search"; query: string; label: string; detail: string }
+  /** "queue <song>": search Spotify and queue the best track match. */
+  | { kind: "queue-search"; query: string; label: string; detail: string }
   | { kind: "copy-code"; code: string | null; from: PhoneNotification[]; label: string }
   | { kind: "clear-all"; items: PhoneNotification[]; label: string }
   | { kind: "mark-all-read"; count: number; label: string }
   | { kind: "dnd"; enabled: boolean; label: string }
   | { kind: "show-app"; appId: string; focusId: number; label: string }
-  | { kind: "open"; target: "new-message" | "settings"; label: string };
+  | { kind: "open"; target: "new-message" | "settings" | "spotify"; label: string };
 
 const MEDIA: Array<[string[], MediaCommand, string]> = [
   [["play", "resume"], "play", "Play"],
@@ -65,9 +71,10 @@ const MEDIA: Array<[string[], MediaCommand, string]> = [
   [["quieter", "volume down"], "volumeDown", "Volume down"],
 ];
 
-const OPEN: Array<[string[], "new-message" | "settings", string]> = [
+const OPEN: Array<[string[], "new-message" | "settings" | "spotify", string]> = [
   [["new message", "new text", "compose"], "new-message", "New message"],
   [["settings", "preferences"], "settings", "Settings"],
+  [["spotify", "music"], "spotify", "Open Spotify"],
 ];
 
 // Exact phrases only, so "clear" or "code" inside a longer search never fire a one-off action.
@@ -79,6 +86,7 @@ const DND = /^(?:do not disturb|dnd)(?:\s+(on|off))?$/i;
 const SEND = /^(?:text|msg|message|tell|send)\s+(.+)$/i;
 const CALL = /^(?:call|ring|phone)\s+(.+)$/i;
 const PLAY = /^play\s+(.+)$/i;
+const QUEUE = /^queue\s+(.+)$/i;
 
 /** Lowercase, drop emoji/symbols, collapse spaces: "tay 🤎" → "tay". */
 function key(s: string): string {
@@ -106,7 +114,9 @@ export function parseActions(query: string, people: Person[], ctx: ActionContext
     if (words.includes(lower)) out.push({ kind: "media", command, label });
   }
   for (const [words, target, label] of OPEN) {
-    if (words.includes(lower)) out.push({ kind: "open", target, label });
+    if (!words.includes(lower)) continue;
+    if (target === "spotify" && !ctx.spotifyConnected) continue;
+    out.push({ kind: "open", target, label });
   }
 
   if (COPY_CODE.includes(lower)) out.push(copyCodeAction(ctx));
@@ -121,19 +131,37 @@ export function parseActions(query: string, people: Person[], ctx: ActionContext
   const c = CALL.exec(q);
   if (c) out.push(...callActions(c[1], people, ctx));
   const pl = PLAY.exec(q);
-  if (pl) out.push(...playlistActions(pl[1], ctx));
+  if (pl) out.push(...playActions(pl[1], ctx));
+  const qu = QUEUE.exec(q);
+  if (qu && ctx.spotifyConnected) {
+    out.push({ kind: "queue-search", query: qu[1], label: `Queue “${qu[1]}”`, detail: "Add the top Spotify result to your queue" });
+  }
   return out;
 }
 
-/** "play deep focus": start a Spotify playlist on the iPhone, fuzzy-matched by name. */
-function playlistActions(rest: string, ctx: ActionContext): Action[] {
-  return matchPlaylists(rest, ctx.playlists ?? []).map((p): Action => ({
+/**
+ * "play deep focus": an exactly-named playlist plays as a playlist; otherwise search Spotify for the
+ * best song match (when connected), with any fuzzy playlist matches offered below it.
+ */
+function playActions(rest: string, ctx: ActionContext): Action[] {
+  const playlists = ctx.playlists ?? [];
+  const matches = matchPlaylists(rest, playlists);
+  const toPlaylist = (p: SpotifyPlaylist): Action => ({
     kind: "play-playlist",
     uri: p.uri,
     name: p.name,
     label: `Play ${p.name}`,
     detail: playlistDetail(p),
-  }));
+  });
+  // An exact playlist name wins: just play that playlist.
+  const exact = matches.filter((p) => normalize(p.name) === normalize(rest));
+  if (exact.length) return exact.map(toPlaylist);
+  const out: Action[] = [];
+  if (ctx.spotifyConnected) {
+    out.push({ kind: "play-search", query: rest, label: `Play “${rest}”`, detail: "Play the top song match on Spotify" });
+  }
+  out.push(...matches.map(toPlaylist));
+  return out;
 }
 
 /**

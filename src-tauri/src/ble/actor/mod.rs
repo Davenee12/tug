@@ -119,17 +119,20 @@ enum Event {
         id: String,
         result: Result<(), String>,
         /// Set when the device paired was an unpaired Classic iPhone, so success adopts the LE
-        /// bond cross-transport derivation creates rather than the Classic id directly.
+        /// bond cross-transport derivation creates rather than the Classic id directly. The LE bond
+        /// is resolved off the actor loop (in the pairing task) and carried here, so adoption never
+        /// blocks the loop waiting for it.
         classic: Option<ClassicPairing>,
         reply: Reply,
     },
 }
 
-/// What an in-flight Classic iPhone pairing needs once it succeeds: the phone's name, and the LE
-/// devices already bonded when it started (so the newly-derived LE bond stands out).
+/// A just-paired Classic iPhone ready to adopt: the phone's name, and the LE bond cross-transport
+/// derivation created (resolved in the pairing task, so the actor loop isn't blocked waiting). None
+/// when no LE bond appeared within the wait — adoption then falls back or asks the user to retry.
 struct ClassicPairing {
     name: String,
-    before: HashSet<String>,
+    resolved_le: Option<String>,
 }
 
 struct Ancs {
@@ -240,7 +243,7 @@ struct Actor {
     gen: u64,
     provider: Option<GattServiceProvider>,
     _radio: Option<Radio>,
-    watchers: Vec<DeviceWatcher>,
+    watchers: Vec<(Transport, DeviceWatcher)>,
     discovered: HashMap<String, Discovered>,
     discovered_dirty: bool,
     device_id: Option<String>,
@@ -325,7 +328,15 @@ impl Actor {
                 }
             }
             Command::StopDiscovery => self.stop_discovery(),
+            Command::RescanDiscovery => {
+                if let Err(e) = self.rescan_classic() {
+                    log::debug!("rescan for the iPhone failed: {}", e.message());
+                }
+            }
             Command::Pair { id, reply } => self.pair(id, reply),
+            Command::RemovePairing { id, reply } => {
+                let _ = reply.send(self.remove_pairing(id).await);
+            }
             Command::UseDevice { id, reply } => match self.use_device(&id).await {
                 Err(e) => match self.le_side_of_classic(&id) {
                     // Classic-only pairing (calls/audio): pair the same phone's LE
