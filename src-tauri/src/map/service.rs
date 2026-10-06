@@ -217,6 +217,8 @@ mod worker {
         /// Whether the photo pass has already been started (or deliberately skipped) on this
         /// connection, so it runs at most once per connection. Reset when the session drops.
         photo_pass_started: bool,
+        /// Last logged message-type counts, so the "message types" line logs only on change.
+        last_type_counts: Option<(u32, u32, u32)>,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -245,6 +247,7 @@ mod worker {
             mns_reopened_at: None,
             photo_task: None,
             photo_pass_started: false,
+            last_type_counts: None,
         };
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
@@ -724,6 +727,12 @@ mod worker {
             if Instant::now() < self.next_calls_sync {
                 return;
             }
+            // The background photo pass holds the phone's contacts (PBAP) link; a second PBAP
+            // connection fails with "only one usage of each socket address". Wait for it.
+            if self.photo_task.as_ref().is_some_and(|t| !t.is_finished()) {
+                self.next_calls_sync = Instant::now() + Duration::from_secs(5);
+                return;
+            }
             self.last_calls_pull = Some(Instant::now());
             self.next_calls_sync = Instant::now() + CALLS_RESYNC;
             let pulled = tokio::time::timeout(CALLS_PULL_TIMEOUT, pull_call_history(&device_id, CALLS_MAX))
@@ -853,6 +862,7 @@ mod worker {
             // One line per sync showing how the phone typed this listing, so a hardware run reveals
             // whether iOS distinguishes iMessage (IM) from a plain text (SMS_*). "other" covers
             // SMS_CDMA, MMS, EMAIL and any the phone left blank.
+            let mut type_counts: Option<(u32, u32, u32)> = None;
             if !listed.is_empty() {
                 let (mut sms_gsm, mut im, mut other) = (0u32, 0u32, 0u32);
                 for m in &listed {
@@ -862,7 +872,7 @@ mod worker {
                         _ => other += 1,
                     }
                 }
-                log::info!("message types: SMS_GSM={sms_gsm}, IM={im}, other={other}");
+                type_counts = Some((sms_gsm, im, other));
             }
             let mut added = 0;
             // Oldest first so arrival order matches the phone.
@@ -921,6 +931,13 @@ mod worker {
             }
             // Only once it all went through: a sync that failed partway looks back again.
             self.backfilled = true;
+            // Once per change, not every poll (logged here, after the session borrow ends).
+            if let Some(counts @ (sms_gsm, im, other)) = type_counts {
+                if self.last_type_counts != Some(counts) {
+                    self.last_type_counts = Some(counts);
+                    log::info!("message types: SMS_GSM={sms_gsm}, IM={im}, other={other}");
+                }
+            }
             Ok(added)
         }
 
