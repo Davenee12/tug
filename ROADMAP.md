@@ -72,6 +72,21 @@ versions between.
 - **Welcome back** digest; **Calls in Ctrl+K search**; **Send later**; **Remind me to call back**.
 - **Spotify for everyone** needs Spotify's Extended Quota (registered business, 250k users).
 
+## v0.5.11 — tug Drop (next feature release, after v0.5.10)
+Move photos, files and text between the phone and PC over home Wi-Fi with no app and no fees:
+scan a QR in tug, a tug page opens in Safari, send or receive. See docs/COMPANION-PLAN.md
+"Phase 0.5" for the design and safety notes.
+
+## Future — companion apps (planned, see docs/COMPANION-PLAN.md)
+tug stays zero-setup on the phone by default. A tug phone app is the step that unlocks files,
+clipboard and Wi-Fi speed. Order: **Phase 0** reliability and polish (now) → **Phase 1** the tug
+protocol in Rust (device keys, pairing over Bluetooth, encrypted local Wi-Fi link, events with
+catch-up) → **Phase 2** Android app (Kotlin, the biggest unlock) → **Phase 3** iPhone app (Swift;
+needs the $99/year Apple account) → **Phase 4** optional remote access (WebRTC; Nostr only if it
+earns its place). Desktop stack stays Rust + Tauri + Vue + SQLite.
+- Brand: "within reach" announcement cards (tug loop + partner name; follow each brand's logo
+  rules; only announce real capabilities) and an in-app "✦ New" tied to What's new.
+
 ## Waiting on code signing (Dave isn't buying it for now)
 - **Auto-updates** from GitHub Releases, once releases are signed. Dave is in the US, so Azure
   Artifact Signing (~$9.99/mo) is available, or an OV certificate ($150–300/yr). Neither instantly
