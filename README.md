@@ -5,55 +5,52 @@ controls, over Bluetooth. No app on the phone, no Mac, no cloud.
 
 tug is a Windows desktop app (Tauri 2 + Rust + Vue 3) that pairs with an iPhone the way a
 smartwatch or car kit does, using the Bluetooth services Apple publishes for accessories.
-**Current release: v0.5.2** — see [CHANGELOG.md](CHANGELOG.md).
+**Current release: v0.5.10** — see [CHANGELOG.md](CHANGELOG.md).
 
 | Feature | How | Status |
 |---|---|---|
 | Live notifications from every app, with actions (answer/decline/clear) | ANCS (Bluetooth LE) | ✅ Verified on iPhone 15 Pro Max |
-| Compact feed: one row per person/app, cleared items disappear | Local | ✅ |
-| Searchable history that outlives the phone's lock screen | SQLite + FTS5 | ✅ |
-| Read texts, including ones read in the open chat | MAP (Classic Bluetooth, OBEX) | ✅ Verified |
-| Reply and start new texts from the PC | MAP PushMessage | ✅ Verified (SMS/iMessage chosen by iOS) |
-| Contact names, new message by name | PBAP | Built; needs *Sync Contacts* on the phone |
-| Now playing + play/pause/skip/volume | AMS (Bluetooth LE) | ✅ Verified |
-| Phone battery level | Battery Service | ✅ Verified (level only; no charging flag) |
-| Windows toasts, per-app mute, do not disturb, Ctrl +/−/0 zoom | Local | ✅ |
-| Incoming-call card (answer/decline, Enter/Esc) | ANCS | Built; not yet verified on hardware |
-| Recent calls | PBAP call history | Built; needs *Sync Contacts*; not yet verified on hardware |
-| Call from tug (audio stays on the phone) | HFP, experimental | Behind a check in Settings › iPhone; unverified |
-| Group texts, photos, texts sent from the phone itself | Not exposed by iOS over Bluetooth | Out of scope |
+| Compact feed, real app icons, open a notification's web page | Local + App Store lookup | ✅ |
+| Search everything with Ctrl+K: people, texts, notifications, plus actions (`text zoe …`, `play …`) | SQLite + FTS5 | ✅ |
+| Read texts the moment they arrive, reply and start new ones | MAP + MNS (Classic Bluetooth, OBEX) | ✅ Verified |
+| Verification codes from texts and notifications, with Copy code | Local | ✅ Verified |
+| Contact names and photos | PBAP | ✅ Verified (needs *Sync Contacts*) |
+| Incoming-call card, recent calls, call back a missed call | ANCS + PBAP | ✅ Verified |
+| Now playing, play/pause/skip/±15 s/volume, Windows media keys | AMS (Bluetooth LE) + SMTC | ✅ Verified |
+| Spotify: playlists, search, queue, Like, albums, artists, Play on | Spotify Web API (Settings › Connectors) | ✅ Built; needs Spotify Premium |
+| Phone battery level and low-battery alert | Battery Service | ✅ Verified (level only; no charging flag) |
+| Windows pop-ups you can reply from, quiet hours, app mute, VIPs | Local | ✅ |
+| Weather on the Feed | Open-Meteo | ✅ |
+| Group texts, photos/attachments, texts sent from the phone itself, iMessage vs SMS | Not exposed by iOS over Bluetooth | Out of scope |
 
 ## Requirements
 
 - Windows 10 2004+ or Windows 11.
 - A Bluetooth adapter that supports the **peripheral role** (most Bluetooth 5 adapters do).
-  The Connection panel says so if yours doesn't.
-- An iPhone. Tested target: iPhone 15 Pro Max.
+  tug says so if yours doesn't.
+- An iPhone. Tested on an iPhone 15 Pro Max and an iPhone X.
 
-## First-time pairing
+## Connecting your iPhone
 
-iOS only lets an accessory connect when the phone starts the connection, so the first pairing goes
-through a free BLE app. After that, iOS reconnects to the PC by itself.
+tug opens with a **Connect your iPhone** panel (also in Settings › iPhone):
 
-1. Start tug. Leave **Visible to iPhone** on (left rail).
-2. On the iPhone, install **LightBlue** (free) and open it next to the PC. Windows doesn't include a
-   name in its Bluetooth LE advert, so the PC most likely appears as **Unnamed** (sometimes as the PC name),
-   usually with the strongest signal.
-   To confirm, switch *Visible to iPhone* off in tug and watch which entry disappears; switch it back on
-   and tap that entry. (Its advert lists the tug service `6E4C3A10-9B2F-4D7A-8C1E-5A0F2B7D9C01`.)
-3. Accept the pairing request on the iPhone and turn on **Share System Notifications** if iOS asks.
-4. In tug's Connection panel the iPhone appears at the top as **Connected now**. Click **Pair**,
-   check the code matches the one on the phone, and confirm on both.
+1. On the iPhone, open **Settings › Bluetooth** and keep it open. tug lists your phone by name.
+2. Click **Pair**, check the code in tug matches the phone, and confirm. That one pairing brings
+   notifications, music, battery and texts. No extra apps needed.
+3. Tap **Allow** on the iPhone when it asks, then turn on the three switches tug shows
+   (Settings › Bluetooth › ⓘ next to this PC): *Share System Notifications* for the Feed,
+   *Show Notifications* for texts, *Sync Contacts* for names, photos and calls. tug turns each one
+   green as it comes on.
 
-A phone already paired through Windows Settings › Bluetooth (e.g. via Phone Link) also shows in the
-list as *Paired for calls & audio*; **Use** pairs that same phone's Bluetooth LE side for you.
+Tapping the PC in the iPhone's Bluetooth list, or Windows' "Add a device", also works.
 
-**iPhone switches** (Settings › Bluetooth › ⓘ next to this PC): *Share System Notifications* for the
-feed, *Show Notifications* for reading and sending texts, *Sync Contacts* for names and new messages.
-The first time tug asks for messages or contacts, iOS refuses once; that's what makes the switch appear.
-
-**Message text missing?** iOS only shares what the lock screen would show. Set
-Settings › Notifications › Show Previews to *Always*.
+**What iOS allows over Bluetooth:**
+- Only the 10 newest incoming texts come over on a fresh install, and texts sent from the phone
+  are never shared. Everything after that is kept in tug's history.
+- After the iPhone restarts, nothing connects until it's unlocked once. tug shows
+  "Unlock your iPhone" and reconnects by itself.
+- Message text missing? iOS only shares what the lock screen shows. Set
+  Settings › Notifications › Show Previews to *Always*.
 
 ## Develop
 
@@ -61,13 +58,14 @@ Settings › Notifications › Show Previews to *Always*.
 npm install
 npm run tauri dev     # the real app, with Bluetooth
 npm run dev           # UI only in a browser, with sample data (src/lib/devMock.ts)
-npm run check         # vue-tsc + clippy -D warnings + cargo test
+npm run check         # vue-tsc + vitest + cargo fmt + clippy -D warnings + cargo test
 npx tauri build --no-bundle   # src-tauri/target/release/tug.exe
-npx tauri build               # installer: src-tauri/target/release/bundle/nsis/tug_0.1.0_x64-setup.exe
+npx tauri build               # installer: src-tauri/target/release/bundle/nsis/tug_<version>_x64-setup.exe
 ```
 
 Browser preview URLs: `/` (connected, sample history), `/?setup` (first run), `/?pairing` (PIN dialog),
-`/?call` (a call rings), `/?nodial` (the calling check fails).
+`/?call` (a call rings), `/?whatsnew` (the What's new card), `/?applemusic`, `/?spotifyoff`,
+`/?btoff`. See `src/lib/devMock.ts` for the rest.
 
 Logs: `%LOCALAPPDATA%\dev.davejames.tug\logs`. History DB: `%APPDATA%\dev.davejames.tug\tug.db`.
 
@@ -75,17 +73,23 @@ Logs: `%LOCALAPPDATA%\dev.davejames.tug\logs`. History DB: `%APPDATA%\dev.daveja
 
 ```
 src-tauri/src/
-  ancs.rs        ANCS wire protocol: parse events, build Control Point requests, reassemble Data Source fragments
-  ams.rs         AMS wire protocol: register for player/track updates, parse them, remote commands
-  media_keys.rs  Windows media keys and flyout (SMTC) show and control the iPhone's music
-  store.rs       SQLite history (FTS5 search), app names, settings
-  state.rs       Status/now-playing shared with the UI; event names
-  commands.rs    Tauri commands called from the UI
-  ble/actor.rs   The Bluetooth actor: advertising, discovery, pairing, GATT session, reconnects
-  ble/winrt.rs   Helpers over Windows.Devices.Bluetooth (GATT read/write/subscribe)
+  ancs.rs, ancs_queue.rs  ANCS wire protocol and the one-request-at-a-time detail queue
+  ams.rs          AMS wire protocol: player/track updates and remote commands
+  ble/actor/      The Bluetooth actor: advertising, discovery, pairing, GATT session, reconnects
+                  (link.rs: connect/backoff/blip handling; notifications.rs; media.rs; pairing.rs)
+  ble/winrt.rs    Helpers over Windows.Devices.Bluetooth; every await is time-limited
+  map/            Texts, contacts and calls over Classic Bluetooth (OBEX, MAP, MNS, PBAP)
+  spotify/        Spotify connector (sign-in, Web API, rate-limit backoff)
+  media_keys.rs   Windows media keys and flyout (SMTC) for the iPhone's music
+  toast/, tray.rs Windows pop-ups with actions; tray icon
+  store.rs        SQLite history (FTS5 search), settings; versioned migrations
+  state.rs        Status/now-playing shared with the UI; event names
+  commands.rs     Tauri commands called from the UI
+  cache_trim.rs, diagnostics.rs, frontend_log.rs, webview_watch.rs  upkeep and crash logging
 src/
-  stores/tug.ts  Pinia store: all UI state, backend events, Windows toasts
-  components/    DeviceRail, FeedPanel, MessageThreads, ConnectionPanel, PairingDialog, …
+  stores/tug.ts   Pinia store: all UI state, backend events, Windows toasts
+  components/     DeviceRail, FeedPanel, MessageThreads, CallsPanel, NowPlayingCard, Settings…
+  lib/whatsNew.ts End-user release notes shown once after each update
   types/protocol.ts  Mirrors the Rust serde types; keep the two in sync
 ```
 
@@ -93,7 +97,9 @@ src/
 so the PC is the GAP *peripheral*. Over that same link the PC is the GATT *client* of the iPhone's
 ANCS, AMS and Battery services. `GattSession.MaintainConnection` asks Windows to re-establish the link
 whenever the phone comes back in range. All Bluetooth work runs in one actor on its own thread,
-because WinRT async types aren't `Send`.
+because WinRT async types aren't `Send`. Retries back off progressively (to 2 minutes while the
+phone is locked after a restart), a sub-second link blip keeps the session, and waking the PC from
+sleep reconnects at once.
 
 **ANCS details that matter.** Subscribe to Data Source *before* Notification Source. Send one Control
 Point request at a time and reassemble its fragmented response. Notification UIDs are only valid within
@@ -103,14 +109,12 @@ duplicated.
 
 ## Roadmap
 
-1. **Calls:** the incoming-call card and recent calls are built (not yet verified on hardware).
-   Dialing over hands-free (HFP) is experimental: it only works if Windows doesn't already hold the
-   iPhone's hands-free link, which `cargo run --example hfp_probe` checks.
-2. **Connectors:** messages are stored with a `source`; next sources are Android, then apps like
-   Slack, Teams, WhatsApp and Wispr Flow feeding the same inbox.
-3. **PC media:** show and control what's playing on the PC (e.g. YouTube in a browser) next to the phone.
-4. **Exact charging state:** iOS exposes none over BLE; needs a companion app or a USB trust pairing.
-5. ANCS service-solicitation advert so the PC appears in iOS Settings without LightBlue.
+See [ROADMAP.md](ROADMAP.md). Every fifth version (v0.5.10, v0.5.15, …) is bug fixing only.
+Next up:
+1. **v0.5.11 — tug Drop:** send photos, files and text between the iPhone and the PC over Wi-Fi,
+   with no app on the phone: scan a QR code in tug and a tug page opens in Safari.
+2. **Companion apps** (planned): a tug protocol in Rust, then Android and iPhone apps for clipboard,
+   files and full message history. See [docs/COMPANION-PLAN.md](docs/COMPANION-PLAN.md).
 
 ## Icon
 
