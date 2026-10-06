@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { MessageSquare, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { callName, callTime, clockTime, formatAddress, groupCalls, MESSAGES_APP } from "../lib/format";
+import { callKey, callKeys, callName, callTime, clockTime, formatAddress, groupCalls, MESSAGES_APP } from "../lib/format";
+import { preservedScrollTop } from "../lib/scroll";
 import type { CallDirection, CallRecord } from "../types/protocol";
 import AppAvatar from "./AppAvatar.vue";
 
@@ -22,6 +23,38 @@ onUnmounted(() => window.clearInterval(live));
 
 const nameFor = computed(() => new Map(tug.contacts.map((c) => [c.address, c.name])));
 const groups = computed(() => groupCalls(tug.calls));
+
+// A stable key per call so a new call at the top doesn't re-key (and so re-render) every row below
+// it. Built from the same objects groupCalls returns, so a per-render identity lookup is enough.
+const keyMap = computed(() => {
+  const keys = callKeys(tug.calls);
+  const m = new Map<CallRecord, string>();
+  tug.calls.forEach((c, i) => m.set(c, keys[i]));
+  return m;
+});
+const keyOf = (c: CallRecord) => keyMap.value.get(c) ?? callKey(c);
+
+// Hold the reader's place as calls arrive. The list is newest-first, so a new call lands at the top:
+// left alone the viewport would slide down by the new row's height. Measure before the DOM updates
+// (this watcher runs pre-flush), then restore — stay pinned at the top if they were already there
+// (so the newest call is seen), otherwise keep the rows under their eye still.
+const scroller = ref<HTMLElement | null>(null);
+const topKey = (gs: Array<{ calls: CallRecord[] }>): string | undefined => {
+  const c = gs[0]?.calls[0];
+  return c ? callKey(c) : undefined;
+};
+watch(groups, async (next, prev) => {
+  const el = scroller.value;
+  if (!el) return;
+  const prevTop = el.scrollTop;
+  const prevHeight = el.scrollHeight;
+  const prependedAtTop = topKey(next) !== topKey(prev ?? []);
+  await nextTick();
+  const after = scroller.value;
+  if (!after) return;
+  const top = preservedScrollTop({ prevTop, prevHeight, newHeight: after.scrollHeight, prependedAtTop });
+  if (top !== null) after.scrollTop = top;
+});
 
 const DIRECTION: Record<CallDirection, { label: string; icon: typeof Phone; tone: string }> = {
   incoming: { label: "Incoming", icon: PhoneIncoming, tone: "bg-accent-teal/20 text-ink" },
@@ -57,7 +90,7 @@ const emptyHint = computed(() => {
 </script>
 
 <template>
-  <div class="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-10">
+  <div ref="scroller" class="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-10">
     <div v-if="tug.calls.length === 0" class="flex flex-1 items-center justify-center py-10">
       <div class="max-w-lg text-center">
         <p class="headline text-[28px]">No recent calls yet</p>
@@ -70,8 +103,8 @@ const emptyHint = computed(() => {
         <h2 class="caption-upper sticky top-0 z-10 bg-canvas/95 px-3 pt-5 pb-2 text-muted backdrop-blur-sm">{{ g.label }}</h2>
         <ul class="flex flex-col gap-0.5">
           <li
-            v-for="(c, i) in g.calls"
-            :key="`${c.at}-${c.number}-${i}`"
+            v-for="c in g.calls"
+            :key="keyOf(c)"
             :class="['group flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-surface-soft', c.number ? 'cursor-pointer' : '']"
             :title="c.number ? `Call ${name(c)}${route(c) === 'back' ? ' back' : ''} on your iPhone` : undefined"
             @click="callFrom(c)"
