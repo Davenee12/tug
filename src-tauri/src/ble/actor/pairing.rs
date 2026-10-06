@@ -15,70 +15,106 @@ impl Actor {
             return Ok(());
         }
         self.discovered.clear();
-        let le = format!("System.Devices.Aep.ProtocolId:=\"{AEP_PROTOCOL_LE}\"");
-        // No IsPaired filter on Classic: a freshly-forgotten iPhone sitting on Settings ›
-        // Bluetooth is discoverable over Classic inquiry with its real name (CoD major = phone),
-        // but unpaired. Filtering to paired-only hid it, so the wizard only ever saw already-
-        // paired accessories (AirPods, Echo) and the anonymous LE adverts. Let both paired and
-        // unpaired Classic devices through; device_kind keeps non-phones out of the phone offer.
-        let classic = format!("System.Devices.Aep.ProtocolId:=\"{AEP_PROTOCOL_CLASSIC}\"");
-        for (aqs, transport) in [(le, Transport::Le), (classic, Transport::Classic)] {
-            let kind_prop = match transport {
-                Transport::Le => PROP_LE_APPEARANCE,
-                Transport::Classic => PROP_COD_MAJOR,
-            };
-            let create = |extra: &[&str]| {
-                let mut props = vec![
-                    HSTRING::from(PROP_IS_CONNECTED),
-                    HSTRING::from("System.Devices.Aep.IsPaired"),
-                ];
-                props.extend(extra.iter().map(|p| HSTRING::from(*p)));
-                DeviceInformation::CreateWatcherWithKindAqsFilterAndAdditionalProperties(
-                    &HSTRING::from(aqs.as_str()),
-                    &IIterable::<HSTRING>::from(props),
-                    DeviceInformationKind::AssociationEndpoint,
-                )
-            };
-            // The kind property is a nicety: if this Windows build rejects it, discover without it.
-            let watcher = create(&[kind_prop]).or_else(|e| {
-                log::warn!("discovery without {kind_prop}: {}", e.message());
-                create(&[])
-            })?;
-            let tx = self.tx.clone();
-            watcher.Added(&TypedEventHandler::<DeviceWatcher, DeviceInformation>::new(
-                move |_, info| {
-                    if let Some(info) = info.as_ref() {
-                        let _ = tx.send(Event::DeviceAdded(info.clone(), transport));
-                    }
-                    Ok(())
-                },
-            ))?;
-            let tx = self.tx.clone();
-            watcher.Updated(&TypedEventHandler::<DeviceWatcher, DeviceInformationUpdate>::new(
-                move |_, u| {
-                    if let Some(u) = u.as_ref() {
-                        let _ = tx.send(Event::DeviceUpdated(u.clone()));
-                    }
-                    Ok(())
-                },
-            ))?;
-            let tx = self.tx.clone();
-            watcher.Removed(&TypedEventHandler::<DeviceWatcher, DeviceInformationUpdate>::new(
-                move |_, u| {
-                    if let Some(id) = u.as_ref().and_then(|u| u.Id().ok()) {
-                        let _ = tx.send(Event::DeviceRemoved(id.to_string()));
-                    }
-                    Ok(())
-                },
-            ))?;
+        for transport in [Transport::Le, Transport::Classic] {
+            let watcher = self.build_watcher(transport)?;
             watcher.Start()?;
-            self.watchers.push(watcher);
+            self.watchers.push((transport, watcher));
         }
         Ok(())
     }
 
+    /// Build (but don't start) a device watcher for one transport, wired to feed the actor's event
+    /// channel. Shared by `start_discovery` and `rescan_classic`.
+    ///
+    /// No IsPaired filter on Classic: a freshly-forgotten iPhone sitting on Settings › Bluetooth is
+    /// discoverable over Classic inquiry with its real name (CoD major = phone), but unpaired.
+    /// Filtering to paired-only hid it, so the wizard only ever saw already-paired accessories
+    /// (AirPods, Echo) and the anonymous LE adverts. Let both paired and unpaired Classic devices
+    /// through; device_kind keeps non-phones out of the phone offer.
+    fn build_watcher(&self, transport: Transport) -> windows::core::Result<DeviceWatcher> {
+        let (aqs, kind_prop) = match transport {
+            Transport::Le => (
+                format!("System.Devices.Aep.ProtocolId:=\"{AEP_PROTOCOL_LE}\""),
+                PROP_LE_APPEARANCE,
+            ),
+            Transport::Classic => (
+                format!("System.Devices.Aep.ProtocolId:=\"{AEP_PROTOCOL_CLASSIC}\""),
+                PROP_COD_MAJOR,
+            ),
+        };
+        let create = |extra: &[&str]| {
+            let mut props = vec![
+                HSTRING::from(PROP_IS_CONNECTED),
+                HSTRING::from("System.Devices.Aep.IsPaired"),
+            ];
+            props.extend(extra.iter().map(|p| HSTRING::from(*p)));
+            DeviceInformation::CreateWatcherWithKindAqsFilterAndAdditionalProperties(
+                &HSTRING::from(aqs.as_str()),
+                &IIterable::<HSTRING>::from(props),
+                DeviceInformationKind::AssociationEndpoint,
+            )
+        };
+        // The kind property is a nicety: if this Windows build rejects it, discover without it.
+        let watcher = create(&[kind_prop]).or_else(|e| {
+            log::warn!("discovery without {kind_prop}: {}", e.message());
+            create(&[])
+        })?;
+        let tx = self.tx.clone();
+        watcher.Added(&TypedEventHandler::<DeviceWatcher, DeviceInformation>::new(
+            move |_, info| {
+                if let Some(info) = info.as_ref() {
+                    let _ = tx.send(Event::DeviceAdded(info.clone(), transport));
+                }
+                Ok(())
+            },
+        ))?;
+        let tx = self.tx.clone();
+        watcher.Updated(&TypedEventHandler::<DeviceWatcher, DeviceInformationUpdate>::new(
+            move |_, u| {
+                if let Some(u) = u.as_ref() {
+                    let _ = tx.send(Event::DeviceUpdated(u.clone()));
+                }
+                Ok(())
+            },
+        ))?;
+        let tx = self.tx.clone();
+        watcher.Removed(&TypedEventHandler::<DeviceWatcher, DeviceInformationUpdate>::new(
+            move |_, u| {
+                if let Some(id) = u.as_ref().and_then(|u| u.Id().ok()) {
+                    let _ = tx.send(Event::DeviceRemoved(id.to_string()));
+                }
+                Ok(())
+            },
+        ))?;
+        Ok(watcher)
+    }
+
+    /// Restart just the Classic watcher so Windows runs a fresh inquiry: an unpaired-Classic AEP
+    /// watcher inquires once when it starts and never again, so an iPhone made discoverable after
+    /// scanning began would otherwise never appear. The LE watcher and the rows already discovered
+    /// are left untouched (ids stay stable; re-added devices update in place), so nothing flickers.
+    pub(super) fn rescan_classic(&mut self) -> windows::core::Result<()> {
+        // Nothing to re-inquire if discovery isn't running (the find step drives this).
+        if self.watchers.is_empty() {
+            return Ok(());
+        }
+        self.watchers.retain(|(t, w)| {
+            if *t == Transport::Classic {
+                let _ = w.Stop();
+                false
+            } else {
+                true
+            }
+        });
+        log::debug!("rescan: restarting Classic discovery for the iPhone");
+        let watcher = self.build_watcher(Transport::Classic)?;
+        watcher.Start()?;
+        self.watchers.push((Transport::Classic, watcher));
+        Ok(())
+    }
+
     pub(super) fn stop_discovery(&mut self) {
-        for w in self.watchers.drain(..) {
+        for (_, w) in self.watchers.drain(..) {
             let _ = w.Stop();
         }
         self.discovered.clear();
@@ -169,12 +205,11 @@ impl Actor {
         tokio::task::spawn_local(async move {
             // Pairing an unpaired Classic iPhone: note which LE devices are already bonded, so once
             // cross-transport key derivation adds the phone's LE bond we can tell it from the rest.
-            let classic = if transport == Transport::Classic {
-                let before = paired_le_ids().await.unwrap_or_else(|e| {
+            let before = if transport == Transport::Classic {
+                Some(paired_le_ids().await.unwrap_or_else(|e| {
                     log::warn!("couldn't list bonded LE devices before pairing: {e}");
                     std::collections::HashSet::new()
-                });
-                Some(ClassicPairing { name, before })
+                }))
             } else {
                 None
             };
@@ -189,6 +224,15 @@ impl Actor {
                     DevicePairingResultStatus::AuthenticationTimeout => Err("Pairing timed out".to_string()),
                     other => Err(format!("Pairing failed ({other:?})")),
                 });
+            // A Classic iPhone that paired: wait here (off the actor loop, up to ~15 s) for the LE
+            // bond cross-transport derivation creates, so adoption is instant and the loop responsive.
+            let classic = match (&result, before) {
+                (Ok(()), Some(before)) => {
+                    let resolved_le = resolve_le_after_classic(&name, &before).await;
+                    Some(ClassicPairing { name, resolved_le })
+                }
+                _ => None,
+            };
             let _ = tx.send(Event::PairingDone {
                 id,
                 result,
@@ -211,7 +255,7 @@ impl Actor {
         // the texts pairing is already done, and the message service can connect on it.
         let _ = self.shared.store.set_setting(keys::TEXTS_DEVICE_ID, &classic_id);
 
-        let le_id = match self.resolve_le_after_classic(&ctx.name, &ctx.before).await {
+        let le_id = match ctx.resolved_le {
             Some(id) => {
                 log::info!("LE device resolved after Classic pairing");
                 id
@@ -228,9 +272,9 @@ impl Actor {
                         Err(e) => return Err(e.message().to_string()),
                     },
                     Err(_) => {
-                        log::warn!("no LE device appeared after Classic pairing; keeping LightBlue fallback");
+                        log::warn!("no LE device appeared after Classic pairing");
                         return Err(
-                            "Paired for texts, but Windows hasn't added your iPhone for notifications yet. In the free LightBlue app on your iPhone, tap the Unnamed entry for this PC, then click Use."
+                            "Almost there — keep Settings › Bluetooth open on your iPhone and tap Pair again."
                                 .to_string(),
                         );
                     }
@@ -241,29 +285,43 @@ impl Actor {
         self.use_device(&le_id).await
     }
 
-    /// Look for the LE bond that cross-transport derivation created for a just-paired Classic
-    /// iPhone, retrying briefly because it can show up slightly later. Pure choice in `map::pick`.
-    async fn resolve_le_after_classic(
-        &self,
-        classic_name: &str,
-        before: &std::collections::HashSet<String>,
-    ) -> Option<String> {
-        const ATTEMPTS: u32 = 6;
-        for attempt in 1..=ATTEMPTS {
-            match paired_le_candidates().await {
-                Ok(candidates) => {
-                    if let Some(c) = crate::map::pick::choose_le_after_classic(&candidates, classic_name, before) {
-                        return Some(c.id.clone());
-                    }
-                    log::info!("LE bond not visible yet after Classic pairing (attempt {attempt}/{ATTEMPTS})");
-                }
-                Err(e) => log::warn!("listing bonded LE devices after Classic pairing: {e}"),
-            }
-            if attempt < ATTEMPTS {
-                tokio::time::sleep(Duration::from_millis(800)).await;
-            }
+    /// Remove a leftover Windows pairing: unpair both the LE and Classic bonds of the phone the id
+    /// points at (matched by name, since the two bonds share one), then re-inquire so it reappears
+    /// unpaired and ready to pair fresh. Best effort, fully bounded — a bond that's away can't park
+    /// the actor loop.
+    pub(super) async fn remove_pairing(&mut self, id: String) -> Result<(), String> {
+        // The two bonds share a name; collect every paired phone entry with it. Gather the ids
+        // first, since the map can't stay borrowed across the await.
+        let target_name = self.discovered.get(&id).and_then(|d| real_name(&d.info));
+        let mut ids: Vec<String> = self
+            .discovered
+            .iter()
+            .filter(|(_, d)| {
+                let name = d.info.Name().map(|n| n.to_string()).unwrap_or_default();
+                let kind = device_kind::classify(
+                    &name,
+                    uint_property(&d.info, PROP_LE_APPEARANCE).and_then(|a| u16::try_from(a).ok()),
+                    uint_property(&d.info, PROP_COD_MAJOR),
+                );
+                let paired = d.info.Pairing().and_then(|p| p.IsPaired()).unwrap_or(false);
+                paired
+                    && kind == DeviceKind::Phone
+                    && target_name
+                        .as_deref()
+                        .is_some_and(|n| real_name(&d.info).as_deref() == Some(n))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if !ids.contains(&id) {
+            ids.push(id);
         }
-        None
+        log::debug!("removing leftover pairing: {} bond(s)", ids.len());
+        for bond in ids {
+            unpair_device(&bond).await;
+        }
+        // Keep scanning so the now-unpaired phone shows up fresh, ready to pair.
+        let _ = self.rescan_classic();
+        Ok(())
     }
 
     /// Adopt a device as "the iPhone": persist it and start connecting.
@@ -272,10 +330,10 @@ impl Actor {
         let le = resolve_le_device(id, transport).await.map_err(|e| {
             // WinRT reports "no such device" as a null result with S_OK.
             if e.code().is_ok() && transport == Some(Transport::Classic) {
-                "Windows has this iPhone paired only for calls and audio (Classic Bluetooth), not Bluetooth LE, which notifications need. In LightBlue on the iPhone, tap the Unnamed entry for this PC, then click Use again."
+                "Windows has this iPhone paired for calls and audio only, not the connection your notifications need. On your iPhone, keep Settings › Bluetooth open and tap Pair again."
                     .to_string()
             } else if e.code().is_ok() {
-                "Windows couldn't find that device over Bluetooth LE. Reconnect from LightBlue and try again.".to_string()
+                "Windows couldn't reach that iPhone over Bluetooth. On your iPhone, keep Settings › Bluetooth open and tap Pair again.".to_string()
             } else {
                 format!("Couldn't open that device over Bluetooth LE: {}", e.message())
             }
@@ -437,6 +495,40 @@ async fn paired_le_candidates() -> std::result::Result<Vec<crate::map::pick::LeC
 /// Just the ids of the bonded LE devices, to snapshot before a Classic pairing.
 async fn paired_le_ids() -> std::result::Result<std::collections::HashSet<String>, String> {
     Ok(paired_le_candidates().await?.into_iter().map(|c| c.id).collect())
+}
+
+/// Look for the LE bond cross-transport derivation creates for a just-paired Classic iPhone,
+/// retrying for ~15 s because it can show up a little later (one run took three attempts, and one
+/// had none appear within the old ~5 s). Runs off the actor loop (in the pairing task), so the wait
+/// never blocks other commands. Pure choice in `map::pick`.
+async fn resolve_le_after_classic(classic_name: &str, before: &std::collections::HashSet<String>) -> Option<String> {
+    const ATTEMPTS: u32 = 15;
+    for attempt in 1..=ATTEMPTS {
+        match paired_le_candidates().await {
+            Ok(candidates) => {
+                if let Some(c) = crate::map::pick::choose_le_after_classic(&candidates, classic_name, before) {
+                    return Some(c.id.clone());
+                }
+                log::debug!("LE bond not visible yet after Classic pairing (attempt {attempt}/{ATTEMPTS})");
+            }
+            Err(e) => log::warn!("listing bonded LE devices after Classic pairing: {e}"),
+        }
+        if attempt < ATTEMPTS {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+    None
+}
+
+/// Lower-cased, trimmed device name, or None when it isn't a real one yet ("Unnamed device").
+fn real_name(info: &DeviceInformation) -> Option<String> {
+    let n = info
+        .Name()
+        .map(|n| n.to_string())
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    (!n.is_empty() && n != "unnamed device").then_some(n)
 }
 
 /// Remove one Windows Bluetooth bond by device id. Best effort and fully bounded, so a phone
