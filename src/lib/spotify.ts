@@ -77,6 +77,19 @@ export function bestTrack(query: string, tracks: SpotifyTrack[]): SpotifyTrack |
   );
 }
 
+/**
+ * Whether a Spotify player snapshot is the song the phone says is playing: the track name equals
+ * the AMS title, ignoring case and surrounding spaces. `null` when either side is missing (unknown).
+ * Spotify's API can lag the phone by a second or so, so a read right after a skip may still
+ * describe the previous song; tug only trusts a snapshot (art, Like) when this is `true`.
+ */
+export function sameSong(trackName: string | null | undefined, title: string | null | undefined): boolean | null {
+  const a = trackName?.trim().toLowerCase();
+  const b = title?.trim().toLowerCase();
+  if (!a || !b) return null;
+  return a === b;
+}
+
 /** mm:ss from a duration in milliseconds (track lengths). */
 export function trackLength(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000));
