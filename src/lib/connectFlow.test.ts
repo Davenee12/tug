@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectDone, connectStep, nextShowConnect, optionalNudge } from "./connectFlow";
+import { canSkipSwitches, connectDone, connectStep, nextShowConnect, optionalNudge } from "./connectFlow";
 import type { DeviceStatus, PairingRequest } from "../types/protocol";
 
 // A fully connected, everything-on phone; tests override only what they exercise.
@@ -67,6 +67,36 @@ describe("connectDone", () => {
     expect(connectDone(CONNECTED)).toBe(true);
     expect(connectDone({ ...CONNECTED, services: { ...CONNECTED.services, notifications: false } })).toBe(false);
     expect(connectDone({ ...CONNECTED, connection: "connecting" })).toBe(false);
+  });
+});
+
+describe("waiting for all three switches", () => {
+  // Dave: the panel rushed to the Feed before he'd turned the switches on.
+  const contactsOff = { ...CONNECTED, contactsShared: false };
+  const textsOff = { ...CONNECTED, services: { ...CONNECTED.services, messages: false }, messagesError: "the iPhone refused message access" };
+
+  it("stays on the switches until every one is on", () => {
+    expect(connectDone(contactsOff)).toBe(false);
+    expect(connectDone(textsOff)).toBe(false);
+    expect(connectStep(contactsOff, null)).toBe("switches");
+    expect(connectDone(CONNECTED)).toBe(true);
+  });
+
+  it("an open panel stays up while optional switches are off", () => {
+    expect(nextShowConnect(true, true, contactsOff)).toBe(true);
+    expect(nextShowConnect(true, true, CONNECTED)).toBe(false);
+  });
+
+  it("Skip for now lets it yield once notifications work", () => {
+    expect(canSkipSwitches(contactsOff)).toBe(true);
+    expect(canSkipSwitches(CONNECTED)).toBe(false);
+    expect(canSkipSwitches({ ...contactsOff, services: { ...contactsOff.services, notifications: false } })).toBe(false);
+    expect(connectDone(contactsOff, true)).toBe(true);
+    expect(nextShowConnect(true, true, contactsOff, true)).toBe(false);
+  });
+
+  it("a returning user's reconnect never opens the panel over optional switches", () => {
+    expect(nextShowConnect(false, true, contactsOff)).toBe(false);
   });
 });
 

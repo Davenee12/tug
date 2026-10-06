@@ -214,10 +214,16 @@ export const useTugStore = defineStore("tug", () => {
    * back. Settings › iPhone shows the same panel component regardless of this flag.
    */
   const showConnect = ref(false);
+  /** "Skip for now" on the panel's switches: let it yield with optional switches still off. */
+  const connectSkipped = ref(false);
   watch(
-    [statusKnown, () => status.value.device, () => status.value.connection, () => status.value.services.notifications],
-    () => (showConnect.value = nextShowConnect(showConnect.value, statusKnown.value, status.value)),
-    { immediate: true },
+    [statusKnown, status, connectSkipped],
+    () => {
+      showConnect.value = nextShowConnect(showConnect.value, statusKnown.value, status.value, connectSkipped.value);
+      // A new setup (no phone) waits for the switches again.
+      if (status.value.device == null) connectSkipped.value = false;
+    },
+    { immediate: true, deep: true },
   );
   const flash = ref<{ kind: "error" | "info"; text: string; action?: { label: string; run: () => void } } | null>(null);
   let flashTimer: number | undefined;
@@ -1163,6 +1169,7 @@ export const useTugStore = defineStore("tug", () => {
     zoom,
     setZoom,
     showConnect,
+    connectSkipped,
     focusItem,
     seen,
     connected,
