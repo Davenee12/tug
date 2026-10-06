@@ -68,10 +68,10 @@ const RETRY_IDLE_SECS: u32 = 10;
 const MAX_RETRY_SECS: u32 = 30;
 /// The iPhone is connected but keeps not offering ANCS — locked after a restart, or mid-update
 /// before its first unlock. Those attempts can't succeed until it's unlocked, so back off far
-/// further than an ordinary failure (up to 5 min) instead of hammering it every 30 s all night,
-/// while still retrying so it reconnects on its own once unlocked.
+/// further than an ordinary failure (up to 2 min) instead of hammering it every 30 s all night,
+/// while still retrying so it reconnects on its own within 2 min of the morning unlock.
 const UNLOCK_RETRY_SECS: u32 = 30;
-const MAX_UNLOCK_RETRY_SECS: u32 = 300;
+const MAX_UNLOCK_RETRY_SECS: u32 = 120;
 /// After this many failures in a row, treat link-up blips as flapping.
 const FLAPPING_AFTER: u32 = 3;
 const FLAP_SETTLE_SECS: u32 = 5;
@@ -117,6 +117,9 @@ enum Event {
     Connection {
         gen: u64,
         connected: bool,
+        /// When Windows reported the edge (stamped in its handler), so the blip debounce measures
+        /// the real outage, not however long the actor took to get to the event.
+        at: Instant,
     },
     /// The phone's Bluetooth name changed (renamed in Settings › General › About).
     Name {
@@ -301,8 +304,9 @@ struct Actor {
     /// Last retry of media/battery discovery: full GATT discovery, so it keeps the slow
     /// cadence even while the user watches the switches (and the probe runs every 2 s).
     optional_retry_at: Option<Instant>,
-    /// When the link last went down and is waiting out the blip grace before a real teardown.
-    /// Set on a disconnect, cleared by a quick reconnect (blip) or by `finish_link_down`.
+    /// When the link last went down (as stamped by Windows' event) and is waiting out the blip
+    /// grace before a real teardown. Set on a disconnect, cleared by the next link-up or by
+    /// `finish_link_down`.
     link_down_at: Option<Instant>,
 }
 
@@ -324,6 +328,28 @@ fn retry_delay(base: u32, failures: u32, cap: u32) -> u32 {
 /// sub-second blip. Pure, so the blip debounce is unit-tested.
 fn link_down_is_real(down_for: Duration) -> bool {
     down_for >= LINK_BLIP_GRACE
+}
+
+/// What a link-up means for the ANCS session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkUp {
+    /// No pending link-down: an ordinary (re)connect.
+    Fresh,
+    /// Down then up inside the blip grace: the GATT subscription survived, keep ANCS.
+    Blip,
+    /// Down past the grace, even if the teardown hasn't run yet: a real outage.
+    AfterOutage,
+}
+
+/// Classify a link-up from the event-source stamps of the pending down (if any) and the up.
+/// Pure, so the debounce is unit-tested; judged on Windows' timestamps, never on when the actor
+/// happened to handle the events (it can be stuck in a bounded await for tens of seconds).
+fn classify_link_up(down_at: Option<Instant>, up_at: Instant) -> LinkUp {
+    match down_at {
+        None => LinkUp::Fresh,
+        Some(down) if link_down_is_real(up_at.saturating_duration_since(down)) => LinkUp::AfterOutage,
+        Some(_) => LinkUp::Blip,
+    }
 }
 
 /// Whether a gap between heartbeats is large enough to mean the PC slept, not just scheduling
@@ -460,7 +486,9 @@ impl Actor {
                     self.shared.update_status(|s| s.battery = Some(level.min(100)));
                 }
             }
-            Event::Connection { gen, connected } if Some(gen) == link_gen => self.on_connection(connected),
+            Event::Connection { gen, connected, at } if Some(gen) == link_gen => {
+                self.on_connection(connected, at).await
+            }
             Event::Name { gen, name } if Some(gen) == link_gen => self.set_device_name(&name),
             Event::Woke { slept } => {
                 log::info!(
@@ -696,12 +724,12 @@ mod tests {
 
     #[test]
     fn unlock_backoff_climbs_to_minutes_not_a_30s_loop() {
-        // The overnight "ANCS not found" loop: back off far (up to 5 min) instead of ~30 s forever,
-        // while still retrying so the phone reconnects on its own once unlocked.
+        // The overnight "ANCS not found" loop: back off (up to 2 min) instead of ~30 s forever,
+        // while still retrying often enough that it reconnects within 2 min of the morning unlock.
         let waits: Vec<u32> = (1..=8)
             .map(|f| retry_delay(UNLOCK_RETRY_SECS, f, MAX_UNLOCK_RETRY_SECS))
             .collect();
-        assert_eq!(waits, vec![30, 60, 120, 240, 300, 300, 300, 300]);
+        assert_eq!(waits, vec![30, 60, 120, 120, 120, 120, 120, 120]);
         assert!(waits.iter().all(|&w| w <= MAX_UNLOCK_RETRY_SECS));
     }
 
@@ -712,6 +740,39 @@ mod tests {
         assert!(!link_down_is_real(Duration::from_millis(900)));
         assert!(link_down_is_real(LINK_BLIP_GRACE), "past the grace: a real disconnect");
         assert!(link_down_is_real(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn a_link_up_is_judged_on_event_stamps_not_handling_time() {
+        let down = Instant::now();
+        assert_eq!(classify_link_up(None, down), LinkUp::Fresh, "no pending down");
+        assert_eq!(
+            classify_link_up(Some(down), down + Duration::from_millis(300)),
+            LinkUp::Blip,
+            "a quick flap keeps ANCS"
+        );
+        // The bug: an up arriving after the grace (before the 1 s tick tore down), or after the
+        // actor sat 10-30 s in a bounded await, was taken for a blip and kept a stale session.
+        assert_eq!(
+            classify_link_up(Some(down), down + LINK_BLIP_GRACE),
+            LinkUp::AfterOutage,
+            "up just past the grace, before the tick ran"
+        );
+        assert_eq!(
+            classify_link_up(Some(down), down + Duration::from_secs(25)),
+            LinkUp::AfterOutage,
+            "a long outage handled late"
+        );
+        // Both edges queued while the actor was stuck: they're still a blip by their own stamps.
+        assert_eq!(
+            classify_link_up(Some(down), down + Duration::from_millis(800)),
+            LinkUp::Blip
+        );
+        // A stamp out of order can't panic or read as an outage.
+        assert_eq!(
+            classify_link_up(Some(down + Duration::from_secs(1)), down),
+            LinkUp::Blip
+        );
     }
 
     #[test]

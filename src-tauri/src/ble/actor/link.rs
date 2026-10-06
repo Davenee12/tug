@@ -12,6 +12,8 @@ impl Actor {
         self.shared.update_status(|s| {
             s.battery = None;
             s.awaiting_phone_allow = false;
+            // No link, so nothing is "connected but locked" any more (Forget, relink, device switch).
+            s.awaiting_unlock = false;
             s.services = Services {
                 messages: s.services.messages,
                 ..Services::default()
@@ -130,7 +132,7 @@ impl Actor {
         }
         let linked = self.link.as_ref().is_some_and(|l| l.connected);
         // A connected-but-no-ANCS failure (phone locked/restarting) can't succeed until unlocked:
-        // back off far (up to 5 min). Otherwise the usual short backoff for a reachable/absent phone.
+        // back off (up to 2 min). Otherwise the usual short backoff for a reachable/absent phone.
         let (base, cap) = if awaiting_unlock {
             (UNLOCK_RETRY_SECS, MAX_UNLOCK_RETRY_SECS)
         } else if linked {
@@ -159,7 +161,14 @@ impl Actor {
             &TypedEventHandler::<BluetoothLEDevice, windows::core::IInspectable>::new(move |d, _| {
                 if let Some(d) = d.as_ref() {
                     let connected = d.ConnectionStatus().ok() == Some(BluetoothConnectionStatus::Connected);
-                    let _ = tx.send(Event::Connection { gen, connected });
+                    // Stamp the edge here, not when the actor gets to it: the actor can be stuck in
+                    // a bounded await for tens of seconds, and the blip debounce must measure how
+                    // long the link was really down, not how quickly the queue was drained.
+                    let _ = tx.send(Event::Connection {
+                        gen,
+                        connected,
+                        at: Instant::now(),
+                    });
                 }
                 Ok(())
             }),
@@ -210,21 +219,31 @@ impl Actor {
         })
     }
 
-    pub(super) fn on_connection(&mut self, connected: bool) {
+    /// A connection edge from Windows, stamped (`at`) when Windows reported it.
+    pub(super) async fn on_connection(&mut self, connected: bool, at: Instant) {
         if self.link.is_none() {
             return;
         }
         if connected {
+            let up = classify_link_up(self.link_down_at.take(), at);
+            // The link was down past the grace even if `tick` hasn't torn it down yet (the up beat
+            // the next tick, or the actor was busy): a real outage, so the old ANCS session, rows and
+            // meta must go and the reconnect's cleared-while-away sweep must run. Tear down before
+            // marking the link connected, because finish_link_down bails on a connected link.
+            if up == LinkUp::AfterOutage {
+                self.finish_link_down();
+            }
             if let Some(l) = self.link.as_mut() {
                 l.connected = true;
             }
-            // A sub-second down→up blip: the GATT subscription (and the pre-existing notifications
-            // iOS is replaying on it) survived, so keep ANCS instead of tearing it down and dropping
-            // the replay. Seen on hardware: a reconnect blip lost every waiting notification.
-            let blip = self.link_down_at.take().is_some();
+            // A down→up blip inside the grace: the GATT subscription (and the pre-existing
+            // notifications iOS is replaying on it) survived, so keep ANCS instead of tearing it down
+            // and dropping the replay. Seen on hardware: a reconnect blip lost every waiting notification.
             let have_ancs = self.link.as_ref().is_some_and(|l| l.ancs.is_some());
-            if blip && have_ancs {
+            if up == LinkUp::Blip && have_ancs {
                 log::debug!("iPhone link blip (down then up); keeping notifications subscribed");
+                // pump() holds requests back while the link is down; send any that queued meanwhile.
+                self.pump().await;
                 return;
             }
             log::info!("iPhone link up");
@@ -244,13 +263,16 @@ impl Actor {
         if let Some(l) = self.link.as_mut() {
             l.connected = false;
         }
-        if self.link_down_at.is_none() {
-            self.link_down_at = Some(Instant::now());
-        }
+        // Keep the first down's stamp: a repeated down event mustn't restart the grace.
+        self.link_down_at.get_or_insert(at);
     }
 
-    /// A deferred link-down that outlasted the blip grace: really disconnect. Services and the
-    /// notification UIDs don't survive a disconnect, so drop them and let the reconnect loop run.
+    /// A link-down that outlasted the blip grace: really disconnect. Runs from `tick` once the
+    /// down has lasted past the grace, or from `on_connection` when the link-up came after it.
+    /// A shorter blip never gets here: its GATT subscription survives, so the ANCS session, its
+    /// notification UIDs, rows and meta are all kept. After a real outage iOS starts a fresh ANCS
+    /// session whose UIDs don't match the old ones, so drop the services and session here; the
+    /// reconnect resubscribes, and its post-replay sweep clears rows dismissed while away.
     pub(super) fn finish_link_down(&mut self) {
         self.link_down_at = None;
         // A link-up arrived first (handled as a blip): nothing to tear down.
