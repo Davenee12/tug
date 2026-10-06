@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **A full Spotify panel**, opened from the Spotify button on Now Playing or with Ctrl+K. It has
+  tabs for **Search**, **Playlists**, **Recently played**, **Your top** songs and artists (last
+  4 weeks / 6 months / all time), and **Up next** (your current queue).
+- **Search and play any song.** Type to search songs, albums, artists and playlists; play a song
+  (it keeps going through its album), add it to your queue, save it to Liked Songs, add it to one
+  of your playlists, or open its album or artist. "Show more" loads further results.
+- **Album and artist pages** with Back: an album's songs, an artist's albums.
+- **Open a playlist to see and play its songs** (for playlists you own or collaborate on);
+  followed playlists play with one tap.
+- **Scrub the Now Playing bar** to seek when Spotify is playing — click or drag.
+- **Play on**: pick where to play from the panel — your iPhone (the default) or another device
+  running Spotify, like Spotify on this PC.
+- **Ctrl+K** learned "**play &lt;song or artist&gt;**" (plays the best match), "**queue
+  &lt;song&gt;**", and "**spotify**" to open the panel. "play &lt;playlist&gt;" still matches a
+  playlist by name.
+
 ## v0.5.8 — 2026-10-05
 
 Smoother setup, texts that arrive instantly, and Spotify. Merged as #48–#61; tried on Dave's
