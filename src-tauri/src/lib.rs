@@ -3,6 +3,7 @@ mod ancs;
 mod ancs_queue;
 mod app_icons;
 mod ble;
+mod cache_trim;
 mod clipboard;
 mod commands;
 mod contact_photos;
@@ -75,6 +76,16 @@ pub fn run() {
             // cached under the app-data dir; the refresh token goes to Credential Manager.
             let spotify = Arc::new(spotify::Spotify::new(store, dir.clone()));
             app.manage(AppState { shared, ble, spotify });
+            // Keep the purely-cached image folders (album art/covers, app icons) from growing without
+            // limit: drop the least-recently-used beyond the cap. Off the main thread so a big folder
+            // scan never delays the window. Contact photos aren't capped here — they can't be
+            // re-fetched, and are pruned by reference instead.
+            let icons_dir = dir.join("icons");
+            let art_dir = dir.join("spotify_art");
+            std::thread::spawn(move || {
+                cache_trim::trim(&icons_dir, cache_trim::APP_ICONS_CAP);
+                cache_trim::trim(&art_dir, cache_trim::SPOTIFY_ART_CAP);
+            });
             // Nice to have, never a reason not to start.
             if let Err(e) = tray::install(app.handle()) {
                 log::warn!("tray icon unavailable: {e}");
