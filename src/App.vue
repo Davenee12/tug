@@ -11,6 +11,7 @@ import NewConversation from "./components/NewConversation.vue";
 import SearchPalette from "./components/SearchPalette.vue";
 import SettingsPage from "./components/SettingsPage.vue";
 import SpotifyPanel from "./components/SpotifyPanel.vue";
+import WhatsNew from "./components/WhatsNew.vue";
 import PairingDialog from "./components/PairingDialog.vue";
 import { nextDownSince, RECONNECT_GRACE_MS, showConnectionPanel } from "./lib/connectionPanel";
 
@@ -128,6 +129,7 @@ onUnmounted(() => {
     <NewConversation v-if="tug.pickerOpen" />
     <SearchPalette v-if="tug.searchOpen" />
     <SpotifyPanel v-if="tug.spotifyPanelOpen" />
+    <WhatsNew v-if="tug.whatsNewOpen" />
     <!-- Last, so a ringing call sits over any other dialog. -->
     <IncomingCall v-if="tug.ringing" :key="tug.ringing.id" :call="tug.ringing" />
 
