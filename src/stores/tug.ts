@@ -895,7 +895,11 @@ export const useTugStore = defineStore("tug", () => {
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
     // A missing key is a fresh install: null (not ""), so the first launch records the version
     // silently instead of greeting a brand-new user with a card about changes they never saw.
-    lastSeenVersion.value = "ui.lastSeenVersion" in raw ? raw["ui.lastSeenVersion"] : null;
+    // Before 0.5.9 nothing recorded a seen version. Someone who finished the old setup wizard
+    // ("ui.onboarded") is updating, not installing fresh: treat them as having seen 0.5.8 so
+    // the 0.5.9 card greets them instead of being skipped as a first install.
+    lastSeenVersion.value =
+      "ui.lastSeenVersion" in raw ? raw["ui.lastSeenVersion"] : raw["ui.onboarded"] === "1" ? "0.5.8" : null;
   }
 
   /** Remember the version whose card the user has now seen, so it doesn't show again. */
