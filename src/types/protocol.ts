@@ -395,3 +395,160 @@ export interface SpotifyPlayer {
   trackName: string | null;
   deviceName: string | null;
 }
+
+// --- Bluetooth inventory (src-tauri/src/bt_inventory) ---
+// A diagnostic of what the iPhone exposes to tug. Privacy-safe by construction: UUIDs, property
+// flags, field names, counts, enums, lengths and harmless values only.
+
+/** One part of the inventory: what was found, or why it couldn't be. */
+export type Probe<T> = { ok: T } | { unavailable: string };
+
+export type InventoryTrigger = "connect" | "followUp" | "onDemand";
+
+export interface BtGattCharacteristic {
+  /** `0x2A19` for SIG UUIDs, the full 128-bit form otherwise. */
+  uuid: string;
+  name: string | null;
+  properties: string[];
+  /** For readable characteristics: "N bytes", an error, or why it wasn't read. Never the value. */
+  read: string | null;
+}
+
+export interface BtGattService {
+  uuid: string;
+  name: string | null;
+  characteristics: Probe<BtGattCharacteristic[]>;
+}
+
+export interface BtPnpId {
+  vendorIdSource: string;
+  vendorId: string;
+  vendor: string | null;
+  productId: string;
+  productVersion: string;
+}
+
+export interface BtDeviceInformation {
+  manufacturer: string | null;
+  modelNumber: string | null;
+  serialNumberLength: number | null;
+  hardwareRevision: string | null;
+  firmwareRevision: string | null;
+  softwareRevision: string | null;
+  systemIdLength: number | null;
+  regulatoryDataLength: number | null;
+  pnpId: BtPnpId | null;
+  unreadable: Record<string, string>;
+}
+
+export interface BtCurrentTime {
+  /** The phone's local wall-clock time, `YYYY-MM-DDTHH:MM:SS`. */
+  local: string;
+  dayOfWeek: string | null;
+  fractions256: number;
+  adjustReasons: string[];
+}
+
+export interface BtLocalTimeInfo {
+  timeZoneMinutes: number | null;
+  dstOffsetMinutes: number | null;
+}
+
+export interface BtReferenceTimeInfo {
+  source: string;
+  accuracyEighths: number | null;
+  accuracy: string;
+  daysSinceUpdate: number;
+  hoursSinceUpdate: number;
+}
+
+export interface BtCurrentTimeReport {
+  currentTime: Probe<BtCurrentTime>;
+  currentTimeNotifies: boolean;
+  localTimeInfo: Probe<BtLocalTimeInfo>;
+  referenceTimeInfo: Probe<BtReferenceTimeInfo>;
+  utcOffsetMinutes: number | null;
+  /** Phone clock minus PC clock in seconds (positive: the phone is ahead). */
+  skewSeconds: number | null;
+}
+
+export interface BtBatteryReport {
+  characteristics: string[];
+  level: number | null;
+  levelNotifies: boolean;
+  powerStateCharacteristic: boolean;
+}
+
+/** One AMS attribute read: a harmless value, presence + length, empty, or an error. */
+export type BtAmsValue = { value: string } | { present: number } | "empty" | { error: string };
+
+export interface BtAmsReport {
+  attributes: { name: string; result: BtAmsValue }[];
+  supportedCommands: string[] | null;
+}
+
+export interface BtAncsTally {
+  added: number;
+  modified: number;
+  removed: number;
+  categories: Record<string, number>;
+  flags: Record<string, number>;
+  detailsFetched: number;
+  attributesPresent: Record<string, number>;
+  messageSize: string;
+  actionLabels: string[];
+}
+
+export interface BtVcardFieldCounts {
+  contacts: number;
+  fields: Record<string, number>;
+  telTypes: Record<string, number>;
+}
+
+export interface BtPbapReport {
+  phonebooks: Record<string, { response: string; size: number | null }>;
+  fieldCounts: Record<string, BtVcardFieldCounts>;
+  probedAt: number | null;
+  fieldPullError: string | null;
+}
+
+export interface BtMapReport {
+  folders: Probe<string[]>;
+  listingTypes: Record<string, number>;
+  mnsEvents: Record<string, number>;
+  sdpFeatures: string[] | null;
+  sdpMessageTypes: string | null;
+}
+
+export interface BtSdpRecord {
+  serviceClasses: string[];
+  profiles: string[];
+  protocols: string[];
+  supportedFeatures: string | null;
+  featureNames: string[];
+  details: Record<string, string>;
+  attributeIds: string[];
+}
+
+export interface BtLinkReport {
+  parameters: Probe<{ intervalMs: number; latency: number; supervisionTimeoutMs: number }>;
+  phy: Probe<{ transmit: string; receive: string }>;
+  maxPduSize: number | null;
+}
+
+export interface BtInventory {
+  schema: number;
+  trigger: InventoryTrigger;
+  generatedAt: number;
+  gatt: Probe<BtGattService[]>;
+  deviceInformation: Probe<BtDeviceInformation>;
+  currentTime: Probe<BtCurrentTimeReport>;
+  battery: Probe<BtBatteryReport>;
+  ams: Probe<BtAmsReport>;
+  ancs: BtAncsTally;
+  pbap: Probe<BtPbapReport>;
+  map: Probe<BtMapReport>;
+  classicSdp: Probe<BtSdpRecord[]>;
+  link: Probe<BtLinkReport>;
+  audioPlayback: Probe<{ candidates: number; iphoneListed: boolean }>;
+}

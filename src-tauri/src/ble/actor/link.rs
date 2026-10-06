@@ -82,6 +82,8 @@ impl Actor {
                 if let Some(l) = self.link.as_mut() {
                     l.connected = true;
                 }
+                // Bluetooth inventory: one report per connection, a little later, off this path.
+                self.schedule_inventory();
                 self.shared.update_status(|s| {
                     s.connection = ConnectionState::Connected;
                     s.last_error = None;
