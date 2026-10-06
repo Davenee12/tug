@@ -13,6 +13,8 @@ import {
   supportsRepeat,
   supportsSkipBack,
   supportsSkipForward,
+  skipMode,
+  skipTargetMs,
   type HoldTimers,
 } from "./media";
 
@@ -51,6 +53,23 @@ describe("extra AMS controls appear only when the player lists them", () => {
     const spotify = { available: ["play", "pause", "skipForward", "skipBackward"] };
     expect(supportsSkipForward(spotify)).toBe(true);
     expect(supportsLike(spotify)).toBe(false);
+  });
+
+  it("skip ±15 s seeks through the Spotify connection for Spotify, never its track-skipping command", () => {
+    const spotify = { player: "Spotify", available: ["play", "pause", "skipForward", "skipBackward"] };
+    expect(skipMode(spotify, "back", true)).toBe("seek");
+    expect(skipMode(spotify, "forward", true)).toBe("seek");
+    expect(skipMode(spotify, "back", false)).toBe("none");
+    const apple = { player: "Music", available: ["skipBackward"] };
+    expect(skipMode(apple, "back", false)).toBe("ams");
+    expect(skipMode(apple, "forward", true)).toBe("none");
+  });
+
+  it("a skip lands inside the song", () => {
+    expect(skipTargetMs(73, -15, 200)).toBe(58_000);
+    expect(skipTargetMs(10, -15, 200)).toBe(0);
+    expect(skipTargetMs(195, 15, 200)).toBe(199_000);
+    expect(skipTargetMs(30, 15, null)).toBe(45_000);
   });
 
   it("like / dislike follow likeTrack / dislikeTrack", () => {
