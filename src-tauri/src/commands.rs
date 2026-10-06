@@ -773,6 +773,24 @@ pub async fn spotify_set_saved(state: State<'_, AppState>, uri: String, saved: b
         .map_err(|e| e.to_string())?
 }
 
+/// An uncaught frontend error (window.onerror, an unhandled promise rejection, or a Vue error),
+/// forwarded so a window crash leaves a trace in the log. Logged at warn, redacted and rate-limited
+/// (see `frontend_log`); the frontend only ever sends the error's name, a trimmed message and the
+/// top of the stack, never a message body or a phone number.
+#[tauri::command]
+pub fn log_frontend_error(kind: String, name: String, message: String, source: String) {
+    use std::sync::{Mutex, OnceLock};
+    static LIMITER: OnceLock<Mutex<crate::frontend_log::RateLimiter>> = OnceLock::new();
+    let limiter = LIMITER.get_or_init(|| Mutex::new(crate::frontend_log::RateLimiter::default()));
+    let allowed = limiter
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .allow(std::time::Instant::now());
+    if allowed {
+        log::warn!("{}", crate::frontend_log::summary(&kind, &name, &message, &source));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_http_url;
