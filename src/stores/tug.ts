@@ -74,6 +74,8 @@ const CODE_TOAST_WINDOW_MS = 10 * 60 * 1000;
  * backend regardless), which is exactly right — a text has nothing to clear in the Feed.
  */
 const CODE_TEXT_TOAST_BASE = 1_000_000_000;
+/** The low-battery pop-up's toast id: outside notification and code-text ids, so a press only opens tug. */
+const BATTERY_TOAST_ID = 2_000_000_000;
 
 const EMPTY_STATUS: DeviceStatus = {
   radio: "unknown",
@@ -455,7 +457,21 @@ export const useTugStore = defineStore("tug", () => {
     }
     if (!settings.value.lowBattery || !(await canToast())) return;
     batteryAlerted = r.alerted;
-    sendNotification({ title: "iPhone battery low", body: `${level}% left. Time to charge it.` });
+    // Through tug's own Windows toast like every other pop-up: the generic notification call
+    // never showed on Dave's PC at 20%. Its id sits outside notification ids, so pressing it
+    // just opens tug.
+    const spec: ToastSpec = {
+      id: BATTERY_TOAST_ID,
+      title: "iPhone battery low",
+      body: `${level}% left. Time to charge it.`,
+      name: "",
+      replyTo: null,
+      markRead: false,
+      code: null,
+      callBack: false,
+      clear: false,
+    };
+    api.showToast(spec).catch(() => sendNotification({ title: spec.title, body: spec.body }));
   }
 
   // A one-time code shouldn't pop up twice when it arrives on both an ANCS notification and a MAP
