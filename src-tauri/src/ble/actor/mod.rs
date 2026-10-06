@@ -66,9 +66,22 @@ const RETRY_CONNECTED_SECS: u32 = 2;
 const RETRY_IDLE_SECS: u32 = 10;
 /// Longest wait between connect attempts once they keep failing.
 const MAX_RETRY_SECS: u32 = 30;
+/// The iPhone is connected but keeps not offering ANCS — locked after a restart, or mid-update
+/// before its first unlock. Those attempts can't succeed until it's unlocked, so back off far
+/// further than an ordinary failure (up to 2 min) instead of hammering it every 30 s all night,
+/// while still retrying so it reconnects on its own within 2 min of the morning unlock.
+const UNLOCK_RETRY_SECS: u32 = 30;
+const MAX_UNLOCK_RETRY_SECS: u32 = 120;
 /// After this many failures in a row, treat link-up blips as flapping.
 const FLAPPING_AFTER: u32 = 3;
 const FLAP_SETTLE_SECS: u32 = 5;
+/// A link-down shorter than this is a blip: the GATT subscription (and the pre-existing
+/// notifications iOS is replaying on it) survives, so keep ANCS instead of tearing it down and
+/// losing the replay. Only a down that outlasts this is treated as a real disconnect.
+const LINK_BLIP_GRACE: Duration = Duration::from_millis(1500);
+/// A wall-clock jump larger than this between 1 s heartbeats means the PC was asleep (the
+/// monotonic heartbeat can't skip this far on its own): on wake, retry the link at once.
+const RESUME_GAP: Duration = Duration::from_secs(10);
 const ADVERTISE_RETRY_SECS: u32 = 3;
 /// Quiet period after the last replayed notification before sweeping stale rows.
 // Long enough that a slow replay's gaps aren't mistaken for its end (that swept, then
@@ -104,11 +117,19 @@ enum Event {
     Connection {
         gen: u64,
         connected: bool,
+        /// When Windows reported the edge (stamped in its handler), so the blip debounce measures
+        /// the real outage, not however long the actor took to get to the event.
+        at: Instant,
     },
     /// The phone's Bluetooth name changed (renamed in Settings › General › About).
     Name {
         gen: u64,
         name: String,
+    },
+    /// The 1 s heartbeat saw the wall clock jump forward: the PC resumed from sleep (or was
+    /// otherwise frozen). Carries how long it was away, for the log.
+    Woke {
+        slept: Duration,
     },
     Advertising(GattServiceProviderAdvertisementStatus),
     Radio(RadioState),
@@ -206,6 +227,27 @@ struct Discovered {
 
 pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Command>) {
     let (tx, mut events) = unbounded_channel();
+    // A 1 s heartbeat that notices the wall clock jumping forward — the PC slept and woke. It runs
+    // as its own task so a long BLE await on the actor loop can't be mistaken for a wake, and so the
+    // actor retries the link the moment Windows thaws rather than sitting on a backed-off timer
+    // (which, after a resume, left tug disconnected until it was restarted).
+    {
+        let tx = tx.clone();
+        tokio::task::spawn_local(async move {
+            let mut last = SystemTime::now();
+            let mut beat = tokio::time::interval(Duration::from_secs(1));
+            beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                beat.tick().await;
+                let now = SystemTime::now();
+                let gap = now.duration_since(last).unwrap_or(Duration::ZERO);
+                last = now;
+                if woke_from_gap(gap) && tx.send(Event::Woke { slept: gap }).is_err() {
+                    break;
+                }
+            }
+        });
+    }
     let mut actor = Actor {
         shared,
         tx,
@@ -223,6 +265,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         carried_name: None,
         cccd_check_in: CCCD_CHECK_SECS,
         optional_retry_at: None,
+        link_down_at: None,
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -261,6 +304,10 @@ struct Actor {
     /// Last retry of media/battery discovery: full GATT discovery, so it keeps the slow
     /// cadence even while the user watches the switches (and the probe runs every 2 s).
     optional_retry_at: Option<Instant>,
+    /// When the link last went down (as stamped by Windows' event) and is waiting out the blip
+    /// grace before a real teardown. Set on a disconnect, cleared by the next link-up or by
+    /// `finish_link_down`.
+    link_down_at: Option<Instant>,
 }
 
 fn now_ms() -> i64 {
@@ -272,9 +319,51 @@ fn now_ms() -> i64 {
 
 /// Seconds before the next connect attempt: the base delay, doubling with each failure in
 /// a row (a phone at the edge of range fails every few seconds, all night), capped.
-fn retry_delay(base: u32, failures: u32) -> u32 {
+fn retry_delay(base: u32, failures: u32, cap: u32) -> u32 {
     let doublings = failures.saturating_sub(1).min(5);
-    base.saturating_mul(1 << doublings).min(MAX_RETRY_SECS)
+    base.saturating_mul(1 << doublings).min(cap)
+}
+
+/// Whether a deferred link-down has lasted long enough to be a real disconnect rather than a
+/// sub-second blip. Pure, so the blip debounce is unit-tested.
+fn link_down_is_real(down_for: Duration) -> bool {
+    down_for >= LINK_BLIP_GRACE
+}
+
+/// What a link-up means for the ANCS session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkUp {
+    /// No pending link-down: an ordinary (re)connect.
+    Fresh,
+    /// Down then up inside the blip grace: the GATT subscription survived, keep ANCS.
+    Blip,
+    /// Down past the grace, even if the teardown hasn't run yet: a real outage.
+    AfterOutage,
+}
+
+/// Classify a link-up from the event-source stamps of the pending down (if any) and the up.
+/// Pure, so the debounce is unit-tested; judged on Windows' timestamps, never on when the actor
+/// happened to handle the events (it can be stuck in a bounded await for tens of seconds).
+fn classify_link_up(down_at: Option<Instant>, up_at: Instant) -> LinkUp {
+    match down_at {
+        None => LinkUp::Fresh,
+        Some(down) if link_down_is_real(up_at.saturating_duration_since(down)) => LinkUp::AfterOutage,
+        Some(_) => LinkUp::Blip,
+    }
+}
+
+/// Whether a gap between heartbeats is large enough to mean the PC slept, not just scheduling
+/// jitter. Pure, so the wake detection is unit-tested.
+fn woke_from_gap(gap: Duration) -> bool {
+    gap >= RESUME_GAP
+}
+
+/// Whether a GATT/ANCS event still belongs to the live subscription and should be processed. The
+/// decision is purely the subscription generation: a momentary link-down flag doesn't invalidate
+/// events that carry the current generation, because the GATT subscription (and the pre-existing
+/// notifications iOS replays on it) outlives a sub-second connection blip.
+fn event_is_current(event_gen: u64, current_sub_gen: Option<u64>) -> bool {
+    current_sub_gen == Some(event_gen)
 }
 
 fn guid(u: u128) -> GUID {
@@ -386,17 +475,41 @@ impl Actor {
             _ => {}
         }
         match ev {
-            Event::NotificationSource { gen, data } if Some(gen) == current => self.on_notification_source(&data).await,
-            Event::DataSource { gen, data } if Some(gen) == current => self.on_data_source(&data).await,
-            Event::MediaEntity { gen, data } if Some(gen) == current => self.on_media_entity(&data).await,
-            Event::MediaCommands { gen, data } if Some(gen) == current => self.on_media_commands(&data),
-            Event::Battery { gen, data } if Some(gen) == current => {
+            Event::NotificationSource { gen, data } if event_is_current(gen, current) => {
+                self.on_notification_source(&data).await
+            }
+            Event::DataSource { gen, data } if event_is_current(gen, current) => self.on_data_source(&data).await,
+            Event::MediaEntity { gen, data } if event_is_current(gen, current) => self.on_media_entity(&data).await,
+            Event::MediaCommands { gen, data } if event_is_current(gen, current) => self.on_media_commands(&data),
+            Event::Battery { gen, data } if event_is_current(gen, current) => {
                 if let Some(&level) = data.first() {
                     self.shared.update_status(|s| s.battery = Some(level.min(100)));
                 }
             }
-            Event::Connection { gen, connected } if Some(gen) == link_gen => self.on_connection(connected),
+            Event::Connection { gen, connected, at } if Some(gen) == link_gen => {
+                self.on_connection(connected, at).await
+            }
             Event::Name { gen, name } if Some(gen) == link_gen => self.set_device_name(&name),
+            Event::Woke { slept } => {
+                log::info!(
+                    "woke after ~{}s away (PC resumed from sleep); retrying the iPhone link and messages now",
+                    slept.as_secs()
+                );
+                // A real change: drop the backoff and retry at once instead of waiting it out.
+                self.connect_failures = 0;
+                self.link_down_at = None;
+                self.retry_in = 0;
+                self.shared.update_status(|s| s.awaiting_unlock = false);
+                // After resume the old GATT handles are stale and Windows may never fire a reconnect
+                // for them, so drop the link and let the next tick open a fresh one.
+                if self.link.is_some() {
+                    self.relink("PC resumed from sleep");
+                }
+                // Nudge the texts/contacts/calls worker to rebuild its MAP session too.
+                if let Some(map) = self.shared.map.get() {
+                    map.refresh();
+                }
+            }
             Event::NotificationSource { .. }
             | Event::DataSource { .. }
             | Event::MediaEntity { .. }
@@ -517,6 +630,12 @@ impl Actor {
             }
         }
 
+        // A link-down that outlasted the blip grace is a real disconnect: tear ANCS down now.
+        // (A shorter down→up blip keeps ANCS, so the pre-existing-notification replay isn't lost.)
+        if self.link_down_at.is_some_and(|t| link_down_is_real(t.elapsed())) {
+            self.finish_link_down();
+        }
+
         if self.shared.watching() {
             self.cccd_check_in = self.cccd_check_in.min(CCCD_CHECK_WATCHING_SECS);
         }
@@ -560,8 +679,16 @@ impl Actor {
 
         self.sweep_if_settled();
 
+        // While the user is on the iPhone screens (setup/Settings), a connect that's backed off
+        // waiting for an unlock should retry promptly — they may be unlocking the phone right now.
+        if self.shared.watching() && self.shared.status().awaiting_unlock {
+            self.retry_in = self.retry_in.min(CCCD_CHECK_WATCHING_SECS);
+        }
+
         let ready = self.link.as_ref().is_some_and(|l| l.connected && l.ancs.is_some());
-        if self.device_id.is_none() || ready || self.shared.status().radio == RadioState::Off {
+        // Within the blip grace, don't reconnect: we're waiting to see if a down is just a flap.
+        let settling = self.link_down_at.is_some();
+        if self.device_id.is_none() || ready || settling || self.shared.status().radio == RadioState::Off {
             return;
         }
         if self.retry_in > 0 {
@@ -582,14 +709,86 @@ mod tests {
 
     #[test]
     fn connect_retries_back_off_then_cap() {
-        let waits: Vec<u32> = (0..=8).map(|f| retry_delay(RETRY_CONNECTED_SECS, f)).collect();
+        let waits: Vec<u32> = (0..=8)
+            .map(|f| retry_delay(RETRY_CONNECTED_SECS, f, MAX_RETRY_SECS))
+            .collect();
         assert_eq!(waits, vec![2, 2, 4, 8, 16, 30, 30, 30, 30]);
-        assert_eq!(retry_delay(RETRY_IDLE_SECS, 1), 10);
-        assert_eq!(retry_delay(RETRY_IDLE_SECS, 3), 30);
+        assert_eq!(retry_delay(RETRY_IDLE_SECS, 1, MAX_RETRY_SECS), 10);
+        assert_eq!(retry_delay(RETRY_IDLE_SECS, 3, MAX_RETRY_SECS), 30);
         assert_eq!(
-            retry_delay(RETRY_CONNECTED_SECS, u32::MAX),
+            retry_delay(RETRY_CONNECTED_SECS, u32::MAX, MAX_RETRY_SECS),
             MAX_RETRY_SECS,
             "no overflow"
         );
+    }
+
+    #[test]
+    fn unlock_backoff_climbs_to_minutes_not_a_30s_loop() {
+        // The overnight "ANCS not found" loop: back off (up to 2 min) instead of ~30 s forever,
+        // while still retrying often enough that it reconnects within 2 min of the morning unlock.
+        let waits: Vec<u32> = (1..=8)
+            .map(|f| retry_delay(UNLOCK_RETRY_SECS, f, MAX_UNLOCK_RETRY_SECS))
+            .collect();
+        assert_eq!(waits, vec![30, 60, 120, 120, 120, 120, 120, 120]);
+        assert!(waits.iter().all(|&w| w <= MAX_UNLOCK_RETRY_SECS));
+    }
+
+    #[test]
+    fn a_sub_second_link_blip_is_not_a_real_disconnect() {
+        // Keep ANCS (and the pre-existing-notification replay) through a quick down→up flap.
+        assert!(!link_down_is_real(Duration::from_millis(200)));
+        assert!(!link_down_is_real(Duration::from_millis(900)));
+        assert!(link_down_is_real(LINK_BLIP_GRACE), "past the grace: a real disconnect");
+        assert!(link_down_is_real(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn a_link_up_is_judged_on_event_stamps_not_handling_time() {
+        let down = Instant::now();
+        assert_eq!(classify_link_up(None, down), LinkUp::Fresh, "no pending down");
+        assert_eq!(
+            classify_link_up(Some(down), down + Duration::from_millis(300)),
+            LinkUp::Blip,
+            "a quick flap keeps ANCS"
+        );
+        // The bug: an up arriving after the grace (before the 1 s tick tore down), or after the
+        // actor sat 10-30 s in a bounded await, was taken for a blip and kept a stale session.
+        assert_eq!(
+            classify_link_up(Some(down), down + LINK_BLIP_GRACE),
+            LinkUp::AfterOutage,
+            "up just past the grace, before the tick ran"
+        );
+        assert_eq!(
+            classify_link_up(Some(down), down + Duration::from_secs(25)),
+            LinkUp::AfterOutage,
+            "a long outage handled late"
+        );
+        // Both edges queued while the actor was stuck: they're still a blip by their own stamps.
+        assert_eq!(
+            classify_link_up(Some(down), down + Duration::from_millis(800)),
+            LinkUp::Blip
+        );
+        // A stamp out of order can't panic or read as an outage.
+        assert_eq!(
+            classify_link_up(Some(down + Duration::from_secs(1)), down),
+            LinkUp::Blip
+        );
+    }
+
+    #[test]
+    fn a_wall_clock_jump_reads_as_a_wake() {
+        assert!(!woke_from_gap(Duration::from_secs(1)), "a normal heartbeat");
+        assert!(!woke_from_gap(Duration::from_secs(3)), "scheduling jitter isn't a wake");
+        assert!(woke_from_gap(RESUME_GAP));
+        assert!(woke_from_gap(Duration::from_secs(3600)), "a long sleep");
+    }
+
+    #[test]
+    fn ancs_events_follow_the_live_subscription_generation() {
+        // An event from the current subscription is kept even if a link-down flag flipped during a
+        // blip; one from a replaced subscription is dropped. (The bug: a blip dropped current ones.)
+        assert!(event_is_current(2, Some(2)), "current generation: keep");
+        assert!(!event_is_current(2, Some(3)), "superseded by a resubscribe: drop");
+        assert!(!event_is_current(2, None), "no live subscription: drop");
     }
 }

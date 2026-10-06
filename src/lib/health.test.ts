@@ -15,6 +15,7 @@ const CONNECTED: DeviceStatus = {
   lastErrorAt: null,
   pairingStale: false,
   awaitingPhoneAllow: false,
+  awaitingUnlock: false,
   messagesError: null,
   contactsError: null,
   contactsShared: false,
@@ -75,6 +76,22 @@ describe("connectionHealth", () => {
   it("tells a never-paired owner to pair", () => {
     const m = health({ connection: "noDevice", device: null });
     expect(m.get("texts")!.detail).toMatch(/Pair your iPhone/);
+  });
+
+  it("tells the owner to unlock a connected-but-locked iPhone", () => {
+    const m = health({ connection: "disconnected", awaitingUnlock: true, device: { id: "x", name: "iPhone" } });
+    for (const key of ["notifications", "media", "battery", "texts"]) {
+      expect(m.get(key)!.state, key).toBe("waiting");
+      expect(m.get(key)!.detail).toMatch(/Unlock it to reconnect/);
+    }
+  });
+
+  it("asks to pair, not unlock, once the iPhone is forgotten even if awaitingUnlock lingers", () => {
+    const m = health({ connection: "noDevice", awaitingUnlock: true, device: null });
+    for (const key of ["notifications", "media", "battery", "texts"]) {
+      expect(m.get(key)!.detail, key).toMatch(/Pair your iPhone/);
+      expect(m.get(key)!.detail, key).not.toMatch(/locked/);
+    }
   });
 
   it("surfaces a stale pairing on the notifications link", () => {

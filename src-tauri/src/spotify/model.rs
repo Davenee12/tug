@@ -173,6 +173,8 @@ pub struct PlayerSnapshot {
     pub shuffle: bool,
     pub repeat: Option<RepeatMode>,
     pub track_uri: Option<String>,
+    /// The playing track's name, so the UI can check this is the song the phone reports.
+    pub track_name: Option<String>,
     pub art_url: Option<String>,
     pub device_name: Option<String>,
 }
@@ -195,6 +197,12 @@ pub fn parse_player(json: &str) -> Option<PlayerSnapshot> {
             .and_then(|i| i.get("uri"))
             .and_then(Value::as_str)
             .filter(|u| !u.is_empty())
+            .map(str::to_string),
+        track_name: item
+            .and_then(|i| i.get("name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
             .map(str::to_string),
         art_url: item
             .and_then(|i| i.get("album"))
@@ -966,17 +974,25 @@ mod tests {
             "shuffle_state": true,
             "repeat_state": "context",
             "device": {"name":"Jordan's iPhone","type":"Smartphone"},
-            "item": {"uri":"spotify:track:abc","album":{"images":[{"url":"https://i.scdn.co/big","width":640},{"url":"https://i.scdn.co/mid","width":300}]}}
+            "item": {"uri":"spotify:track:abc","name":"Teardrop","album":{"images":[{"url":"https://i.scdn.co/big","width":640},{"url":"https://i.scdn.co/mid","width":300}]}}
         }"#;
         let p = parse_player(json).unwrap();
         assert!(p.is_playing && p.shuffle);
         assert_eq!(p.repeat, Some(RepeatMode::All));
         assert_eq!(p.track_uri.as_deref(), Some("spotify:track:abc"));
+        assert_eq!(p.track_name.as_deref(), Some("Teardrop"));
         assert_eq!(p.art_url.as_deref(), Some("https://i.scdn.co/mid"));
         assert_eq!(p.device_name.as_deref(), Some("Jordan's iPhone"));
         // 204/empty body: nothing playing.
         assert_eq!(parse_player(""), None);
         assert_eq!(parse_player("   "), None);
+        // No item (an ad, or between songs): no track and no name to check against.
+        let p = parse_player(r#"{"is_playing":true,"item":null}"#).unwrap();
+        assert_eq!(p.track_uri, None);
+        assert_eq!(p.track_name, None);
+        // A blank name is unknown, not a name.
+        let p = parse_player(r#"{"item":{"uri":"spotify:track:x","name":"  "}}"#).unwrap();
+        assert_eq!(p.track_name, None);
     }
 
     #[test]

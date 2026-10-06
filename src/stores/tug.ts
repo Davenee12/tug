@@ -50,7 +50,7 @@ import type {
   ToastPressed,
   UiSettings,
 } from "../types/protocol";
-import { bestTrack, nextRepeat } from "../lib/spotify";
+import { bestTrack, nextRepeat, sameSong } from "../lib/spotify";
 import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 
@@ -94,6 +94,7 @@ const EMPTY_STATUS: DeviceStatus = {
   lastErrorAt: null,
   pairingStale: false,
   awaitingPhoneAllow: false,
+  awaitingUnlock: false,
   messagesError: null,
   contactsError: null,
   contactsShared: false,
@@ -161,7 +162,7 @@ export const useTugStore = defineStore("tug", () => {
 
   // --- Spotify connector ---
   const spotify = ref<SpotifyStatus>({ connected: false, account: null });
-  /** The Spotify playback snapshot (repeat/shuffle/like/art), polled only while relevant. */
+  /** The Spotify playback snapshot (repeat/shuffle/like/art), read once per song (no polling). */
   const spotifyPlayer = ref<SpotifyPlayer | null>(null);
   /** The user's playlists, loaded on connect / first use and cached for Ctrl+K and the panel. */
   const playlists = ref<SpotifyPlaylist[]>([]);
@@ -276,7 +277,8 @@ export const useTugStore = defineStore("tug", () => {
   );
   const flash = ref<{ kind: "error" | "info"; text: string; action?: { label: string; run: () => void } } | null>(null);
   let flashTimer: number | undefined;
-  let spotifyPoll: number | undefined;
+  /** The pending once-per-song Spotify read (see refreshForSong). */
+  let spotifySongTimer: number | undefined;
 
   // --- What's new -----------------------------------------------------------------------
   /** The running app version (from getVersion), null until read / in a plain-browser dev build. */
@@ -531,9 +533,11 @@ export const useTugStore = defineStore("tug", () => {
     if (!popupAllowed(event)) return;
     const code = findCode(n.message || n.subtitle)?.code ?? null;
     if (code !== null && recentlyCodeToasted(code)) return; // a text pop-up already carried this code
+    // Claim the code before awaiting: the notification and the text for one code can arrive in the
+    // same tick, and both would pass the check above if the claim came after the await.
+    if (code !== null) markCodeToasted(code);
     if (!(await hasToastPermission())) return;
     if (!admitToast(event.isCall)) return;
-    if (code !== null) markCodeToasted(code);
     // With buttons for what applies (reply, mark read, copy code, call back, clear); the
     // backend falls back to a plain pop-up itself if Windows won't take that one.
     const spec = toastSpec(n, messages.value, contacts.value);
@@ -552,9 +556,9 @@ export const useTugStore = defineStore("tug", () => {
     // A code text obeys the same policy as a notification carrying a code (Messages app, no call).
     const event: PopupEvent = { appId: MESSAGES_APP, isCall: false, isVip: isVip(vips.value, { name: m.contactName, address: m.address }) };
     if (!popupAllowed(event)) return;
+    markCodeToasted(code); // claimed before the await (see maybeToast)
     if (!(await hasToastPermission())) return;
     if (!admitToast(false)) return;
-    markCodeToasted(code);
     const known = m.contactName ?? contacts.value.find((c) => c.address === m.address)?.name;
     const name = known && !isAddressLike(known) ? cleanName(known) : formatAddress(m.address);
     const spec: ToastSpec = {
@@ -1012,9 +1016,8 @@ export const useTugStore = defineStore("tug", () => {
           // A resync may have added, changed or removed photos: drop the cache so avatars re-ask.
           contactPhotos.value = {};
           photoRequests.clear();
-          // Names are joined into messages server-side; apply them to what's loaded.
-          const byAddress = new Map(list.map((c) => [c.address, c.name]));
-          for (const m of messages.value) m.contactName = byAddress.get(m.address) ?? m.contactName;
+          // Names are joined into messages server-side; re-read them for what's loaded.
+          void refreshLoadedMessageNames();
           // Notifications under a contact's old name come back under the new one.
           void refreshLoadedNotifications();
         }),
@@ -1063,7 +1066,8 @@ export const useTugStore = defineStore("tug", () => {
     window.clearTimeout(toastSummary);
     spotifyWait++;
     window.clearTimeout(freshTimer);
-    window.clearInterval(spotifyPoll);
+    window.clearTimeout(spotifySongTimer);
+    spotifySongTimer = undefined;
     window.clearTimeout(flashTimer);
     window.clearInterval(watchRenew);
     window.clearInterval(clockTimer);
@@ -1084,6 +1088,18 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   /** Re-read what's loaded (names are resolved server-side, e.g. after a contact is renamed). */
+  /**
+   * Take each loaded text's name from the server, which knows the whole story: the contact's
+   * name when there is one, else the name the iPhone sent with the text. Guessing from the
+   * contacts list alone wiped phone-sent names and brought deleted contacts back on restart.
+   */
+  async function refreshLoadedMessageNames() {
+    const fresh = await api.listMessages(Math.max(messages.value.length, 2000)).catch(() => null);
+    if (!fresh) return;
+    const names = new Map(fresh.map((m) => [m.id, m.contactName]));
+    for (const m of messages.value) if (names.has(m.id)) m.contactName = names.get(m.id) ?? null;
+  }
+
   async function refreshLoadedNotifications() {
     const count = Math.min(Math.max(notifications.value.length, PAGE), 500);
     const fresh = await api.listNotifications(count).catch(() => null);
@@ -1337,7 +1353,7 @@ export const useTugStore = defineStore("tug", () => {
 
   async function refreshSpotifyPlayer() {
     if (!spotifyActive.value) return;
-    // A transient read failure shouldn't nag; the next poll tries again.
+    // A transient read failure shouldn't nag; the next song or action reads again.
     try {
       spotifyPlayer.value = await api.spotifyPlayer();
     } catch {
@@ -1369,7 +1385,8 @@ export const useTugStore = defineStore("tug", () => {
 
   async function toggleSpotifyLike() {
     const p = spotifyPlayer.value;
-    if (!p?.trackUri) return;
+    // Never Like from a snapshot of another song (Spotify lagging the phone after a skip).
+    if (!p?.trackUri || !spotifyTrackVerified.value) return;
     const previous = p.saved ?? false;
     const want = !previous;
     p.saved = want;
@@ -1378,27 +1395,54 @@ export const useTugStore = defineStore("tug", () => {
     if (ok !== true && spotifyPlayer.value) spotifyPlayer.value.saved = previous;
   }
 
-  // Poll /me/player lightly, only while tug is visible and Spotify is the active player.
-  // Spotify rate-limits hard (Dave hit a 19-hour timeout polling every 5 s): what's playing is
-  // re-read every 30 s while visible, and right away when the song changes (below).
-  const SPOTIFY_POLL_MS = 30_000;
-  // A new song (from the phone's own media updates) re-reads Spotify once, so Like and art follow
-  // without polling fast.
-  watch(
-    () => `${nowPlaying.value.title}|${nowPlaying.value.artist}`,
-    () => {
-      if (pageVisible.value && spotifyActive.value) void refreshSpotifyPlayer();
-    },
+  // No polling: Spotify rate-limits hard (Dave hit a 19-hour timeout polling every 5 s, then
+  // still while polling every 30 s). The iPhone already says when the song changes, so tug reads
+  // Spotify's extras (art, Like, shuffle/repeat) once per song, and otherwise only when you act.
+  // Spotify's API often lags the phone by about a second, so the read waits for the song to settle
+  // (which also skips the songs you skip past), and is checked against the phone's title: a
+  // snapshot of the previous song is read once more, and never shown as the current one.
+  /** Wait after a song change before reading Spotify. */
+  const SPOTIFY_SETTLE_MS = 2_500;
+  /** Wait before the one re-read when Spotify still reports a different song. */
+  const SPOTIFY_RECHECK_MS = 3_000;
+  /** The snapshot is the song the phone is playing (so its art and Like belong to it). */
+  const spotifyTrackVerified = computed(
+    () => sameSong(spotifyPlayer.value?.trackName, nowPlaying.value.title) === true,
   );
+  let spotifyReadFor = "";
+  const songKey = () => `${nowPlaying.value.title}|${nowPlaying.value.artist}`;
+  function cancelSongRead() {
+    window.clearTimeout(spotifySongTimer);
+    spotifySongTimer = undefined;
+  }
+  function refreshForSong() {
+    cancelSongRead();
+    if (!pageVisible.value || !spotifyActive.value) return;
+    const key = songKey();
+    // Already read for this song (e.g. window shown again), unless that read was of another song.
+    if (key === spotifyReadFor && spotifyTrackVerified.value) return;
+    spotifySongTimer = window.setTimeout(() => void readForSong(key, true), SPOTIFY_SETTLE_MS);
+  }
+  async function readForSong(key: string, recheck: boolean) {
+    spotifySongTimer = undefined;
+    if (key !== songKey() || !pageVisible.value || !spotifyActive.value) return;
+    spotifyReadFor = key;
+    await refreshSpotifyPlayer();
+    // The song moved on while reading: its own settle timer takes over.
+    if (key !== songKey() || !pageVisible.value || !spotifyActive.value) return;
+    if (recheck && !spotifyTrackVerified.value) {
+      spotifySongTimer = window.setTimeout(() => void readForSong(key, false), SPOTIFY_RECHECK_MS);
+    }
+  }
+  watch(songKey, refreshForSong);
   watch(
     () => pageVisible.value && spotifyActive.value,
     (on) => {
-      window.clearInterval(spotifyPoll);
-      if (on) {
-        void refreshSpotifyPlayer();
-        spotifyPoll = window.setInterval(() => void refreshSpotifyPlayer(), SPOTIFY_POLL_MS);
-      } else {
+      if (on) return refreshForSong();
+      cancelSongRead();
+      if (!spotifyActive.value) {
         spotifyPlayer.value = null;
+        spotifyReadFor = "";
       }
     },
     { immediate: true },
@@ -1411,6 +1455,7 @@ export const useTugStore = defineStore("tug", () => {
     // Spotify connector
     spotify,
     spotifyPlayer,
+    spotifyTrackVerified,
     spotifyActive,
     spotifyConnecting,
     playlists,
