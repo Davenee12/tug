@@ -72,6 +72,8 @@ pub struct SpotifyPlayer {
     pub album_art: Option<String>,
     /// The playing track's URI (what Like saves/removes).
     pub track_uri: Option<String>,
+    /// The playing track's name, checked against the phone's title before Like is offered.
+    pub track_name: Option<String>,
     pub device_name: Option<String>,
 }
 
@@ -546,6 +548,7 @@ impl Spotify {
             saved,
             album_art,
             track_uri: snap.track_uri,
+            track_name: snap.track_name,
             device_name: snap.device_name,
         }))
     }
