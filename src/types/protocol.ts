@@ -391,5 +391,7 @@ export interface SpotifyPlayer {
   albumArt: string | null;
   /** The playing track's URI (what Like saves/removes). */
   trackUri: string | null;
+  /** The playing track's name, checked against the phone's title before Like is offered. */
+  trackName: string | null;
   deviceName: string | null;
 }
