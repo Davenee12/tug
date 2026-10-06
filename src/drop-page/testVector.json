@@ -1,0 +1,23 @@
+{
+  "_comment": "Shared tug Drop crypto vector, asserted by cargo test (src-tauri/src/drop/crypto.rs) and vitest (src/drop-page/crypto.test.ts).",
+  "secret": "000102030405060708090a0b0c0d0e0f",
+  "encKey": "b8d54cc76359b4935d36d338a4f279d69d952d9ec15eaeb5bcf4d6a88c591693",
+  "authKey": "acfac4a33eba6ab16e80a798dfdbe29c6a6d6daa96eeaca32db46fbfde6905d1",
+  "nonce": "404142434445464748494a4b4c4d4e4f5051525354555657",
+  "ad": "tug-drop/1|up|AAAAAAAAAAAAAAAAAAAAAA|3",
+  "plaintext": "tug Drop test vector: photos, files and text.",
+  "sealed": "404142434445464748494a4b4c4d4e4f505152535455565749a094714523df70a73ca4fe50815ea75ebc26504241ca555102fbe3bc65089a50816f308032045ba8753a625750c2c1e53bf44ca358fe602494f12463",
+  "mac": {
+    "client": "Y2xpZW50LWlkLTEyMzQ1Ng",
+    "seq": 1843200000000001,
+    "method": "PUT",
+    "path": "/api/up/AAAAAAAAAAAAAAAAAAAAAA/3",
+    "mac": "-lIZXFRQGLAPPR0_8Y6MIA"
+  },
+  "fileId": {
+    "name": "IMG_0001.HEIC",
+    "size": 2481152,
+    "lastModified": 1790000000000,
+    "id": "sRHWUdv1l62jLqTOc0LvMQ"
+  }
+}
