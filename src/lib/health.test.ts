@@ -86,6 +86,14 @@ describe("connectionHealth", () => {
     }
   });
 
+  it("asks to pair, not unlock, once the iPhone is forgotten even if awaitingUnlock lingers", () => {
+    const m = health({ connection: "noDevice", awaitingUnlock: true, device: null });
+    for (const key of ["notifications", "media", "battery", "texts"]) {
+      expect(m.get(key)!.detail, key).toMatch(/Pair your iPhone/);
+      expect(m.get(key)!.detail, key).not.toMatch(/locked/);
+    }
+  });
+
   it("surfaces a stale pairing on the notifications link", () => {
     const l = link({ pairingStale: true, services: { notifications: false, media: true, battery: true, messages: true } }, "notifications");
     expect(l.state).toBe("error");
