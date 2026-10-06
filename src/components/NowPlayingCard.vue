@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { FastForward, Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, Rewind, RotateCcw, Shuffle, SkipBack, SkipForward, ThumbsDown, ThumbsUp, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { duration } from "../lib/format";
-import { canRestart, createHoldRepeater, repeatLabel, SKIP_SECONDS, supportsDislike, supportsLike, supportsSkipBack, supportsSkipForward } from "../lib/media";
+import { canRestart, createHoldRepeater, repeatLabel, SKIP_SECONDS, skipMode, skipTargetMs, supportsDislike, supportsLike } from "../lib/media";
 import { seekFraction } from "../lib/spotify";
 
 // `compact` (from the sidebar, on short windows) drops the card's second row of extra controls and
@@ -112,8 +112,21 @@ const can = (c: string) => np.value.available.length === 0 || np.value.available
 // Extra AMS controls, shown only when the current player lists them (see lib/media). Skip ±15 s is
 // offered by Apple Music and Spotify; Like/Dislike by Apple Music. Spotify keeps its own Web API
 // Like (the heart next to the title), so AMS Like is suppressed while Spotify is the active player.
-const skipBack = computed(() => supportsSkipBack(np.value));
-const skipForward = computed(() => supportsSkipForward(np.value));
+const backMode = computed(() => skipMode(np.value, "back", seekable.value));
+const forwardMode = computed(() => skipMode(np.value, "forward", seekable.value));
+const skipBack = computed(() => backMode.value !== "none");
+const skipForward = computed(() => forwardMode.value !== "none");
+// Spotify jumps to the exact time through the Spotify connection (its own skip command restarts
+// the song); other players get the phone's skip command.
+function skip(direction: "back" | "forward") {
+  const mode = direction === "back" ? backMode.value : forwardMode.value;
+  if (mode === "seek") {
+    const delta = direction === "back" ? -SKIP_SECONDS : SKIP_SECONDS;
+    void tug.spotifySeek(skipTargetMs(elapsed.value ?? 0, delta, np.value.duration ?? null));
+  } else if (mode === "ams") {
+    void tug.media(direction === "back" ? "skipBackward" : "skipForward");
+  }
+}
 const amsLike = computed(() => !tug.spotifyActive && supportsLike(np.value));
 const amsDislike = computed(() => !tug.spotifyActive && supportsDislike(np.value));
 const hasExtraControls = computed(() => skipBack.value || skipForward.value || amsLike.value || amsDislike.value);
@@ -242,7 +255,7 @@ function restart() {
             class="flex items-center gap-0.5 rounded-full px-1.5 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
             :aria-label="`Back ${SKIP_SECONDS} seconds`"
             :title="`Back ${SKIP_SECONDS} seconds`"
-            @click="tug.media('skipBackward')"
+            @click="skip('back')"
           >
             <Rewind :size="15" />
             <span class="text-[10px]">{{ SKIP_SECONDS }}</span>
@@ -252,7 +265,7 @@ function restart() {
             class="flex items-center gap-0.5 rounded-full px-1.5 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
             :aria-label="`Forward ${SKIP_SECONDS} seconds`"
             :title="`Forward ${SKIP_SECONDS} seconds`"
-            @click="tug.media('skipForward')"
+            @click="skip('forward')"
           >
             <span class="text-[10px]">{{ SKIP_SECONDS }}</span>
             <FastForward :size="15" />
@@ -356,7 +369,7 @@ function restart() {
           class="flex items-center gap-0.5 rounded-full px-2 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
           :aria-label="`Back ${SKIP_SECONDS} seconds`"
           :title="`Back ${SKIP_SECONDS} seconds`"
-          @click="tug.media('skipBackward')"
+          @click="skip('back')"
         >
           <Rewind :size="15" />
           <span class="font-mono text-[10px]">{{ SKIP_SECONDS }}</span>
@@ -366,7 +379,7 @@ function restart() {
           class="flex items-center gap-0.5 rounded-full px-2 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
           :aria-label="`Forward ${SKIP_SECONDS} seconds`"
           :title="`Forward ${SKIP_SECONDS} seconds`"
-          @click="tug.media('skipForward')"
+          @click="skip('forward')"
         >
           <span class="font-mono text-[10px]">{{ SKIP_SECONDS }}</span>
           <FastForward :size="15" />
