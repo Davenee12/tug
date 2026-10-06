@@ -15,9 +15,17 @@ import type {
   PairingRequest,
   PhoneNotification,
   RepeatMode,
+  SpotifyAlbumDetail,
+  SpotifyArtist,
+  SpotifyArtistDetail,
+  SpotifyDevice,
+  SpotifyKind,
   SpotifyPlayer,
   SpotifyPlaylist,
+  SpotifyQueue,
+  SpotifySearch,
   SpotifyStatus,
+  SpotifyTrack,
   ToastPressed,
   ToastSpec,
 } from "../types/protocol";
@@ -82,11 +90,31 @@ export const api = {
   spotifyDisconnect: () => invoke<SpotifyStatus>("spotify_disconnect"),
   spotifyPlaylists: () => invoke<SpotifyPlaylist[]>("spotify_playlists"),
   spotifyCover: (url: string) => invoke<string | null>("spotify_cover", { url }),
-  spotifyPlayPlaylist: (uri: string) => invoke<void>("spotify_play_playlist", { uri }),
+  /** Play a playlist/album/artist context on a device (null = the iPhone, with the open-Spotify wait). */
+  spotifyPlayContext: (uri: string, deviceId: string | null) =>
+    invoke<void>("spotify_play_context", { uri, deviceId }),
+  /** Play one track, optionally inside a context so the queue keeps going. */
+  spotifyPlayTrack: (uri: string, contextUri: string | null, deviceId: string | null) =>
+    invoke<void>("spotify_play_track", { uri, contextUri, deviceId }),
   spotifyPlayer: () => invoke<SpotifyPlayer | null>("spotify_player"),
   spotifySetRepeat: (mode: RepeatMode) => invoke<void>("spotify_set_repeat", { mode }),
   spotifySetShuffle: (on: boolean) => invoke<void>("spotify_set_shuffle", { on }),
   spotifySetSaved: (uri: string, saved: boolean) => invoke<void>("spotify_set_saved", { uri, saved }),
+  spotifySearch: (query: string, kinds: SpotifyKind[], offset: number) =>
+    invoke<SpotifySearch>("spotify_search", { query, kinds, offset }),
+  spotifyQueue: () => invoke<SpotifyQueue>("spotify_queue"),
+  spotifyAddToQueue: (uri: string) => invoke<void>("spotify_add_to_queue", { uri }),
+  spotifyRecentlyPlayed: () => invoke<SpotifyTrack[]>("spotify_recently_played"),
+  spotifyTopTracks: (timeRange: string) => invoke<SpotifyTrack[]>("spotify_top_tracks", { timeRange }),
+  spotifyTopArtists: (timeRange: string) => invoke<SpotifyArtist[]>("spotify_top_artists", { timeRange }),
+  spotifyDevices: () => invoke<SpotifyDevice[]>("spotify_devices"),
+  spotifyTransfer: (deviceId: string) => invoke<void>("spotify_transfer", { deviceId }),
+  spotifySeek: (positionMs: number) => invoke<void>("spotify_seek", { positionMs }),
+  spotifyAlbum: (id: string) => invoke<SpotifyAlbumDetail>("spotify_album", { id }),
+  spotifyArtist: (id: string) => invoke<SpotifyArtistDetail>("spotify_artist", { id }),
+  spotifyPlaylistItems: (id: string) => invoke<SpotifyTrack[]>("spotify_playlist_items", { id }),
+  spotifyAddToPlaylist: (playlistId: string, trackUri: string) =>
+    invoke<void>("spotify_add_to_playlist", { playlistId, trackUri }),
 };
 
 interface EventPayloads {
