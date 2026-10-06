@@ -18,6 +18,9 @@ and media controls over Bluetooth LE (ANCS/AMS). See README.md for architecture.
   inline hex in components. Custom classes must be `@utility` (Tailwind v4), not `@layer components`.
 - UI work without a phone: `npm run dev` in a browser loads `src/lib/devMock.ts` (dev-only).
 - Line endings are LF (`.gitattributes`).
+- **Every release adds an entry to `src/lib/whatsNew.ts`** (the end-user "What's new" card, newest
+  first, version in step with `package.json`). It's the friendly notes for users, not CHANGELOG.md.
+  Preview it with `npm run dev` → `?whatsnew`.
 
 ## Product
 - Read `docs/PRODUCT.md` before proposing features. Stabilization comes first; new ideas go into its

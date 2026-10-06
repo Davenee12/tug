@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { matchPlaylists, matchScore, nextRepeat, normalize, playlistDetail } from "./spotify";
-import type { SpotifyPlaylist } from "../types/protocol";
+import { bestTrack, idFromUri, matchPlaylists, matchScore, nextRepeat, normalize, playlistDetail, seekFraction, trackLength } from "./spotify";
+import type { SpotifyPlaylist, SpotifyTrack } from "../types/protocol";
 
-const pl = (name: string): SpotifyPlaylist => ({ uri: `spotify:playlist:${name}`, name, owner: "Dave", trackCount: 10, imageUrl: null });
+const pl = (name: string): SpotifyPlaylist => ({ uri: `spotify:playlist:${name}`, id: name, name, owner: "Dave", trackCount: 10, imageUrl: null, owned: true });
 const lists = [pl("Deep Focus"), pl("Morning Run"), pl("Discover Weekly"), pl("Coding Flow"), pl("Rainy Day Jazz")];
 
 describe("normalize", () => {
@@ -61,5 +61,62 @@ describe("playlistDetail", () => {
     expect(playlistDetail({ owner: "Dave", trackCount: 1 })).toBe("Dave · 1 song");
     expect(playlistDetail({ owner: "Island Ting", trackCount: null })).toBe("Island Ting");
     expect(playlistDetail({ owner: null, trackCount: 0 })).toBe("0 songs");
+  });
+});
+
+const track = (name: string, artists = "Artist"): SpotifyTrack => ({
+  uri: `spotify:track:${name}`,
+  name,
+  artists,
+  artistUri: "spotify:artist:a",
+  album: "Album",
+  albumUri: "spotify:album:al",
+  imageUrl: null,
+  durationMs: 200000,
+});
+
+describe("idFromUri", () => {
+  it("pulls the bare id from a spotify uri", () => {
+    expect(idFromUri("spotify:track:abc123")).toBe("abc123");
+    expect(idFromUri("spotify:album:xyz")).toBe("xyz");
+    expect(idFromUri(null)).toBeNull();
+    expect(idFromUri("")).toBeNull();
+  });
+});
+
+describe("bestTrack", () => {
+  const tracks = [track("Teardrops"), track("Teardrop", "Massive Attack"), track("Tears")];
+  it("prefers an exact name match over Spotify's ranking", () => {
+    expect(bestTrack("teardrop", tracks)?.name).toBe("Teardrop");
+  });
+  it("falls back to the top result when nothing matches exactly", () => {
+    expect(bestTrack("massive", tracks)?.name).toBe("Teardrops");
+  });
+  it("matches 'name artist' and a name prefix, and handles empties", () => {
+    expect(bestTrack("teardrop massive attack", tracks)?.name).toBe("Teardrop");
+    expect(bestTrack("tear", tracks)?.name).toBe("Teardrops");
+    expect(bestTrack("anything", [])).toBeNull();
+    expect(bestTrack("", tracks)?.name).toBe("Teardrops");
+  });
+});
+
+describe("trackLength", () => {
+  it("formats milliseconds as mm:ss", () => {
+    expect(trackLength(0)).toBe("0:00");
+    expect(trackLength(5000)).toBe("0:05");
+    expect(trackLength(200000)).toBe("3:20");
+    expect(trackLength(548000)).toBe("9:08");
+  });
+});
+
+describe("seekFraction", () => {
+  it("maps a pointer x to a 0–1 fraction, clamped to the bar", () => {
+    const rect = { left: 100, width: 200 };
+    expect(seekFraction(100, rect)).toBe(0);
+    expect(seekFraction(200, rect)).toBe(0.5);
+    expect(seekFraction(300, rect)).toBe(1);
+    expect(seekFraction(50, rect)).toBe(0); // before the start, clamped
+    expect(seekFraction(400, rect)).toBe(1); // past the end, clamped
+    expect(seekFraction(150, { left: 0, width: 0 })).toBe(0); // zero-width guard
   });
 });

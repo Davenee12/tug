@@ -1,7 +1,7 @@
 // Pure Spotify helpers used by the UI and the Ctrl+K palette: fuzzy-matching a typed name to a
 // playlist ("play deep focus"), and the repeat-button cycle. No IPC here, so it's unit-tested.
 
-import type { RepeatMode, SpotifyPlaylist } from "../types/protocol";
+import type { RepeatMode, SpotifyPlaylist, SpotifyTrack } from "../types/protocol";
 
 /** Lowercase, drop punctuation/emoji, collapse spaces: "Deep Focus 🎧" → "deep focus". */
 export function normalize(s: string): string {
@@ -52,4 +52,44 @@ export function nextRepeat(mode: RepeatMode | null): RepeatMode {
 export function playlistDetail(p: Pick<SpotifyPlaylist, "owner" | "trackCount">): string {
   const songs = p.trackCount == null ? null : `${p.trackCount} song${p.trackCount === 1 ? "" : "s"}`;
   return [p.owner, songs].filter(Boolean).join(" · ");
+}
+
+/** The bare id in a `spotify:track:ID` / `spotify:album:ID` / `spotify:artist:ID` URI. */
+export function idFromUri(uri: string | null | undefined): string | null {
+  if (!uri) return null;
+  const id = uri.split(":").pop();
+  return id && id.length ? id : null;
+}
+
+/**
+ * The best track for a typed "play …": an exact name match wins, then a name that starts with the
+ * query, then Spotify's own top result. `null` when there are no tracks. Pure, so it's tested.
+ */
+export function bestTrack(query: string, tracks: SpotifyTrack[]): SpotifyTrack | null {
+  if (tracks.length === 0) return null;
+  const q = normalize(query);
+  if (!q) return tracks[0];
+  return (
+    tracks.find((t) => normalize(t.name) === q) ??
+    tracks.find((t) => normalize(`${t.name} ${t.artists}`) === q) ??
+    tracks.find((t) => normalize(t.name).startsWith(q)) ??
+    tracks[0]
+  );
+}
+
+/** mm:ss from a duration in milliseconds (track lengths). */
+export function trackLength(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/**
+ * The fraction (0–1) of the progress bar a pointer is at, for click/drag-to-seek. Clamped so a
+ * drag past either end stays in range. Pure, so it's tested.
+ */
+export function seekFraction(clientX: number, rect: { left: number; width: number }): number {
+  if (rect.width <= 0) return 0;
+  return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
 }
