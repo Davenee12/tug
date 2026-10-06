@@ -97,6 +97,7 @@ fn perf_large_history() {
                 sender_name: None,
                 body: &body,
                 sent_at: None,
+                msg_type: None,
                 received_at: 1_760_000_000_000 + i as i64 * 300_000,
                 unread_on_phone: false,
             })
@@ -233,6 +234,7 @@ fn perf_large_history() {
                     sent_at: Some("20261005T120000"),
                     received_at: 2_000_000_000_000,
                     unread_on_phone: false,
+                    msg_type: None,
                 })
                 .unwrap()
         }),

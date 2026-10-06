@@ -46,6 +46,14 @@ pub enum RemoteCommand {
     VolumeDown,
     /// Off → repeat all → repeat one → off, as the phone's own button.
     AdvanceRepeatMode,
+    /// Jump forward in the track (iOS uses a 15 s step).
+    SkipForward,
+    /// Jump back in the track (iOS uses a 15 s step).
+    SkipBackward,
+    /// Thumbs up the current track (Apple Music loves/favourites it).
+    LikeTrack,
+    /// Thumbs down the current track.
+    DislikeTrack,
 }
 
 impl RemoteCommand {
@@ -59,6 +67,10 @@ impl RemoteCommand {
             Self::VolumeUp => 5,
             Self::VolumeDown => 6,
             Self::AdvanceRepeatMode => 7,
+            Self::SkipForward => 9,
+            Self::SkipBackward => 10,
+            Self::LikeTrack => 11,
+            Self::DislikeTrack => 12,
         }
     }
 
@@ -77,6 +89,10 @@ impl RemoteCommand {
             5 => "volumeUp",
             6 => "volumeDown",
             7 => "advanceRepeatMode",
+            9 => "skipForward",
+            10 => "skipBackward",
+            11 => "likeTrack",
+            12 => "dislikeTrack",
             _ => return None,
         })
     }
@@ -91,6 +107,10 @@ impl RemoteCommand {
             "volumeUp" => Self::VolumeUp,
             "volumeDown" => Self::VolumeDown,
             "advanceRepeatMode" => Self::AdvanceRepeatMode,
+            "skipForward" => Self::SkipForward,
+            "skipBackward" => Self::SkipBackward,
+            "likeTrack" => Self::LikeTrack,
+            "dislikeTrack" => Self::DislikeTrack,
             _ => return None,
         })
     }
@@ -100,11 +120,8 @@ impl RemoteCommand {
 /// doesn't send, so the log shows exactly what the player offers.
 pub fn command_label(id: u8) -> String {
     let name = match id {
+        // The commands tug doesn't send are named here; the rest come from RemoteCommand::name.
         8 => "advanceShuffleMode",
-        9 => "skipForward",
-        10 => "skipBackward",
-        11 => "likeTrack",
-        12 => "dislikeTrack",
         13 => "bookmarkTrack",
         _ => match RemoteCommand::name(id) {
             Some(n) => n,
@@ -441,13 +458,32 @@ mod tests {
 
     #[test]
     fn command_names_round_trip() {
-        for id in 0..=7 {
+        // 0–7 and 9–12 are commands tug sends; 8 (shuffle) and 13 (bookmark) are not.
+        for id in [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12] {
             let name = RemoteCommand::name(id).unwrap();
             let command = RemoteCommand::parse(name).unwrap();
             assert_eq!(command.id(), id);
             assert_eq!(command.as_str(), name);
         }
         assert_eq!(RemoteCommand::name(8), None, "tug doesn't send shuffle");
+        assert_eq!(RemoteCommand::name(13), None, "tug doesn't send bookmark");
+    }
+
+    #[test]
+    fn exposes_skip_and_like_when_the_player_lists_them() {
+        let mut np = NowPlaying::default();
+        // Apple Music-like: skip and like/dislike offered (shuffle 8 is ignored, repeat 7 too).
+        np.apply_available_commands(&[0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12]);
+        assert!(np.lists(RemoteCommand::SkipForward));
+        assert!(np.lists(RemoteCommand::SkipBackward));
+        assert!(np.lists(RemoteCommand::LikeTrack));
+        assert!(np.lists(RemoteCommand::DislikeTrack));
+        // Shuffle (8) isn't a command tug sends, so it never reaches `available`.
+        assert!(!np.available.contains(&"advanceShuffleMode"));
+        // Spotify-like: skip but no like.
+        np.apply_available_commands(&[0, 1, 2, 3, 4, 5, 6, 9, 10]);
+        assert!(np.lists(RemoteCommand::SkipForward));
+        assert!(!np.lists(RemoteCommand::LikeTrack));
     }
 
     #[test]

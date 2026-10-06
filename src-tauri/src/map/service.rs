@@ -850,6 +850,20 @@ mod worker {
                 }
                 log::info!("looked back over {} inbox message(s)", listed.len());
             }
+            // One line per sync showing how the phone typed this listing, so a hardware run reveals
+            // whether iOS distinguishes iMessage (IM) from a plain text (SMS_*). "other" covers
+            // SMS_CDMA, MMS, EMAIL and any the phone left blank.
+            if !listed.is_empty() {
+                let (mut sms_gsm, mut im, mut other) = (0u32, 0u32, 0u32);
+                for m in &listed {
+                    match m.msg_type.as_str() {
+                        "SMS_GSM" => sms_gsm += 1,
+                        "IM" => im += 1,
+                        _ => other += 1,
+                    }
+                }
+                log::info!("message types: SMS_GSM={sms_gsm}, IM={im}, other={other}");
+            }
             let mut added = 0;
             // Oldest first so arrival order matches the phone.
             for item in listed.iter().rev() {
@@ -891,6 +905,7 @@ mod worker {
                     sent_at: sent_at.as_deref(),
                     received_at: now_ms(),
                     unread_on_phone: !item.read,
+                    msg_type: Some(item.msg_type.as_str()).filter(|t| !t.is_empty()),
                 })?;
                 if let Some(m) = stored {
                     shared.emit(events::MESSAGE, m);

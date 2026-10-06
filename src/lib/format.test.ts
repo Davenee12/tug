@@ -52,6 +52,7 @@ function sms(address: string, body: string, atMin: number, direction: "in" | "ou
     sentAt: null,
     receivedAt: T0 + atMin * min,
     status: direction === "in" ? "received" : "accepted",
+    msgType: null,
   };
 }
 
