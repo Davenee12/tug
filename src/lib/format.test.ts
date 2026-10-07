@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  nameKey,
   callKey,
   callKeys,
   callName,
@@ -62,6 +63,17 @@ describe("names and keys", () => {
   it("treats padded and differently-cased names as one person", () => {
     expect(cleanName("  marco  ")).toBe("marco");
     expect(threadKey({ appId: "x", title: "marco " })).toBe(threadKey({ appId: "x", title: "Marco" }));
+  });
+
+  it("ignores the invisible marks apps hide in names (WhatsApp's U+200E split sam ❤️ in two)", () => {
+    expect(cleanName("‎sam ❤️")).toBe("sam ❤️");
+    expect(threadKey({ appId: "net.whatsapp.WhatsApp", title: "‎sam ❤️" })).toBe(
+      threadKey({ appId: "net.whatsapp.WhatsApp", title: "sam ❤️" }),
+    );
+    expect(cleanName("‪Zoe‬‏﻿")).toBe("Zoe");
+    // Emoji variants (❤ vs ❤️) are one person; zero-width joiners inside emoji are kept.
+    expect(nameKey("sam ❤")).toBe(nameKey("Sam ❤️"));
+    expect(cleanName("👨‍👩‍👧 fam")).toBe("👨‍👩‍👧 fam");
   });
 
   it("treats iOS inline-reply titles as the same person", () => {

@@ -3,7 +3,7 @@
 // is titled with a VIP contact's name (iOS titles a known sender by name). Modelled on senders.ts.
 
 import type { Contact } from "../types/protocol";
-import { cleanName } from "./format";
+import { cleanName, nameKey } from "./format";
 import { isAddressLike, normalizeAddress, numberTail } from "./address";
 
 export interface VipIndex {
@@ -29,7 +29,7 @@ export function vipIndex(vips: Iterable<string>, contacts: Contact[]): VipIndex 
     const a = normalizeAddress(c.address);
     const t = numberTail(a);
     if (addresses.has(a) || (t !== null && tails.has(t))) {
-      const n = cleanName(c.name).toLowerCase();
+      const n = nameKey(c.name);
       if (n && !isAddressLike(n)) names.add(n);
     }
   }
@@ -54,5 +54,5 @@ export function isVip(index: VipIndex, who: { name?: string | null; address?: st
   if (!name) return false;
   // A title that's really a number/email (an unknown sender) is matched as an address, not a name.
   if (isAddressLike(name)) return matchesAddress(index, name);
-  return index.names.has(name.toLowerCase());
+  return index.names.has(nameKey(name));
 }

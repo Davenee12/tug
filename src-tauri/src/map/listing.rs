@@ -35,7 +35,7 @@ pub fn parse(xml: &str) -> Vec<ListedMessage> {
                 handle: handle.clone(),
                 subject: get("subject"),
                 datetime: get("datetime"),
-                sender_name: get("sender_name"),
+                sender_name: crate::text::strip_invisible(&get("sender_name")),
                 sender_addressing: get("sender_addressing"),
                 msg_type: get("type"),
                 read: get("read").eq_ignore_ascii_case("yes"),
