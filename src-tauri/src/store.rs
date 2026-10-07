@@ -135,13 +135,27 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE messages ADD COLUMN msg_type TEXT;
     "#,
+    // v8: names saved with invisible marks (WhatsApp/Snapchat prefix some titles with U+200E) are
+    // cleaned, so they join the right conversation and a reconnect's replay matches its row
+    // instead of saving a duplicate. New ones are cleaned as they arrive.
+    r#"
+    UPDATE notifications SET title = strip_invisible(title) WHERE title <> strip_invisible(title);
+    UPDATE notifications SET subtitle = strip_invisible(subtitle) WHERE subtitle <> strip_invisible(subtitle);
+    UPDATE messages SET sender_name = strip_invisible(sender_name) WHERE sender_name <> strip_invisible(sender_name);
+    UPDATE contacts SET name = strip_invisible(name) WHERE name <> strip_invisible(name);
+    UPDATE OR IGNORE contact_aliases SET alias = strip_invisible(alias) WHERE alias <> strip_invisible(alias);
+    DELETE FROM contact_aliases WHERE alias <> strip_invisible(alias);
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
 /// inner whitespace collapsed, and iOS's inline-reply suffix ("tay replied to you",
 /// "… replied to your message") removed from the end. Also callable from SQL.
 pub(crate) fn clean_name(name: &str) -> String {
-    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let name = crate::text::strip_invisible(name)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     for suffix in [" replied to your message", " replied to you"] {
         let cut = name.len().wrapping_sub(suffix.len());
         if name.len() >= suffix.len() && name.is_char_boundary(cut) && name[cut..].eq_ignore_ascii_case(suffix) {
@@ -151,20 +165,34 @@ pub(crate) fn clean_name(name: &str) -> String {
     name
 }
 
+/// How two names are compared (matching the UI's `nameKey`, format.ts): the cleaned name,
+/// lower-cased, without emoji variation selectors, so "mom ❤" and "mom ❤️" are one person.
+pub(crate) fn name_key(name: &str) -> String {
+    clean_name(name)
+        .chars()
+        .filter(|c| !matches!(c, '\u{FE0E}' | '\u{FE0F}'))
+        .collect::<String>()
+        .to_lowercase()
+}
+
 fn register_functions(conn: &Connection) -> Result<()> {
     use rusqlite::functions::FunctionFlags;
-    conn.create_scalar_function(
-        "clean_name",
-        1,
-        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-        |ctx| Ok(clean_name(&ctx.get::<String>(0)?)),
-    )
+    let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
+    conn.create_scalar_function("clean_name", 1, flags, |ctx| Ok(clean_name(&ctx.get::<String>(0)?)))?;
+    conn.create_scalar_function("name_key", 1, flags, |ctx| {
+        Ok(ctx.get::<Option<String>>(0)?.map(|s| name_key(&s)))
+    })?;
+    conn.create_scalar_function("strip_invisible", 1, flags, |ctx| {
+        Ok(ctx.get::<Option<String>>(0)?.map(|s| crate::text::strip_invisible(&s)))
+    })
 }
 
 /// The schema version this build expects.
 pub const SCHEMA_VERSION: i64 = 1 + MIGRATIONS.len() as i64;
 
 fn migrate(conn: &mut Connection) -> Result<()> {
+    // Migrations may call tug's SQL functions (v8 uses strip_invisible).
+    register_functions(conn)?;
     let mut version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if version == 0 {
         // Fresh database, or one from before versioning: the baseline is in place.
@@ -195,7 +223,7 @@ const SELECT: &str = "SELECT n.id, n.session, n.uid, n.app_id, a.display_name, n
             CASE WHEN n.app_id = 'com.apple.MobileSMS' THEN COALESCE((
                 SELECT CASE WHEN COUNT(DISTINCT c.name) = 1 THEN MIN(c.name) END
                 FROM contact_aliases ca JOIN contacts c ON c.address = ca.address
-                WHERE lower(ca.alias) = lower(clean_name(n.title))
+                WHERE name_key(ca.alias) = name_key(n.title)
                   AND NOT EXISTS (SELECT 1 FROM contacts c2 WHERE lower(c2.name) = lower(ca.alias))
             ), n.title) ELSE n.title END,
             n.subtitle, n.message, n.posted_at, n.received_at, n.flags, n.positive_label, n.negative_label, n.removed_at,
@@ -655,6 +683,47 @@ mod tests {
         assert!(rows.iter().all(|r| r.live));
         assert!(s.recent(10, None, Some("s2")).unwrap().iter().all(|r| !r.live));
         assert_eq!(s.recent(10, Some(b.id), None).unwrap().len(), 1, "paging");
+    }
+
+    #[test]
+    fn names_lose_invisible_marks_and_compare_without_emoji_variants() {
+        assert_eq!(clean_name("\u{200E}mom \u{2764}\u{FE0F}"), "mom \u{2764}\u{FE0F}");
+        assert_eq!(name_key("\u{200E}mom \u{2764}\u{FE0F}"), name_key("Mom \u{2764}"));
+        assert_ne!(name_key("mom \u{2764}"), name_key("mom"));
+    }
+
+    #[test]
+    fn a_title_saved_with_an_invisible_mark_is_cleaned_and_its_replay_reuses_the_row() {
+        // Rows saved before v8 kept WhatsApp's U+200E; the upgrade cleans them so the phone's
+        // replay on the next reconnect (now cleaned on arrival) matches instead of duplicating.
+        let s = Store::in_memory().unwrap();
+        let marked = attrs("net.whatsapp.WhatsApp", "\u{200E}mom \u{2764}\u{FE0F}", "good night");
+        let first = {
+            let conn = s.conn();
+            conn.execute(
+                "INSERT INTO notifications (session, uid, app_id, category, title, subtitle, message, posted_at, received_at, flags)
+                 VALUES ('s1', 4, ?1, 4, ?2, '', ?3, ?4, 1000, 0)",
+                params![marked.app_id, marked.title, marked.message, marked.date],
+            )
+            .unwrap();
+            let id = conn.last_insert_rowid();
+            conn.pragma_update(None, "user_version", 7).unwrap();
+            id
+        };
+        migrate(&mut s.conn()).unwrap();
+        let title: String = s
+            .conn()
+            .query_row("SELECT title FROM notifications WHERE id = ?1", [first], |r| r.get(0))
+            .unwrap();
+        assert_eq!(title, "mom \u{2764}\u{FE0F}");
+        let pre = EventFlags {
+            pre_existing: true,
+            ..Default::default()
+        };
+        let clean = attrs("net.whatsapp.WhatsApp", "mom \u{2764}\u{FE0F}", "good night");
+        let again = insert(&s, "s2", 9, pre, &clean);
+        assert_eq!(again.id, first);
+        assert_eq!(s.recent(10, None, None).unwrap().len(), 1);
     }
 
     #[test]

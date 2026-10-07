@@ -20,6 +20,7 @@ describe("vips", () => {
   it("matches a VIP contact by the name iOS titles their texts with", () => {
     expect(isVip(index, { name: "Tay" })).toBe(true);
     expect(isVip(index, { name: "tay " })).toBe(true);
+    expect(isVip(index, { name: "\u200eTay" })).toBe(true); // WhatsApp hides a mark in some titles
     expect(isVip(index, { name: "Sam" })).toBe(false);
     expect(isVip(index, { name: "Not a VIP" })).toBe(false);
   });
