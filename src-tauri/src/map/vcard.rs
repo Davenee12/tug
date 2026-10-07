@@ -3,6 +3,8 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhonebookEntry {
     pub name: String,
+    /// Phone numbers, then email addresses (people text from an Apple ID email too, and those
+    /// texts arrive from the email address).
     pub numbers: Vec<String>,
     /// The contact's photo as raw image bytes, when the phone inlined one (PHOTO). `None` for
     /// contacts without a photo, and for photos given only as a URI (never fetched). Validation
@@ -11,12 +13,13 @@ pub struct PhonebookEntry {
 }
 
 /// Parse a PBAP phonebook object (concatenated vCards). Entries without a name
-/// or without a number are skipped; the phone's own "owner" card usually has both.
+/// or without a number or email are skipped; the phone's own "owner" card usually has both.
 pub fn parse(raw: &str) -> Vec<PhonebookEntry> {
     let mut out = Vec::new();
     let mut fn_name: Option<String> = None;
     let mut n_name: Option<String> = None;
     let mut numbers: Vec<String> = Vec::new();
+    let mut emails: Vec<String> = Vec::new();
     let mut photo: Option<Vec<u8>> = None;
     for line in unfold(raw) {
         let Some((key, params, value)) = property(&line) else {
@@ -27,6 +30,7 @@ pub fn parse(raw: &str) -> Vec<PhonebookEntry> {
                 fn_name = None;
                 n_name = None;
                 numbers.clear();
+                emails.clear();
                 photo = None;
             }
             "FN" if !crate::text::strip_invisible(&value).trim().is_empty() => {
@@ -38,9 +42,11 @@ pub fn parse(raw: &str) -> Vec<PhonebookEntry> {
                 }
             }
             "TEL" if !value.trim().is_empty() => numbers.push(value.trim().to_string()),
+            "EMAIL" if value.contains('@') => emails.push(value.trim().to_string()),
             // Only the first inline photo on a card is kept (iOS sends one).
             "PHOTO" if photo.is_none() => photo = photo_bytes(&params, &value),
             "END" if value.eq_ignore_ascii_case("VCARD") => {
+                numbers.append(&mut emails);
                 if let Some(name) = fn_name.take().or(n_name.take()) {
                     if !numbers.is_empty() {
                         out.push(PhonebookEntry {
@@ -176,6 +182,18 @@ mod tests {
         assert_eq!(got[0].photo, None);
         assert_eq!(got[1].name, "zoe 💜");
         assert_eq!(got[1].numbers, vec!["+13025550173"]);
+    }
+
+    #[test]
+    fn emails_count_as_addresses_after_numbers() {
+        let raw = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Ana Ruiz\r\nitem1.EMAIL;TYPE=INTERNET:ana@example.com\r\n\
+                   TEL:+13025550100\r\nEND:VCARD\r\n\
+                   BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Only Email\r\nEMAIL:only@example.com\r\nEND:VCARD\r\n\
+                   BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Bad Email\r\nEMAIL:not-an-address\r\nEND:VCARD\r\n";
+        let got = parse(raw);
+        assert_eq!(got.len(), 2, "a card with only a bad email has no address");
+        assert_eq!(got[0].numbers, vec!["+13025550100", "ana@example.com"]);
+        assert_eq!(got[1].numbers, vec!["only@example.com"]);
     }
 
     #[test]
