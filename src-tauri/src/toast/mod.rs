@@ -299,7 +299,13 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 }
                 Ok(stored) if stored.status == crate::messages::Status::Unconfirmed => {
                     log::info!("reply from a pop-up may have sent (row {id}, message {})", stored.id);
-                    note(&app, id, &format!("May have sent to {who}"), "Check your iPhone to be sure.", false);
+                    note(
+                        &app,
+                        id,
+                        &format!("May have sent to {who}"),
+                        "Check your iPhone to be sure.",
+                        false,
+                    );
                     pressed_with(PressKind::Replied, Some(stored));
                 }
                 Ok(stored) => {
