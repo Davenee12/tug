@@ -176,7 +176,13 @@ pub struct PlayerSnapshot {
     /// The playing track's name, so the UI can check this is the song the phone reports.
     pub track_name: Option<String>,
     pub art_url: Option<String>,
+    /// The playing track's artists, "A, B" (the phone hides them on Spotify Connect).
+    pub track_artists: Option<String>,
+    /// The device Spotify is playing on: the truth for "Play on" and Now Playing.
+    pub device_id: Option<String>,
     pub device_name: Option<String>,
+    /// Spotify's device type ("Smartphone", "Speaker"…).
+    pub device_kind: Option<String>,
 }
 
 /// Parse `GET /me/player`. Returns `None` for an empty body (HTTP 204: nothing is playing).
@@ -208,13 +214,20 @@ pub fn parse_player(json: &str) -> Option<PlayerSnapshot> {
             .and_then(|i| i.get("album"))
             .and_then(|a| a.get("images"))
             .and_then(best_image_url),
-        device_name: v
-            .get("device")
-            .and_then(|d| d.get("name"))
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string),
+        track_artists: item.map(joined_artists).filter(|a| !a.is_empty()),
+        device_id: device_str(&v, "id"),
+        device_name: device_str(&v, "name"),
+        device_kind: device_str(&v, "type"),
     })
+}
+
+fn device_str(player: &Value, key: &str) -> Option<String> {
+    player
+        .get("device")
+        .and_then(|d| d.get(key))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Parse `GET /me/library/contains` (a JSON array of booleans): whether the first item is saved.
@@ -973,8 +986,8 @@ mod tests {
             "is_playing": true,
             "shuffle_state": true,
             "repeat_state": "context",
-            "device": {"name":"Jordan's iPhone","type":"Smartphone"},
-            "item": {"uri":"spotify:track:abc","name":"Teardrop","album":{"images":[{"url":"https://i.scdn.co/big","width":640},{"url":"https://i.scdn.co/mid","width":300}]}}
+            "device": {"id":"dev-ph","name":"Jordan's iPhone","type":"Smartphone"},
+            "item": {"uri":"spotify:track:abc","name":"Teardrop","artists":[{"name":"Massive Attack"},{"name":"Liz Fraser"}],"album":{"images":[{"url":"https://i.scdn.co/big","width":640},{"url":"https://i.scdn.co/mid","width":300}]}}
         }"#;
         let p = parse_player(json).unwrap();
         assert!(p.is_playing && p.shuffle);
@@ -983,6 +996,9 @@ mod tests {
         assert_eq!(p.track_name.as_deref(), Some("Teardrop"));
         assert_eq!(p.art_url.as_deref(), Some("https://i.scdn.co/mid"));
         assert_eq!(p.device_name.as_deref(), Some("Jordan's iPhone"));
+        assert_eq!(p.device_id.as_deref(), Some("dev-ph"));
+        assert_eq!(p.device_kind.as_deref(), Some("Smartphone"));
+        assert_eq!(p.track_artists.as_deref(), Some("Massive Attack, Liz Fraser"));
         // 204/empty body: nothing playing.
         assert_eq!(parse_player(""), None);
         assert_eq!(parse_player("   "), None);

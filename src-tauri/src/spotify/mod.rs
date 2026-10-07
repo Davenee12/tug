@@ -74,7 +74,12 @@ pub struct SpotifyPlayer {
     pub track_uri: Option<String>,
     /// The playing track's name, checked against the phone's title before Like is offered.
     pub track_name: Option<String>,
+    /// The playing track's artists, "A, B".
+    pub track_artists: Option<String>,
+    /// The device Spotify says it is playing on (`/me/player` `device`).
+    pub device_id: Option<String>,
     pub device_name: Option<String>,
+    pub device_kind: Option<String>,
 }
 
 #[derive(Default)]
@@ -549,7 +554,10 @@ impl Spotify {
             album_art,
             track_uri: snap.track_uri,
             track_name: snap.track_name,
+            track_artists: snap.track_artists,
+            device_id: snap.device_id,
             device_name: snap.device_name,
+            device_kind: snap.device_kind,
         }))
     }
 

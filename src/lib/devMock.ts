@@ -197,6 +197,9 @@ if (params.has("away") && status.device) {
 // ?applemusic swaps Spotify for Apple Music, which lists skip ±15 s and Like/Dislike over AMS
 // (and no working repeat), so those controls can be reviewed in the browser.
 const appleMusic = params.has("applemusic");
+// ?speaker: Spotify on the phone is playing on a Spotify Connect speaker. The phone then reports the
+// title as "Song • Artist" and the artist as "Listening on <speaker>" (seen on a real iPhone).
+const onSpeaker = params.has("speaker") && !appleMusic;
 const nowPlaying: NowPlaying = noPhone || forgotten
   ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, repeat: null, available: [] }
   : {
@@ -206,9 +209,9 @@ const nowPlaying: NowPlaying = noPhone || forgotten
       elapsed: 74,
       elapsedAt: now,
       volume: 0.6,
-      title: "Teardrop",
-      artist: "Massive Attack",
-      album: "Mezzanine",
+      title: onSpeaker ? "Teardrop • Massive Attack" : "Teardrop",
+      artist: onSpeaker ? "Listening on Kitchen speaker" : "Massive Attack",
+      album: onSpeaker ? null : "Mezzanine",
       duration: 330,
       repeat: "off",
       available: [
@@ -352,7 +355,10 @@ const spotifyPlayer: SpotifyPlayer = {
   trackUri: "spotify:track:mock123",
   // The same song as the mock Now Playing, so the Like button and art show.
   trackName: "Teardrop",
-  deviceName: "Jordan's iPhone",
+  trackArtists: "Massive Attack",
+  deviceId: onSpeaker ? "spk" : "phone",
+  deviceName: onSpeaker ? "Kitchen speaker" : "Jordan's iPhone",
+  deviceKind: onSpeaker ? "Speaker" : "Smartphone",
 };
 const img = (seed: string) => `https://i.scdn.co/mock/${encodeURIComponent(seed)}`;
 const spotifyPlaylists: SpotifyPlaylist[] = [
@@ -406,9 +412,9 @@ const catalogueArtists: SpotifyArtist[] = [
   mockArtist("cg", "Childish Gambino"),
 ];
 const spotifyDevices: SpotifyDevice[] = [
-  { id: "phone", name: "Jordan's iPhone", kind: "Smartphone", isActive: true },
+  { id: "phone", name: "Jordan's iPhone", kind: "Smartphone", isActive: !onSpeaker },
   { id: "pc", name: "Spotify on this PC", kind: "Computer", isActive: false },
-  { id: "spk", name: "Kitchen speaker", kind: "Speaker", isActive: false },
+  { id: "spk", name: "Kitchen speaker", kind: "Speaker", isActive: onSpeaker },
 ];
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
@@ -874,6 +880,11 @@ mockIPC(
         return spotifyDevices;
       case "spotify_transfer":
         console.log("[devMock] spotify transfer to", a.deviceId);
+        for (const d of spotifyDevices) d.isActive = d.id === a.deviceId;
+        {
+          const d = spotifyDevices.find((x) => x.id === a.deviceId);
+          if (d) Object.assign(spotifyPlayer, { deviceId: d.id, deviceName: d.name, deviceKind: d.kind });
+        }
         return null;
       case "spotify_seek":
         nowPlaying.elapsed = Math.round(Number(a.positionMs ?? 0) / 1000);

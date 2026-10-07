@@ -51,6 +51,17 @@ import type {
   UiSettings,
 } from "../types/protocol";
 import { bestTrack, nextRepeat, sameSong } from "../lib/spotify";
+import {
+  activeFromDevices,
+  activeFromPlayer,
+  currentDevice,
+  phoneDevice,
+  pickerLabel,
+  pickerRows,
+  playingOnLine,
+  trackLines,
+  type PlaybackDevice,
+} from "../lib/playback";
 import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 import { useTugboatStore } from "./tugboat";
@@ -67,6 +78,8 @@ const DEFAULT_QUIET_HOURS = { enabled: false, start: "22:00", end: "07:00", days
 const SPOTIFY_NO_PHONE = "Open Spotify on your iPhone.";
 /** How long to wait for Spotify to open on the iPhone before giving up. */
 const SPOTIFY_WAIT_MS = 60_000;
+/** How long Spotify takes to report a transfer before tug re-reads where it is playing. */
+const SPOTIFY_TRANSFER_SETTLE_MS = 1_500;
 
 export type SettingsSection = "general" | "iphone" | "notifications" | "connectors" | "weather" | "privacy" | "about";
 const SEEN_KEEP = 300;
@@ -176,6 +189,10 @@ export const useTugStore = defineStore("tug", () => {
   const spotifyConnecting = ref(false);
   /** The "Play on" target: a chosen device, or null for the iPhone (the default). */
   const spotifyDevice = ref<SpotifyDevice | null>(null);
+  /** Spotify's device list, read when the "Play on" picker opens and after a transfer. */
+  const spotifyDevices = ref<SpotifyDevice[]>([]);
+  /** Where Spotify's API last said music is playing (devices list or player read, whichever came last). */
+  const spotifyApiDevice = ref<PlaybackDevice | null>(null);
 
   /** Who counts as a known sender (contacts, numbers you've texted, ones you moved), for Filter unknown senders. */
   const senders = computed(() => senderIndex(contacts.value, outgoingAddresses(messages.value), settings.value.knownSenders));
@@ -1191,12 +1208,47 @@ export const useTugStore = defineStore("tug", () => {
     playlists.value = [];
     spotifyPlayer.value = null;
     spotifyDevice.value = null;
+    spotifyDevices.value = [];
+    spotifyApiDevice.value = null;
   }
 
-  /** The current "Play on" target id for playback calls (null = the iPhone default). */
-  const spotifyTargetId = computed(() => spotifyDevice.value?.id ?? null);
-  /** The name of the current target, for messages ("Playing on <device>"). */
-  const spotifyTargetName = computed(() => spotifyDevice.value?.name ?? status.value.device?.name ?? "your iPhone");
+  /** The song as it should read (never "Listening on <device>" as the artist; see lib/playback). */
+  const trackView = computed(() =>
+    trackLines(nowPlaying.value, spotifyActive.value && spotifyPlayer.value ? spotifyPlayer.value : null),
+  );
+  /** Where music is really playing: Spotify's API first, the phone's "Listening on" hint as the fallback. */
+  const spotifyCurrentDevice = computed(() =>
+    currentDevice(spotify.value.connected ? spotifyApiDevice.value : null, trackView.value.hint, spotifyDevices.value),
+  );
+  /** "on Kitchen speaker" for Now Playing when music plays away from the iPhone (same name as the picker). */
+  const playingOn = computed(() => playingOnLine(spotifyCurrentDevice.value));
+  /** The "Play on" list, with "Current" on the device that is playing. */
+  const spotifyPickerRows = computed(() =>
+    pickerRows(spotifyDevices.value, spotifyCurrentDevice.value, status.value.device?.name ?? null),
+  );
+  /** The current "Play on" target id for playback calls: where music is playing, else the chosen device (null = the iPhone). */
+  const spotifyTargetId = computed(() => spotifyCurrentDevice.value?.id ?? spotifyDevice.value?.id ?? null);
+  /** The picker's label and the name in messages ("Playing on <device>"): always Spotify's name for it. */
+  const spotifyTargetName = computed(() => pickerLabel(spotifyPickerRows.value, spotifyDevice.value));
+
+  /** Re-read Spotify's devices (the picker opening): the list and which one is active. */
+  async function refreshSpotifyDevices(): Promise<void> {
+    if (!spotify.value.connected) return;
+    try {
+      const list = await api.spotifyDevices();
+      spotifyDevices.value = list;
+      spotifyApiDevice.value = activeFromDevices(list);
+    } catch (e) {
+      notify("error", errorMessage(e));
+    }
+  }
+  /** Spotify accepted a transfer: show it there now, then confirm with Spotify once it has caught up. */
+  let transferCheck: number | undefined;
+  function afterTransfer(device: SpotifyDevice) {
+    spotifyApiDevice.value = { id: device.id, name: device.name, kind: device.kind };
+    window.clearTimeout(transferCheck);
+    transferCheck = window.setTimeout(() => void refreshSpotifyDevices(), SPOTIFY_TRANSFER_SETTLE_MS);
+  }
 
   /** Bumped to cancel a pending "start when Spotify opens on the iPhone". */
   let spotifyWait = 0;
@@ -1321,29 +1373,29 @@ export const useTugStore = defineStore("tug", () => {
       // Move what's playing back to the iPhone now, not just the next play (prefer the paired
       // phone by name among Spotify's smartphones).
       const devices = await api.spotifyDevices().catch(() => [] as SpotifyDevice[]);
-      const phones = devices.filter((d) => d.kind.toLowerCase() === "smartphone");
-      const name = status.value.device?.name?.toLowerCase();
-      const phone = phones.find((d) => d.name.toLowerCase() === name) ?? phones[0];
+      if (devices.length) spotifyDevices.value = devices;
+      const phone = phoneDevice(devices, status.value.device?.name);
       if (!phone) {
         notify("info", "Open Spotify on your iPhone to move the music there.");
         return true;
       }
       if (phone.isActive) {
-        notify("info", "Playing on your iPhone.");
+        spotifyApiDevice.value = { id: phone.id, name: phone.name, kind: phone.kind };
+        notify("info", `Playing on ${phone.name}.`);
         return true;
       }
       const ok = await attempt(() => api.spotifyTransfer(phone.id).then(() => true));
       if (ok === true) {
-        notify("info", "Playing on your iPhone.");
-        void refreshSpotifyPlayer();
+        afterTransfer(phone);
+        notify("info", `Playing on ${phone.name}.`);
       }
       return ok === true;
     }
     const ok = await attempt(() => api.spotifyTransfer(device.id).then(() => true));
     if (ok === true) {
       spotifyDevice.value = device;
+      afterTransfer(device);
       notify("info", `Playing on ${device.name}.`);
-      void refreshSpotifyPlayer();
     }
     return ok === true;
   }
@@ -1359,6 +1411,8 @@ export const useTugStore = defineStore("tug", () => {
     // A transient read failure shouldn't nag; the next song or action reads again.
     try {
       spotifyPlayer.value = await api.spotifyPlayer();
+      // Spotify's own word on where it's playing (null: nothing active).
+      spotifyApiDevice.value = activeFromPlayer(spotifyPlayer.value);
     } catch {
       /* ignore */
     }
@@ -1410,7 +1464,7 @@ export const useTugStore = defineStore("tug", () => {
   const SPOTIFY_RECHECK_MS = 3_000;
   /** The snapshot is the song the phone is playing (so its art and Like belong to it). */
   const spotifyTrackVerified = computed(
-    () => sameSong(spotifyPlayer.value?.trackName, nowPlaying.value.title) === true,
+    () => sameSong(spotifyPlayer.value?.trackName, trackView.value.title) === true,
   );
   let spotifyReadFor = "";
   const songKey = () => `${nowPlaying.value.title}|${nowPlaying.value.artist}`;
@@ -1445,6 +1499,7 @@ export const useTugStore = defineStore("tug", () => {
       cancelSongRead();
       if (!spotifyActive.value) {
         spotifyPlayer.value = null;
+        spotifyApiDevice.value = null;
         spotifyReadFor = "";
       }
     },
@@ -1465,7 +1520,13 @@ export const useTugStore = defineStore("tug", () => {
     spotifyPanelOpen,
     spotifyPanelTab,
     spotifyDevice,
+    spotifyDevices,
+    spotifyPickerRows,
+    spotifyCurrentDevice,
     spotifyTargetName,
+    refreshSpotifyDevices,
+    trackView,
+    playingOn,
     loadSpotify,
     loadPlaylists,
     connectSpotify,

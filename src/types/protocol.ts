@@ -398,7 +398,12 @@ export interface SpotifyPlayer {
   trackUri: string | null;
   /** The playing track's name, checked against the phone's title before Like is offered. */
   trackName: string | null;
+  /** The playing track's artists, "A, B" (the phone hides them on Spotify Connect). */
+  trackArtists: string | null;
+  /** The device Spotify says it is playing on (`/me/player` `device`). */
+  deviceId: string | null;
   deviceName: string | null;
+  deviceKind: string | null;
 }
 
 // --- Tugboat (src-tauri/src/tugboat/mod.rs, session.rs, qr.rs) ---

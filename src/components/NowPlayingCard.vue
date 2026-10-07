@@ -15,6 +15,17 @@ const tug = useTugStore();
 const np = computed(() => tug.nowPlaying);
 const available = computed(() => tug.status.services.media && np.value.title != null);
 const playing = computed(() => np.value.state === "playing");
+// The song as it should read: on Spotify Connect the phone sends "Listening on <device>" as the
+// artist, which is never shown as one (see lib/playback). The device goes in the header instead,
+// under the same name the "Play on" picker uses.
+const track = computed(() => tug.trackView);
+const artistLine = computed(() => {
+  const line = [track.value.artist, track.value.album].filter(Boolean).join(" — ");
+  return line || (track.value.hint ? null : "Unknown artist");
+});
+const heading = computed(() =>
+  available.value ? [np.value.player ?? "Now playing", tug.playingOn].filter(Boolean).join(" ") : "Now playing",
+);
 
 // Spotify augmentation: only when connected and Spotify is the AMS player (see the store).
 const sp = computed(() => (tug.spotifyActive ? tug.spotifyPlayer : null));
@@ -157,7 +168,7 @@ function restart() {
   <section class="rounded-xl bg-surface-dark-elevated p-4">
     <div class="caption-upper mb-2.5 flex items-center gap-2 text-on-dark-soft">
       <Music2 :size="13" />
-      <span class="min-w-0 flex-1 truncate">{{ available ? np.player ?? "Now playing" : "Now playing" }}</span>
+      <span class="min-w-0 flex-1 truncate">{{ heading }}</span>
       <template v-if="available">
         <button
           class="rounded-full p-1.5 normal-case text-on-dark-soft active:text-on-dark"
@@ -185,10 +196,10 @@ function restart() {
         <img v-if="art" :src="art" alt="" class="size-11 shrink-0 rounded-md object-cover" />
         <div class="min-w-0 flex-1">
           <p class="truncate font-display text-[22px] leading-tight text-on-dark" style="letter-spacing: -0.01em">
-            {{ np.title }}
+            {{ track.title }}
           </p>
-          <p class="mt-0.5 truncate text-[13px] text-on-dark-soft">
-            {{ [np.artist, np.album].filter(Boolean).join(" — ") || "Unknown artist" }}
+          <p v-if="artistLine" class="mt-0.5 truncate text-[13px] text-on-dark-soft">
+            {{ artistLine }}
           </p>
         </div>
         <!-- Like the current song: Spotify only, sat next to the title. -->
