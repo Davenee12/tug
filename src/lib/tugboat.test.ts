@@ -13,8 +13,10 @@ describe("Tugboat panel decisions", () => {
   it("knows when files are still arriving", () => {
     expect(transferring(TUGBOAT_OFF)).toBe(false);
     const file = { id: "a", name: "a.jpg", size: 10, received: 4, done: false, path: null, at: 0 };
-    expect(transferring({ incoming: [file] })).toBe(true);
-    expect(transferring({ incoming: [{ ...file, received: 10, done: true }] })).toBe(false);
+    expect(transferring({ incoming: [file], sending: false })).toBe(true);
+    expect(transferring({ incoming: [{ ...file, received: 10, done: true }], sending: false })).toBe(false);
+    // The phone downloading from the PC counts too.
+    expect(transferring({ incoming: [], sending: true })).toBe(true);
   });
 
   it("explains skipped files in one sentence", () => {

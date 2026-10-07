@@ -101,9 +101,16 @@ onMounted(async () => {
   mq.addEventListener("change", onMq);
   window.addEventListener("keydown", onShortcut);
   // Tugboat: files dragged onto the window open Tugboat with them offered to the phone.
-  void tugboat.init((skipped) => {
-    const msg = skippedMessage(skipped);
-    if (msg) tug.notify("info", msg);
+  void tugboat.init({
+    onSkipped: (skipped) => {
+      const msg = skippedMessage(skipped);
+      if (msg) tug.notify("info", msg);
+    },
+    // Text from the phone replaces the clipboard without asking, so say so (only once it's true).
+    onText: (ok) =>
+      ok
+        ? tug.notify("info", "Text from your phone is on your clipboard")
+        : tug.notify("error", "Text from your phone arrived, but couldn't go on the clipboard"),
   });
   try {
     await tug.init();

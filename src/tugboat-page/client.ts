@@ -242,7 +242,3 @@ export function clientId(make: () => string): string {
   return id;
 }
 
-/** Use the client id the PC put in the link (this phone's, carried across a network change). */
-export function adoptClientId(id: string) {
-  if (CLIENT_ID.test(id)) save("tugboat.client", id);
-}

@@ -478,6 +478,7 @@ const dropState: TugboatStatus = {
   outgoing: [],
   texts: [],
   sentText: null,
+  sending: false,
   ended: null,
 };
 const sendDrop = () => void emit("tugboat-status", structuredClone(dropState));
@@ -618,17 +619,16 @@ mockIPC(
       case "tugboat_stop":
         Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null });
         return null;
-      case "tugboat_offer_files":
       case "tugboat_pick_files": {
         startDrop();
-        const paths = cmd === "tugboat_pick_files" ? ["C:\\Users\\Dave\\Documents\\Lease agreement.pdf"] : (a.paths as string[]);
-        for (const p of paths) {
-          const name = p.split("\\").pop() ?? p;
-          dropState.outgoing.push({ id: `o${dropState.outgoing.length + 10}`, name, size: 1_250_000, downloads: 0 });
-        }
+        dropState.outgoing.push({ id: `o${dropState.outgoing.length + 10}`, name: "Lease agreement.pdf", size: 1_250_000, downloads: 0 });
         sendDrop();
         return [];
       }
+      case "tugboat_copy_link":
+        // The real one is a private clipboard write in Rust (no history, no sync).
+        console.log("[devMock] copy Tugboat link");
+        return null;
       case "tugboat_remove_offer":
         dropState.outgoing = dropState.outgoing.filter((o) => o.id !== a.id);
         sendDrop();

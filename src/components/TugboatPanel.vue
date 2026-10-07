@@ -38,29 +38,17 @@ const help = computed(() => showConnectHelp(s.value, tugboat.shownAt, now.value)
 
 // The phone as its page reported it ("iPhone", "Android phone"…); just "phone" until one connects.
 const phoneName = computed(() => s.value.phone ?? "phone");
-/** Once a phone is connected the code steps aside (it can be shown again). */
+/** Once a phone is connected the code steps aside (it can be shown again). After a network
+ * change the PC waits for a fresh scan, so the panel is back to "waiting" and shows the code. */
 const showCode = ref(false);
-/** The last address the code pointed at, to notice a network change. */
-let lastAddress = s.value.address;
 watch(
   () => s.value.phase,
   (p) => {
     if (p !== "connected") showCode.value = false;
-    if (p === "off") lastAddress = null;
-  },
-);
-// The network changed (maybe via a moment with none): the phone needs the new code, so bring it
-// back into view.
-watch(
-  () => s.value.address,
-  (now) => {
-    if (!now) return;
-    if (lastAddress && now !== lastAddress) showCode.value = true;
-    lastAddress = now;
   },
 );
 
-// Closing over files still arriving asks first; otherwise it just closes.
+// Closing while files are moving either way asks first; otherwise it just closes.
 const confirmClose = ref(false);
 function requestClose() {
   if (transferring(s.value) && !confirmClose.value) {
@@ -70,10 +58,21 @@ function requestClose() {
   void tugboat.close();
 }
 
+// The backdrop closes the panel only for a click that started on it too, so a text selection
+// dragged past the dialog's edge doesn't close Tugboat.
+const downOnBackdrop = ref(false);
+function onBackdropDown(e: PointerEvent) {
+  downOnBackdrop.value = e.target === e.currentTarget;
+}
+function onBackdropClick(e: MouseEvent) {
+  if (downOnBackdrop.value && e.target === e.currentTarget) requestClose();
+  downOnBackdrop.value = false;
+}
+
 const copiedLink = ref(false);
 async function copyLink() {
-  if (!s.value.url) return;
-  if (await copyText(s.value.url)) {
+  // Copied in Rust, kept out of Windows' clipboard history and sync: the link carries the secret.
+  if (await tugboat.copyLink()) {
     copiedLink.value = true;
     window.setTimeout(() => (copiedLink.value = false), 1500);
   } else tug.notify("error", "Couldn't copy the link.");
@@ -102,7 +101,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-start justify-center bg-ink/30 px-6 pt-[6vh] backdrop-blur-[2px]" @click.self="requestClose">
+  <div class="fixed inset-0 z-50 flex items-start justify-center bg-ink/30 px-6 pt-[6vh] backdrop-blur-[2px]" @pointerdown="onBackdropDown" @click="onBackdropClick">
     <div
       ref="root"
       role="dialog"
@@ -123,7 +122,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
       </header>
 
       <div v-if="confirmClose" class="flex items-center gap-3 border-b border-hairline-soft bg-surface-soft px-6 py-3" role="alert">
-        <p class="flex-1 text-[14px] text-ink">Files are still arriving from your {{ phoneName }}. Close Tugboat and stop them?</p>
+        <p class="flex-1 text-[14px] text-ink">Files are still moving between your {{ phoneName }} and this PC. Close Tugboat and stop them?</p>
         <button class="btn-secondary btn-sm" @click="confirmClose = false">Keep open</button>
         <button class="btn-primary btn-sm" @click="requestClose">Close</button>
       </div>
@@ -205,7 +204,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
             </details>
           </template>
 
-          <p v-if="s.phase !== 'off'" class="mt-auto pt-5 text-center text-[12px] text-muted-soft">Private to your Wi-Fi, encrypted.</p>
+          <p v-if="s.phase !== 'off'" class="mt-auto pt-5 text-center text-[12px] text-muted-soft">Encrypted. Use it on Wi-Fi you trust, like at home.</p>
         </section>
 
         <!-- Right: what's moving -->
@@ -218,7 +217,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
               <li v-for="(t, i) in s.texts" :key="t.id" class="rounded-lg bg-surface-soft px-3.5 py-3">
                 <p class="selectable line-clamp-4 text-[14px] break-words whitespace-pre-wrap text-ink">{{ t.text }}</p>
                 <div class="mt-2 flex items-center gap-3">
-                  <span v-if="i === 0 && copiedText === null" class="text-[12px] text-muted">On your clipboard</span>
+                  <span v-if="i === 0 && copiedText === null" class="text-[12px] text-muted">Put on your clipboard</span>
                   <button class="btn-secondary btn-sm ml-auto" @click="copyPhoneText(t.id, t.text)">
                     <Check v-if="copiedText === t.id" :size="14" class="text-success" />
                     <Copy v-else :size="14" />
@@ -306,7 +305,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
           <FolderOpen :size="14" />
           Open folder
         </button>
-        <span class="ml-auto text-right text-muted-soft">Turns off when you close this, or after 10 minutes unused.</span>
+        <span class="ml-auto text-right text-muted-soft">Turns off when you close this or hide tug, or after 10 minutes unused.</span>
       </footer>
     </div>
   </div>

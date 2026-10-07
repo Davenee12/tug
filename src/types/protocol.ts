@@ -454,8 +454,15 @@ export interface TugboatStatus {
   texts: TugboatText[];
   /** Text currently offered to the phone. */
   sentText: string | null;
+  /** The phone is downloading a file from the PC right now. */
+  sending: boolean;
   /** Why Tugboat turned itself off. */
-  ended: "idle" | null;
+  ended: "idle" | "hidden" | null;
+}
+
+/** "tugboat-text": text from the phone went (or failed to go) onto the PC clipboard. */
+export interface TugboatTextArrived {
+  ok: boolean;
 }
 
 /** A file that couldn't be offered to the phone, and why. */
