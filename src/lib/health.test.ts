@@ -95,6 +95,10 @@ describe("connectionHealth", () => {
     }
     const locked = health({ connection: "disconnected", reconnecting: true, awaitingUnlock: true, device: { id: "x", name: "iPhone" } });
     expect(locked.get("notifications")!.detail).toMatch(/Unlock it to reconnect/);
+    // Bluetooth off wins: the radio row says so, and nothing claims to be reconnecting.
+    const off = health({ connection: "disconnected", reconnecting: true, radio: "off", device: { id: "x", name: "iPhone" } });
+    expect(off.get("radio")!.detail).toMatch(/Bluetooth is off/);
+    expect(off.get("notifications")!.detail).not.toMatch(/Reconnecting/);
   });
 
   it("asks to pair, not unlock, once the iPhone is forgotten even if awaitingUnlock lingers", () => {

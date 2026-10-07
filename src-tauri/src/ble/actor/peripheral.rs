@@ -43,7 +43,24 @@ impl Actor {
         self.shared
             .update_status(|s| s.advertising = AdvertisingState::Starting);
         match self.create_provider().await {
-            Ok(provider) => self.provider = Some(provider),
+            Ok(provider) => {
+                self.provider = Some(provider);
+                self.advertise_failures = 0;
+            }
+            // The PC's adapter is busy or stalled (Windows aborts advertising when it blips, and
+            // starting again can then hang). Nothing sends an Aborted event for a provider that was
+            // never created, so retry from here, backing off, and keep it calm: it's not the
+            // iPhone's doing and there's nothing for the user to do. Without this tug stayed
+            // invisible, so the iPhone could never reconnect, until restarted.
+            Err(e) if e.is_timeout() => {
+                self.advertise_failures = self.advertise_failures.saturating_add(1);
+                let wait = retry_delay(ADVERTISE_RETRY_SECS, self.advertise_failures, MAX_ADVERTISE_RETRY_SECS);
+                log::warn!(
+                    "advertising didn't start in time (Bluetooth busy, {} in a row); retrying in {wait}s",
+                    self.advertise_failures
+                );
+                self.advertise_retry_in = Some(wait);
+            }
             Err(e) => {
                 log::error!("advertising failed: {e}");
                 self.shared.update_status(|s| {
