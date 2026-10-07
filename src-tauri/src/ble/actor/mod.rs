@@ -38,6 +38,7 @@ use crate::ams::{self, NowPlaying};
 use crate::ancs::{self, Category, EventFlags, EventId, ParseError, Response};
 use crate::ancs_queue::{Request, RequestQueue, MAX_ATTEMPTS};
 use crate::device_info;
+use crate::link_policy;
 use crate::state::{
     events, keys, AdvertisingState, AppName, ConnectionState, DiscoveredDevice, PairedDevice, PairingRequest,
     RadioState, Services, Shared, Transport,
@@ -266,6 +267,10 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         wedge: WedgeWatch::default(),
         wedge_relink_at: None,
         inventory: inventory::InventoryState::default(),
+        away_since: None,
+        last_poke: None,
+        connected_since_adopt: true,
+        adopt_timeouts: 0,
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -317,6 +322,15 @@ struct Actor {
     wedge_relink_at: Option<Instant>,
     /// When the next Bluetooth inventory report is due, and the one running now.
     inventory: inventory::InventoryState,
+    /// Since when the phone has been away (down past the blip grace, or unreachable). Sticky:
+    /// cleared only by a successful connect, so failed retries don't flip the status.
+    away_since: Option<Instant>,
+    /// When a connect last tried a link Windows reports down (see `link_policy::wait_for_link_up`).
+    last_poke: Option<Instant>,
+    /// Whether the adopted phone has connected since it was adopted (true for a remembered one).
+    connected_since_adopt: bool,
+    /// Timed-out connects since adopting the phone, while it hasn't connected yet.
+    adopt_timeouts: u32,
 }
 
 fn now_ms() -> i64 {

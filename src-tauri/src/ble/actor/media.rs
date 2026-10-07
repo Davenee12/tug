@@ -177,8 +177,7 @@ impl Actor {
                     command.id(),
                     describe_error(&e)
                 );
-                if e.is_closed() {
-                    self.relink("media controls were closed by Windows");
+                if self.on_closed(&e) {
                     return Err(RECONNECTING.into());
                 }
                 Err(e.to_string())

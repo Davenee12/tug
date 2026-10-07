@@ -13,6 +13,7 @@ mod device_kind;
 mod diagnostics;
 mod frontend_log;
 pub mod hfp;
+mod link_policy;
 mod location;
 pub mod map;
 mod media_keys;

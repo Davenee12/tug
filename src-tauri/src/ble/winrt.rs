@@ -47,6 +47,23 @@ impl BleError {
         matches!(self, Self::TimedOut)
     }
 
+    /// The link this request went over is gone: Windows closed tug's objects, can't reach the
+    /// phone, or stopped answering. Carrying on with setup over it only waits out more timeouts.
+    pub fn link_is_dead(&self) -> bool {
+        self.is_closed() || matches!(self, Self::Unreachable | Self::TimedOut)
+    }
+
+    /// This error, reduced to what `link_policy` decides on.
+    pub fn failure(&self) -> crate::link_policy::Failure {
+        use crate::link_policy::Failure;
+        match self {
+            Self::Unreachable => Failure::Unreachable,
+            Self::TimedOut => Failure::TimedOut,
+            Self::NotFound(_) => Failure::NotFound,
+            _ => Failure::Other,
+        }
+    }
+
     /// The ATT error code the peripheral answered with, when it answered with one.
     pub fn att_code(&self) -> Option<u8> {
         match self {
@@ -371,6 +388,17 @@ mod tests {
 
     #[test]
     fn a_timeout_reads_as_a_timeout_not_a_refusal() {
+        assert!(BleError::TimedOut.link_is_dead());
+        assert!(BleError::Unreachable.link_is_dead());
+        let closed = BleError::Win(windows::core::Error::from(windows::core::HRESULT(
+            0x8000_0013_u32 as i32,
+        )));
+        assert!(closed.is_closed() && closed.link_is_dead());
+        assert!(
+            !BleError::NotFound("AMS").link_is_dead(),
+            "the phone answered: the link works"
+        );
+        assert!(!BleError::AccessDenied.link_is_dead());
         assert!(BleError::TimedOut.is_timeout());
         assert!(!BleError::Unreachable.is_timeout());
         assert!(!BleError::Protocol(Some(0x0E)).is_timeout());

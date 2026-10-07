@@ -2,7 +2,7 @@
 
 import type { DeviceStatus } from "../types/protocol";
 
-type StatusInputs = Pick<DeviceStatus, "connection" | "awaitingUnlock" | "reconnecting" | "radio">;
+type StatusInputs = Pick<DeviceStatus, "connection" | "awaitingUnlock" | "reconnecting" | "radio" | "away">;
 
 /**
  * Whether to say tug is reconnecting on its own. Never with Bluetooth off or missing: the sidebar
@@ -23,6 +23,7 @@ export function connectionLabel(s: StatusInputs): string {
     case "disconnected":
       // A locked phone needs the user; tug rebuilding the link on its own doesn't.
       if (s.awaitingUnlock) return "Unlock your iPhone";
+      if (s.away) return "iPhone away";
       return reconnecting ? "Reconnecting…" : "Waiting for iPhone";
     default:
       return "Not set up";

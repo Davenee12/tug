@@ -126,6 +126,9 @@ pub struct DeviceStatus {
     /// "Reconnecting…" rather than "Waiting for iPhone". Cleared once connected, or after a few
     /// failed attempts.
     pub reconnecting: bool,
+    /// The iPhone is away (out of range, or Windows can't reach it). Sticky until it connects
+    /// again, so the status stays steady instead of flipping with every background retry.
+    pub away: bool,
     /// Why message access isn't available, when the user can fix it (e.g. consent).
     pub messages_error: Option<String>,
     /// Why the phone's contacts aren't available, when the user can fix it.
