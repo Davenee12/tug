@@ -370,16 +370,24 @@ impl DevTools {
             ),
             Resolution::Cancelled => (SendOutcome::Cancelled, Some("It was cancelled in tug.".to_string())),
             Resolution::Approved => {
-                let map = self.shared.map.get().cloned();
-                let sent = match map {
-                    None => Err("Texts aren't connected.".to_string()),
-                    Some(map) => tokio::time::timeout(SEND_TIMEOUT, map.send(address, message))
-                        .await
-                        .unwrap_or_else(|_| Err("The phone didn't answer in time.".to_string()))
-                        .map(|_| ()),
-                };
+                // The same path as tug's own composer (#99): saved and shown as "Sending…" first,
+                // and a send the phone didn't take comes back as a failed row, not an error.
+                let sent = tokio::time::timeout(
+                    SEND_TIMEOUT,
+                    crate::map::service::send_text(&self.shared, &address, &message),
+                )
+                .await
+                .unwrap_or_else(|_| Err("The phone didn't answer in time.".to_string()));
                 match sent {
-                    Ok(()) => (SendOutcome::Sent, None),
+                    Ok(m) if m.status == crate::messages::Status::Failed => (
+                        SendOutcome::Failed,
+                        Some("Your iPhone didn't send it. Retry it from the conversation in tug.".to_string()),
+                    ),
+                    Ok(m) if m.status == crate::messages::Status::Unconfirmed => (
+                        SendOutcome::Sent,
+                        Some("It may have sent; check your iPhone to be sure.".to_string()),
+                    ),
+                    Ok(_) => (SendOutcome::Sent, None),
                     Err(e) => (SendOutcome::Failed, Some(e)),
                 }
             }
