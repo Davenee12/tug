@@ -8,6 +8,9 @@ export type ConnectionState = "noDevice" | "disconnected" | "connecting" | "conn
 export interface PairedDevice {
   id: string;
   name: string;
+  /** Apple's model identifier ("iPhone16,2") read over Bluetooth; null until the phone reports it.
+   *  `lib/phoneModel` turns it into a name and picture. */
+  model: string | null;
 }
 
 export interface Services {
@@ -35,6 +38,8 @@ export interface DeviceStatus {
   awaitingPhoneAllow: boolean;
   /** The iPhone is connected but locked (no ANCS yet): tell the user to unlock it to reconnect. */
   awaitingUnlock: boolean;
+  /** tug is rebuilding the link on its own (Bluetooth stalled, the PC woke): say "Reconnecting…", not "Waiting". */
+  reconnecting: boolean;
   /** Why message access isn't available, when the user can fix it. */
   messagesError: string | null;
   /** Why the phone's contacts aren't available, when the user can fix it. */

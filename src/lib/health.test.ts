@@ -7,7 +7,7 @@ const CONNECTED: DeviceStatus = {
   radio: "on",
   peripheralSupported: true,
   advertising: "on",
-  device: { id: "x", name: "iPhone" },
+  device: { id: "x", name: "iPhone", model: null },
   connection: "connected",
   battery: 76,
   services: { notifications: true, media: true, battery: true, messages: true },
@@ -16,6 +16,7 @@ const CONNECTED: DeviceStatus = {
   pairingStale: false,
   awaitingPhoneAllow: false,
   awaitingUnlock: false,
+  reconnecting: false,
   messagesError: null,
   contactsError: null,
   contactsShared: false,
@@ -64,7 +65,7 @@ describe("connectionHealth", () => {
   });
 
   it("downstream links wait until connected", () => {
-    const m = health({ connection: "disconnected", device: { id: "x", name: "iPhone" } });
+    const m = health({ connection: "disconnected", device: { id: "x", name: "iPhone", model: null } });
     for (const key of ["notifications", "media", "battery", "texts", "contacts", "calls"]) {
       expect(m.get(key)!.state, key).toBe("waiting");
       expect(m.get(key)!.detail).toMatch(/reconnect/);
@@ -79,11 +80,25 @@ describe("connectionHealth", () => {
   });
 
   it("tells the owner to unlock a connected-but-locked iPhone", () => {
-    const m = health({ connection: "disconnected", awaitingUnlock: true, device: { id: "x", name: "iPhone" } });
+    const m = health({ connection: "disconnected", awaitingUnlock: true, device: { id: "x", name: "iPhone", model: null } });
     for (const key of ["notifications", "media", "battery", "texts"]) {
       expect(m.get(key)!.state, key).toBe("waiting");
       expect(m.get(key)!.detail).toMatch(/Unlock it to reconnect/);
     }
+  });
+
+  it("says tug is reconnecting while it rebuilds the link on its own", () => {
+    const m = health({ connection: "connecting", reconnecting: true, device: { id: "x", name: "iPhone", model: null } });
+    for (const key of ["notifications", "media", "battery", "texts"]) {
+      expect(m.get(key)!.state, key).toBe("waiting");
+      expect(m.get(key)!.detail, key).toMatch(/^Reconnecting to your iPhone/);
+    }
+    const locked = health({ connection: "disconnected", reconnecting: true, awaitingUnlock: true, device: { id: "x", name: "iPhone", model: null } });
+    expect(locked.get("notifications")!.detail).toMatch(/Unlock it to reconnect/);
+    // Bluetooth off wins: the radio row says so, and nothing claims to be reconnecting.
+    const off = health({ connection: "disconnected", reconnecting: true, radio: "off", device: { id: "x", name: "iPhone", model: null } });
+    expect(off.get("radio")!.detail).toMatch(/Bluetooth is off/);
+    expect(off.get("notifications")!.detail).not.toMatch(/Reconnecting/);
   });
 
   it("asks to pair, not unlock, once the iPhone is forgotten even if awaitingUnlock lingers", () => {
