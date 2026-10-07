@@ -21,6 +21,7 @@ mod perf;
 mod spotify;
 mod state;
 mod store;
+mod text;
 pub mod toast;
 mod tray;
 mod webview_watch;
