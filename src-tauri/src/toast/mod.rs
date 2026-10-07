@@ -449,6 +449,7 @@ mod tests {
             received_at: 1_791_300_000_000,
             status: Status::Accepted,
             msg_type: None,
+            gap_before: false,
         };
         let json: serde_json::Value = serde_json::to_value(ToastPressed {
             kind: PressKind::Replied,
