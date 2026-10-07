@@ -18,7 +18,7 @@ import {
 } from "lucide-vue-next";
 import { useTugStore, type SpotifyTab } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
-import { idFromUri, playlistDetail } from "../lib/spotify";
+import { idFromUri, playlistDetail, uniqueAlbums, uniqueSongs } from "../lib/spotify";
 import { api, errorMessage } from "../lib/ipc";
 import type { PickerRow } from "../lib/playback";
 import type {
@@ -143,8 +143,9 @@ async function runSearch() {
   try {
     const r = await api.spotifySearch(q, ["track", "album", "artist", "playlist"], 0);
     if (mine !== searchSeq) return;
-    results.value = r;
+    // Offsets count what Spotify returned (so "Show more" pages on), not what's shown.
     offsets.value = { tracks: r.tracks.length, albums: r.albums.length, artists: r.artists.length, playlists: r.playlists.length };
+    results.value = { ...r, tracks: uniqueSongs(r.tracks), albums: uniqueAlbums(r.albums) };
   } catch (e) {
     if (mine === searchSeq) tug.notify("error", errorMessage(e));
   } finally {
@@ -159,7 +160,9 @@ async function showMore(kind: "track" | "album" | "artist" | "playlist") {
   try {
     const r = await api.spotifySearch(q, [kind], offsets.value[key]);
     const cur = results.value;
-    cur[key] = [...cur[key], ...(r[key] as never[])] as never;
+    const fresh =
+      key === "tracks" ? uniqueSongs(r.tracks, cur.tracks) : key === "albums" ? uniqueAlbums(r.albums, cur.albums) : r[key];
+    cur[key] = [...cur[key], ...(fresh as never[])] as never;
     cur.more[key] = r.more[key];
     offsets.value[key] += r[key].length;
   } catch (e) {
