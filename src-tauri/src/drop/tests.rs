@@ -139,7 +139,8 @@ async fn phone_session_over_a_socket() {
     let folder = root.join("tug Drop");
     let secret = crypto::new_secret();
     let sink = Arc::new(TestSink::default());
-    let session = Arc::new(Session::new(&secret, folder.clone(), sink.clone()));
+    let incoming = root.join("incoming");
+    let session = Arc::new(Session::new(&secret, folder.clone(), incoming.clone(), sink.clone()));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -324,8 +325,12 @@ async fn phone_session_over_a_socket() {
     server.await.unwrap();
 
     // Nothing unfinished is left behind.
-    session::clean_incoming(&folder);
-    assert!(!folder.join(".incoming").exists());
+    assert!(
+        std::fs::read_dir(&incoming).unwrap().next().is_none(),
+        "saved files left the incoming folder"
+    );
+    session::clean_incoming(&incoming);
+    assert!(!incoming.exists());
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -339,7 +344,12 @@ async fn manual_page() {
     let root = temp_dir();
     let folder = root.join("tug Drop");
     let secret = crypto::new_secret();
-    let session = Arc::new(Session::new(&secret, folder.clone(), Arc::new(TestSink::default())));
+    let session = Arc::new(Session::new(
+        &secret,
+        folder.clone(),
+        root.join("incoming"),
+        Arc::new(TestSink::default()),
+    ));
     let offered = root.join("Offered from PC.txt");
     std::fs::write(&offered, "Hello from tug on the PC.\n".repeat(200_000)).unwrap();
     session.offer(&[offered]);

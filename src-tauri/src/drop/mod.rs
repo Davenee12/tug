@@ -170,6 +170,14 @@ impl Sink for PanelSink {
     }
 }
 
+/// Unfinished uploads, under tug's local app data.
+fn incoming_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|p| p.join("drop-incoming"))
+        .map_err(|_| "Couldn't find tug's data folder.".to_string())
+}
+
 /// `Pictures\tug Drop`, from Windows' Pictures known folder (wherever it's been moved to).
 fn drop_folder(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
@@ -296,13 +304,14 @@ impl DropService {
             return Ok(self.status());
         }
         let folder = drop_folder(&self.inner.app)?;
+        let incoming = incoming_dir(&self.inner.app)?;
         {
-            let folder = folder.clone();
-            let _ = tokio::task::spawn_blocking(move || session::clean_incoming(&folder)).await;
+            let incoming = incoming.clone();
+            let _ = tokio::task::spawn_blocking(move || session::clean_incoming(&incoming)).await;
         }
         let secret = crypto::new_secret();
         let sink: Arc<dyn Sink> = Arc::new(PanelSink(Arc::downgrade(&self.inner)));
-        let session = Arc::new(Session::new(&secret, folder, sink));
+        let session = Arc::new(Session::new(&secret, folder, incoming, sink));
         let ip = tokio::task::spawn_blocking(net::current).await.ok().flatten();
         let endpoint = match ip {
             Some(ip) => match open_endpoint(ip, 0, &secret, session.clone()).await {
@@ -348,8 +357,8 @@ impl DropService {
             if let Some(e) = r.endpoint {
                 e.close();
             }
-            let folder = r.session.folder.clone();
-            let _ = tokio::task::spawn_blocking(move || session::clean_incoming(&folder)).await;
+            let incoming = r.session.incoming.clone();
+            let _ = tokio::task::spawn_blocking(move || session::clean_incoming(&incoming)).await;
             log::info!("drop: closed{}", if ended.is_some() { " (idle)" } else { "" });
         }
         *lock(&self.inner.ended) = ended;
@@ -366,7 +375,7 @@ impl DropService {
                 }
                 e.task.abort();
             }
-            session::clean_incoming(&r.session.folder);
+            session::clean_incoming(&r.session.incoming);
         }
     }
 
@@ -466,7 +475,15 @@ impl DropService {
         let mut cmd = std::process::Command::new("explorer.exe");
         match file.map(Path::new) {
             Some(p) if self.session().is_some_and(|s| s.saved_path(p)) && p.exists() => {
-                cmd.arg(format!("/select,{}", p.display()));
+                // Explorer wants `/select,"C:\path with spaces\file"` verbatim, not Rust's quoting
+                // of the whole argument. The path is one this session saved (checked above).
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.raw_arg(format!("/select,\"{}\"", p.display()));
+                }
+                #[cfg(not(windows))]
+                cmd.arg(p);
             }
             _ => {
                 cmd.arg(&folder);
