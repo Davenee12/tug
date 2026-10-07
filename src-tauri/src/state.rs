@@ -27,6 +27,9 @@ pub mod events {
     pub const CONTACTS: &str = "contacts";
     /// Tray click/Open with unread texts: the frontend opens the newest unread conversation.
     pub const OPEN_LATEST_CONVERSATION: &str = "open-latest-conversation";
+    /// Tray menu's Settings…: the frontend opens Settings (the only mouse path there while
+    /// the first-run Connect panel stands in for the Feed).
+    pub const OPEN_SETTINGS: &str = "open-settings";
     pub const CALLS: &str = "calls";
     /// A pop-up's body or button was pressed and carried out (see `toast`).
     pub const TOAST_PRESSED: &str = "toast-pressed";

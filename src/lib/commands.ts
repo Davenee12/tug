@@ -182,7 +182,7 @@ function callActions(rest: string, people: Person[], ctx: ActionContext): Action
       return { kind: "call", person, label: `Call ${name} back`, detail: "From their missed call" };
     }
     if (ctx.canDial) return { kind: "call", person, label: `Call ${name}`, detail: formatAddress(person.address) };
-    return { kind: "call-setup", label: `Can't call ${name} yet: only missed calls can be called back` };
+    return { kind: "call-setup", label: `Can't call ${name} yet: turn on Settings › iPhone › Call from tug` };
   });
 }
 

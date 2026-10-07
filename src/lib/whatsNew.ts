@@ -26,7 +26,7 @@ export const RELEASE_NOTES: ReleaseNote[] = [
     highlights: [
       "Tugboat: scan a code with your phone and send photos, files and text to your PC, and back. No app needed.",
       "Your exact iPhone now shows in the sidebar.",
-      "One conversation per person, even when an app hides a mark in their name.",
+      "One conversation per person, even when their name arrives slightly different.",
       "Spotify's back and forward 15 seconds jump to the right spot.",
       "Weather keeps itself up to date.",
     ],

@@ -29,17 +29,22 @@ pub fn installed() -> bool {
 }
 
 /// Left-click (and the menu's Open) bring tug forward and, with unread texts, open the
-/// newest unread conversation; right-click offers Open and Quit.
+/// newest unread conversation; right-click offers Open, Settings and Quit.
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open tug", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit tug", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &settings, &quit])?;
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("tug")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_and_open_latest(app),
+            "settings" => {
+                show(app);
+                let _ = app.emit(events::OPEN_SETTINGS, ());
+            }
             "quit" => app.exit(0),
             _ => {}
         })

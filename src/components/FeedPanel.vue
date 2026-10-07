@@ -69,7 +69,7 @@ watch(entryGroups, async (next, prev) => {
 });
 
 const unreadMessages = computed(() => tug.unreadTexts);
-const TITLES: Record<string, string> = { feed: "Notifications", messages: "Messages", calls: "Calls" };
+const TITLES: Record<string, string> = { feed: "Feed", messages: "Messages", calls: "Calls" };
 
 // Infinite scroll through older history.
 const sentinel = ref<HTMLElement | null>(null);
@@ -98,11 +98,20 @@ const nudgeDismissed = ref(false);
 
 <template>
   <div class="flex h-full min-h-0 flex-col">
-    <header class="flex items-center gap-4 border-b border-hairline px-8 pt-6 pb-4">
-      <h1 class="headline text-[36px] leading-none">{{ TITLES[tug.view] ?? "Notifications" }}</h1>
-      <nav class="ml-2 flex gap-1">
-        <button :class="['tab', tug.view === 'feed' && 'tab-active']" @click="tug.view = 'feed'">Feed</button>
-        <button :class="['tab flex items-center gap-1.5', tug.view === 'messages' && 'tab-active']" @click="tug.view = 'messages'">
+    <!-- A container: with the side Connection panel open the Feed is narrower than the window, so the
+         title shrinks and search folds to an icon by the Feed's own width, not the viewport's. -->
+    <header class="@container flex items-center gap-4 border-b border-hairline px-8 pt-6 pb-4">
+      <h1 class="headline text-[28px] leading-none @2xl:text-[36px]">{{ TITLES[tug.view] ?? "Feed" }}</h1>
+      <nav class="ml-2 flex gap-1" role="tablist" aria-label="Feed, Messages and Calls">
+        <button role="tab" :aria-selected="tug.view === 'feed'" :class="['tab', tug.view === 'feed' && 'tab-active']" @click="tug.view = 'feed'">
+          Feed
+        </button>
+        <button
+          role="tab"
+          :aria-selected="tug.view === 'messages'"
+          :class="['tab flex items-center gap-1.5', tug.view === 'messages' && 'tab-active']"
+          @click="tug.view = 'messages'"
+        >
           Messages
           <span
             v-if="unreadMessages"
@@ -111,16 +120,18 @@ const nudgeDismissed = ref(false);
             {{ unreadMessages }}
           </span>
         </button>
-        <button :class="['tab', tug.view === 'calls' && 'tab-active']" @click="tug.view = 'calls'">Calls</button>
+        <button role="tab" :aria-selected="tug.view === 'calls'" :class="['tab', tug.view === 'calls' && 'tab-active']" @click="tug.view = 'calls'">
+          Calls
+        </button>
       </nav>
       <button
-        class="ml-auto flex h-10 w-full max-w-72 items-center gap-2 rounded-lg border border-hairline bg-canvas px-3.5 text-left text-[14px] text-muted-soft active:bg-surface-soft"
+        class="ml-auto flex h-10 w-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-hairline bg-canvas text-left text-[14px] text-muted-soft active:bg-surface-soft @2xl:w-full @2xl:max-w-72 @2xl:shrink @2xl:justify-start @2xl:px-3.5"
         aria-label="Search people, texts and notifications"
         @click="tug.searchOpen = true"
       >
         <Search :size="15" class="shrink-0" />
-        <span class="flex-1 truncate">Search everything</span>
-        <kbd class="rounded border border-hairline px-1.5 font-mono text-[11px]">Ctrl K</kbd>
+        <span class="hidden flex-1 truncate @2xl:inline">Search everything</span>
+        <kbd class="hidden rounded border border-hairline px-1.5 font-mono text-[11px] @2xl:inline">Ctrl K</kbd>
       </button>
       <button class="btn-secondary w-10 px-0" aria-label="Settings" title="Settings (Ctrl+,)" @click="tug.openSettings()">
         <Settings2 :size="16" />
@@ -158,7 +169,7 @@ const nudgeDismissed = ref(false);
           <p class="mt-2 text-[14px] text-muted">
             {{
               tug.notifications.length
-                ? "Cleared notifications live on in Messages and search (Ctrl K)."
+                ? "Cleared notifications are still in search (Ctrl K); texts stay in Messages."
                 : tug.connected
                   ? "New notifications from your iPhone will land here."
                   : "Notifications appear here once your iPhone connects."

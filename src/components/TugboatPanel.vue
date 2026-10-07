@@ -20,7 +20,7 @@ import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
 import { useFocusTrap } from "../lib/focusTrap";
 import { copyText } from "../lib/clipboard";
-import { formatSize, percent, showConnectHelp, skippedMessage, transferring } from "../lib/tugboat";
+import { capitalised, closeWarning, formatSize, percent, showConnectHelp, skippedMessage } from "../lib/tugboat";
 
 const tug = useTugStore();
 const tugboat = useTugboatStore();
@@ -48,10 +48,15 @@ watch(
   },
 );
 
-// Closing while files are moving either way asks first; otherwise it just closes.
+// Closing while files are moving either way, or with offered files the phone hasn't saved yet,
+// asks first; otherwise it just closes. The question goes away once nothing is pending.
 const confirmClose = ref(false);
+const pending = computed(() => closeWarning(s.value));
+watch(pending, (w) => {
+  if (!w) confirmClose.value = false;
+});
 function requestClose() {
-  if (transferring(s.value) && !confirmClose.value) {
+  if (pending.value && !confirmClose.value) {
     confirmClose.value = true;
     return;
   }
@@ -122,7 +127,8 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
       </header>
 
       <div v-if="confirmClose" class="flex items-center gap-3 border-b border-hairline-soft bg-surface-soft px-6 py-3" role="alert">
-        <p class="flex-1 text-[14px] text-ink">Files are still moving between your {{ phoneName }} and this PC. Close Tugboat and stop them?</p>
+        <p v-if="pending === 'unsaved'" class="flex-1 text-[14px] text-ink">Files you offered haven't been saved on your {{ phoneName }} yet. Close anyway?</p>
+        <p v-else class="flex-1 text-[14px] text-ink">Files are still moving between your {{ phoneName }} and this PC. Close Tugboat and stop them?</p>
         <button class="btn-secondary btn-sm" @click="confirmClose = false">Keep open</button>
         <button class="btn-primary btn-sm" @click="requestClose">Close</button>
       </div>
@@ -159,7 +165,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
             <span class="flex size-16 items-center justify-center rounded-2xl bg-surface-dark text-on-dark">
               <Smartphone :size="28" />
             </span>
-            <p class="font-display text-[22px] leading-tight text-ink">{{ phoneName }} connected</p>
+            <p class="font-display text-[22px] leading-tight text-ink">{{ capitalised(phoneName) }} connected</p>
             <p class="flex items-center gap-2 text-[13px] text-muted">
               <span :class="['size-2 rounded-full', s.phoneActive ? 'bg-accent-teal' : 'bg-muted-soft']" />
               {{ s.phoneActive ? `Tugboat is open on your ${phoneName}` : `Open Tugboat on your ${phoneName} to send` }}
@@ -293,7 +299,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
                   Send
                 </button>
               </div>
-              <p v-if="s.sentText" class="mt-2 truncate text-[12px] text-muted">On your phone now: “{{ s.sentText }}”</p>
+              <p v-if="s.sentText" class="mt-2 truncate text-[12px] text-muted">On your {{ phoneName }} now: “{{ s.sentText }}”</p>
             </div>
           </section>
         </div>
