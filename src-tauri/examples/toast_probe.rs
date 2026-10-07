@@ -63,7 +63,7 @@ fn main() {
             ..base
         },
     };
-    let xml = notification_toast(&spec);
+    let xml = notification_toast(&spec, true);
     println!("AUMID: {aumid}\nXML: {xml}\n");
     let toast = Toast {
         aumid: &aumid,

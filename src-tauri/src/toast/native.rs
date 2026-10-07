@@ -11,8 +11,7 @@ use windows::core::{IInspectable, Interface, HSTRING};
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::Foundation::{DateTime, IReference, PropertyValue, TypedEventHandler};
 use windows::UI::Notifications::{
-    NotificationSetting, ToastActivatedEventArgs, ToastFailedEventArgs, ToastNotification,
-    ToastNotificationManager,
+    NotificationSetting, ToastActivatedEventArgs, ToastFailedEventArgs, ToastNotification, ToastNotificationManager,
 };
 
 /// PowerShell's AppUserModelID: always registered, so an uninstalled (dev) build can show
