@@ -26,6 +26,15 @@ export interface SetupSnippet {
 /** JSON string contents: backslashes and quotes escaped. */
 const jsonPath = (p: string) => JSON.stringify(p);
 
+/**
+ * A TOML string for a path: a literal string ('…') keeps Windows backslashes as they are, but
+ * can't hold a `'` (C:\Users\O'Brien), so then a basic string with JSON-style escapes, which
+ * TOML reads the same way.
+ */
+export function tomlString(p: string): string {
+  return p.includes("'") || /[\u0000-\u001f]/.test(p) ? JSON.stringify(p) : `'${p}'`;
+}
+
 /** Copy-paste setup for each AI tool, pointing at this PC's tug command. */
 export function setupSnippets(cliPath: string): SetupSnippet[] {
   return [
@@ -39,8 +48,7 @@ export function setupSnippets(cliPath: string): SetupSnippet[] {
       id: "codex",
       name: "Codex",
       where: "Add to ~/.codex/config.toml",
-      // A TOML literal string ('…') keeps Windows backslashes as they are.
-      code: `[mcp_servers.tug]\ncommand = '${cliPath.replace(/'/g, "")}'\nargs = ["mcp"]`,
+      code: `[mcp_servers.tug]\ncommand = ${tomlString(cliPath)}\nargs = ["mcp"]`,
     },
     {
       id: "cursor",
@@ -76,6 +84,14 @@ export function secondsLeft(expiresAt: number, now: number): number {
 export function countdown(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** How long Send stays disabled after the card appears, so a click or key already on its way can't send. */
+export const SEND_ARM_MS = 1500;
+
+/** Send is clickable only once the card has been up a moment and tug's window has focus. */
+export function sendArmed(shownAt: number, now: number, windowFocused: boolean): boolean {
+  return windowFocused && now - shownAt >= SEND_ARM_MS;
 }
 
 /** A tool name fit for the card's sentence: "claude-code" → "claude-code", "" → "An AI tool". */

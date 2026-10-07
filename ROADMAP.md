@@ -91,8 +91,11 @@ docs/DEVELOPERS.md.
 - **How:** a named pipe only the user can open (no port), per-install token proved by HMAC (never
   sent), versioned JSON; `bin\tug.exe` is a separate console program (`crates/tug-cli`), the
   bridge is `crates/tug-bridge`. PATH only via Settings › Developer tools › Add tug to PATH.
-- **Safety:** off by default (and idle when off); per-tool switches (reads on, music and texts
-  off); rate limits; Revoke access rotates the token; tool calls logged without content.
+- **Safety:** off by default (and idle when off); per-tool switches (reads on; codes, music and
+  texts off); rate limits; Revoke access rotates the token; tool calls logged without content.
+  After a security review: clients refuse a pipe not owned by the user at medium+ integrity and
+  never show pre-auth text; the token file is low-integrity-proof; results with other people's
+  words are framed as untrusted data; Send on the card arms after 1.5 s and only with focus.
 - **ChatGPT desktop:** can't start local (stdio) MCP servers yet, only remote connectors; the
   setup page says so. "Works with" badges not done.
 - **Verified on the PC (isolated test build, no phone):** off → "turned off" answer; on →

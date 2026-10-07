@@ -67,13 +67,17 @@ export const useDevToolsStore = defineStore("devtools", () => {
   const revoke = () => run(() => api.devtoolsRevoke());
   const setOnPath = (on: boolean) => run(() => api.devtoolsSetOnPath(on));
 
-  /** Send (true) or Don't send. The card closes at once; Rust ignores a second answer. */
-  async function answer(send: boolean) {
+  /**
+   * Send (true) or Don't send for the card with this id. Ignored unless it's the card showing
+   * now, so a click meant for one card can never answer the next. The card closes at once;
+   * Rust also ignores anything but the question it's waiting on.
+   */
+  async function answer(id: number, send: boolean) {
     const c = confirm.value;
-    if (!c) return;
+    if (!c || c.id !== id) return;
     confirm.value = null;
     try {
-      await api.devtoolsConfirm(c.id, send);
+      await api.devtoolsConfirm(id, send);
     } catch {
       /* it expires as not sent */
     }
