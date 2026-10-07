@@ -138,6 +138,7 @@ impl Actor {
         &mut self,
         command: ams::RemoteCommand,
         requested_at: std::time::Instant,
+        report_repeat: bool,
     ) -> Result<(), String> {
         // One press, one command: a repeat that queued behind the previous write is the same press.
         if !self.media_gate.admit(command, requested_at) {
@@ -145,7 +146,11 @@ impl Actor {
                 "dropped duplicate AMS command {} (pressed again before the last one went through)",
                 command.as_str()
             );
-            return Ok(());
+            return if report_repeat {
+                Err(ams::REPEAT_IGNORED.into())
+            } else {
+                Ok(())
+            };
         }
         let np = self.shared.now_playing();
         let waited = requested_at.elapsed();

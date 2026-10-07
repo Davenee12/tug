@@ -94,7 +94,7 @@ export function sendArmed(shownAt: number, now: number, windowFocused: boolean):
   return windowFocused && now - shownAt >= SEND_ARM_MS;
 }
 
-/** A tool name fit for the card's sentence: "claude-code" → "claude-code", "" → "An AI tool". */
+/** A tool name fit for the card's sentence ("Claude Code", already tamed by tug), "" → "An AI tool". */
 export function askerName(tool: string): string {
   const t = tool.trim();
   return t.length ? t : "An AI tool";

@@ -439,9 +439,10 @@ impl Actor {
             Command::Media {
                 command,
                 requested_at,
+                report_repeat,
                 reply,
             } => {
-                let res = self.send_media_command(command, requested_at).await;
+                let res = self.send_media_command(command, requested_at, report_repeat).await;
                 let _ = reply.send(res);
             }
             Command::StartDiscovery => {

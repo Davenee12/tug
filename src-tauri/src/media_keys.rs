@@ -280,6 +280,7 @@ mod smtc {
                         ble.send(Command::Media {
                             command,
                             requested_at: std::time::Instant::now(),
+                            report_repeat: false,
                             reply,
                         });
                     }

@@ -111,6 +111,7 @@ pub async fn media_command(state: State<'_, AppState>, command: String) -> Resul
         .request(|reply| Command::Media {
             command,
             requested_at,
+            report_repeat: false,
             reply,
         })
         .await

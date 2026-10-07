@@ -22,7 +22,7 @@ pub fn exit_code(e: &ClientError) -> i32 {
             ErrorCode::Invalid => USAGE,
             _ => FAILED,
         },
-        ClientError::Timeout | ClientError::Other(_) => FAILED,
+        ClientError::Timeout | ClientError::SendTimeout | ClientError::Other(_) => FAILED,
     }
 }
 
@@ -103,7 +103,17 @@ pub fn status_lines(s: &StatusResult) -> Vec<String> {
 /// `tug text`: the outcome sentence and whether it counts as success.
 pub fn send_outcome(r: &SendResult) -> (String, bool) {
     match r.outcome {
-        SendOutcome::Sent => (format!("Sent to {}.", printable(&r.to)), true),
+        SendOutcome::Sent => (
+            format!(
+                "Sent to {}.{}",
+                printable(&r.to),
+                r.detail
+                    .as_deref()
+                    .map(|d| format!(" {}", printable(d)))
+                    .unwrap_or_default()
+            ),
+            true,
+        ),
         SendOutcome::Declined => (
             format!("Not sent: you chose Don't send for {}.", printable(&r.to)),
             false,
@@ -119,6 +129,15 @@ pub fn send_outcome(r: &SendResult) -> (String, bool) {
                     .unwrap_or_default()
             ),
             false,
+        ),
+        // Saved in tug and still on its way: counted as success, so a script that retries on
+        // failure can't send it twice.
+        SendOutcome::Queued => (
+            format!(
+                "Queued for {}: tug is still waiting for your iPhone, so it may still send. Check the conversation in tug. Don't send it again.",
+                printable(&r.to)
+            ),
+            true,
         ),
     }
 }
@@ -268,6 +287,21 @@ mod tests {
         assert!(!send_outcome(&r(SendOutcome::Declined)).1);
         assert!(!send_outcome(&r(SendOutcome::TimedOut)).1);
         assert!(send_outcome(&r(SendOutcome::TimedOut)).0.contains("2 minutes"));
+        // Still on its way in tug: never a failure (a retrying script would send it twice).
+        let (line, ok) = send_outcome(&r(SendOutcome::Queued));
+        assert!(ok);
+        assert!(line.contains("Don't send it again"), "{line}");
+        let unsure = SendResult {
+            detail: Some("It may have sent; check your iPhone to be sure. Don't send it again.".into()),
+            ..r(SendOutcome::Sent)
+        };
+        assert!(send_outcome(&unsure).0.contains("Don't send it again"));
+    }
+
+    #[test]
+    fn a_send_that_ran_out_of_time_says_not_to_resend() {
+        assert_eq!(exit_code(&ClientError::SendTimeout), FAILED);
+        assert!(ClientError::SendTimeout.to_string().contains("don't send it again"));
     }
 
     #[test]

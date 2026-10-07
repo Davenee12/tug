@@ -120,9 +120,16 @@ pub async fn handle_connection<S: AsyncRead + AsyncWrite + Send + Unpin>(stream:
         return fail(&mut w, ErrorCode::Off, OFF_MESSAGE).await;
     }
     let limit = handler.time_limit(&request);
+    // An approved text is saved and queued before anything waits on the phone: past the limit it
+    // may still go, so the caller must not be told to try again.
+    let is_send = matches!(request, Request::SendText { .. });
     let answer = match timeout(limit, handler.handle(client, request)).await {
         Ok(Ok(value)) => ServerMsg::Result { ok: value },
         Ok(Err(e)) => ServerMsg::Error(e),
+        Err(_) if is_send => ServerMsg::Error(BridgeError::new(
+            ErrorCode::Internal,
+            crate::client::SEND_TIMEOUT_MESSAGE,
+        )),
         Err(_) => ServerMsg::Error(BridgeError::new(
             ErrorCode::Internal,
             "tug took too long to answer. Try again.",

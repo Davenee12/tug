@@ -308,12 +308,18 @@ async fn media(dt: &DevTools, action: MediaAction) -> Result<serde_json::Value, 
         dt.ble.request(|reply| Command::Media {
             command,
             requested_at: std::time::Instant::now(),
+            report_repeat: true,
             reply,
         }),
     )
     .await;
     match sent {
         Ok(Ok(())) => json(serde_json::json!({ "done": command.as_str() })),
+        // The same command went to the phone a moment ago, so this one wasn't sent again.
+        Ok(Err(e)) if e == crate::ams::REPEAT_IGNORED => json(serde_json::json!({
+            "ignored": command.as_str(),
+            "detail": e,
+        })),
         Ok(Err(e)) => Err(BridgeError::new(
             ErrorCode::Unavailable,
             format!("The phone didn't take it: {e}"),

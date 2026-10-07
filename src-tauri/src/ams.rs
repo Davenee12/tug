@@ -38,6 +38,10 @@ const TRACK_DURATION: u8 = 3;
 /// Identical presses closer together than this are one press (see [`CommandGate`]).
 pub const REPEAT_WINDOW: std::time::Duration = std::time::Duration::from_millis(300);
 
+/// The error a media command asked with `report_repeat` comes back with when the gate dropped it
+/// as a repeat, so a caller that reports what happened (an AI tool) doesn't say "done".
+pub const REPEAT_IGNORED: &str = "ignored (same command just sent)";
+
 /// One press, one command. The Bluetooth actor writes media commands one at a time, so when a
 /// write stalls (the link stopped answering for a few seconds on 2026-10-07) every extra press
 /// made meanwhile queues up behind it and then goes out back to back: two Plays cancel out,

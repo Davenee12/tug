@@ -47,8 +47,52 @@ use settings::ClientRecord;
 pub const STATUS_EVENT: &str = "devtools-status";
 /// The confirmation card: a `ConfirmRequest` to show, or `null` once it's answered or gone.
 pub const CONFIRM_EVENT: &str = "devtools-confirm";
-/// Sending, once the person clicked Send.
-const SEND_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long the AI tool's call waits for the phone once the person clicked Send. The text is
+/// saved and queued before this starts and the worker always answers, so running out only stops
+/// the wait: the text may still go, and the answer is "queued", never "failed" (an AI tool told
+/// "failed" sends it again).
+const SEND_WAIT: Duration = Duration::from_secs(60);
+
+/// The bridge's limit for a `send_text` call: the card's 2 minutes plus the wait for the phone,
+/// with room to answer. Under the client's own limit (`tug_bridge::client::SEND_TEXT_TIMEOUT`), so
+/// the client always hears the outcome.
+const fn send_text_time_limit() -> Duration {
+    Duration::from_millis(CONFIRM_TIMEOUT_MS as u64 + SEND_WAIT.as_millis() as u64 + 10_000)
+}
+
+/// What came of an approved text, as far as the AI tool's call saw it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Delivery {
+    /// The worker answered with the stored row in this state.
+    Stored(crate::messages::Status),
+    /// Nothing was saved (no message service, empty text, a store error): safe to try again.
+    NotSaved(String),
+    /// Saved and queued, but the phone hadn't answered within `SEND_WAIT`.
+    StillQueued,
+}
+
+/// The outcome and detail an approved text reports. Pure, so the mapping is unit-tested: above
+/// all, a text that's saved and may still go is never reported as failed.
+fn approved_outcome(delivery: Delivery) -> (SendOutcome, Option<String>) {
+    use crate::messages::Status;
+    const QUEUED: &str = "It's saved in tug and still waiting for your iPhone, so it may still send. \
+                          Check the conversation in tug. Don't send it again.";
+    match delivery {
+        Delivery::Stored(Status::Failed) => (
+            SendOutcome::Failed,
+            Some("Your iPhone didn't send it. Retry it from the conversation in tug.".to_string()),
+        ),
+        Delivery::Stored(Status::Unconfirmed) => (
+            SendOutcome::Sent,
+            Some("It may have sent; check your iPhone to be sure. Don't send it again.".to_string()),
+        ),
+        Delivery::Stored(Status::Accepted | Status::Sent) => (SendOutcome::Sent, None),
+        Delivery::Stored(Status::Pending | Status::Received) | Delivery::StillQueued => {
+            (SendOutcome::Queued, Some(QUEUED.to_string()))
+        }
+        Delivery::NotSaved(e) => (SendOutcome::Failed, Some(e)),
+    }
+}
 
 /// One switch in Settings › Developer tools. Mirrored in `src/types/protocol.ts`.
 #[derive(Debug, Clone, Serialize)]
@@ -370,26 +414,23 @@ impl DevTools {
             ),
             Resolution::Cancelled => (SendOutcome::Cancelled, Some("It was cancelled in tug.".to_string())),
             Resolution::Approved => {
-                // The same path as tug's own composer (#99): saved and shown as "Sending…" first,
-                // and a send the phone didn't take comes back as a failed row, not an error.
+                // The same path as tug's own composer (#99): saved, shown as "Sending…" and queued
+                // before anything waits, and a send the phone didn't take comes back as a failed
+                // row, not an error. Running out of SEND_WAIT only stops this wait: the queued text
+                // still goes (or fails with Retry) in tug.
                 let sent = tokio::time::timeout(
-                    SEND_TIMEOUT,
+                    SEND_WAIT,
                     crate::map::service::send_text(&self.shared, &address, &message),
                 )
-                .await
-                .unwrap_or_else(|_| Err("The phone didn't answer in time.".to_string()));
-                match sent {
-                    Ok(m) if m.status == crate::messages::Status::Failed => (
-                        SendOutcome::Failed,
-                        Some("Your iPhone didn't send it. Retry it from the conversation in tug.".to_string()),
-                    ),
-                    Ok(m) if m.status == crate::messages::Status::Unconfirmed => (
-                        SendOutcome::Sent,
-                        Some("It may have sent; check your iPhone to be sure.".to_string()),
-                    ),
-                    Ok(_) => (SendOutcome::Sent, None),
-                    Err(e) => (SendOutcome::Failed, Some(e)),
-                }
+                .await;
+                approved_outcome(match sent {
+                    Ok(Ok(m)) => Delivery::Stored(m.status),
+                    Ok(Err(e)) => Delivery::NotSaved(e),
+                    Err(_) => {
+                        log::info!("devtools: send_text still waiting on the phone; answered queued");
+                        Delivery::StillQueued
+                    }
+                })
             }
         };
         Ok(SendResult {
@@ -424,9 +465,7 @@ impl Handler for DevTools {
 
     fn time_limit(&self, request: &Request) -> Duration {
         match request {
-            Request::SendText { .. } => {
-                Duration::from_millis(CONFIRM_TIMEOUT_MS as u64) + SEND_TIMEOUT + Duration::from_secs(10)
-            }
+            Request::SendText { .. } => send_text_time_limit(),
             _ => Duration::from_secs(15),
         }
     }
@@ -467,5 +506,57 @@ impl Handler for DevTools {
             }
             result
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::messages::Status;
+
+    #[test]
+    fn a_text_still_waiting_on_the_phone_is_queued_never_failed() {
+        let (outcome, detail) = approved_outcome(Delivery::StillQueued);
+        assert_eq!(outcome, SendOutcome::Queued);
+        let detail = detail.unwrap();
+        assert!(detail.contains("Don't send it again"), "{detail}");
+        // A row the worker left pending reads the same way.
+        assert_eq!(
+            approved_outcome(Delivery::Stored(Status::Pending)).0,
+            SendOutcome::Queued
+        );
+    }
+
+    #[test]
+    fn the_phones_answer_maps_to_the_outcome() {
+        assert_eq!(
+            approved_outcome(Delivery::Stored(Status::Accepted)),
+            (SendOutcome::Sent, None)
+        );
+        assert_eq!(
+            approved_outcome(Delivery::Stored(Status::Sent)),
+            (SendOutcome::Sent, None)
+        );
+        let (o, d) = approved_outcome(Delivery::Stored(Status::Unconfirmed));
+        assert_eq!(o, SendOutcome::Sent);
+        assert!(d.unwrap().contains("Don't send it again"));
+        let (o, d) = approved_outcome(Delivery::Stored(Status::Failed));
+        assert_eq!(o, SendOutcome::Failed);
+        assert!(d.unwrap().contains("Retry"));
+    }
+
+    #[test]
+    fn nothing_saved_is_failed_with_the_reason() {
+        assert_eq!(
+            approved_outcome(Delivery::NotSaved("Message service isn't running".into())),
+            (SendOutcome::Failed, Some("Message service isn't running".into()))
+        );
+    }
+
+    #[test]
+    fn the_wait_ends_before_the_bridge_and_the_client_give_up() {
+        let card_and_wait = Duration::from_millis(CONFIRM_TIMEOUT_MS as u64) + SEND_WAIT;
+        assert!(send_text_time_limit() > card_and_wait);
+        assert!(send_text_time_limit() < tug_bridge::client::SEND_TEXT_TIMEOUT);
     }
 }

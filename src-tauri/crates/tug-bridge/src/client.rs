@@ -21,8 +21,13 @@ use crate::token_file::{self, TokenError};
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// A normal call, start to finish.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(20);
-/// `send_text` waits for the person to click Send (2 minutes) and then for the phone.
-pub const SEND_TEXT_TIMEOUT: Duration = Duration::from_secs(200);
+/// `send_text` waits for the person to click Send (2 minutes) and then for the phone. Longer than
+/// tug's own limit for it (the card plus its wait for the phone), so tug always gets to answer.
+pub const SEND_TEXT_TIMEOUT: Duration = Duration::from_secs(210);
+
+/// What a timed-out `send_text` says: by then the text may be saved in tug and on its way, so
+/// sending it again could text the person twice.
+pub const SEND_TIMEOUT_MESSAGE: &str = "tug didn't answer in time. If you approved the text, it may still send:                                         check the conversation in tug and don't send it again.";
 
 pub const NOT_RUNNING: &str = "tug isn't running. Open tug and try again.";
 pub const NOT_SET_UP: &str =
@@ -35,6 +40,8 @@ pub enum ClientError {
     /// tug answered with an error (off, tool off, rate limited, revoked, …).
     Bridge(BridgeError),
     Timeout,
+    /// `send_text` ran out of time: it may still send, so it mustn't be retried blindly.
+    SendTimeout,
     /// Something answered on the pipe that couldn't prove it was tug.
     Impostor,
     Other(String),
@@ -56,6 +63,7 @@ impl std::fmt::Display for ClientError {
             ClientError::NotSetUp => f.write_str(NOT_SET_UP),
             ClientError::Bridge(e) => f.write_str(&e.message),
             ClientError::Timeout => f.write_str("tug didn't answer in time. Try again."),
+            ClientError::SendTimeout => f.write_str(SEND_TIMEOUT_MESSAGE),
             ClientError::Impostor => {
                 f.write_str("Something other than tug answered. Quit and reopen tug, then try again.")
             }
@@ -248,7 +256,10 @@ impl Client {
             call_over(stream, info, || self.token(), call).await
         })
         .await
-        .map_err(|_| ClientError::Timeout)?;
+        .map_err(|_| match call {
+            Call::SendText { .. } => ClientError::SendTimeout,
+            _ => ClientError::Timeout,
+        })?;
         match result {
             Err(ClientError::Impostor) if self.token_changed() => Err(ClientError::Bridge(BridgeError::new(
                 ErrorCode::Unauthorized,

@@ -618,7 +618,7 @@ const devState: DevToolsStatus = {
   permissions: DEV_LABELS.map(([key, label, on]) => ({ key, label, on })),
   clients: params.has("devtools")
     ? [
-        { name: "claude-code", kind: "mcp", lastUsed: Date.now() - 4 * 60_000 },
+        { name: "Claude Code", kind: "mcp", lastUsed: Date.now() - 4 * 60_000 },
         { name: "tug command", kind: "cli", lastUsed: Date.now() - 3 * 3_600_000 },
       ]
     : [],
@@ -643,7 +643,7 @@ if (params.has("devconfirm")) {
   setTimeout(() => {
     devState.pending = {
       id: 1,
-      tool: "claude-code",
+      tool: "Claude Code",
       toName: "Zoe",
       toAddress: ZOE,
       message: "Running 10 minutes late, start without me!",

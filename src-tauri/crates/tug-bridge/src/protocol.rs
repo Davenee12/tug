@@ -66,17 +66,71 @@ pub fn printable(s: &str) -> String {
         .collect()
 }
 
+/// MCP clients' names as they introduce themselves, and the names people know them by.
+const KNOWN_CLIENTS: &[(&str, &str)] = &[
+    ("claude-code", "Claude Code"),
+    ("claude-ai", "Claude"),
+    ("claude-desktop", "Claude"),
+    ("cursor", "Cursor"),
+    ("cursor-vscode", "Cursor"),
+    ("vscode", "VS Code"),
+    ("visual-studio-code", "VS Code"),
+    ("windsurf", "Windsurf"),
+    ("windsurf-client", "Windsurf"),
+    ("codex", "Codex"),
+    ("codex-mcp-client", "Codex"),
+    ("gemini-cli", "Gemini CLI"),
+    ("gemini-cli-mcp-client", "Gemini CLI"),
+    ("zed", "Zed"),
+    ("cline", "Cline"),
+    ("goose", "Goose"),
+    ("continue", "Continue"),
+    ("mcp-inspector", "MCP Inspector"),
+];
+
+/// An MCP client's name as people know it: a known tool by its product name ("claude-code" →
+/// "Claude Code"), another identifier-style name in words ("my-agent" → "My Agent"), and
+/// anything already written for people ("Claude Code", "My Tool v2") as it is.
+fn friendly_client_name(name: &str) -> String {
+    let key = name.to_ascii_lowercase();
+    if let Some((_, known)) = KNOWN_CLIENTS.iter().find(|(id, _)| *id == key) {
+        return (*known).to_string();
+    }
+    let slug = name.chars().any(|c| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'));
+    if !slug {
+        return name.to_string();
+    }
+    name.split(['-', '_'])
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut chars = w.chars();
+            chars
+                .next()
+                .map(|first| first.to_ascii_uppercase().to_string() + chars.as_str())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl ClientInfo {
-    /// A name safe to show and log: printable, single line, at most 40 characters.
+    /// A name safe to show and log: printable, single line, at most 40 characters. An AI tool's
+    /// name reads the way people know it ("claude-code" → "Claude Code").
     pub fn display_name(&self) -> String {
-        let clean: String = self
+        let printable: String = self
             .name
             .chars()
             .filter(|c| !c.is_control() && !is_invisible_format(*c))
-            .take(40)
-            .collect::<String>()
-            .trim()
-            .to_string();
+            .take(200)
+            .collect();
+        let named = match self.kind {
+            ClientKind::Mcp => friendly_client_name(printable.trim()),
+            ClientKind::Cli => printable,
+        };
+        let clean = named.chars().take(40).collect::<String>().trim().to_string();
         if clean.is_empty() {
             match self.kind {
                 ClientKind::Mcp => "An AI tool".into(),
@@ -574,6 +628,9 @@ pub enum SendOutcome {
     Cancelled,
     /// Approved, but the phone didn't take it.
     Failed,
+    /// Approved and saved in tug, but the phone hadn't answered when the call stopped waiting:
+    /// it may still send. Never to be sent again by the caller.
+    Queued,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -808,11 +865,40 @@ mod tests {
             name: name.into(),
             kind: ClientKind::Mcp,
         };
-        assert_eq!(c("claude-code").display_name(), "claude-code");
+        assert_eq!(c("claude-code").display_name(), "Claude Code");
         assert_eq!(c("evil\nname\u{1b}[31m").display_name(), "evilname[31m");
         assert_eq!(c("").display_name(), "An AI tool");
-        assert_eq!(c("claude\u{202E}edoc\u{200B}").display_name(), "claudeedoc");
+        assert_eq!(c(" \u{200B} ").display_name(), "An AI tool");
+        // Bidi overrides and zero-width characters go before the name is read or prettified.
+        assert_eq!(c("claude\u{202E}-code\u{200B}").display_name(), "Claude Code");
+        assert_eq!(c("claude\u{202E}edoc\u{200B}").display_name(), "Claudeedoc");
         assert_eq!(printable("a\u{1b}[2Jb\nc\u{2066}d"), "a[2Jbcd");
-        assert_eq!(c(&"a".repeat(100)).display_name().len(), 40);
+        assert_eq!(c(&"a".repeat(100)).display_name().chars().count(), 40);
+        assert_eq!(c(&"Ab".repeat(100)).display_name().chars().count(), 40);
+    }
+
+    #[test]
+    fn ai_tools_are_named_the_way_people_know_them() {
+        let c = |name: &str| {
+            ClientInfo {
+                name: name.into(),
+                kind: ClientKind::Mcp,
+            }
+            .display_name()
+        };
+        assert_eq!(c("claude-code"), "Claude Code");
+        assert_eq!(c("Claude-Code"), "Claude Code");
+        assert_eq!(c("cursor-vscode"), "Cursor");
+        assert_eq!(c("my-agent_2"), "My Agent 2");
+        // Already written for people: left as it is.
+        assert_eq!(c("Claude Code"), "Claude Code");
+        assert_eq!(c("My Tool v2"), "My Tool v2");
+        assert_eq!(c("  claude-code  "), "Claude Code");
+        // The tug command keeps its own name, lowercase.
+        let cli = ClientInfo {
+            name: "tug".into(),
+            kind: ClientKind::Cli,
+        };
+        assert_eq!(cli.display_name(), "tug");
     }
 }

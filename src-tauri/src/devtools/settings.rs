@@ -87,7 +87,7 @@ mod tests {
         let l = record_client(l, &info("tug", ClientKind::Cli), 30);
         let l = record_client(l, &info("claude-code", ClientKind::Mcp), 40);
         let names: Vec<_> = l.iter().map(|c| (c.name.as_str(), c.last_used)).collect();
-        assert_eq!(names, vec![("claude-code", 40), ("tug", 30), ("cursor", 20)]);
+        assert_eq!(names, vec![("Claude Code", 40), ("tug", 30), ("Cursor", 20)]);
         let round: Vec<ClientRecord> = parse_clients(Some(&serde_json::to_string(&l).unwrap()));
         assert_eq!(round, l);
     }
@@ -99,6 +99,6 @@ mod tests {
             l = record_client(l, &info(&format!("tool{i}"), ClientKind::Mcp), i);
         }
         assert_eq!(l.len(), MAX_CLIENTS);
-        assert_eq!(l[0].name, "tool19");
+        assert_eq!(l[0].name, "Tool19");
     }
 }

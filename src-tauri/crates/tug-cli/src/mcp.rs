@@ -116,7 +116,7 @@ pub fn tools() -> Vec<Tool> {
         .annotate(ToolAnnotations::new().read_only(false).destructive(false).open_world(false)),
         Tool::new(
             "send_text",
-            "Ask to text someone from the user's iPhone. tug shows the user the recipient and exact message; it's sent only if they click Send within 2 minutes. Returns outcome: sent, declined, timed_out, cancelled or failed.",
+            "Ask to text someone from the user's iPhone. tug shows the user the recipient and exact message; it's sent only if they click Send within 2 minutes. Returns outcome: sent, queued (saved in tug and may still send: don't send it again), declined, timed_out, cancelled or failed. Never retry after sent or queued.",
             schema(json!({
                 "type": "object",
                 "properties": {
@@ -212,6 +212,25 @@ pub fn wrap_untrusted(name: &str, value: Value) -> Value {
     }
 }
 
+/// What the AI tool calls itself: from `initialize`, or (in the newer lifecycle without one) from
+/// the call's own metadata. Its display title when it gave one ("Claude Code"), else its name
+/// ("claude-code"); empty if it said neither, and tug shows "An AI tool".
+pub fn caller_name(initialized: Option<&Implementation>, from_call: Option<Implementation>) -> String {
+    let pick = |i: &Implementation| {
+        i.title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(i.name.trim())
+            .to_string()
+    };
+    initialized
+        .map(pick)
+        .filter(|n| !n.is_empty())
+        .or_else(|| from_call.as_ref().map(pick))
+        .unwrap_or_default()
+}
+
 pub struct TugMcp {
     client: Client,
 }
@@ -254,14 +273,11 @@ impl ServerHandler for TugMcp {
             Ok(c) => c,
             Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)]).into()),
         };
-        // Name the caller after the AI tool, as it introduced itself.
-        let client_name = context
-            .peer
-            .peer_info()
-            .map(|p| p.client_info.name.clone())
-            .unwrap_or_default();
+        // Name the caller after the AI tool, as it introduced itself (tug tames the name for
+        // display: control and bidi characters out, length capped, "claude-code" → "Claude Code").
+        let peer = context.peer.peer_info();
         let info = ClientInfo {
-            name: client_name,
+            name: caller_name(peer.as_ref().map(|p| &p.client_info), context.meta.client_info()),
             kind: ClientKind::Mcp,
         };
         let result = match self.client.call_as_client(&info, &call, time_limit(&call)).await {
@@ -366,6 +382,19 @@ mod tests {
                 assert_eq!(a.destructive_hint, Some(true));
             }
         }
+    }
+
+    #[test]
+    fn the_caller_is_named_by_its_title_then_its_name() {
+        let named = Implementation::new("claude-code", "2.1.0");
+        let titled = Implementation::new("claude-code", "2.1.0").with_title("Claude Code");
+        assert_eq!(caller_name(Some(&named), None), "claude-code");
+        assert_eq!(caller_name(Some(&titled), None), "Claude Code");
+        // No initialize (the newer lifecycle): the call's own metadata names it.
+        assert_eq!(caller_name(None, Some(titled.clone())), "Claude Code");
+        let blank = Implementation::new("  ", "1").with_title(" ");
+        assert_eq!(caller_name(Some(&blank), Some(named.clone())), "claude-code");
+        assert_eq!(caller_name(None, None), "");
     }
 
     #[test]
