@@ -31,6 +31,8 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::AppHandle;
 
+use crate::messages::StoredMessage;
+
 pub use xml::ToastSpec;
 
 /// Toasts tied to a phone notification (tag = row id). Removing this group takes back
@@ -46,11 +48,16 @@ const SENT_NOTE_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 6
 
 /// Told to the frontend after a press was carried out, so its state follows: what's been
 /// seen and read, where to navigate. Mirrored in `src/types/protocol.ts`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ToastPressed {
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct ToastPressed {
     pub kind: PressKind,
     pub id: i64,
+    /// A reply: the text as stored, the same row the `message` events carried. The window
+    /// adds it if it doesn't have it, so a pop-up reply can't go missing from the
+    /// conversation even if the window missed those events. `None` for every other press.
+    pub message: Option<StoredMessage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -213,11 +220,12 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
     };
     let (shared, ble) = (state.shared.clone(), state.ble.clone());
     let id = action.id();
-    let pressed = |kind: PressKind| {
-        if let Err(e) = app.emit(crate::state::events::TOAST_PRESSED, ToastPressed { kind, id }) {
+    let pressed_with = |kind: PressKind, message: Option<StoredMessage>| {
+        if let Err(e) = app.emit(crate::state::events::TOAST_PRESSED, ToastPressed { kind, id, message }) {
             log::warn!("emit toast-pressed failed: {e}");
         }
     };
+    let pressed = |kind: PressKind| pressed_with(kind, None);
     // What the phone still knows about it (category), to refuse a press that doesn't fit.
     let category = || {
         shared
@@ -250,14 +258,14 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
             }
             withdraw(&app, id);
             let sent = match shared.map.get().cloned() {
-                Some(map) => map.send(to, text.clone()).await.map(|_| ()),
+                Some(map) => map.send(to, text.clone()).await,
                 None => Err("Message service isn't running".to_string()),
             };
             match sent {
-                Ok(()) => {
-                    log::info!("sent a reply from a pop-up (row {id})");
+                Ok(stored) => {
+                    log::info!("sent a reply from a pop-up (row {id}, message {})", stored.id);
                     note(&app, id, &format!("Sent to {who}"), &text, true);
-                    pressed(PressKind::Replied);
+                    pressed_with(PressKind::Replied, Some(stored));
                 }
                 Err(e) => {
                     log::info!("reply from a pop-up not sent (row {id}): {e}");
@@ -392,8 +400,44 @@ mod tests {
         let json = serde_json::to_string(&ToastPressed {
             kind: PressKind::CalledBack,
             id: 5,
+            message: None,
         })
         .unwrap();
-        assert_eq!(json, r#"{"kind":"calledBack","id":5}"#);
+        assert_eq!(json, r#"{"kind":"calledBack","id":5,"message":null}"#);
+    }
+
+    /// A reply press carries the stored text in the same shape as the `message` event, so the
+    /// window can add it to the conversation itself (`src/types/protocol.ts` `SmsMessage`).
+    #[test]
+    fn a_reply_press_carries_the_stored_message() {
+        use crate::messages::{Direction, Status};
+        let stored = StoredMessage {
+            id: 12,
+            source: "iphone-map".into(),
+            direction: Direction::Out,
+            address: "+13025550142".into(),
+            contact_name: Some("Zoe".into()),
+            body: "on my way".into(),
+            sent_at: None,
+            received_at: 1_791_300_000_000,
+            status: Status::Accepted,
+            msg_type: None,
+        };
+        let json: serde_json::Value = serde_json::to_value(ToastPressed {
+            kind: PressKind::Replied,
+            id: 7,
+            message: Some(stored),
+        })
+        .unwrap();
+        assert_eq!(json["kind"], "replied");
+        assert_eq!(json["id"], 7);
+        let m = &json["message"];
+        assert_eq!(m["id"], 12);
+        assert_eq!(m["direction"], "out");
+        assert_eq!(m["address"], "+13025550142");
+        assert_eq!(m["contactName"], "Zoe");
+        assert_eq!(m["receivedAt"], 1_791_300_000_000_i64);
+        assert_eq!(m["status"], "accepted");
+        assert!(m["sentAt"].is_null() && m["msgType"].is_null());
     }
 }

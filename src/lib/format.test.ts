@@ -153,6 +153,61 @@ describe("groupConversations — duplicates (M4)", () => {
   });
 });
 
+// A reply sent from the Windows pop-up is stored and announced exactly like one typed in tug.
+// Reported as missing from its conversation (a saved contact, rapid back-and-forth): these pin
+// down that the conversation logic files it where the pop-up's notification lives, after the text
+// it answered, whatever the window learned first.
+describe("groupConversations — a reply sent from the pop-up", () => {
+  const ZOE = "+13025550142";
+  const contacts: Contact[] = [{ address: ZOE, name: "Zoe" }];
+  /** Phone-local ISO time, as MAP gives a text's time (the phone's clock, not the PC's). */
+  const phoneTime = (atMin: number) => {
+    const d = new Date(T0 + atMin * min);
+    return new Date(d.getTime() - d.getTimezoneOffset() * min).toISOString().slice(0, 19);
+  };
+  // The text that popped up: its notification, and the same text over MAP (with the trailing space
+  // the iPhone adds), from a saved contact.
+  const popped = () => note("Zoe", "ok", 0, { postedAt: phoneTime(0) });
+  const text = () => ({ ...sms(ZOE, "ok ", 0, "in", "Zoe"), sentAt: phoneTime(0) });
+  const reply = (contactName: string | null = "Zoe") => sms(ZOE, "on my way", 0.5, "out", contactName);
+
+  it("lands in the notification's conversation, after the text it answers", () => {
+    const n = popped();
+    const r = reply();
+    const convs = groupConversations([n], [text(), r], contacts);
+    expect(convs).toHaveLength(1);
+    expect(convs[0].key).toBe(threadKey(n));
+    expect(convs[0].items.map((i) => (i.kind === "message" ? `${i.m.direction}:${i.body.trim()}` : `n:${i.body}`))).toEqual([
+      "in:ok",
+      "out:on my way",
+    ]);
+    expect(convs[0].latest.kind === "message" && convs[0].latest.m.id).toBe(r.id);
+  });
+
+  it("still lands there when it carries no contact name (the contacts list names the number)", () => {
+    const n = popped();
+    const convs = groupConversations([n], [text(), reply(null)], contacts);
+    expect(convs).toHaveLength(1);
+    expect(convs[0].key).toBe(threadKey(n));
+    expect(convs[0].items.some((i) => i.kind === "message" && i.m.direction === "out")).toBe(true);
+  });
+
+  it("shows even before the text's MAP copy arrives (only the notification so far)", () => {
+    const n = popped();
+    const convs = groupConversations([n], [reply()], contacts);
+    expect(convs).toHaveLength(1);
+    expect(convs[0].key).toBe(threadKey(n));
+    expect(convs[0].items.map((i) => i.kind)).toEqual(["notification", "message"]);
+  });
+
+  it("is never absorbed by a notification with the same words (only incoming texts are)", () => {
+    // They answered with the very words of the reply: both show.
+    const echo = note("Zoe", "on my way", 1, { postedAt: phoneTime(1) });
+    const convs = groupConversations([popped(), echo], [text(), reply()], contacts);
+    expect(convs[0].items.filter((i) => i.body.trim() === "on my way").map((i) => i.kind)).toEqual(["message", "notification"]);
+  });
+});
+
 describe("groupFeed", () => {
   it("groups chat notifications per person and other apps per app, newest first", () => {
     const entries = groupFeed([
