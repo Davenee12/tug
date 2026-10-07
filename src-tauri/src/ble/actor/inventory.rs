@@ -291,12 +291,12 @@ enum StepError {
     Part(String),
 }
 
-/// Whether a failed step means the link itself stopped answering — a timeout or Windows reporting
-/// the phone unreachable (both `Unreachable`), or Windows closing tug's GATT objects — so the pass
+/// Whether a failed step means the link itself stopped answering — a timeout (`TimedOut`), Windows
+/// reporting the phone unreachable (`Unreachable`), or Windows closing tug's GATT objects — so the pass
 /// ends rather than queue more operations behind tug's own. An ATT error or an access refusal is
 /// the phone answering: only that part is marked.
 fn ends_pass(e: &BleError) -> bool {
-    matches!(e, BleError::Unreachable) || e.is_closed()
+    matches!(e, BleError::Unreachable) || e.is_timeout() || e.is_closed()
 }
 
 impl From<BleError> for StepError {
@@ -372,7 +372,8 @@ impl Pass {
 
 fn describe(e: &BleError) -> String {
     match e {
-        BleError::Unreachable => "no answer in time, or Windows reported the iPhone unreachable".into(),
+        BleError::Unreachable => "Windows reported the iPhone unreachable".into(),
+        BleError::TimedOut => "no answer in time".into(),
         _ => match e.att_code() {
             Some(code) => match ams::error_name(code) {
                 Some(name) => format!("ATT 0x{code:02X} {name}"),
@@ -387,7 +388,7 @@ fn describe(e: &BleError) -> String {
 async fn probe_read(ch: &GattCharacteristic) -> Result<Vec<u8>, BleError> {
     tokio::time::timeout(PROBE_OP_TIMEOUT, winrt::read(ch))
         .await
-        .map_err(|_| BleError::Unreachable)?
+        .map_err(|_| BleError::TimedOut)?
 }
 
 async fn gatt_pass(device: &BluetoothLEDevice) -> Result<Pass, StepError> {
@@ -662,7 +663,7 @@ async fn ams_read(attr: &GattCharacteristic, entity: u8, attribute: u8) -> Resul
         winrt::read(attr).await
     })
     .await
-    .map_err(|_| BleError::Unreachable)?
+    .map_err(|_| BleError::TimedOut)?
 }
 
 type LinkDetails = (Result<ConnectionParameters, String>, Result<ConnectionPhy, String>);
@@ -901,7 +902,8 @@ mod tests {
 
     #[test]
     fn only_a_link_that_stopped_answering_ends_the_pass() {
-        assert!(ends_pass(&BleError::Unreachable), "a timeout or an unreachable phone");
+        assert!(ends_pass(&BleError::Unreachable), "an unreachable phone");
+        assert!(ends_pass(&BleError::TimedOut), "a timeout");
         let closed = windows::core::Error::from(windows::core::HRESULT(0x8000_0013_u32 as i32));
         assert!(ends_pass(&BleError::Win(closed)), "Windows closed tug's GATT objects");
         assert!(

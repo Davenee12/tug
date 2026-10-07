@@ -3,8 +3,8 @@
 use super::*;
 
 impl Actor {
-    pub(super) async fn watch_radio(&mut self) -> windows::core::Result<()> {
-        let radios = Radio::GetRadiosAsync()?.await?;
+    pub(super) async fn watch_radio(&mut self) -> Result<(), BleError> {
+        let radios = winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, Radio::GetRadiosAsync()?).await?;
         let Some(radio) = radios.into_iter().find(|r| r.Kind().ok() == Some(RadioKind::Bluetooth)) else {
             self.shared.update_status(|s| s.radio = RadioState::Unavailable);
             return Ok(());
@@ -31,8 +31,9 @@ impl Actor {
         Ok(())
     }
 
-    pub(super) async fn peripheral_supported(&self) -> windows::core::Result<bool> {
-        BluetoothAdapter::GetDefaultAsync()?.await?.IsPeripheralRoleSupported()
+    pub(super) async fn peripheral_supported(&self) -> Result<bool, BleError> {
+        let adapter = winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, BluetoothAdapter::GetDefaultAsync()?).await?;
+        Ok(adapter.IsPeripheralRoleSupported()?)
     }
 
     pub(super) async fn start_advertising(&mut self) {
@@ -42,7 +43,24 @@ impl Actor {
         self.shared
             .update_status(|s| s.advertising = AdvertisingState::Starting);
         match self.create_provider().await {
-            Ok(provider) => self.provider = Some(provider),
+            Ok(provider) => {
+                self.provider = Some(provider);
+                self.advertise_failures = 0;
+            }
+            // The PC's adapter is busy or stalled (Windows aborts advertising when it blips, and
+            // starting again can then hang). Nothing sends an Aborted event for a provider that was
+            // never created, so retry from here, backing off, and keep it calm: it's not the
+            // iPhone's doing and there's nothing for the user to do. Without this tug stayed
+            // invisible, so the iPhone could never reconnect, until restarted.
+            Err(e) if e.is_timeout() => {
+                self.advertise_failures = self.advertise_failures.saturating_add(1);
+                let wait = retry_delay(ADVERTISE_RETRY_SECS, self.advertise_failures, MAX_ADVERTISE_RETRY_SECS);
+                log::warn!(
+                    "advertising didn't start in time (Bluetooth busy, {} in a row); retrying in {wait}s",
+                    self.advertise_failures
+                );
+                self.advertise_retry_in = Some(wait);
+            }
             Err(e) => {
                 log::error!("advertising failed: {e}");
                 self.shared.update_status(|s| {
@@ -54,7 +72,13 @@ impl Actor {
     }
 
     pub(super) async fn create_provider(&self) -> Result<GattServiceProvider, BleError> {
-        let res = GattServiceProvider::CreateAsync(guid(TUG_SERVICE))?.await?;
+        // Bounded: this also runs from `tick` when Windows aborts advertising, which happens when the
+        // adapter blips, and an unbounded wait there would park the whole actor.
+        let res = winrt::bounded_for(
+            winrt::DISCOVERY_TIMEOUT,
+            GattServiceProvider::CreateAsync(guid(TUG_SERVICE))?,
+        )
+        .await?;
         let err = res.Error()?;
         if err != BluetoothError::Success {
             return Err(BleError::Win(windows::core::Error::new(
@@ -69,10 +93,11 @@ impl Actor {
         params.SetReadProtectionLevel(GattProtectionLevel::Plain)?;
         params.SetStaticValue(&winrt::to_buffer(b"tug")?)?;
         params.SetUserDescription(&HSTRING::from("tug"))?;
-        provider
-            .Service()?
-            .CreateCharacteristicAsync(guid(TUG_INFO), &params)?
-            .await?;
+        winrt::bounded_for(
+            winrt::DISCOVERY_TIMEOUT,
+            provider.Service()?.CreateCharacteristicAsync(guid(TUG_INFO), &params)?,
+        )
+        .await?;
 
         let tx = self.tx.clone();
         provider.AdvertisementStatusChanged(&TypedEventHandler::<

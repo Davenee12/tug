@@ -8,6 +8,7 @@ mod cache_trim;
 mod clipboard;
 mod commands;
 mod contact_photos;
+mod device_info;
 mod device_kind;
 mod diagnostics;
 mod frontend_log;
@@ -21,9 +22,12 @@ mod perf;
 mod spotify;
 mod state;
 mod store;
+mod text;
 pub mod toast;
 mod tray;
+mod wake;
 mod webview_watch;
+mod wedge;
 
 use std::sync::Arc;
 

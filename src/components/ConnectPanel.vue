@@ -6,6 +6,8 @@ import { bondHint, leftoverPhone, pairingProblem, setupDeviceLists, startedOutsi
 import { canSkipSwitches, connectStep, rescanDue } from "../lib/connectFlow";
 import { phoneSwitches } from "../lib/phoneSwitches";
 import { api } from "../lib/ipc";
+import { phoneModel } from "../lib/phoneModel";
+import PhoneArt from "./PhoneArt.vue";
 import PhoneSwitches from "./PhoneSwitches.vue";
 import type { DiscoveredDevice } from "../types/protocol";
 
@@ -179,6 +181,9 @@ onUnmounted(() => {
 });
 
 const connecting = computed(() => s.value.connection !== "connected");
+// Settings › iPhone pictures the exact phone (the Feed's first-run panel stays as it was).
+const settingsArt = computed(() => props.context === "settings");
+const model = computed(() => phoneModel(s.value.device?.model));
 </script>
 
 <template>
@@ -222,22 +227,29 @@ const connecting = computed(() => s.value.connection !== "connected");
       <!-- Paired: the phone, the switches ticking green, and a way to start over. -->
       <template v-if="s.device">
         <section class="rounded-xl border border-hairline bg-canvas p-5">
-          <p class="caption-upper text-muted">Your iPhone</p>
-          <p class="headline mt-1 text-[24px]">{{ s.device.name }}</p>
+          <!-- In Settings, the phone pictured beside its name (model read over Bluetooth). -->
+          <div class="flex items-center gap-5">
+            <PhoneArt v-if="settingsArt" :face="model.face" :size="model.size" :height="112" :lit="s.connection === 'connected'" />
+            <div class="min-w-0 flex-1">
+              <p class="caption-upper text-muted">Your iPhone</p>
+              <p class="headline mt-1 text-[24px]">{{ s.device.name }}</p>
+              <p v-if="settingsArt && model.known" class="text-[13px] text-muted">{{ model.name }}</p>
 
-          <!-- Fresh bond: iOS holds the connection open until "Allow" is tapped on the phone. -->
-          <div v-if="step === 'allow'" class="mt-3 flex items-center gap-3 rounded-xl bg-surface-card px-4 py-3">
-            <Smartphone :size="18" class="shrink-0 text-ink" />
-            <p class="min-w-0 flex-1 text-[13px] text-body">
-              Look at your iPhone and tap <strong class="font-medium text-body-strong">Allow</strong> to let this PC see your notifications.
-            </p>
+              <!-- Fresh bond: iOS holds the connection open until "Allow" is tapped on the phone. -->
+              <div v-if="step === 'allow'" class="mt-3 flex items-center gap-3 rounded-xl bg-surface-card px-4 py-3">
+                <Smartphone :size="18" class="shrink-0 text-ink" />
+                <p class="min-w-0 flex-1 text-[13px] text-body">
+                  Look at your iPhone and tap <strong class="font-medium text-body-strong">Allow</strong> to let this PC see your notifications.
+                </p>
+              </div>
+              <p v-else-if="connecting" class="mt-2 flex items-center gap-2 text-[13px] text-muted">
+                <LoaderCircle :size="14" class="animate-spin" /> Connecting to your iPhone…
+              </p>
+              <p v-else class="mt-1 text-[13px] text-muted">
+                Connected. tug reconnects by itself when you come back in range.
+              </p>
+            </div>
           </div>
-          <p v-else-if="connecting" class="mt-2 flex items-center gap-2 text-[13px] text-muted">
-            <LoaderCircle :size="14" class="animate-spin" /> Connecting to your iPhone…
-          </p>
-          <p v-else class="mt-1 text-[13px] text-muted">
-            Connected. tug reconnects by itself when you come back in range.
-          </p>
         </section>
 
         <!-- The three switches on the iPhone, each lighting up green as it comes on. -->

@@ -36,6 +36,9 @@ pub mod events {
 pub mod keys {
     pub const DEVICE_ID: &str = "device_id";
     pub const DEVICE_NAME: &str = "device_name";
+    /// The phone's model identifier ("iPhone16,2") from its Device Information Service, kept so
+    /// the sidebar can picture the phone while it's away. Cleared with the device.
+    pub const DEVICE_MODEL: &str = "device_model";
     pub const ADVERTISE: &str = "advertise";
     /// The Classic (texts) device id tug last connected a MAP session to. Remembered so a
     /// phone rename can't make tug follow the old name onto the wrong device.
@@ -81,6 +84,9 @@ pub enum ConnectionState {
 pub struct PairedDevice {
     pub id: String,
     pub name: String,
+    /// Apple's model identifier ("iPhone16,2"), read over Bluetooth (Device Information Service).
+    /// None until the phone has told us, or if it never does. The UI maps it to a name and picture.
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -115,6 +121,11 @@ pub struct DeviceStatus {
     /// The iPhone is connected but isn't offering notifications (ANCS) — it's locked after a
     /// restart, or mid-update before its first unlock. The UI says to unlock it to reconnect.
     pub awaiting_unlock: bool,
+    /// tug is rebuilding the link on its own (Bluetooth stopped responding, the PC woke, Windows
+    /// closed tug's Bluetooth objects): the phone doesn't need the user, so the UI says
+    /// "Reconnecting…" rather than "Waiting for iPhone". Cleared once connected, or after a few
+    /// failed attempts.
+    pub reconnecting: bool,
     /// Why message access isn't available, when the user can fix it (e.g. consent).
     pub messages_error: Option<String>,
     /// Why the phone's contacts aren't available, when the user can fix it.
