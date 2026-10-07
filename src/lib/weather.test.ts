@@ -112,11 +112,11 @@ group("weather", () => {
   });
 
   it("names a located place like a person would", () => {
-    expect(placeName({ city: "Orlando", locality: "Meadow Woods", principalSubdivision: "Florida", countryCode: "US" })).toBe(
-      "Orlando, Florida",
+    expect(placeName({ city: "Portland", locality: "Pearl District", principalSubdivision: "Oregon", countryCode: "US" })).toBe(
+      "Portland, Oregon",
     );
-    expect(placeName({ city: "", locality: "Kissimmee", principalSubdivision: "Florida", countryCode: "US" })).toBe(
-      "Kissimmee, Florida",
+    expect(placeName({ city: "", locality: "Beaverton", principalSubdivision: "Oregon", countryCode: "US" })).toBe(
+      "Beaverton, Oregon",
     );
     expect(placeName({ city: "Madrid", principalSubdivision: "Madrid", countryCode: "ES", countryName: "Spain" })).toBe(
       "Madrid, Spain",

@@ -16,7 +16,7 @@ const CONNECTED: DeviceStatus = {
   radio: "on",
   peripheralSupported: true,
   advertising: "on",
-  device: { id: "x", name: "Dave's iPhone", model: null },
+  device: { id: "x", name: "Jordan's iPhone", model: null },
   connection: "connected",
   battery: 76,
   services: { notifications: true, media: true, battery: true, messages: true },
@@ -30,7 +30,7 @@ const CONNECTED: DeviceStatus = {
   contactsError: null,
   contactsShared: true,
   textsPairing: "ok",
-  textsDevice: "Dave's iPhone",
+  textsDevice: "Jordan's iPhone",
   liveTexts: "off",
 };
 
@@ -46,7 +46,7 @@ const FRESH: DeviceStatus = {
   textsDevice: null,
 };
 
-const REQUEST: PairingRequest = { deviceName: "Dave's iPhone", pin: "482 913", confirmOnPhone: false };
+const REQUEST: PairingRequest = { deviceName: "Jordan's iPhone", pin: "482 913", confirmOnPhone: false };
 
 describe("connectStep", () => {
   it("looks for an iPhone when nothing is paired and no pairing is underway", () => {
@@ -58,12 +58,12 @@ describe("connectStep", () => {
   });
 
   it("asks for Allow once paired while iOS holds the connection open", () => {
-    const s = { ...FRESH, device: { id: "a", name: "Dave's iPhone", model: null }, connection: "connecting" as const, awaitingPhoneAllow: true };
+    const s = { ...FRESH, device: { id: "a", name: "Jordan's iPhone", model: null }, connection: "connecting" as const, awaitingPhoneAllow: true };
     expect(connectStep(s, null)).toBe("allow");
   });
 
   it("shows the switches while paired and connecting, before notifications are on", () => {
-    const s = { ...FRESH, device: { id: "a", name: "Dave's iPhone", model: null }, connection: "connected" as const };
+    const s = { ...FRESH, device: { id: "a", name: "Jordan's iPhone", model: null }, connection: "connected" as const };
     expect(connectStep(s, null)).toBe("switches");
   });
 
@@ -82,7 +82,7 @@ describe("connectDone", () => {
 });
 
 describe("waiting for all three switches", () => {
-  // Dave: the panel rushed to the Feed before he'd turned the switches on.
+  // Hands-on feedback: the panel rushed to the Feed before the switches were on.
   const contactsOff = { ...CONNECTED, contactsShared: false };
   const textsOff = { ...CONNECTED, services: { ...CONNECTED.services, messages: false }, messagesError: "the iPhone refused message access" };
 
@@ -126,7 +126,7 @@ describe("nextShowConnect", () => {
   });
 
   it("holds the panel up through pairing and the switches until notifications work", () => {
-    const paired = { ...FRESH, device: { id: "a", name: "Dave's iPhone", model: null }, connection: "connecting" as const };
+    const paired = { ...FRESH, device: { id: "a", name: "Jordan's iPhone", model: null }, connection: "connecting" as const };
     expect(nextShowConnect(true, true, paired)).toBe(true);
   });
 

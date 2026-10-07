@@ -20,7 +20,7 @@ export const supportsSkipForward = (np: { available: readonly string[] }): boole
  * How skip ±15 s is done for the current player: "ams" sends the phone's skip command, "seek" jumps
  * through the Spotify connection, "none" hides the button. Spotify on the iPhone lists
  * skipBackward/skipForward but treats them as track controls for music (Back 15 restarted the song
- * from 0:00 on Dave's iPhone, 2026-10-06), so for Spotify tug seeks instead, and only when it can.
+ * from 0:00 on a real iPhone, 2026-10-06), so for Spotify tug seeks instead, and only when it can.
  */
 export type SkipMode = "ams" | "seek" | "none";
 export function skipMode(

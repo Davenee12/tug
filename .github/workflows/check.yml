@@ -7,6 +7,10 @@ on:
   push:
     branches: [main]
 
+# Read-only token: the job only checks out and builds.
+permissions:
+  contents: read
+
 concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: true
@@ -23,11 +27,14 @@ jobs:
           node-version: 22
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Third-party actions are pinned to a commit SHA (tag in the comment). Pinned by SHA,
+      # rust-toolchain can't read the toolchain from the ref, so it's named explicitly.
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
+          toolchain: stable
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri -> target
 

@@ -108,7 +108,7 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE messages ADD COLUMN unread_on_phone INTEGER NOT NULL DEFAULT 0;
     CREATE INDEX notifications_open ON notifications (session) WHERE removed_at IS NULL;
     "#,
-    // v4: names a contact used to have ("tay 🤎" before Dave renamed her "tay"), so
+    // v4: names a contact used to have (before a rename on the phone), so
     // notifications that arrived under an old name stay in the same conversation.
     r#"
     CREATE TABLE contact_aliases (
@@ -149,7 +149,7 @@ const MIGRATIONS: &[&str] = &[
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
-/// inner whitespace collapsed, and iOS's inline-reply suffix ("tay replied to you",
+/// inner whitespace collapsed, and iOS's inline-reply suffix ("zoe replied to you",
 /// "… replied to your message") removed from the end. Also callable from SQL.
 pub(crate) fn clean_name(name: &str) -> String {
     let name = crate::text::strip_invisible(name)
@@ -578,9 +578,9 @@ mod tests {
 
     #[test]
     fn clean_name_matches_the_ui() {
-        assert_eq!(clean_name("  damian  "), "damian");
-        assert_eq!(clean_name("tay 🤎 replied to you"), "tay 🤎");
-        assert_eq!(clean_name("Tay Replied To Your Message"), "Tay");
+        assert_eq!(clean_name("  marco  "), "marco");
+        assert_eq!(clean_name("zoe 💜 replied to you"), "zoe 💜");
+        assert_eq!(clean_name("Zoe Replied To Your Message"), "Zoe");
         assert_eq!(clean_name("Mary  Ann"), "Mary Ann");
         assert_eq!(clean_name("Replied to you Club"), "Replied to you Club");
         assert_eq!(

@@ -161,7 +161,7 @@ mod worker {
     const CONTACTS_UNSHARED_QUICK_TRIES: u32 = 15;
     const CONTACTS_PULL_TIMEOUT: Duration = Duration::from_secs(90);
     /// The slow WITH-PHOTO phonebook pull runs off this worker, so give it well over the ~60 s it
-    /// took on Dave's phone for 27 photos — nothing is waiting on it, and a timeout only ends the
+    /// took on a test phone for 27 photos — nothing is waiting on it, and a timeout only ends the
     /// pass cleanly.
     const PHOTO_PULL_TIMEOUT: Duration = Duration::from_secs(120);
     /// Contact photos rarely change; pull them at most once a day (the last time is persisted, so
@@ -194,7 +194,7 @@ mod worker {
     /// that keeps dropping it can't make tug reconnect in a loop.
     const MNS_REOPEN_GAP: Duration = Duration::from_secs(60);
     /// When the iPhone is reachable but isn't offering message access (Classic/MAP not up — e.g.
-    /// locked after a restart), retrying every POLL_DISCONNECTED all night is pointless (Dave's log
+    /// locked after a restart), retrying every POLL_DISCONNECTED all night is pointless (a test log
     /// had ~839 of these in 21 h). Back off progressively from there to a few minutes, while still
     /// retrying on a real change (BLE link up, PC resume, Bluetooth on, user on Settings › iPhone).
     const MAP_RETRY_BASE: Duration = Duration::from_secs(30);
@@ -424,7 +424,7 @@ mod worker {
                 // Only once connecting worked: a device that won't connect isn't "the phone".
                 self.remember_texts_device(&device.id);
                 // The LE side often reports the bare "iPhone"; the Classic side carries the real
-                // name ("Dave's iPhone"). Adopt it when it's more specific.
+                // name ("Jordan's iPhone"). Adopt it when it's more specific.
                 let current = self.shared.status().device.map(|d| d.name).unwrap_or_default();
                 if crate::device_kind::more_specific_name(&current, &device.name) {
                     log::info!("using the Classic name '{}' for the iPhone", device.name);
@@ -560,7 +560,7 @@ mod worker {
                     self.set_live(LiveTexts::Active);
                 }
                 mns::ServerMessage::Disconnected => {
-                    // Seen on Dave's iPhone: once registered, an open session's inbox listing
+                    // Seen on the test iPhone: once registered, an open session's inbox listing
                     // stopped showing new texts after the MNS link died, so the poll found
                     // nothing until a fresh session. Reopen message access, which re-registers.
                     let recent = self.mns_reopened_at.is_some_and(|t| t.elapsed() < MNS_REOPEN_GAP);

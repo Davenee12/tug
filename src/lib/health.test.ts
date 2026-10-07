@@ -122,9 +122,9 @@ describe("connectionHealth", () => {
   });
 
   it("explains a broken texts pairing naming the device", () => {
-    const l = link({ textsPairing: "broken", textsDevice: "Dave's iPhone" }, "texts");
+    const l = link({ textsPairing: "broken", textsDevice: "Jordan's iPhone" }, "texts");
     expect(l.state).toBe("error");
-    expect(l.detail).toContain("Dave's iPhone");
+    expect(l.detail).toContain("Jordan's iPhone");
     expect(l.detail).toMatch(/remove .* and add it again/);
   });
 

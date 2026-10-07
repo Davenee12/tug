@@ -61,36 +61,36 @@ function sms(address: string, body: string, atMin: number, direction: "in" | "ou
 
 describe("names and keys", () => {
   it("treats padded and differently-cased names as one person", () => {
-    expect(cleanName("  damian  ")).toBe("damian");
-    expect(threadKey({ appId: "x", title: "damian " })).toBe(threadKey({ appId: "x", title: "Damian" }));
+    expect(cleanName("  marco  ")).toBe("marco");
+    expect(threadKey({ appId: "x", title: "marco " })).toBe(threadKey({ appId: "x", title: "Marco" }));
   });
 
   it("ignores the invisible marks apps hide in names (WhatsApp's U+200E split sam ❤️ in two)", () => {
-    expect(cleanName("‎sam ❤️")).toBe("sam ❤️");
-    expect(threadKey({ appId: "net.whatsapp.WhatsApp", title: "‎sam ❤️" })).toBe(
+    expect(cleanName("\u200esam ❤️")).toBe("sam ❤️");
+    expect(threadKey({ appId: "net.whatsapp.WhatsApp", title: "\u200esam ❤️" })).toBe(
       threadKey({ appId: "net.whatsapp.WhatsApp", title: "sam ❤️" }),
     );
-    expect(cleanName("‪Tay‬‏﻿")).toBe("Tay");
+    expect(cleanName("\u202aZoe\u202c\u200f\ufeff")).toBe("Zoe");
     // Emoji variants (❤ vs ❤️) are one person; zero-width joiners inside emoji are kept.
     expect(nameKey("sam ❤")).toBe(nameKey("Sam ❤️"));
     expect(cleanName("👨‍👩‍👧 fam")).toBe("👨‍👩‍👧 fam");
   });
 
   it("treats iOS inline-reply titles as the same person", () => {
-    expect(cleanName("tay 🤎 replied to you")).toBe("tay 🤎");
-    expect(threadKey({ appId: "x", title: "tay 🤎 replied to you" })).toBe(threadKey({ appId: "x", title: "tay 🤎" }));
+    expect(cleanName("zoe 💜 replied to you")).toBe("zoe 💜");
+    expect(threadKey({ appId: "x", title: "zoe 💜 replied to you" })).toBe(threadKey({ appId: "x", title: "zoe 💜" }));
   });
 
   it("never splits an emoji into a broken initial", () => {
-    expect(initials("tay 🤎")).toBe("TA"); // emoji skipped, like any single name
+    expect(initials("zoe 💜")).toBe("ZO"); // emoji skipped, like any single name
     expect(initials("Jane Doe")).toBe("JD");
-    expect(initials("🤎")).toBe("?");
+    expect(initials("💜")).toBe("?");
   });
 });
 
 describe("groupConversations — reply numbers (H1)", () => {
   it("one number: replies go to it", () => {
-    const [c] = groupConversations([], [sms("+13025550100", "hi", 0, "in", "Tay")], []);
+    const [c] = groupConversations([], [sms("+13025550100", "hi", 0, "in", "Zoe")], []);
     expect(c.addresses).toEqual(["+13025550100"]);
     expect(c.address).toBe("+13025550100");
   });
@@ -119,35 +119,35 @@ describe("groupConversations — reply numbers (H1)", () => {
   });
 
   it("a unique contact name supplies the number for a notification-only conversation", () => {
-    const [c] = groupConversations([note("tay 🤎", "hey", 0)], [], [{ address: "+13026698133", name: "tay 🤎" }]);
-    expect(c.address).toBe("+13026698133");
+    const [c] = groupConversations([note("zoe 💜", "hey", 0)], [], [{ address: "+13025550173", name: "zoe 💜" }]);
+    expect(c.address).toBe("+13025550173");
   });
 });
 
 describe("groupConversations — duplicates (M4)", () => {
   it("shows a text once when both the notification and message access report it", () => {
-    const [c] = groupConversations([note("Tay", "omw", 0)], [sms("+1302", "omw", 0, "in", "Tay")], []);
+    const [c] = groupConversations([note("Zoe", "omw", 0)], [sms("+1302", "omw", 0, "in", "Zoe")], []);
     expect(c.items).toHaveLength(1);
     expect(c.items[0].kind).toBe("message");
   });
 
   it("keeps two genuinely identical texts: one message can't absorb two notifications", () => {
-    const notifications = [note("Tay", "ok", 0), note("Tay", "ok", 2)];
-    const [c] = groupConversations(notifications, [sms("+1302", "ok", 0, "in", "Tay")], []);
+    const notifications = [note("Zoe", "ok", 0), note("Zoe", "ok", 2)];
+    const [c] = groupConversations(notifications, [sms("+1302", "ok", 0, "in", "Zoe")], []);
     expect(c.items.map((i) => i.body)).toEqual(["ok", "ok"]);
   });
 
   it("puts an inline reply in the sender's conversation, shown once", () => {
-    const notes = [note("tay 🤎", "hi", 0), note("tay 🤎 replied to you", "Yes", 2)];
-    const convs = groupConversations(notes, [sms("+1302", "Yes", 2, "in", "tay 🤎")], []);
+    const notes = [note("zoe 💜", "hi", 0), note("zoe 💜 replied to you", "Yes", 2)];
+    const convs = groupConversations(notes, [sms("+1302", "Yes", 2, "in", "zoe 💜")], []);
     expect(convs).toHaveLength(1);
-    expect(convs[0].contact).toBe("tay 🤎");
+    expect(convs[0].contact).toBe("zoe 💜");
     expect(convs[0].items.map((i) => i.body)).toEqual(["hi", "Yes"]);
     expect(groupFeed(notes)).toHaveLength(1);
   });
 
   it("merges a notification titled with padding into the same conversation", () => {
-    const convs = groupConversations([note("damian ", "Yow", 1)], [sms("+1214", "hi", 0, "out", "damian")], []);
+    const convs = groupConversations([note("marco ", "Yow", 1)], [sms("+1214", "hi", 0, "out", "marco")], []);
     expect(convs).toHaveLength(1);
     expect(convs[0].items).toHaveLength(2);
   });
@@ -156,8 +156,8 @@ describe("groupConversations — duplicates (M4)", () => {
 describe("groupFeed", () => {
   it("groups chat notifications per person and other apps per app, newest first", () => {
     const entries = groupFeed([
-      note("Tay", "a", 0),
-      note("Tay", "b", 3),
+      note("Zoe", "a", 0),
+      note("Zoe", "b", 3),
       note("Calendar", "Standup", 1, { appId: "com.apple.mobilecal", appName: "Calendar", category: "schedule" }),
     ]);
     expect(entries.map((e) => e.kind)).toEqual(["thread", "stack"]);
@@ -169,19 +169,19 @@ describe("the tray's newest unread conversation", () => {
   const key = (title: string) => threadKey({ appId: "com.apple.MobileSMS", title });
 
   it("picks the newest thread that still has unread texts", () => {
-    // Jane is newer overall, but all read; Tay is older and unread → Tay wins.
-    const notes = [note("Jane Doe", "see you at 5", 10), note("Tay", "omw 🚗", 4), note("Tay", "did you see?", 2)];
-    const unread = new Set([key("Tay")]);
-    expect(newestUnreadThread(notes, (k) => (unread.has(k) ? 1 : 0))).toBe(key("Tay"));
+    // Jane is newer overall, but all read; Zoe is older and unread → Zoe wins.
+    const notes = [note("Jane Doe", "see you at 5", 10), note("Zoe", "omw 🚗", 4), note("Zoe", "did you see?", 2)];
+    const unread = new Set([key("Zoe")]);
+    expect(newestUnreadThread(notes, (k) => (unread.has(k) ? 1 : 0))).toBe(key("Zoe"));
   });
 
   it("prefers the newest when several conversations are unread", () => {
-    const notes = [note("Tay", "older", 2), note("Jane Doe", "newer", 9)];
+    const notes = [note("Zoe", "older", 2), note("Jane Doe", "newer", 9)];
     expect(newestUnreadThread(notes, () => 1)).toBe(key("Jane Doe"));
   });
 
   it("returns null when nothing is unread", () => {
-    expect(newestUnreadThread([note("Tay", "hi", 1)], () => 0)).toBeNull();
+    expect(newestUnreadThread([note("Zoe", "hi", 1)], () => 0)).toBeNull();
     expect(newestUnreadThread([], () => 1)).toBeNull();
   });
 });
@@ -209,9 +209,9 @@ describe("search presentation", () => {
 
 describe("canClear", () => {
   it("clears what's still on the phone and offers a clear", () => {
-    expect(canClear(note("Tay", "hey", 0))).toBe(true);
-    expect(canClear(note("Tay", "hey", 0, { live: false }))).toBe(false);
-    expect(canClear(note("Tay", "hey", 0, { removedAt: T0 }))).toBe(false);
+    expect(canClear(note("Zoe", "hey", 0))).toBe(true);
+    expect(canClear(note("Zoe", "hey", 0, { live: false }))).toBe(false);
+    expect(canClear(note("Zoe", "hey", 0, { removedAt: T0 }))).toBe(false);
   });
 
   it("never clears a ringing call (its negative action is Decline)", () => {
@@ -238,9 +238,9 @@ describe("recent calls", () => {
   });
 
   it("names a call by the contact first, then the phone's name, then the number", () => {
-    const nameFor = new Map([["+13025550142", "Tay 🤎 "]]);
-    expect(callName(call("+13025550142", "Taylor", null), nameFor)).toBe("Tay 🤎");
-    expect(callName(call("+12145550199", "Dave Smith", null), nameFor)).toBe("Dave Smith");
+    const nameFor = new Map([["+13025550142", "Zoe 💜 "]]);
+    expect(callName(call("+13025550142", "Zoey", null), nameFor)).toBe("Zoe 💜");
+    expect(callName(call("+12145550199", "Chris Smith", null), nameFor)).toBe("Chris Smith");
     expect(callName(call("+12145550199", null, null), nameFor)).toBe("(214) 555-0199");
     expect(callName(call(null, null, null), nameFor)).toBe("No caller ID");
   });
@@ -266,7 +266,7 @@ describe("recent calls", () => {
   });
 
   it("keys a call on when/who/direction, not its position", () => {
-    const a = call("+13025550142", "Taylor", "2026-10-05T09:30:00", "missed");
+    const a = call("+13025550142", "Zoey", "2026-10-05T09:30:00", "missed");
     expect(callKey(a)).toBe("2026-10-05T09:30:00|+13025550142|missed");
     // A withheld number and no time still key (empty time and number fields), differing by direction.
     expect(callKey(call(null, null, null, "incoming"))).toBe("||incoming");
@@ -301,17 +301,17 @@ describe("missedCallFor", () => {
     });
 
   it("finds the newest missed call still on the phone, by name or number", () => {
-    const old = missed("tay 🤎", 0);
-    const recent = missed("tay 🤎", 5);
-    expect(missedCallFor([old, recent], { name: "Tay 🤎", address: "+13026698133" })).toBe(recent);
-    const byNumber = missed("(302) 669-8133", 1);
-    expect(missedCallFor([byNumber], { name: "Someone else", address: "+13026698133" })).toBe(byNumber);
+    const old = missed("zoe 💜", 0);
+    const recent = missed("zoe 💜", 5);
+    expect(missedCallFor([old, recent], { name: "Zoe 💜", address: "+13025550173" })).toBe(recent);
+    const byNumber = missed("(302) 555-0173", 1);
+    expect(missedCallFor([byNumber], { name: "Someone else", address: "+13025550173" })).toBe(byNumber);
   });
 
   it("ignores missed calls that are gone or can't be dialed, and other people", () => {
-    expect(missedCallFor([missed("tay 🤎", 0, { removedAt: T0 })], { name: "tay 🤎", address: null })).toBeNull();
-    expect(missedCallFor([missed("tay 🤎", 0, { live: false })], { name: "tay 🤎", address: null })).toBeNull();
-    expect(missedCallFor([missed("Daviel", 0)], { name: "tay 🤎", address: "+13026698133" })).toBeNull();
-    expect(missedCallFor([note("tay 🤎", "hey", 0)], { name: "tay 🤎", address: null })).toBeNull();
+    expect(missedCallFor([missed("zoe 💜", 0, { removedAt: T0 })], { name: "zoe 💜", address: null })).toBeNull();
+    expect(missedCallFor([missed("zoe 💜", 0, { live: false })], { name: "zoe 💜", address: null })).toBeNull();
+    expect(missedCallFor([missed("Priya", 0)], { name: "zoe 💜", address: "+13025550173" })).toBeNull();
+    expect(missedCallFor([note("zoe 💜", "hey", 0)], { name: "zoe 💜", address: null })).toBeNull();
   });
 });

@@ -2,7 +2,7 @@
 name = "tug"
 version = "0.5.10"
 description = "Bluetooth LE companion that mirrors iPhone notifications and media controls to Windows"
-authors = ["Dave James"]
+authors = ["tug contributors"]
 edition = "2021"
 
 [lib]

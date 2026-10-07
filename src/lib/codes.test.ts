@@ -21,12 +21,12 @@ describe("findCode", () => {
   });
 
   it("ignores numbers that aren't codes", () => {
-    expect(code("Call me at 302-669-8133 when you land")).toBeNull();
+    expect(code("Call me at 302-555-0173 when you land")).toBeNull();
     expect(code("meet at 7:30?")).toBeNull();
     expect(code("Order #123456 has shipped")).toBeNull();
     expect(code("Your total is $1234.50")).toBeNull();
     expect(code("omw, 10 mins")).toBeNull();
-    expect(code("Verify your number: (302) 669-8133")).toBeNull();
+    expect(code("Verify your number: (302) 555-0173")).toBeNull();
     expect(code("Security alert: sign-in from a new device in 2026")).toBeNull();
     expect(code("")).toBeNull();
     expect(code(null)).toBeNull();

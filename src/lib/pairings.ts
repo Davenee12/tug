@@ -1,5 +1,5 @@
-// Spotting a messy pairing state so setup can offer "Start over" instead of looping. Dave's PC
-// ended up with two iPhone bonds (an old "DTD iPhone Max 15 Pro" and a new "Dave's iPhone"), and
+// Spotting a messy pairing state so setup can offer "Start over" instead of looping. A test PC
+// ended up with two iPhone bonds (an "Old iPhone" left from before and a new "My iPhone"), and
 // once with a bond the phone had forgotten. These are pure decisions over the device list tug
 // already has (each entry's `kind` comes from the Rust device_kind::classify), so they're
 // unit-tested without a phone. We don't guess: a problem is only reported on clear evidence.
@@ -36,7 +36,7 @@ export function setupDeviceLists(discovered: DiscoveredDevice[]): DeviceLists {
     Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name);
 
   // One row per phone. An iPhone shows up on both transports with the same name; an unpaired
-  // iPhone only accepts pairing over Classic (LE pairing fails with status 19 on Dave's iPhone,
+  // iPhone only accepts pairing over Classic (LE pairing fails with status 19 on the test iPhone,
   // and the LE bond then comes along via cross-transport keys). So when both are seen, the
   // Classic row wins unless the LE side is already paired or connected (the LightBlue path).
   const classicNames = new Set(
@@ -145,8 +145,8 @@ export function startedOutsideTug(
 }
 
 /**
- * Whether the iPhone looks to have forgotten this PC while Windows still holds the bond — Dave
- * forgot the PC on the phone but both bonds stayed, so LightBlue kept dropping, LE connects
+ * Whether the iPhone looks to have forgotten this PC while Windows still holds the bond — in testing
+ * the phone forgot the PC but both bonds stayed, so LightBlue kept dropping, LE connects
  * failed with stale-bond errors and MAP CONNECT was refused 0xC3.
  *
  * - "forgotten": the LE link reported the stale-bond HRESULT (pairingStale) — a definite signal.

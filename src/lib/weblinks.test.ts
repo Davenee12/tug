@@ -30,7 +30,7 @@ describe("webLinkFor", () => {
   });
 
   it("searches Google for what a Google app alert is about", () => {
-    // The shape Dave's iPhone actually sends: topic in the title, generic text in the message.
+    // The shape a real iPhone actually sends: topic in the title, generic text in the message.
     const n = note({ appId: "com.google.GoogleMobile", title: "⏰ France vs Belgium", subtitle: "", message: "Tap to add the live score to your lock screen" });
     expect(webLinkFor(n)?.url).toBe(`https://www.google.com/search?q=${encodeURIComponent("France vs Belgium")}`);
     // A plain "Google" title falls back to the text.
@@ -65,7 +65,7 @@ describe("webLinkFor", () => {
   });
 
   it("returns null for apps with no useful web page", () => {
-    expect(webLinkFor(note({ appId: "com.apple.MobileSMS", title: "Tay" }))).toBeNull();
+    expect(webLinkFor(note({ appId: "com.apple.MobileSMS", title: "Zoe" }))).toBeNull();
     expect(webLinkFor(note({ appId: "com.apple.mobilephone", title: "Mum" }))).toBeNull();
     expect(webLinkFor(note({ appId: "com.unknown.app", title: "x" }))).toBeNull();
   });

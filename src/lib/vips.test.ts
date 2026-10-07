@@ -3,7 +3,7 @@ import { isVip, vipIndex } from "./vips";
 import type { Contact } from "../types/protocol";
 
 const contacts: Contact[] = [
-  { address: "+13025550123", name: "Tay" },
+  { address: "+13025550123", name: "Zoe" },
   { address: "+13025550111", name: "Sam" },
   { address: "+14155550000", name: "Not a VIP" },
 ];
@@ -18,9 +18,9 @@ describe("vips", () => {
   });
 
   it("matches a VIP contact by the name iOS titles their texts with", () => {
-    expect(isVip(index, { name: "Tay" })).toBe(true);
-    expect(isVip(index, { name: "tay " })).toBe(true);
-    expect(isVip(index, { name: "\u200eTay" })).toBe(true); // WhatsApp hides a mark in some titles
+    expect(isVip(index, { name: "Zoe" })).toBe(true);
+    expect(isVip(index, { name: "zoe " })).toBe(true);
+    expect(isVip(index, { name: "\u200eZoe" })).toBe(true); // WhatsApp hides a mark in some titles
     expect(isVip(index, { name: "Sam" })).toBe(false);
     expect(isVip(index, { name: "Not a VIP" })).toBe(false);
   });
@@ -32,7 +32,7 @@ describe("vips", () => {
 
   it("is empty when there are no VIPs", () => {
     const none = vipIndex([], contacts);
-    expect(isVip(none, { name: "Tay", address: "+13025550123" })).toBe(false);
+    expect(isVip(none, { name: "Zoe", address: "+13025550123" })).toBe(false);
   });
 
   it("matches a VIP by number even when it's not a saved contact", () => {

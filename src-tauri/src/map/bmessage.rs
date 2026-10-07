@@ -156,8 +156,8 @@ mod tests {
 
     #[test]
     fn compose_routes_email_recipients_and_strips_control_chars() {
-        let raw = String::from_utf8(compose("tay@icloud.com\r\nEND:BMSG", "hi")).unwrap();
-        assert!(raw.contains("EMAIL:tay@icloud.comEND:BMSG\r\n"), "no injected lines");
+        let raw = String::from_utf8(compose("zoe@example.com\r\nEND:BMSG", "hi")).unwrap();
+        assert!(raw.contains("EMAIL:zoe@example.comEND:BMSG\r\n"), "no injected lines");
         assert_eq!(
             raw.lines().filter(|l| *l == "END:BMSG").count(),
             1,
@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn parses_incoming_message() {
         let raw = "BEGIN:BMSG\r\nVERSION:1.0\r\nSTATUS:UNREAD\r\nTYPE:SMS_GSM\r\nFOLDER:telecom/msg/inbox\r\n\
-                   BEGIN:VCARD\r\nVERSION:2.1\r\nN:Tay\r\nTEL;TYPE=CELL:+15559876543\r\nEND:VCARD\r\n\
+                   BEGIN:VCARD\r\nVERSION:2.1\r\nN:Zoe\r\nTEL;TYPE=CELL:+15559876543\r\nEND:VCARD\r\n\
                    BEGIN:BENV\r\nBEGIN:VCARD\r\nVERSION:2.1\r\nN:\r\nTEL:\r\nEND:VCARD\r\nBEGIN:BBODY\r\n\
                    CHARSET:UTF-8\r\nLENGTH:40\r\nBEGIN:MSG\r\nomw, 10 mins\r\nsee you\r\nEND:MSG\r\n\
                    END:BBODY\r\nEND:BENV\r\nEND:BMSG\r\n";
@@ -182,7 +182,7 @@ mod tests {
         assert!(!m.read);
         assert_eq!(m.msg_type, "SMS_GSM");
         assert_eq!(m.folder, "telecom/msg/inbox");
-        assert_eq!(m.originator_name.as_deref(), Some("Tay"));
+        assert_eq!(m.originator_name.as_deref(), Some("Zoe"));
         assert_eq!(m.originator_address.as_deref(), Some("+15559876543"));
         assert_eq!(m.body, "omw, 10 mins\nsee you");
     }

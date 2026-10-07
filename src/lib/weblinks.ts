@@ -23,7 +23,7 @@ const NO_WEB = new Set(["com.apple.MobileSMS", "com.apple.mobilephone", "com.app
 
 /**
  * Home pages, by iOS bundle id: Open goes to the app's front door, never a surprise page
- * (Dave: an Amazon alert opening order history felt wrong). Gmail opens the inbox. Bundle ids are the
+ * (an Amazon alert opening order history felt wrong). Gmail opens the inbox. Bundle ids are the
  * real App Store ones (several apps keep historical ids: X is still `com.atebits.Tweetie2`,
  * Snapchat `com.toyopagroup.picaboo`). Apps not listed here get no "Open" button.
  */

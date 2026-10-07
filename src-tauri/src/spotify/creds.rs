@@ -6,7 +6,7 @@
 #[cfg(not(test))]
 pub const TARGET: &str = "tug/spotify-refresh-token";
 /// Tests use their own entry, so a real Spotify login on the dev machine can't leak into them
-/// (it made `status_reports_client_id_and_redirect` fail once Dave connected).
+/// (it made `status_reports_client_id_and_redirect` fail once a real account connected).
 #[cfg(test)]
 pub const TARGET: &str = "tug/test-spotify-refresh-token";
 

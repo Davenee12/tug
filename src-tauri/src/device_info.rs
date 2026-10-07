@@ -58,7 +58,7 @@ mod tests {
         assert_eq!(parse_model_number(b"   "), None);
         assert_eq!(parse_model_number(&[0xFF, 0xFE, 0x41]), None);
         assert_eq!(parse_model_number(b"<script>"), None);
-        assert_eq!(parse_model_number(b"Dave's iPhone"), None);
+        assert_eq!(parse_model_number(b"My iPhone"), None);
         assert_eq!(parse_model_number(&[b'A'; 64]), None);
     }
 }

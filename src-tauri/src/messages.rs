@@ -627,23 +627,23 @@ mod tests {
     #[test]
     fn learns_the_sender_not_the_inline_reply_title() {
         let s = Store::in_memory().unwrap();
-        notify(&s, 1, "tay 🤎 replied to you", "Yes", 990);
-        s.insert_incoming(&incoming("H1", "+13026698133", "Yes")).unwrap();
+        notify(&s, 1, "zoe 💜 replied to you", "Yes", 990);
+        s.insert_incoming(&incoming("H1", "+13025550173", "Yes")).unwrap();
         let learned = s.learn_contacts().unwrap();
-        assert_eq!(learned[0].name, "tay 🤎");
+        assert_eq!(learned[0].name, "zoe 💜");
     }
 
     #[test]
     fn reply_suffix_is_stripped_only_at_the_end() {
         let s = Store::in_memory().unwrap();
-        // Used to come out as "Tayr message"; a name that merely contains the phrase stays whole.
-        notify(&s, 1, "Tay Replied To Your Message ", "Yes", 990);
-        s.insert_incoming(&incoming("H1", "+13026698133", "Yes")).unwrap();
+        // Used to come out as "Zoer message"; a name that merely contains the phrase stays whole.
+        notify(&s, 1, "Zoe Replied To Your Message ", "Yes", 990);
+        s.insert_incoming(&incoming("H1", "+13025550173", "Yes")).unwrap();
         notify(&s, 2, "Replied to you Club", "Sure", 990);
-        s.insert_incoming(&incoming("H2", "+12142230313", "Sure")).unwrap();
+        s.insert_incoming(&incoming("H2", "+12145550186", "Sure")).unwrap();
         let mut names: Vec<String> = s.learn_contacts().unwrap().into_iter().map(|c| c.name).collect();
         names.sort();
-        assert_eq!(names, vec!["Replied to you Club", "Tay"]);
+        assert_eq!(names, vec!["Replied to you Club", "Zoe"]);
     }
 
     fn titles(s: &Store) -> Vec<String> {
@@ -653,38 +653,38 @@ mod tests {
     #[test]
     fn renaming_a_contact_keeps_their_history_together() {
         let s = Store::in_memory().unwrap();
-        s.save_phonebook(&[("+13026698133".into(), "tay 🤎".into())]).unwrap();
-        notify(&s, 1, "tay 🤎", "omw", 1_000);
-        notify(&s, 2, "tay 🤎 replied to you", "Yes", 2_000);
-        // Dave takes the heart off her name on the phone; the next contacts sync brings it over.
-        s.save_phonebook(&[("+13026698133".into(), "tay".into())]).unwrap();
-        notify(&s, 3, "tay", "hi again", 3_000);
+        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
+        notify(&s, 1, "zoe 💜", "omw", 1_000);
+        notify(&s, 2, "zoe 💜 replied to you", "Yes", 2_000);
+        // The contact is renamed on the phone (heart dropped); the next contacts sync brings it over.
+        s.save_phonebook(&[("+13025550173".into(), "zoe".into())]).unwrap();
+        notify(&s, 3, "zoe", "hi again", 3_000);
         assert_eq!(
             titles(&s),
-            vec!["tay", "tay", "tay"],
+            vec!["zoe", "zoe", "zoe"],
             "old notifications show the current name"
         );
-        // Renaming back: "tay" becomes the old name, and "tay 🤎" is current again (titles
+        // Renaming back: "zoe" becomes the old name, and "zoe 💜" is current again (titles
         // that need no rewriting come back as iOS sent them; the UI cleans the reply suffix).
-        s.save_phonebook(&[("+13026698133".into(), "tay 🤎".into())]).unwrap();
-        assert_eq!(titles(&s), vec!["tay 🤎", "tay 🤎 replied to you", "tay 🤎"]);
+        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
+        assert_eq!(titles(&s), vec!["zoe 💜", "zoe 💜 replied to you", "zoe 💜"]);
     }
 
     #[test]
     fn learns_old_names_from_history() {
         let s = Store::in_memory().unwrap();
-        // Renamed before tug kept aliases: the contact is already "tay", history says "tay 🤎".
-        s.save_phonebook(&[("+13026698133".into(), "tay".into())]).unwrap();
-        notify(&s, 1, "tay 🤎", "dinner at 7?", 990);
-        s.insert_incoming(&incoming("H1", "+13026698133", "dinner at 7?"))
+        // Renamed before tug kept aliases: the contact is already "zoe", history says "zoe 💜".
+        s.save_phonebook(&[("+13025550173".into(), "zoe".into())]).unwrap();
+        notify(&s, 1, "zoe 💜", "dinner at 7?", 990);
+        s.insert_incoming(&incoming("H1", "+13025550173", "dinner at 7?"))
             .unwrap();
         assert_eq!(s.learn_aliases().unwrap(), 0, "one matching text isn't enough evidence");
-        notify(&s, 2, "tay 🤎", "running late", 990);
-        s.insert_incoming(&incoming("H2", "+13026698133", "running late"))
+        notify(&s, 2, "zoe 💜", "running late", 990);
+        s.insert_incoming(&incoming("H2", "+13025550173", "running late"))
             .unwrap();
         assert_eq!(s.learn_aliases().unwrap(), 1);
         assert_eq!(s.learn_aliases().unwrap(), 0, "learned once");
-        assert_eq!(titles(&s), vec!["tay", "tay"]);
+        assert_eq!(titles(&s), vec!["zoe", "zoe"]);
     }
 
     #[test]
@@ -740,15 +740,15 @@ mod tests {
         let s = Store::in_memory().unwrap();
         let unread = IncomingMessage {
             unread_on_phone: true,
-            ..incoming("H1", "+13026698133", "are you up?")
+            ..incoming("H1", "+13025550173", "are you up?")
         };
         let a = s.insert_incoming(&unread).unwrap().unwrap();
         let b = s
-            .insert_incoming(&incoming("H2", "+13026698133", "already read"))
+            .insert_incoming(&incoming("H2", "+13025550173", "already read"))
             .unwrap()
             .unwrap();
         let out = s
-            .insert_outgoing(SOURCE_IPHONE_MAP, "+13026698133", "yes", 2_000)
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550173", "yes", 2_000)
             .unwrap();
         let ids = [a.id, b.id, out.id, 999];
         assert_eq!(s.unread_on_phone(SOURCE_IPHONE_MAP, &ids).unwrap(), vec!["H1"]);
@@ -764,28 +764,28 @@ mod tests {
     fn name_sent_with_the_message_shows_until_the_contact_is_known() {
         let s = Store::in_memory().unwrap();
         let m = IncomingMessage {
-            sender_name: Some("Tay"),
-            ..incoming("H1", "+13026698133", "hi")
+            sender_name: Some("Zoe"),
+            ..incoming("H1", "+13025550173", "hi")
         };
         assert_eq!(
             s.insert_incoming(&m).unwrap().unwrap().contact_name.as_deref(),
-            Some("Tay")
+            Some("Zoe")
         );
-        s.save_phonebook(&[("+13026698133".into(), "tay 🤎".into())]).unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
         assert_eq!(
             s.recent_messages(10).unwrap()[0].contact_name.as_deref(),
-            Some("tay 🤎")
+            Some("zoe 💜")
         );
     }
 
     #[test]
     fn searches_message_text_and_contacts() {
         let s = Store::in_memory().unwrap();
-        s.insert_incoming(&incoming("H1", "+13026698133", "dinner at 7?"))
+        s.insert_incoming(&incoming("H1", "+13025550173", "dinner at 7?"))
             .unwrap();
-        s.insert_incoming(&incoming("H2", "+13026698133", "running late"))
+        s.insert_incoming(&incoming("H2", "+13025550173", "running late"))
             .unwrap();
-        s.insert_outgoing(SOURCE_IPHONE_MAP, "+13026698133", "Dinner sounds great", 2_000)
+        s.insert_outgoing(SOURCE_IPHONE_MAP, "+13025550173", "Dinner sounds great", 2_000)
             .unwrap();
         let hits: Vec<String> = s
             .search_messages("dinn", 10)
@@ -802,14 +802,14 @@ mod tests {
         assert!(s.search_messages("\"unbalanced", 10).is_ok());
 
         s.save_phonebook(&[
-            ("+13026698133".into(), "tay 🤎".into()),
-            ("+12142230313".into(), "Daviel".into()),
+            ("+13025550173".into(), "zoe 💜".into()),
+            ("+12145550186".into(), "Priya".into()),
         ])
         .unwrap();
-        assert_eq!(s.search_contacts("dav", 10).unwrap()[0].name, "Daviel");
+        assert_eq!(s.search_contacts("pri", 10).unwrap()[0].name, "Priya");
         assert_eq!(
-            s.search_contacts("669-81", 10).unwrap()[0].name,
-            "tay 🤎",
+            s.search_contacts("555-017", 10).unwrap()[0].name,
+            "zoe 💜",
             "by number digits"
         );
         assert!(
@@ -938,16 +938,16 @@ mod tests {
     #[test]
     fn phonebook_names_override_learned_ones() {
         let s = Store::in_memory().unwrap();
-        s.save_phonebook(&[("+13026698133".into(), "tay 🤎".into())]).unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
         let n = s
             .save_phonebook(&[
-                ("+13026698133".into(), "Tay Jones".into()),
-                ("+12142230313".into(), "Daviel".into()),
+                ("+13025550173".into(), "Zoe Park".into()),
+                ("+12145550186".into(), "Priya".into()),
             ])
             .unwrap();
         assert_eq!(n, 2);
         let names: Vec<String> = s.contacts().unwrap().into_iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["Daviel", "Tay Jones"]);
+        assert_eq!(names, vec!["Priya", "Zoe Park"]);
     }
 
     #[test]
@@ -955,60 +955,60 @@ mod tests {
         let s = Store::in_memory().unwrap();
         // The fast sync saves names first; the photo pass attaches the photo afterwards.
         s.save_phonebook(&[
-            ("+13026698133".into(), "Tay".into()),
-            ("+12142230313".into(), "Daviel".into()),
+            ("+13025550173".into(), "Zoe".into()),
+            ("+12145550186".into(), "Priya".into()),
         ])
         .unwrap();
         s.update_contact_photos(&[
-            ("+13026698133".into(), Some("abc123".into())),
-            ("+12142230313".into(), None),
+            ("+13025550173".into(), Some("abc123".into())),
+            ("+12145550186".into(), None),
         ])
         .unwrap();
         // By number: exact address match.
         assert_eq!(
-            s.contact_photo_key(Some("+13026698133"), None).unwrap().as_deref(),
+            s.contact_photo_key(Some("+13025550173"), None).unwrap().as_deref(),
             Some("abc123")
         );
         assert_eq!(
-            s.contact_photo_key(Some("+12142230313"), None).unwrap(),
+            s.contact_photo_key(Some("+12145550186"), None).unwrap(),
             None,
             "no photo"
         );
         // By name: falls back when the number is unknown.
         assert_eq!(
-            s.contact_photo_key(Some("+1999"), Some("Tay")).unwrap().as_deref(),
+            s.contact_photo_key(Some("+1999"), Some("Zoe")).unwrap().as_deref(),
             Some("abc123")
         );
         assert_eq!(
-            s.contact_photo_key(None, Some("tay")).unwrap().as_deref(),
+            s.contact_photo_key(None, Some("zoe")).unwrap().as_deref(),
             Some("abc123"),
             "case-insensitive"
         );
         // Only non-null photo keys are listed, for cleanup.
         assert_eq!(s.photo_keys().unwrap(), ["abc123".to_string()].into_iter().collect());
         // A photo pass that no longer sees the photo clears the reference.
-        s.update_contact_photos(&[("+13026698133".into(), None)]).unwrap();
-        assert_eq!(s.contact_photo_key(Some("+13026698133"), None).unwrap(), None);
+        s.update_contact_photos(&[("+13025550173".into(), None)]).unwrap();
+        assert_eq!(s.contact_photo_key(Some("+13025550173"), None).unwrap(), None);
         assert!(s.photo_keys().unwrap().is_empty());
     }
 
     #[test]
     fn a_fast_sync_without_photos_keeps_the_ones_the_photo_pass_found() {
         let s = Store::in_memory().unwrap();
-        // Photo pass gave Tay a face.
-        s.save_phonebook(&[("+13026698133".into(), "Tay".into())]).unwrap();
-        s.update_contact_photos(&[("+13026698133".into(), Some("abc123".into()))])
+        // Photo pass gave Zoe a face.
+        s.save_phonebook(&[("+13025550173".into(), "Zoe".into())]).unwrap();
+        s.update_contact_photos(&[("+13025550173".into(), Some("abc123".into()))])
             .unwrap();
         // A later fast sync (names only, no photos) must not wipe it — the regression this fixes.
-        s.save_phonebook(&[("+13026698133".into(), "Tay".into())]).unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "Zoe".into())]).unwrap();
         assert_eq!(
-            s.contact_photo_key(Some("+13026698133"), None).unwrap().as_deref(),
+            s.contact_photo_key(Some("+13025550173"), None).unwrap().as_deref(),
             Some("abc123"),
             "fast sync preserves the photo reference"
         );
         // A brand-new contact the fast sync adds simply has no photo yet (initials).
-        s.save_phonebook(&[("+12142230313".into(), "Daviel".into())]).unwrap();
-        assert_eq!(s.contact_photo_key(Some("+12142230313"), None).unwrap(), None);
+        s.save_phonebook(&[("+12145550186".into(), "Priya".into())]).unwrap();
+        assert_eq!(s.contact_photo_key(Some("+12145550186"), None).unwrap(), None);
         // The photo pass only touches contacts that already exist; an unknown number is skipped.
         s.update_contact_photos(&[("+19998887777".into(), Some("deadbeef".into()))])
             .unwrap();
@@ -1042,7 +1042,7 @@ mod tests {
         let s = Store::in_memory().unwrap();
         let attrs = NotificationAttributes {
             app_id: MESSAGES_APP.into(),
-            title: "tay 🤎".into(),
+            title: "zoe 💜".into(),
             message: "omw, 10 mins".into(),
             ..Default::default()
         };
@@ -1055,20 +1055,20 @@ mod tests {
             received_at: 900,
         })
         .unwrap();
-        s.insert_incoming(&incoming("H1", "+13026698133", "omw, 10 mins"))
+        s.insert_incoming(&incoming("H1", "+13025550173", "omw, 10 mins"))
             .unwrap();
-        s.insert_incoming(&incoming("H2", "+12142230313", "unmatched")).unwrap();
+        s.insert_incoming(&incoming("H2", "+12145550186", "unmatched")).unwrap();
         let learned = s.learn_contacts().unwrap();
         assert_eq!(
             learned,
             vec![Contact {
-                address: "+13026698133".into(),
-                name: "tay 🤎".into()
+                address: "+13025550173".into(),
+                name: "zoe 💜".into()
             }]
         );
         assert!(s.learn_contacts().unwrap().is_empty(), "only new links are returned");
         let msgs = s.recent_messages(10).unwrap();
-        assert_eq!(msgs[0].contact_name.as_deref(), Some("tay 🤎"));
+        assert_eq!(msgs[0].contact_name.as_deref(), Some("zoe 💜"));
         assert_eq!(msgs[1].contact_name, None);
     }
 }

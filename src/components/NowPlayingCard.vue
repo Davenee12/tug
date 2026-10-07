@@ -147,7 +147,7 @@ function restart() {
   else tug.notify("info", "Already at the start of the song");
 }
 
-// No loop button: on Dave's iPhone Spotify offers no remote commands for repeat and Apple Music
+// No loop button: on the test iPhone Spotify offers no remote commands for repeat and Apple Music
 // accepts AdvanceRepeatMode but never changes mode (checked in the log, 2026-10-05). tug still
 // reads and logs the repeat mode (see lib/media.ts), so a button can return for a player that
 // honours it.

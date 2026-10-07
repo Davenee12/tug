@@ -44,7 +44,7 @@ function note(title: string, message: string, atMin = 0, extra: Partial<PhoneNot
   };
 }
 
-const contacts: Contact[] = [{ address: "+13025550142", name: "Tay" }];
+const contacts: Contact[] = [{ address: "+13025550142", name: "Zoe" }];
 // Pin "now" just past T0 so T0-stamped fixtures are a few seconds old, not in the future.
 const NOW = T0 + 5_000;
 
@@ -60,8 +60,8 @@ describe("codeEntries", () => {
 
   it("names a known sender from contacts, and opens their conversation", () => {
     const [e] = codeEntries([sms("+13025550142", "Your code is 123456", -1)], [], { now: NOW, contacts });
-    expect(e.sender).toBe("Tay");
-    expect(e.conversationKey).toBe(threadKey({ appId: SMS, title: "Tay" }));
+    expect(e.sender).toBe("Zoe");
+    expect(e.conversationKey).toBe(threadKey({ appId: SMS, title: "Zoe" }));
   });
 
   it("ignores texts with no code, outgoing texts, and old texts", () => {

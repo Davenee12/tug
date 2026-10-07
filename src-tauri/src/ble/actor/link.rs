@@ -61,7 +61,7 @@ impl Actor {
             return;
         }
         // Don't let the LE side's generic "iPhone" clobber a specific name we already have (the
-        // Classic side gives "Dave's iPhone", which the message service may have adopted).
+        // Classic side gives "Jordan's iPhone", which the message service may have adopted).
         if current
             .as_deref()
             .is_some_and(|cur| crate::device_kind::more_specific_name(name, cur))

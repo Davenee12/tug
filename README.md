@@ -11,7 +11,7 @@ smartwatch or car kit does, using the Bluetooth services Apple publishes for acc
 |---|---|---|
 | Live notifications from every app, with actions (answer/decline/clear) | ANCS (Bluetooth LE) | ✅ Verified on iPhone 15 Pro Max |
 | Compact feed, real app icons, open a notification's web page | Local + App Store lookup | ✅ |
-| Search everything with Ctrl+K: people, texts, notifications, plus actions (`text tay …`, `play …`) | SQLite + FTS5 | ✅ |
+| Search everything with Ctrl+K: people, texts, notifications, plus actions (`text zoe …`, `play …`) | SQLite + FTS5 | ✅ |
 | Read texts the moment they arrive, reply and start new ones | MAP + MNS (Classic Bluetooth, OBEX) | ✅ Verified |
 | Verification codes from texts and notifications, with Copy code | Local | ✅ Verified |
 | Contact names and photos | PBAP | ✅ Verified (needs *Sync Contacts*) |
@@ -59,9 +59,13 @@ npm install
 npm run tauri dev     # the real app, with Bluetooth
 npm run dev           # UI only in a browser, with sample data (src/lib/devMock.ts)
 npm run check         # vue-tsc + vitest + cargo fmt + clippy -D warnings + cargo test
-npx tauri build --no-bundle   # src-tauri/target/release/tug.exe
-npx tauri build               # installer: src-tauri/target/release/bundle/nsis/tug_<version>_x64-setup.exe
+npm run build:release -- --no-bundle   # src-tauri/target/release/tug.exe
+npm run build:release                  # installer: src-tauri/target/release/bundle/nsis/tug_<version>_x64-setup.exe
 ```
+
+Build releases with `npm run build:release` rather than a bare `npx tauri build`: it wraps the build
+in `scripts/remap-paths.mjs`, which remaps local paths (your user folder, Cargo's registry, the repo)
+so the exe doesn't carry your Windows user name.
 
 Browser preview URLs: `/` (connected, sample history), `/?setup` (first run), `/?pairing` (PIN dialog),
 `/?call` (a call rings), `/?whatsnew` (the What's new card), `/?applemusic`, `/?spotifyoff`,

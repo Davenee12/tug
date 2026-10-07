@@ -5,7 +5,7 @@
 const BIDI = /[‎‏‪-‮⁦-⁩]/g;
 
 /**
- * `+1 (302) 669-8133`, `13026698133`, `3026698133` → `+13026698133`. Emails are lower-cased.
+ * `+1 (302) 555-0173`, `13025550173`, `3025550173` → `+13025550173`. Emails are lower-cased.
  * Short codes and other numbers keep their digits; anything else is returned trimmed.
  */
 export function normalizeAddress(raw: string): string {

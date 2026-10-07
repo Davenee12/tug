@@ -43,7 +43,7 @@ calmer polling). See CHANGELOG.md.
 - After registering for notifications, an open MAP session's inbox listing can go stale if the
   MNS link dies; reopening the session fixes it (#54).
 
-## Release cadence (Dave, 2026-10-05)
+## Release cadence (decided 2026-10-05)
 Every fifth version is **bug fixing only**: **v0.5.10, v0.5.15, v0.5.20, …** — a stabilization
 pass (hardware logs, independent review, known issues), no new features. Features go in the
 versions between.
@@ -75,7 +75,7 @@ scan a QR in tug, a tug page opens in the phone's browser (iPhone or Android), s
 "Phase 0.5" for the design and safety notes.
 - Your exact iPhone in the sidebar and Settings › iPhone: tug reads the model over Bluetooth (Device
   Information Service) and shows its name ("iPhone 15 Pro Max") with tug's own drawing of that
-  design (home button, notch or Dynamic Island; mini/regular/Plus·Max). Shown on Dave's iPhone 15 Pro Max.
+  design (home button, notch or Dynamic Island; mini/regular/Plus·Max). Shown on a real iPhone 15 Pro Max.
 - Fixed: false "resumed from sleep" when the Bluetooth adapter stalls; recover a wedged adapter by
   reconnecting.
 
@@ -154,7 +154,7 @@ recognition (e.g. whisper.cpp via whisper-rs), no account.
   (always-hidden extensions like .lnk get `.download`), " (2)" on collisions, 8 GB per file,
   free-space check; half-received files live in app data, never in (possibly OneDrive-synced)
   Pictures; cross-drive saves go through a hidden temp file. HEIC kept as-is.
-- **Tested on Dave's iPhone (2026-10-06, test build):** connected in ~10 s, two photos arrived, a
+- **Tested on a real iPhone (2026-10-06, test build):** connected in ~10 s, two photos arrived, a
   PC → phone file downloaded and opened.
 - **Verify on Dave's phones before release:** iPhone (Safari): Photos picker upload incl. Live
   Photos and a large video with the phone locking mid-way (resume), Save of a PC file (Files ›
@@ -184,12 +184,12 @@ earns its place). Desktop stack stays Rust + Tauri + Vue + SQLite.
 - Brand: "within reach" announcement cards (tug loop + partner name; follow each brand's logo
   rules; only announce real capabilities) and an in-app "✦ New" tied to What's new.
 
-## Waiting on code signing (Dave isn't buying it for now)
-- **Auto-updates** from GitHub Releases, once releases are signed. Dave is in the US, so Azure
-  Artifact Signing (~$9.99/mo) is available, or an OV certificate ($150–300/yr). Neither instantly
+## Waiting on code signing (not bought for now)
+- **Auto-updates** from GitHub Releases, once releases are signed. Options: Azure
+  Artifact Signing (~$9.99/mo, where available) or an OV certificate ($150–300/yr). Neither instantly
   clears SmartScreen; reputation still builds over time.
 
-## Parked — calling anyone (v0.5.13 or later; Dave, 2026-10-05)
+## Parked — calling anyone (v0.5.13 or later; decided 2026-10-05)
 Calling back a missed call already works (iOS's "Dial" over ANCS) and stays. Dialing anyone is
 parked: on 2026-10-05 Spike 0 passed and Spike 1 got package identity + `RequestAccessAsync` =
 Allowed (the sparse package passes the restricted-capability check), but `RegisterApp` didn't
@@ -197,7 +197,7 @@ stick ("another app owns the line"), even with Windows' Mobile devices off. Next
 the probe (PR #33, `spikes/phoneline`) after a PC restart, then investigate line ownership.
 Shipping it to others also needs paid code signing.
 
-### Spikes first (Dave's hardware, gate the big items)
+### Spikes first (on real hardware, gate the big items)
 - **Spike 0 — phone line exists.** Re-tick Handsfree Telephony; confirm one `PhoneLineTransportDevice`
   appears for the iPhone (matched by Bluetooth address).
 - **Spike 1 — sparse package passes the restricted-capability check.** Standalone probe crate, sparse
@@ -210,7 +210,7 @@ Shipping it to others also needs paid code signing.
 
 
 ### Calling anyone — spike-gated, ships behind signing
-Call anyone from tug (Calls tab, Ctrl+K "call tay", conversations). Today only missed calls can be
+Call anyone from tug (Calls tab, Ctrl+K "call zoe", conversations). Today only missed calls can be
 called back (iOS's "Dial" over ANCS); dialing anyone needs Windows' calling API
 (`PhoneLineTransportDevice` + `PhoneLine`, what Phone Link uses), which requires **package identity**:
 a sparse package (identity-only MSIX manifest registered with `Add-AppxPackage -ExternalLocation` next
@@ -219,7 +219,7 @@ sideloading needs no Store approval) + `runFullTrust`, and the exe manifest gett
 element via `tauri_build` `WindowsAttributes::app_manifest` (keep Common-Controls v6). `windows` crate
 feature `ApplicationModel_Calls`.
 - PRs (after Spike 1 is a go): identity plumbing → calling module (uses the pure state machine) + UI
-  → installer hooks (`Add-AppxPackage -ExternalLocation`) → production signing (Dave's chosen cert).
+  → installer hooks (`Add-AppxPackage -ExternalLocation`) → production signing (the chosen cert).
 
 
 ## Next — onboarding & distribution (product readiness)

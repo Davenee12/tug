@@ -31,7 +31,7 @@ mod tests {
     #[test]
     fn strips_the_marks_apps_hide_in_names() {
         assert_eq!(strip_invisible("\u{200E}sam \u{2764}\u{FE0F}"), "sam \u{2764}\u{FE0F}");
-        assert_eq!(strip_invisible("\u{202A}Tay\u{202C}\u{200F}"), "Tay");
+        assert_eq!(strip_invisible("\u{202A}Zoe\u{202C}\u{200F}"), "Zoe");
         assert_eq!(strip_invisible("\u{FEFF}Sam\u{200B}"), "Sam");
         assert_eq!(strip_invisible("Jo\u{00AD}anne\u{2066}"), "Joanne");
     }
@@ -40,7 +40,7 @@ mod tests {
     fn keeps_emoji_joiners_and_ordinary_text() {
         let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
         assert_eq!(strip_invisible(family), family);
-        assert_eq!(strip_invisible("damian 🤎"), "damian 🤎");
+        assert_eq!(strip_invisible("marco 🤎"), "marco 🤎");
         assert_eq!(strip_invisible(""), "");
     }
 }

@@ -45,14 +45,14 @@ const ACCESSORY_WORDS: &[&str] = &[
 ];
 
 /// Whether a name from a Bluetooth NameChanged event is worth adopting. iOS briefly reports
-/// junk mid-rename (Dave's phone flashed up as "4" once), and a one- or two-character name is
+/// junk mid-rename (a test phone flashed up as "4" once), and a one- or two-character name is
 /// never a real iPhone name; keep the last good one instead of following it.
 pub fn plausible_device_name(name: &str) -> bool {
     name.trim().chars().count() >= 3
 }
 
 /// Whether `candidate` is a better phone name to show than `current`. The LE side often reports
-/// the bare generic "iPhone", while the Classic side carries the real "Dave's iPhone"; prefer a
+/// the bare generic "iPhone", while the Classic side carries the real "Jordan's iPhone"; prefer a
 /// specific, plausible candidate over a generic or empty current name, but never overwrite an
 /// already-specific name.
 pub fn more_specific_name(current: &str, candidate: &str) -> bool {
@@ -101,7 +101,7 @@ mod tests {
     fn phones_by_appearance_class_or_name() {
         assert_eq!(classify("Unnamed device", Some(0x0040), None), DeviceKind::Phone);
         assert_eq!(classify("Pocket", None, Some(2)), DeviceKind::Phone);
-        assert_eq!(classify("Dave's iPhone", None, None), DeviceKind::Phone);
+        assert_eq!(classify("Jordan's iPhone", None, None), DeviceKind::Phone);
         // A phone signal wins over a misleading word in a renamed phone.
         assert_eq!(classify("Watch this iPhone", None, None), DeviceKind::Phone);
     }
@@ -122,7 +122,7 @@ mod tests {
         assert!(!plausible_device_name("  x "));
         assert!(!plausible_device_name(""));
         // Real names (and a trimmed three-plus) are kept.
-        assert!(plausible_device_name("Dave's iPhone"));
+        assert!(plausible_device_name("Jordan's iPhone"));
         assert!(plausible_device_name("iPhone"));
         assert!(plausible_device_name(" Pro "));
     }
@@ -130,12 +130,12 @@ mod tests {
     #[test]
     fn prefers_a_specific_name_over_the_generic_one() {
         // The LE side gives "iPhone"; the Classic side has the real name.
-        assert!(more_specific_name("iPhone", "Dave's iPhone"));
-        assert!(more_specific_name("", "Dave's iPhone"));
-        assert!(more_specific_name("Unnamed device", "Dave's iPhone"));
+        assert!(more_specific_name("iPhone", "Jordan's iPhone"));
+        assert!(more_specific_name("", "Jordan's iPhone"));
+        assert!(more_specific_name("Unnamed device", "Jordan's iPhone"));
         // Don't downgrade a real name, don't swap one real name for another, don't take junk.
-        assert!(!more_specific_name("Dave's iPhone", "iPhone"));
-        assert!(!more_specific_name("Dave's iPhone", "Work iPhone"));
+        assert!(!more_specific_name("Jordan's iPhone", "iPhone"));
+        assert!(!more_specific_name("Jordan's iPhone", "Work iPhone"));
         assert!(!more_specific_name("iPhone", "iPhone"));
         assert!(!more_specific_name("iPhone", "4"));
     }
@@ -144,6 +144,6 @@ mod tests {
     fn nothing_known_stays_unknown() {
         // A just-connected iPhone often has no name or appearance yet.
         assert_eq!(classify("Unnamed device", None, None), DeviceKind::Unknown);
-        assert_eq!(classify("Dave's phone", Some(0), Some(0x1F)), DeviceKind::Unknown);
+        assert_eq!(classify("Jordan's phone", Some(0), Some(0x1F)), DeviceKind::Unknown);
     }
 }
