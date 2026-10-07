@@ -93,7 +93,9 @@ impl Actor {
 
     /// Ask iOS whether it is actually sharing notifications with this PC.
     pub(super) async fn probe_ancs_authorization(&mut self, control_point: &GattCharacteristic) {
-        let shared = match winrt::write(control_point, &ancs::probe()).await {
+        let result = winrt::write(control_point, &ancs::probe()).await;
+        self.note_gatt(&result);
+        let shared = match result {
             Err(BleError::Protocol(Some(ancs::ERR_INVALID_PARAMETER))) | Ok(()) => true,
             Err(BleError::Protocol(Some(ancs::ATT_WRITE_NOT_PERMITTED))) => false,
             Err(e) => {
@@ -280,8 +282,13 @@ impl Actor {
     /// Send the next queued Control Point request if none is in flight. Holds off while the link
     /// is down (inside the blip grace): writes would fail fast and burn every request's attempts,
     /// giving up on them. The blip's link-up pumps again; a real outage drops the queue anyway.
+    /// Holds off too while a stalled adapter settles: the link is rebuilt, and the new session
+    /// re-fetches what's still on the phone.
     pub(super) async fn pump(&mut self) {
         loop {
+            if self.wedged() {
+                return;
+            }
             let Some(a) = self.link.as_mut().filter(|l| l.connected).and_then(|l| l.ancs.as_mut()) else {
                 return;
             };
@@ -295,6 +302,7 @@ impl Actor {
             };
             let cp = a.control_point.clone();
             let result = winrt::write(&cp, &bytes).await;
+            let wedged = self.note_gatt(&result);
             let Some(a) = self.link.as_mut().and_then(|l| l.ancs.as_mut()) else {
                 return;
             };
@@ -304,6 +312,14 @@ impl Actor {
                 Err(BleError::Protocol(Some(ancs::ERR_INVALID_PARAMETER))) => {
                     a.reassembler.reset();
                     a.requests.drop_inflight();
+                }
+                // The adapter stopped answering, not the phone refusing this request: hold it, without
+                // spending a retry, and stop sending until the link is rebuilt.
+                Err(e) if wedged => {
+                    log::info!("ANCS request {req:?} paused: {e}");
+                    a.reassembler.reset();
+                    a.requests.requeue_inflight();
+                    return;
                 }
                 Err(e) => {
                     log::warn!("ANCS request {req:?} failed: {e}");
@@ -318,6 +334,9 @@ impl Actor {
     }
 
     pub(super) async fn perform_action(&mut self, id: i64, positive: bool) -> Result<(), String> {
+        if self.wedged() {
+            return Err(RECONNECTING.into());
+        }
         // Inside the blip grace ANCS is kept but the link is down: the write can't land.
         let a = self
             .link
@@ -337,6 +356,9 @@ impl Actor {
         let cp = a.control_point.clone();
         let what = if positive { "positive" } else { "clear" };
         let result = winrt::write(&cp, &ancs::perform_action(uid, positive)).await;
+        if self.note_gatt(&result) {
+            return Err(RECONNECTING.into());
+        }
         match action_outcome(result, positive)? {
             true => log::info!("asked the iPhone to {what} notification {uid} (row {id})"),
             false => log::info!("notification {uid} (row {id}) was already gone from the iPhone"),

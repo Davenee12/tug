@@ -115,6 +115,11 @@ pub struct DeviceStatus {
     /// The iPhone is connected but isn't offering notifications (ANCS) — it's locked after a
     /// restart, or mid-update before its first unlock. The UI says to unlock it to reconnect.
     pub awaiting_unlock: bool,
+    /// tug is rebuilding the link on its own (Bluetooth stopped responding, the PC woke, Windows
+    /// closed tug's Bluetooth objects): the phone doesn't need the user, so the UI says
+    /// "Reconnecting…" rather than "Waiting for iPhone". Cleared once connected, or after a few
+    /// failed attempts.
+    pub reconnecting: bool,
     /// Why message access isn't available, when the user can fix it (e.g. consent).
     pub messages_error: Option<String>,
     /// Why the phone's contacts aren't available, when the user can fix it.

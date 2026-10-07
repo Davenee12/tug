@@ -5,6 +5,9 @@ use super::*;
 impl Actor {
     pub(super) fn drop_link(&mut self) {
         self.link_down_at = None;
+        // Whatever stall was being recovered from, the link it was on is gone.
+        self.wedge_relink_at = None;
+        self.wedge.new_link();
         if let Some(link) = self.link.take() {
             let _ = link.device.Close();
         }
@@ -14,6 +17,8 @@ impl Actor {
             s.awaiting_phone_allow = false;
             // No link, so nothing is "connected but locked" any more (Forget, relink, device switch).
             s.awaiting_unlock = false;
+            // Set again by `restart_link` when tug is rebuilding the link on its own.
+            s.reconnecting = false;
             s.services = Services {
                 messages: s.services.messages,
                 ..Services::default()
@@ -29,8 +34,19 @@ impl Actor {
     /// Drop the link and connect again on the next tick.
     pub(super) fn relink(&mut self, why: &str) {
         log::warn!("{why}; reconnecting");
+        self.restart_link();
+    }
+
+    /// `relink` without its log line: drop the link and connect again on the next tick, showing
+    /// "Reconnecting…" (tug is doing this on its own; the phone doesn't need the user) until the
+    /// link is back or a few attempts have failed.
+    pub(super) fn restart_link(&mut self) {
         self.drop_link();
         self.retry_in = 0;
+        self.shared.update_status(|s| {
+            s.connection = ConnectionState::Connecting;
+            s.reconnecting = true;
+        });
     }
 
     /// The phone's name as it is now: saved, and shown everywhere tug names the phone.
@@ -87,6 +103,7 @@ impl Actor {
                     s.last_error = None;
                     s.pairing_stale = false;
                     s.awaiting_unlock = false;
+                    s.reconnecting = false;
                 });
                 // The texts/contacts/calls side sits behind the same phone; a fresh BLE link is a
                 // good moment to retry message access rather than waiting out its own backoff.
@@ -141,10 +158,12 @@ impl Actor {
             (RETRY_IDLE_SECS, MAX_RETRY_SECS)
         };
         self.retry_in = retry_delay(base, self.connect_failures, cap);
+        let failures = self.connect_failures;
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
             s.last_error = Some(message);
             s.awaiting_unlock = awaiting_unlock;
+            s.reconnecting = still_reconnecting(s.reconnecting, failures, awaiting_unlock);
         });
     }
 
@@ -358,6 +377,10 @@ impl Actor {
     /// Another app on this PC (e.g. Phone Link) can turn the shared ANCS CCCDs off,
     /// which silently stops notifications. Read them back and re-enable if needed.
     pub(super) async fn verify_ancs_subscription(&mut self) {
+        // Paused while a stalled adapter settles: these reads would only add to the pile-up.
+        if self.wedged() {
+            return;
+        }
         let Some(a) = self.link.as_ref().filter(|l| l.connected).and_then(|l| l.ancs.as_ref()) else {
             return;
         };
@@ -368,11 +391,19 @@ impl Actor {
             ("data source", a.data_source.characteristic().clone()),
             ("notification source", a.notification_source.characteristic().clone()),
         ] {
-            match winrt::notify_enabled(&ch).await {
+            let state = winrt::notify_enabled(&ch).await;
+            if self.note_gatt(&state) {
+                return;
+            }
+            match state {
                 Ok(true) => log::debug!("ANCS {name}: notifications on"),
                 Ok(false) => {
                     log::warn!("ANCS {name}: notifications were off on the iPhone; re-enabling");
-                    if let Err(e) = winrt::enable_notify(&ch).await {
+                    let enabled = winrt::enable_notify(&ch).await;
+                    if self.note_gatt(&enabled) {
+                        return;
+                    }
+                    if let Err(e) = enabled {
                         log::warn!("ANCS {name}: re-enable failed: {e}");
                     }
                 }
@@ -392,6 +423,9 @@ impl Actor {
         // Only probe between requests so the probe can't interleave with a real response.
         if idle {
             self.probe_ancs_authorization(&control_point).await;
+            if self.wedged() {
+                return;
+            }
         }
         let slow = Duration::from_secs(CCCD_CHECK_SECS.into());
         if self.optional_retry_at.is_none_or(|t| t.elapsed() >= slow) {
@@ -435,6 +469,16 @@ impl Actor {
     }
 }
 
+/// Whether the status should still say "Reconnecting…" after a failed connect attempt: only while tug
+/// is rebuilding the link on its own, for the first few attempts. After that it's an ordinary
+/// "Waiting for iPhone"; and a locked phone asks to be unlocked instead. Pure, so it's unit-tested.
+fn still_reconnecting(reconnecting: bool, failures: u32, awaiting_unlock: bool) -> bool {
+    reconnecting && !awaiting_unlock && failures < RECONNECTING_ATTEMPTS
+}
+
+/// Failed connect attempts after an automatic relink that still show as "Reconnecting…".
+const RECONNECTING_ATTEMPTS: u32 = 3;
+
 /// Turn a watcher id into a `BluetoothLEDevice`. A phone paired through
 /// Windows Settings appears as a Classic device; its LE side shares the address.
 pub(super) async fn resolve_le_device(
@@ -449,4 +493,24 @@ pub(super) async fn resolve_le_device(
     }
     let classic = BluetoothDevice::FromIdAsync(&hid)?.await?;
     BluetoothLEDevice::FromBluetoothAddressAsync(classic.BluetoothAddress()?)?.await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconnecting_shows_for_a_few_failed_attempts_then_waits() {
+        assert!(still_reconnecting(true, 1, false));
+        assert!(still_reconnecting(true, 2, false));
+        assert!(
+            !still_reconnecting(true, RECONNECTING_ATTEMPTS, false),
+            "now an ordinary wait"
+        );
+        assert!(!still_reconnecting(true, 1, true), "a locked phone asks to be unlocked");
+        assert!(
+            !still_reconnecting(false, 1, false),
+            "only after tug relinked on its own"
+        );
+    }
 }

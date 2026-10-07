@@ -384,6 +384,7 @@ impl Actor {
             s.pairing_stale = false;
             s.awaiting_phone_allow = false;
             s.awaiting_unlock = false;
+            s.reconnecting = false;
             s.texts_pairing = crate::map::health::TextsPairing::Unknown;
             s.texts_device = None;
             s.messages_error = None;

@@ -16,6 +16,7 @@ const CONNECTED: DeviceStatus = {
   pairingStale: false,
   awaitingPhoneAllow: false,
   awaitingUnlock: false,
+  reconnecting: false,
   messagesError: null,
   contactsError: null,
   contactsShared: false,
@@ -84,6 +85,16 @@ describe("connectionHealth", () => {
       expect(m.get(key)!.state, key).toBe("waiting");
       expect(m.get(key)!.detail).toMatch(/Unlock it to reconnect/);
     }
+  });
+
+  it("says tug is reconnecting while it rebuilds the link on its own", () => {
+    const m = health({ connection: "connecting", reconnecting: true, device: { id: "x", name: "iPhone" } });
+    for (const key of ["notifications", "media", "battery", "texts"]) {
+      expect(m.get(key)!.state, key).toBe("waiting");
+      expect(m.get(key)!.detail, key).toMatch(/^Reconnecting to your iPhone/);
+    }
+    const locked = health({ connection: "disconnected", reconnecting: true, awaitingUnlock: true, device: { id: "x", name: "iPhone" } });
+    expect(locked.get("notifications")!.detail).toMatch(/Unlock it to reconnect/);
   });
 
   it("asks to pair, not unlock, once the iPhone is forgotten even if awaitingUnlock lingers", () => {

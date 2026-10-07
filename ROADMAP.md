@@ -72,6 +72,8 @@ image cache caps, crash diagnostics, code pop-up dedupe, contact names. See CHAN
 Move photos, files and text between the phone and PC over home Wi-Fi with no app and no fees:
 scan a QR in tug, a tug page opens in Safari, send or receive. See docs/COMPANION-PLAN.md
 "Phase 0.5" for the design and safety notes.
+- Fixed: false "resumed from sleep" when the Bluetooth adapter stalls; recover a wedged adapter by
+  reconnecting.
 
 ## Future — companion apps (planned, see docs/COMPANION-PLAN.md)
 tug stays zero-setup on the phone by default. A tug phone app is the step that unlocks files,
