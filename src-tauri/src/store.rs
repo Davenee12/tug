@@ -166,7 +166,7 @@ pub(crate) fn clean_name(name: &str) -> String {
 }
 
 /// How two names are compared (matching the UI's `nameKey`, format.ts): the cleaned name,
-/// lower-cased, without emoji variation selectors, so "mom ❤" and "mom ❤️" are one person.
+/// lower-cased, without emoji variation selectors, so "sam ❤" and "sam ❤️" are one person.
 pub(crate) fn name_key(name: &str) -> String {
     clean_name(name)
         .chars()
@@ -687,9 +687,9 @@ mod tests {
 
     #[test]
     fn names_lose_invisible_marks_and_compare_without_emoji_variants() {
-        assert_eq!(clean_name("\u{200E}mom \u{2764}\u{FE0F}"), "mom \u{2764}\u{FE0F}");
-        assert_eq!(name_key("\u{200E}mom \u{2764}\u{FE0F}"), name_key("Mom \u{2764}"));
-        assert_ne!(name_key("mom \u{2764}"), name_key("mom"));
+        assert_eq!(clean_name("\u{200E}sam \u{2764}\u{FE0F}"), "sam \u{2764}\u{FE0F}");
+        assert_eq!(name_key("\u{200E}sam \u{2764}\u{FE0F}"), name_key("Sam \u{2764}"));
+        assert_ne!(name_key("sam \u{2764}"), name_key("sam"));
     }
 
     #[test]
@@ -697,7 +697,7 @@ mod tests {
         // Rows saved before v8 kept WhatsApp's U+200E; the upgrade cleans them so the phone's
         // replay on the next reconnect (now cleaned on arrival) matches instead of duplicating.
         let s = Store::in_memory().unwrap();
-        let marked = attrs("net.whatsapp.WhatsApp", "\u{200E}mom \u{2764}\u{FE0F}", "good night");
+        let marked = attrs("net.whatsapp.WhatsApp", "\u{200E}sam \u{2764}\u{FE0F}", "good night");
         let first = {
             let conn = s.conn();
             conn.execute(
@@ -715,12 +715,12 @@ mod tests {
             .conn()
             .query_row("SELECT title FROM notifications WHERE id = ?1", [first], |r| r.get(0))
             .unwrap();
-        assert_eq!(title, "mom \u{2764}\u{FE0F}");
+        assert_eq!(title, "sam \u{2764}\u{FE0F}");
         let pre = EventFlags {
             pre_existing: true,
             ..Default::default()
         };
-        let clean = attrs("net.whatsapp.WhatsApp", "mom \u{2764}\u{FE0F}", "good night");
+        let clean = attrs("net.whatsapp.WhatsApp", "sam \u{2764}\u{FE0F}", "good night");
         let again = insert(&s, "s2", 9, pre, &clean);
         assert_eq!(again.id, first);
         assert_eq!(s.recent(10, None, None).unwrap().len(), 1);

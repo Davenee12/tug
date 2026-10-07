@@ -65,14 +65,14 @@ describe("names and keys", () => {
     expect(threadKey({ appId: "x", title: "damian " })).toBe(threadKey({ appId: "x", title: "Damian" }));
   });
 
-  it("ignores the invisible marks apps hide in names (WhatsApp's U+200E split mom ❤️ in two)", () => {
-    expect(cleanName("‎mom ❤️")).toBe("mom ❤️");
-    expect(threadKey({ appId: "net.whatsapp.WhatsApp", title: "‎mom ❤️" })).toBe(
-      threadKey({ appId: "net.whatsapp.WhatsApp", title: "mom ❤️" }),
+  it("ignores the invisible marks apps hide in names (WhatsApp's U+200E split sam ❤️ in two)", () => {
+    expect(cleanName("‎sam ❤️")).toBe("sam ❤️");
+    expect(threadKey({ appId: "net.whatsapp.WhatsApp", title: "‎sam ❤️" })).toBe(
+      threadKey({ appId: "net.whatsapp.WhatsApp", title: "sam ❤️" }),
     );
     expect(cleanName("‪Tay‬‏﻿")).toBe("Tay");
     // Emoji variants (❤ vs ❤️) are one person; zero-width joiners inside emoji are kept.
-    expect(nameKey("mom ❤")).toBe(nameKey("Mom ❤️"));
+    expect(nameKey("sam ❤")).toBe(nameKey("Sam ❤️"));
     expect(cleanName("👨‍👩‍👧 fam")).toBe("👨‍👩‍👧 fam");
   });
 

@@ -107,7 +107,7 @@ const IOS_REPLY_SUFFIX = /\s+replied to (you|your message)$/i;
 
 /**
  * Invisible formatting characters some apps put in names: WhatsApp and Snapchat prefix some titles
- * with a LEFT-TO-RIGHT MARK (U+200E), which split "mom ❤️" into two conversations. Bidi marks,
+ * with a LEFT-TO-RIGHT MARK (U+200E), which split "sam ❤️" into two conversations. Bidi marks,
  * embeddings and isolates, zero-width space, word joiner and friends, BOM, soft hyphen. Zero-width
  * joiner/non-joiner stay (emoji sequences need them). Mirrors text.rs `is_invisible`.
  */
@@ -120,7 +120,7 @@ export function cleanName(name: string): string {
 
 /**
  * How two names are compared: cleaned, lower-cased, and without emoji variation selectors, so
- * "mom ❤" and "mom ❤️" are one person. Mirrors store.rs `name_key`.
+ * "sam ❤" and "sam ❤️" are one person. Mirrors store.rs `name_key`.
  */
 export function nameKey(name: string): string {
   return cleanName(name).replace(/[︎️]/g, "").toLowerCase();
