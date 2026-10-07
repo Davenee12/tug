@@ -92,26 +92,40 @@ export const useWeatherStore = defineStore("weather", () => {
     await api.setSetting("ui.weather", JSON.stringify(place.value)).catch(() => undefined);
   }
 
+  /**
+   * Bumped by every download that starts and by every place change. A download only lands if it's
+   * still the latest one and its place is still the chosen one: otherwise changing place while a
+   * refresh was in flight showed (and cached) the old place's forecast under the new name.
+   */
+  let generation = 0;
+
   async function refresh(force = false) {
     void nameIfNeeded();
     const p = place.value;
-    if (!p || p === "off" || loading.value) return;
+    if (!p || p === "off") return;
+    // A routine refresh waits for the one in flight; a forced one (a new place) supersedes it.
+    if (loading.value && !force) return;
     if (!force && forecast.value && !isStale(forecast.value.fetchedAt, Date.now())) return;
+    const mine = ++generation;
     loading.value = true;
     try {
       const f = await fetchForecast(p);
+      if (mine !== generation || place.value !== p) return;
       forecast.value = f;
       error.value = null;
       writeCache(p, f);
     } catch (e) {
       // Keep showing the last forecast if there is one; the card says how old it is.
-      error.value = errorMessage(e);
+      if (mine === generation) error.value = errorMessage(e);
     } finally {
-      loading.value = false;
+      if (mine === generation) loading.value = false;
     }
   }
 
   async function setPlace(p: Place) {
+    // Whatever was downloading was for the old place: let it finish, but never land.
+    generation++;
+    loading.value = false;
     place.value = p;
     forecast.value = null;
     error.value = null;
