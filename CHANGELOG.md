@@ -3,8 +3,7 @@
 ## v0.5.11 — 2026-10-07
 
 Tugboat: send photos, files and text between your phone and PC over Wi-Fi, with no app on the
-phone. Plus your exact iPhone in the sidebar and a round of fixes. Merged as #83–#90 (and the
-pop-up reply fix). Tugboat was tried both ways on a real iPhone over home Wi-Fi.
+phone. Plus your exact iPhone in the sidebar and a round of fixes. Merged as #83–#90. Tugboat was tried both ways on a real iPhone over home Wi-Fi.
 
 ### New
 - **Tugboat** (button under your phone in the sidebar, or Ctrl+K "tugboat"): scan the QR code with
@@ -22,9 +21,12 @@ pop-up reply fix). Tugboat was tried both ways on a real iPhone over home Wi-Fi.
 - **Spotify back/forward 15 s** jump to the exact time instead of restarting the song.
 - **Weather updates on its own** every 15 minutes, when you come back to tug, and "now" follows
   the clock between updates.
-- **Replies from the Windows pop-up** show up in the conversation.
 - **A stalled Bluetooth adapter** no longer looks like the PC waking from sleep: tug pauses,
   reconnects cleanly, says "Reconnecting…", and keeps the iPhone able to find the PC.
+
+### Known issues
+- A reply typed in the Windows pop-up is sent, but doesn't appear in the conversation until a later
+  release.
 
 ### Developer
 - `tugboat/` (axum on the LAN IPv4 only, HKDF + XChaCha20-Poly1305 per chunk, MAC-authenticated
