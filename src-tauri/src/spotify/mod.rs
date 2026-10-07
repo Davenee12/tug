@@ -91,7 +91,7 @@ pub struct Spotify {
     cache_dir: PathBuf,
     session: Mutex<Session>,
     /// Set from a 429's Retry-After: until then tug asks Spotify nothing (asking anyway only
-    /// lengthens the penalty; Dave hit a 19-hour one).
+    /// lengthens the penalty; testing hit a 19-hour one).
     blocked_until: Mutex<Option<std::time::Instant>>,
     /// The last "is this song liked?" answer, so the poll asks only when the song changes.
     saved_cache: Mutex<Option<(String, bool)>>,
@@ -584,7 +584,7 @@ impl Spotify {
     pub fn set_saved(&self, uri: &str, saved: bool) -> Result<(), String> {
         let method = if saved { Method::Put } else { Method::Delete };
         // `uris` is a query parameter (comma-separated); a JSON body gets "Missing required
-        // field: uris" (Dave's account, 2026-10-05).
+        // field: uris" (test account, 2026-10-05).
         let path = format!("/me/library?uris={}", pe(uri));
         self.api(method, &path, None).map_err(|e| e.user_message())?;
         *lock(&self.saved_cache) = Some((uri.to_string(), saved));

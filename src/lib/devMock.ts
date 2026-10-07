@@ -242,7 +242,7 @@ const contacts: Contact[] = noPhone
   : [
       { address: ZOE, name: "Zoe" },
       { address: "+12145550199", name: "Priya" },
-      { address: "+19725550111", name: "Dave Smith" },
+      { address: "+19725550111", name: "Chris Smith" },
     ];
 let nextMsg = 1;
 const sms = (
@@ -333,10 +333,10 @@ const spotifyPlayer: SpotifyPlayer = {
 const img = (seed: string) => `https://i.scdn.co/mock/${encodeURIComponent(seed)}`;
 const spotifyPlaylists: SpotifyPlaylist[] = [
   { uri: "spotify:playlist:1", id: "1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: img("Deep Focus"), owned: false },
-  { uri: "spotify:playlist:2", id: "2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: img("Morning Run"), owned: true },
+  { uri: "spotify:playlist:2", id: "2", name: "Morning Run", owner: "Jordan", trackCount: 42, imageUrl: img("Morning Run"), owned: true },
   { uri: "spotify:playlist:3", id: "3", name: "Discover Weekly", owner: "Spotify", trackCount: 30, imageUrl: img("Discover Weekly"), owned: false },
-  { uri: "spotify:playlist:4", id: "4", name: "Coding Flow", owner: "Dave", trackCount: 88, imageUrl: img("Coding Flow"), owned: true },
-  { uri: "spotify:playlist:5", id: "5", name: "Rainy Day Jazz", owner: "Dave", trackCount: 61, imageUrl: img("Rainy Day Jazz"), owned: true },
+  { uri: "spotify:playlist:4", id: "4", name: "Coding Flow", owner: "Jordan", trackCount: 88, imageUrl: img("Coding Flow"), owned: true },
+  { uri: "spotify:playlist:5", id: "5", name: "Rainy Day Jazz", owner: "Jordan", trackCount: 61, imageUrl: img("Rainy Day Jazz"), owned: true },
 ];
 
 // A small catalogue so every panel tab/view renders in the browser. Searching filters it by name.
@@ -566,7 +566,7 @@ mockIPC(
         // Stand-in contact photos so the avatar path is visible without a phone: a couple of mock
         // people have one, the rest fall back to initials (as iOS contacts without a photo would).
         const key = String(a.key ?? "");
-        const withPhoto = new Set([ZOE, "Zoe", "+19725550111", "Dave Smith", "+19725550123", "Mum"]);
+        const withPhoto = new Set([ZOE, "Zoe", "+19725550111", "Chris Smith", "+19725550123", "Mum"]);
         if (!withPhoto.has(key)) return null;
         const hue = [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
         const svg =

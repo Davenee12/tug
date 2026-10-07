@@ -113,8 +113,8 @@ describe("pairingProblem", () => {
 
 describe("setupDeviceLists", () => {
   it("offers a discoverable iPhone even when it isn't connected to the PC yet", () => {
-    // The old LightBlue assumption required `connected`; Dave's phone was discoverable but not
-    // connected, so the wizard's list was empty and he tapped the PC from the phone instead.
+    // The old LightBlue assumption required `connected`; the test phone was discoverable but not
+    // connected, so the wizard's list was empty and the PC got tapped from the phone instead.
     const list = [dev({ id: "p", name: "Jordan's iPhone", paired: false, connected: false, kind: "phone" })];
     const { phones } = setupDeviceLists(list);
     expect(phones.map((d) => d.id)).toEqual(["p"]);
@@ -160,7 +160,7 @@ describe("setupDeviceLists", () => {
   });
 
   it("offers the Classic row for an unpaired iPhone seen on both transports", () => {
-    // Dave's fresh setup: two "Jordan's iPhone" rows; the LE one failed to pair (status 19), the
+    // A fresh setup seen in testing: two "Jordan's iPhone" rows; the LE one failed to pair (status 19), the
     // Classic one paired and brought the LE bond with it.
     const list = [
       dev({ id: "le", transport: "le", name: "Jordan’s iPhone", kind: "phone", paired: false }),

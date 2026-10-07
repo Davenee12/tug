@@ -4,7 +4,7 @@
 //!
 //! Spotify requires a loopback IP literal (`127.0.0.1`), never `localhost`, and permits HTTP
 //! there. Its docs also allow registering it without a port, but the dashboard rejects that as
-//! "not secure" (seen on Dave's account, 2026-10-05), so tug uses one fixed, registered port.
+//! "not secure" (seen on a test account, 2026-10-05), so tug uses one fixed, registered port.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;

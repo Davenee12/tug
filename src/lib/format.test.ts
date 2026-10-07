@@ -228,7 +228,7 @@ describe("recent calls", () => {
   it("names a call by the contact first, then the phone's name, then the number", () => {
     const nameFor = new Map([["+13025550142", "Zoe 💜 "]]);
     expect(callName(call("+13025550142", "Zoey", null), nameFor)).toBe("Zoe 💜");
-    expect(callName(call("+12145550199", "Dave Smith", null), nameFor)).toBe("Dave Smith");
+    expect(callName(call("+12145550199", "Chris Smith", null), nameFor)).toBe("Chris Smith");
     expect(callName(call("+12145550199", null, null), nameFor)).toBe("(214) 555-0199");
     expect(callName(call(null, null, null), nameFor)).toBe("No caller ID");
   });

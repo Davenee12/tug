@@ -483,7 +483,7 @@ export const useTugStore = defineStore("tug", () => {
     if (!popupAllowed({ appId: "", isCall: false, isVip: false }) || !(await hasToastPermission())) return;
     batteryAlerted = r.alerted;
     // Through tug's own Windows toast like every other pop-up: the generic notification call
-    // never showed on Dave's PC at 20%. Its id sits outside notification ids, so pressing it
+    // never showed on the test PC at 20%. Its id sits outside notification ids, so pressing it
     // just opens tug.
     const spec: ToastSpec = {
       id: BATTERY_TOAST_ID,
@@ -1395,7 +1395,7 @@ export const useTugStore = defineStore("tug", () => {
     if (ok !== true && spotifyPlayer.value) spotifyPlayer.value.saved = previous;
   }
 
-  // No polling: Spotify rate-limits hard (Dave hit a 19-hour timeout polling every 5 s, then
+  // No polling: Spotify rate-limits hard (testing hit a 19-hour timeout polling every 5 s, then
   // still while polling every 30 s). The iPhone already says when the song changes, so tug reads
   // Spotify's extras (art, Like, shuffle/repeat) once per song, and otherwise only when you act.
   // Spotify's API often lags the phone by about a second, so the read waits for the song to settle
