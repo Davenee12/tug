@@ -207,9 +207,9 @@ impl Actor {
     }
 }
 
-/// Entity Attribute: select the pair, then read its full value.
-/// Holds the select-then-read pair together, so the inventory's reads can't interleave with it.
-pub(super) async fn read_attribute(attr: &GattCharacteristic, entity: u8, attribute: u8) -> Result<Vec<u8>, BleError> {
+/// Entity Attribute: select the pair, then read its full value. Holds the AMS turn across the
+/// pair, so the inventory's own pairs (`inventory::ams_read`) can't interleave with it.
+async fn read_attribute(attr: &GattCharacteristic, entity: u8, attribute: u8) -> Result<Vec<u8>, BleError> {
     let _turn = super::inventory::AMS_ATTRIBUTE_TURN.lock().await;
     winrt::write(attr, &[entity, attribute]).await?;
     winrt::read(attr).await
