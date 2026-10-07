@@ -31,6 +31,8 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::AppHandle;
 
+use crate::messages::StoredMessage;
+
 pub use xml::ToastSpec;
 
 /// Toasts tied to a phone notification (tag = row id). Removing this group takes back
@@ -46,11 +48,16 @@ const SENT_NOTE_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 6
 
 /// Told to the frontend after a press was carried out, so its state follows: what's been
 /// seen and read, where to navigate. Mirrored in `src/types/protocol.ts`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ToastPressed {
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct ToastPressed {
     pub kind: PressKind,
     pub id: i64,
+    /// A reply: the text as stored, the same row the `message` events carried. The window
+    /// adds it if it doesn't have it, so a pop-up reply can't go missing from the
+    /// conversation even if the window missed those events. `None` for every other press.
+    pub message: Option<StoredMessage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -129,12 +136,39 @@ fn show_native(
     native::show(toast, move |arguments, input| on_activated(&handle, arguments, input))
 }
 
+/// Settings' "Pop-up sound" (on unless turned off): whether tug's pop-ups play the Windows sound.
+#[cfg(windows)]
+fn sound_on(app: &AppHandle) -> bool {
+    use tauri::Manager;
+    app.try_state::<crate::commands::AppState>()
+        .and_then(|s| s.shared.store.setting("ui.popupSound").ok().flatten())
+        .as_deref()
+        != Some("false")
+}
+
+/// Whether Windows is blocking tug's pop-ups (notifications turned off for tug, for every app,
+/// or by policy). False when it can't tell: only a clear "off" shows the warning.
+pub fn blocked(app: &AppHandle) -> bool {
+    #[cfg(windows)]
+    {
+        native::blocked(&aumid(app)).unwrap_or_else(|e| {
+            log::warn!("couldn't read Windows' pop-up setting: {}", e.message());
+            false
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        false
+    }
+}
+
 /// Pop up one phone notification with the actions its spec allows.
 pub fn show(app: &AppHandle, spec: ToastSpec) {
     remember(&spec);
     #[cfg(windows)]
     {
-        let xml = xml::notification_toast(&spec);
+        let xml = xml::notification_toast(&spec, sound_on(app));
         match show_native(app, &xml, &spec.id.to_string(), GROUP_NOTIFICATIONS, None) {
             Ok(()) => return,
             Err(e) => log::warn!("actionable pop-up failed ({}); showing a plain one", e.message()),
@@ -213,11 +247,12 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
     };
     let (shared, ble) = (state.shared.clone(), state.ble.clone());
     let id = action.id();
-    let pressed = |kind: PressKind| {
-        if let Err(e) = app.emit(crate::state::events::TOAST_PRESSED, ToastPressed { kind, id }) {
+    let pressed_with = |kind: PressKind, message: Option<StoredMessage>| {
+        if let Err(e) = app.emit(crate::state::events::TOAST_PRESSED, ToastPressed { kind, id, message }) {
             log::warn!("emit toast-pressed failed: {e}");
         }
     };
+    let pressed = |kind: PressKind| pressed_with(kind, None);
     // What the phone still knows about it (category), to refuse a press that doesn't fit.
     let category = || {
         shared
@@ -249,15 +284,34 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 return;
             }
             withdraw(&app, id);
-            let sent = match shared.map.get().cloned() {
-                Some(map) => map.send(to, text.clone()).await.map(|_| ()),
-                None => Err("Message service isn't running".to_string()),
-            };
+            // Saved and shown as "Sending…" before it's queued (#99); the stored row comes back so
+            // the window can show it even if it missed the live event (#98).
+            let sent = crate::map::service::send_text(&shared, &to, &text).await;
             match sent {
-                Ok(()) => {
-                    log::info!("sent a reply from a pop-up (row {id})");
+                // A send the phone refused is saved as failed (with Retry in the conversation), not
+                // returned as an error: say so, and still hand the row to the window.
+                Ok(stored) if stored.status == crate::messages::Status::Failed => {
+                    log::info!("reply from a pop-up not sent (row {id}, message {})", stored.id);
+                    let body =
+                        format!("Use Retry in the conversation when your iPhone is nearby.\n\u{201c}{text}\u{201d}");
+                    note(&app, id, &format!("Couldn't send to {who}"), &body, false);
+                    pressed_with(PressKind::Replied, Some(stored));
+                }
+                Ok(stored) if stored.status == crate::messages::Status::Unconfirmed => {
+                    log::info!("reply from a pop-up may have sent (row {id}, message {})", stored.id);
+                    note(
+                        &app,
+                        id,
+                        &format!("May have sent to {who}"),
+                        "Check your iPhone to be sure.",
+                        false,
+                    );
+                    pressed_with(PressKind::Replied, Some(stored));
+                }
+                Ok(stored) => {
+                    log::info!("sent a reply from a pop-up (row {id}, message {})", stored.id);
                     note(&app, id, &format!("Sent to {who}"), &text, true);
-                    pressed(PressKind::Replied);
+                    pressed_with(PressKind::Replied, Some(stored));
                 }
                 Err(e) => {
                     log::info!("reply from a pop-up not sent (row {id}): {e}");
@@ -323,7 +377,7 @@ async fn copy(app: &AppHandle, code: String) -> Result<(), String> {
 /// it), in its own group so the phone clearing the notification doesn't take it back.
 #[cfg(windows)]
 fn note(app: &AppHandle, id: i64, title: &str, body: &str, quiet: bool) {
-    let xml = xml::note_toast(id, title, body, quiet);
+    let xml = xml::note_toast(id, title, body, quiet || !sound_on(app));
     let tag = format!("note-{id}");
     if let Err(e) = show_native(app, &xml, &tag, GROUP_NOTES, quiet.then_some(SENT_NOTE_TTL)) {
         log::warn!("follow-up pop-up failed ({}); showing a plain one", e.message());
@@ -392,8 +446,45 @@ mod tests {
         let json = serde_json::to_string(&ToastPressed {
             kind: PressKind::CalledBack,
             id: 5,
+            message: None,
         })
         .unwrap();
-        assert_eq!(json, r#"{"kind":"calledBack","id":5}"#);
+        assert_eq!(json, r#"{"kind":"calledBack","id":5,"message":null}"#);
+    }
+
+    /// A reply press carries the stored text in the same shape as the `message` event, so the
+    /// window can add it to the conversation itself (`src/types/protocol.ts` `SmsMessage`).
+    #[test]
+    fn a_reply_press_carries_the_stored_message() {
+        use crate::messages::{Direction, Status};
+        let stored = StoredMessage {
+            id: 12,
+            source: "iphone-map".into(),
+            direction: Direction::Out,
+            address: "+13025550142".into(),
+            contact_name: Some("Zoe".into()),
+            body: "on my way".into(),
+            sent_at: None,
+            received_at: 1_791_300_000_000,
+            status: Status::Accepted,
+            msg_type: None,
+            gap_before: false,
+        };
+        let json: serde_json::Value = serde_json::to_value(ToastPressed {
+            kind: PressKind::Replied,
+            id: 7,
+            message: Some(stored),
+        })
+        .unwrap();
+        assert_eq!(json["kind"], "replied");
+        assert_eq!(json["id"], 7);
+        let m = &json["message"];
+        assert_eq!(m["id"], 12);
+        assert_eq!(m["direction"], "out");
+        assert_eq!(m["address"], "+13025550142");
+        assert_eq!(m["contactName"], "Zoe");
+        assert_eq!(m["receivedAt"], 1_791_300_000_000_i64);
+        assert_eq!(m["status"], "accepted");
+        assert!(m["sentAt"].is_null() && m["msgType"].is_null());
     }
 }

@@ -73,11 +73,22 @@ export function placeHour(nowMs: number, timeZone?: string): string {
  */
 export function withCurrentHour(f: Forecast, nowMs: number): Forecast {
   const key = placeHour(nowMs, f.timezone);
-  if (f.now.time.slice(0, 13) >= key) return f;
-  const i = f.hours.findIndex((h) => h.time.slice(0, 13) === key);
-  if (i < 0) return f;
-  const h = f.hours[i];
-  return { ...f, now: { ...f.now, time: h.time, temp: h.temp, code: h.code, day: h.day }, hours: f.hours.slice(i) };
+  const withToday = currentDays(f, key.slice(0, 10));
+  if (f.now.time.slice(0, 13) >= key) return withToday;
+  const i = withToday.hours.findIndex((h) => h.time.slice(0, 13) === key);
+  if (i < 0) return withToday;
+  const h = withToday.hours[i];
+  return { ...withToday, now: { ...f.now, time: h.time, temp: h.temp, code: h.code, day: h.day }, hours: withToday.hours.slice(i) };
+}
+
+/**
+ * Past midnight at the place, yesterday drops off the daily list so the first day really is
+ * "Today" (offline, the last download can be from the day before). Kept as-is if every day has
+ * passed: an old outlook beats an empty one.
+ */
+function currentDays(f: Forecast, today: string): Forecast {
+  const i = f.days.findIndex((d) => d.date >= today);
+  return i <= 0 ? f : { ...f, days: f.days.slice(i) };
 }
 
 /** °F where people use it (US and a few others), °C everywhere else. */

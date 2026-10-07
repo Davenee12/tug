@@ -35,8 +35,12 @@ pub fn bluetooth_summary(status: &DeviceStatus) -> String {
 pub fn os_version() -> String {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        // No console window flashing up over tug while it asks.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         std::process::Command::new("cmd")
             .args(["/c", "ver"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .ok()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())

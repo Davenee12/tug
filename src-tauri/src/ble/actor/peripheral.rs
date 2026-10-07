@@ -31,6 +31,25 @@ impl Actor {
         Ok(())
     }
 
+    /// Read the radio again (and watch it afresh) because it isn't On: a missed StateChanged mustn't
+    /// leave a stale "off" in charge. Coming back On resets the connect backoff like the event does.
+    pub(super) async fn recheck_radio(&mut self) {
+        self.radio_recheck_in = link_policy::RADIO_RECHECK_SECS;
+        let was = self.shared.status().radio;
+        if let Err(e) = self.watch_radio().await {
+            log::debug!("radio state still unavailable: {e}");
+            return;
+        }
+        let now = self.shared.status().radio;
+        if now != was {
+            log::info!("Bluetooth radio re-read: {was:?} -> {now:?}");
+            if now == RadioState::On {
+                self.retry_in = 0;
+                self.connect_failures = 0;
+            }
+        }
+    }
+
     pub(super) async fn peripheral_supported(&self) -> Result<bool, BleError> {
         let adapter = winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, BluetoothAdapter::GetDefaultAsync()?).await?;
         Ok(adapter.IsPeripheralRoleSupported()?)
@@ -61,8 +80,16 @@ impl Actor {
                 );
                 self.advertise_retry_in = Some(wait);
             }
+            // Any other failure is retried too, on the same backoff: left alone it kept tug
+            // invisible to the iPhone until restarted.
             Err(e) => {
-                log::error!("advertising failed: {e}");
+                self.advertise_failures = self.advertise_failures.saturating_add(1);
+                let wait = retry_delay(ADVERTISE_RETRY_SECS, self.advertise_failures, MAX_ADVERTISE_RETRY_SECS);
+                log::error!(
+                    "advertising failed ({} in a row): {e}; retrying in {wait}s",
+                    self.advertise_failures
+                );
+                self.advertise_retry_in = Some(wait);
                 self.shared.update_status(|s| {
                     s.advertising = AdvertisingState::Error;
                     s.last_error = Some(format!("Couldn't advertise to the iPhone: {e}"));

@@ -3,7 +3,7 @@
 // rate limiter, the code de-dupe) stays in the store; this decides the policy only.
 //
 // The rules, in order:
-//   • Windows alerts off        → nothing pops up.
+//   • Windows pop-ups off       → nothing pops up.
 //   • An incoming call          → rings through quiet hours and DND; held only if the user mutes
 //                                 calls explicitly, and even then a VIP rings.
 //   • The app is muted          → held (muting an app wins, even for a VIP).

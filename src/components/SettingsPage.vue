@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, X } from "lucide-vue-next";
+import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
 import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
@@ -10,8 +10,10 @@ import { stepZoom } from "../lib/zoom";
 import { escClosesSettings } from "../lib/escape";
 import { formatAddress } from "../lib/format";
 import { normalizeAddress } from "../lib/address";
+import { SPOTIFY_BETA_LABEL, SPOTIFY_BETA_NOTE, SPOTIFY_RECONNECT } from "../lib/spotify";
 import AppAvatar from "./AppAvatar.vue";
 import ConnectPanel from "./ConnectPanel.vue";
+import DeveloperSettings from "./DeveloperSettings.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsSwitch from "./SettingsSwitch.vue";
 
@@ -24,6 +26,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string; icon: Component }> =
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "connectors", label: "Connectors", icon: Plug },
   { id: "weather", label: "Weather", icon: CloudSun },
+  { id: "developer", label: "Developer tools", icon: SquareTerminal },
   { id: "privacy", label: "Data & privacy", icon: ShieldCheck },
   { id: "about", label: "About", icon: Info },
 ];
@@ -40,19 +43,28 @@ const version = ref<string | null>(null);
 // A slow clock so the last-error "3m ago" stays roughly current while Settings is open.
 const now = ref(Date.now());
 let clock: number | undefined;
+// Windows can turn tug's pop-ups off on its own side; checked on open and on coming back
+// (from Windows Settings, say) so the warning goes once they're on again.
+const popupsBlocked = ref(false);
+const checkPopups = async () => {
+  popupsBlocked.value = await api.popupsBlocked().catch(() => false);
+};
 onMounted(async () => {
   window.addEventListener("keydown", onKey);
+  window.addEventListener("focus", checkPopups);
   clock = window.setInterval(() => (now.value = Date.now()), 30_000);
+  void checkPopups();
   version.value = await getVersion().catch(() => null);
 });
 onUnmounted(() => {
   window.removeEventListener("keydown", onKey);
+  window.removeEventListener("focus", checkPopups);
   window.clearInterval(clock);
 });
 
 // ---- iPhone: Connection health ----
 const health = computed<HealthLink[]>(() =>
-  connectionHealth(tug.status, { contacts: tug.contacts.length, calls: tug.calls.length }),
+  connectionHealth(tug.status, { contacts: tug.contacts.length, calls: tug.calls.length }, tug.switchContext),
 );
 const lastErrorAge = computed(() => errorAge(tug.status.lastErrorAt, now.value));
 const STATE_META: Record<LinkState, { dot: string; label: string }> = {
@@ -60,6 +72,7 @@ const STATE_META: Record<LinkState, { dot: string; label: string }> = {
   off: { dot: "bg-accent-amber", label: "Needs attention" },
   error: { dot: "bg-error", label: "Problem" },
   waiting: { dot: "bg-muted-soft", label: "Waiting" },
+  unavailable: { dot: "bg-muted-soft", label: "Not available" },
 };
 
 const diagnostics = ref<"idle" | "copying" | "done">("idle");
@@ -86,6 +99,7 @@ async function openLogs() {
 // ---- General ----
 const toasts = computed({ get: () => tug.settings.toasts, set: (v) => void tug.setSetting("toasts", v) });
 const lowBattery = computed({ get: () => tug.settings.lowBattery, set: (v) => void tug.setSetting("lowBattery", v) });
+const popupSound = computed({ get: () => tug.settings.popupSound, set: (v) => void tug.setSetting("popupSound", v) });
 const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tug.setSetting("doNotDisturb", v) });
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
 const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) => void tug.setAutostart(v) });
@@ -99,7 +113,15 @@ const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
 const qh = computed(() => tug.settings.quietHours);
 const setQuiet = (patch: Partial<typeof tug.settings.quietHours>) => void tug.setSetting("quietHours", { ...tug.settings.quietHours, ...patch });
 const quietEnabled = computed({ get: () => qh.value.enabled, set: (v) => setQuiet({ enabled: v }) });
-const DAYS: Array<[string, number]> = [["S", 0], ["M", 1], ["T", 2], ["W", 3], ["T", 4], ["F", 5], ["S", 6]];
+const DAYS: Array<[string, number, string]> = [
+  ["S", 0, "Sunday"],
+  ["M", 1, "Monday"],
+  ["T", 2, "Tuesday"],
+  ["W", 3, "Wednesday"],
+  ["T", 4, "Thursday"],
+  ["F", 5, "Friday"],
+  ["S", 6, "Saturday"],
+];
 const dayOn = (d: number) => qh.value.days.length === 0 || qh.value.days.includes(d);
 function toggleDay(d: number) {
   const current = qh.value.days.length ? qh.value.days : [0, 1, 2, 3, 4, 5, 6];
@@ -226,9 +248,23 @@ async function clearHistory() {
 
         <!-- General: two columns of rows on wide windows so the whole section fits without scrolling. -->
         <template v-if="current.id === 'general'">
+          <div
+            v-if="popupsBlocked"
+            class="mb-4 flex items-start gap-2.5 rounded-xl border border-error/30 bg-canvas px-4 py-3 text-[13px] text-body-strong"
+          >
+            <CircleAlert :size="16" class="mt-0.5 shrink-0 text-error" />
+            <div class="min-w-0 flex-1">
+              <p class="font-medium">Windows is blocking tug's pop-ups</p>
+              <p class="mt-0.5 text-muted">Notifications still collect in the Feed. Turn on notifications for tug in Windows to see pop-ups.</p>
+            </div>
+            <button class="btn-secondary btn-sm shrink-0" @click="api.openWindowsSettings('notifications')">Open notification settings</button>
+          </div>
           <div class="grid grid-cols-1 gap-px overflow-hidden rounded-xl bg-hairline-soft lg:grid-cols-2">
-            <SettingsRow class="bg-surface-card" label="Windows alerts" description="Pop up new notifications on this PC.">
-              <SettingsSwitch v-model="toasts" label="Windows alerts" />
+            <SettingsRow class="bg-surface-card" label="Windows pop-ups" description="Pop up new notifications on this PC.">
+              <SettingsSwitch v-model="toasts" label="Windows pop-ups" />
+            </SettingsRow>
+            <SettingsRow class="bg-surface-card" label="Pop-up sound" description="Play the Windows sound with tug's pop-ups. Your iPhone already chimes.">
+              <SettingsSwitch v-model="popupSound" label="Pop-up sound" :disabled="!tug.settings.toasts" />
             </SettingsRow>
             <SettingsRow class="bg-surface-card" label="Do not disturb" description="Keep collecting, stop popping up.">
               <SettingsSwitch v-model="dnd" label="Do not disturb" :disabled="!tug.settings.toasts" />
@@ -352,7 +388,7 @@ async function clearHistory() {
               description="Places calls on your iPhone over its hands-free link, from recent calls, conversations and contacts. You talk on the phone. Call buttons only appear once this PC passes the check."
             >
               <template #below>
-                <p class="mt-1 text-[12px] text-muted-soft">Experimental: not yet tried with a real iPhone.</p>
+                <p class="mt-1 text-[12px] text-muted-soft">Experimental. Call buttons only appear once this PC passes the check.</p>
               </template>
               <div v-if="tug.canDial" class="flex items-center gap-3">
                 <span class="flex items-center gap-1.5 text-[13px] font-medium text-ink"><Check :size="15" class="text-accent-teal" /> On</span>
@@ -377,15 +413,15 @@ async function clearHistory() {
             >
               <SettingsSwitch v-model="filterUnknown" label="Filter unknown senders" />
             </SettingsRow>
-            <SettingsRow label="Mute calls" description="Hold call pop-ups too. Off: calls ring through quiet hours. People you always let through still ring.">
-              <SettingsSwitch v-model="muteCalls" label="Mute calls" />
-            </SettingsRow>
           </div>
 
           <!-- Quiet hours: a schedule that holds pop-ups, like Do not disturb. -->
           <div class="mb-4 rounded-xl bg-surface-card">
             <SettingsRow label="Quiet hours" description="Hold Windows pop-ups on a schedule. Notifications still collect in the Feed. People you always let through still get through.">
               <SettingsSwitch v-model="quietEnabled" label="Quiet hours" :disabled="!tug.settings.toasts" />
+            </SettingsRow>
+            <SettingsRow class="border-t border-hairline-soft" label="Mute calls" description="Calls are held during quiet hours and Do not disturb too.">
+              <SettingsSwitch v-model="muteCalls" label="Mute calls" :disabled="!tug.settings.toasts" />
             </SettingsRow>
             <div v-if="qh.enabled" class="flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-hairline-soft px-5 py-4">
               <label class="flex items-center gap-2 text-[13px] text-body">
@@ -406,7 +442,7 @@ async function clearHistory() {
               </label>
               <div class="flex items-center gap-1.5">
                 <button
-                  v-for="([letter, d], i) in DAYS"
+                  v-for="([letter, d, dayName], i) in DAYS"
                   :key="i"
                   type="button"
                   :class="[
@@ -414,7 +450,8 @@ async function clearHistory() {
                     dayOn(d) ? 'bg-ink text-on-dark' : 'bg-canvas text-muted active:bg-surface-cream-strong',
                   ]"
                   :aria-pressed="dayOn(d)"
-                  :title="`Run on this day`"
+                  :aria-label="`${dayName}: ${dayOn(d) ? 'on' : 'off'}`"
+                  :title="`${dayName}: ${dayOn(d) ? 'on' : 'off'}`"
                   @click="toggleDay(d)"
                 >
                   {{ letter }}
@@ -488,7 +525,10 @@ async function clearHistory() {
                 <Music :size="20" />
               </span>
               <div class="min-w-0 flex-1">
-                <p class="text-[14px] font-medium text-ink">Spotify</p>
+                <p class="flex flex-wrap items-center gap-2 text-[14px] font-medium text-ink">
+                  Spotify
+                  <span class="pill bg-surface-cream-strong px-2 py-0 text-[11px] text-body">{{ SPOTIFY_BETA_LABEL }}</span>
+                </p>
                 <p class="mt-0.5 text-[13px] text-muted">
                   {{
                     tug.spotify.connected
@@ -498,7 +538,17 @@ async function clearHistory() {
                       : "Your playlists, likes, repeat, shuffle and album art."
                   }}
                 </p>
+                <p v-if="!tug.spotify.connected" class="mt-0.5 text-[12px] text-muted-soft">{{ SPOTIFY_BETA_NOTE }}</p>
+                <p v-else-if="tug.spotify.needsReconnect" class="mt-0.5 text-[12px] text-body">{{ SPOTIFY_RECONNECT }}</p>
               </div>
+              <button
+                v-if="tug.spotify.connected && tug.spotify.needsReconnect"
+                class="btn-primary btn-sm"
+                :disabled="tug.spotifyConnecting"
+                @click="tug.connectSpotify()"
+              >
+                {{ tug.spotifyConnecting ? "Connecting…" : "Reconnect" }}
+              </button>
               <button v-if="tug.spotify.connected" class="btn-secondary btn-sm" @click="disconnectSpotify">Disconnect</button>
               <button v-else class="btn-primary btn-sm" :disabled="tug.spotifyConnecting" @click="tug.connectSpotify()">
                 {{ tug.spotifyConnecting ? "Connecting…" : "Connect" }}
@@ -520,9 +570,14 @@ async function clearHistory() {
                     : 'Not set up yet: pick a place on the Feed.'
               "
             >
-              <button v-if="weather.place === 'off'" class="btn-secondary btn-sm" @click="changePlace">Show</button>
+              <template #below>
+                <p v-if="tug.showConnect" class="mt-1 text-[12px] text-muted-soft">Shows on the Feed once your iPhone is connected.</p>
+              </template>
+              <button v-if="weather.place === 'off'" class="btn-secondary btn-sm" :disabled="tug.showConnect" @click="changePlace">Show</button>
               <div v-else class="flex gap-2">
-                <button class="btn-secondary btn-sm" @click="changePlace">{{ weather.place ? "Change place" : "Set up" }}</button>
+                <button class="btn-secondary btn-sm" :disabled="tug.showConnect" @click="changePlace">
+                  {{ weather.place ? "Change place" : "Set up" }}
+                </button>
                 <button v-if="weather.place" class="btn-secondary btn-sm" @click="weather.hide()">Hide</button>
               </div>
             </SettingsRow>
@@ -542,6 +597,11 @@ async function clearHistory() {
           </div>
         </template>
 
+        <!-- Developer tools: AI tools (MCP) and the tug command -->
+        <template v-else-if="current.id === 'developer'">
+          <DeveloperSettings />
+        </template>
+
         <!-- Data & privacy -->
         <template v-else-if="current.id === 'privacy'">
           <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
@@ -554,6 +614,14 @@ async function clearHistory() {
               description="Weather, only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name. App icons: each app's ID (like com.google.Gmail, never what it sent you) goes to Apple's App Store once."
             />
             <SettingsRow
+              label="Spotify"
+              description="Connecting signs you in to Spotify; tug then asks Spotify for what's playing, your playlists and cover art."
+            />
+            <SettingsRow
+              label="Tugboat"
+              description="Only while Tugboat is open: an encrypted link on your Wi-Fi. Nothing goes over the internet. Received files go to Pictures › Tugboat."
+            />
+            <SettingsRow
               label="App icons"
               description="Show each app's real icon in the Feed instead of its initials. Fetched once per app from Apple's App Store and kept on this PC."
             >
@@ -564,7 +632,7 @@ async function clearHistory() {
                 :class="['btn-secondary btn-sm', confirmClear ? 'text-error' : '']"
                 @click="clearHistory"
               >
-                {{ confirmClear ? "Tap again to delete" : "Clear history" }}
+                {{ confirmClear ? "Click again to delete" : "Clear history" }}
               </button>
             </SettingsRow>
           </div>
@@ -573,7 +641,7 @@ async function clearHistory() {
         <!-- About -->
         <template v-else>
           <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
-            <SettingsRow label="tug" :description="version ? `Version ${version}` : 'Development build'" />
+            <SettingsRow label="tug" :description="version ? `Version ${version}` : 'Version unavailable'" />
             <SettingsRow label="What's new" description="See what changed in this and earlier updates.">
               <button class="btn-secondary btn-sm" @click="tug.openWhatsNew()">
                 <Sparkles :size="14" /> What's new

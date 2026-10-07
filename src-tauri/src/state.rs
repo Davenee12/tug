@@ -27,6 +27,9 @@ pub mod events {
     pub const CONTACTS: &str = "contacts";
     /// Tray click/Open with unread texts: the frontend opens the newest unread conversation.
     pub const OPEN_LATEST_CONVERSATION: &str = "open-latest-conversation";
+    /// Tray menu's Settings…: the frontend opens Settings (the only mouse path there while
+    /// the first-run Connect panel stands in for the Feed).
+    pub const OPEN_SETTINGS: &str = "open-settings";
     pub const CALLS: &str = "calls";
     /// A pop-up's body or button was pressed and carried out (see `toast`).
     pub const TOAST_PRESSED: &str = "toast-pressed";
@@ -46,6 +49,9 @@ pub mod keys {
     /// Unix ms of the last successful contact-photo pull (the slow WITH-PHOTO PBAP pass). Persisted
     /// so the photo pass runs at most once a day instead of on every connect and 15-min resync.
     pub const LAST_PHOTO_SYNC: &str = "last_photo_sync";
+    /// Unix ms of the last successful text sync, so a catch-up after time away can tell it may
+    /// have missed texts (see `map::service`), and the very first sync doesn't claim a gap.
+    pub const LAST_TEXT_SYNC: &str = "last_text_sync";
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -126,6 +132,9 @@ pub struct DeviceStatus {
     /// "Reconnecting…" rather than "Waiting for iPhone". Cleared once connected, or after a few
     /// failed attempts.
     pub reconnecting: bool,
+    /// The iPhone is away (out of range, or Windows can't reach it). Sticky until it connects
+    /// again, so the status stays steady instead of flipping with every background retry.
+    pub away: bool,
     /// Why message access isn't available, when the user can fix it (e.g. consent).
     pub messages_error: Option<String>,
     /// Why the phone's contacts aren't available, when the user can fix it.
@@ -133,6 +142,10 @@ pub struct DeviceStatus {
     /// Whether the phone shared contacts on the current connection (Sync Contacts on). Not
     /// "tug has contacts saved": kept history made the setup checklist say on while it was off.
     pub contacts_shared: bool,
+    /// The phone keeps answering with an empty phonebook (or refused): Sync Contacts is off. A
+    /// definite answer, so the UI says "off" instead of "Checking…" while tug keeps asking every
+    /// ~30 s (`map::contacts_watch`). Never true together with `contacts_shared`.
+    pub contacts_off: bool,
     /// Whether the texts (Classic) pairing works, is missing, or needs making again.
     pub texts_pairing: TextsPairing,
     /// The phone Windows has paired for texts (what to remove when it needs re-pairing).
@@ -193,7 +206,8 @@ pub struct Shared {
     pub store: Arc<Store>,
     status: Mutex<DeviceStatus>,
     now_playing: Mutex<NowPlaying>,
-    /// The phone's recent calls (PBAP), newest first. Not stored: the phone keeps the real list.
+    /// The phone's recent calls (PBAP), newest first. The last list is saved (`map::calls::save`)
+    /// so Recents shows it at launch until the phone answers again.
     calls: Mutex<Vec<CallRecord>>,
     /// Current ANCS subscription id; rows from it can still take actions.
     live_session: Mutex<Option<String>>,
@@ -224,12 +238,13 @@ pub fn now_ms() -> i64 {
 
 impl Shared {
     pub fn new(app: AppHandle, store: Arc<Store>) -> Self {
+        let calls = crate::map::calls::load(&store);
         Self {
             app,
             store,
             status: Mutex::default(),
             now_playing: Mutex::default(),
-            calls: Mutex::default(),
+            calls: Mutex::new(calls),
             live_session: Mutex::default(),
             pairing_confirm: Mutex::default(),
             map: OnceLock::new(),
@@ -321,6 +336,7 @@ impl Shared {
             changed.then(|| current.clone())
         };
         if let Some(calls) = changed {
+            crate::map::calls::save(&self.store, &calls);
             self.emit(events::CALLS, calls);
         }
     }

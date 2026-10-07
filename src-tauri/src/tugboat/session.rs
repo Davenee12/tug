@@ -211,6 +211,9 @@ pub struct Snapshot {
     pub sent_text: Option<String>,
     /// The phone is downloading a file from the PC right now.
     pub sending: bool,
+    /// Chunks of a file from the phone arrived just now. An upload the phone abandoned (Safari
+    /// closed mid-file) stays unfinished in `incoming`, so "unfinished" isn't "moving".
+    pub receiving: bool,
 }
 
 /// A file offered to the phone that couldn't be added, and why (for the panel's message).
@@ -351,6 +354,11 @@ impl Session {
         st.last_seen = None;
         drop(st);
         self.sink.changed(true);
+    }
+
+    /// Chunks of a file from the phone arrived just now.
+    pub fn receiving(&self) -> bool {
+        self.state().last_upload.is_some_and(|t| t.elapsed() < MOVING)
     }
 
     /// The phone is downloading a file from the PC right now.
@@ -878,6 +886,7 @@ impl Session {
             texts: st.texts.clone(),
             sent_text: st.pc_text.as_ref().map(|t| t.text.clone()),
             sending: st.downloading.values().any(|t| t.elapsed() < MOVING),
+            receiving: st.last_upload.is_some_and(|t| t.elapsed() < MOVING),
         }
     }
 

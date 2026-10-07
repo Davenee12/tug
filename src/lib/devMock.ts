@@ -17,12 +17,17 @@
 //                                     the "Your iPhone has forgotten this PC" notice, with Remove
 //   http://localhost:1420/?nudge      connected, notifications on, but texts/contacts off: the Feed's
 //                                     dismissible "Get more from tug" nudge
-//   http://localhost:1420/?whatsnew   the "What's new" card on launch, previewing 0.5.9 with the
-//                                     earlier 0.5.8 update collapsed (version faked to 0.5.9, last
-//                                     seen 0.5.7). Reopen it any time from Settings › About.
+//   http://localhost:1420/?whatsnew   the "What's new" card on launch, previewing the newest entry in
+//                                     whatsNew.ts with the one before it collapsed (last seen faked to
+//                                     two releases back). Reopen it any time from Settings › About.
 //   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
 //   http://localhost:1420/?call       a call rings 1.5 s after load (rings out after 30 s, as a missed call)
+//   http://localhost:1420/?popupreply a text from Zoe pops up 1.5 s after load and is answered from the
+//                                     Windows pop-up 2 s later, the way the backend reports it (the
+//                                     reply's `message` events, then the press carrying the stored
+//                                     reply). Add &missed to drop the `message` events, as if they never
+//                                     reached the window: the reply must show in Zoe's conversation anyway
 //   http://localhost:1420/?nodial     Settings › iPhone › Calls check fails, like a blocked hands-free link
 //   http://localhost:1420/?norepeat   player doesn't list AdvanceRepeatMode: no loop button
 //   http://localhost:1420/?repeatignored   player lists it but ignores it: the "didn't change" toast
@@ -35,10 +40,13 @@
 //   http://localhost:1420/?tugboatwait   the Tugboat panel showing its QR code, no phone yet ("Can't
 //                                     connect?" help appears after 30 s)
 //   http://localhost:1420/?tugboatnonet  the Tugboat panel with no network a phone could use
+//   http://localhost:1420/?devtools   Settings › Developer tools, switched on, with two connected tools
+//   http://localhost:1420/?devconfirm the "wants to text" confirmation card an AI tool's send_text shows
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
+import { RELEASE_NOTES } from "./whatsNew";
+import type { CallRecord, Contact, DevToolsStatus, DeviceStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -51,10 +59,10 @@ const noRepeat = params.has("norepeat");
 const repeatIgnored = params.has("repeatignored");
 // The model identifier the mock phone reports over its Device Information Service.
 const model = params.has("nomodel") ? null : params.get("model") || "iPhone16,2";
-// ?whatsnew: fake the app version to 0.5.9 so the upcoming entry shows too; otherwise report the
-// shipping version so Settings › About and the card read a real number in the browser preview.
+// The mock reports the newest What's new version as the app version, so Settings › About and the
+// card read the release being built. ?whatsnew also fakes an older last-seen version (below).
 const whatsNewPreview = params.has("whatsnew");
-const appVersion = whatsNewPreview ? "0.5.9" : "0.5.8";
+const appVersion = RELEASE_NOTES[0].version;
 const now = Date.now();
 const min = 60_000;
 
@@ -84,6 +92,7 @@ function n(appId: string, appName: string | null, title: string, message: string
     negativeLabel: "Clear",
     removedAt: null,
     live: true,
+    fresh: false,
     ...extra,
   };
 }
@@ -133,6 +142,7 @@ const status: DeviceStatus = noPhone
       messagesError: null,
       contactsError: null,
       contactsShared: false,
+      contactsOff: false,
       textsPairing: "missing",
       textsDevice: null,
       liveTexts: "off",
@@ -156,6 +166,7 @@ const status: DeviceStatus = noPhone
       messagesError: null,
       contactsError: null,
       contactsShared: false,
+      contactsOff: false,
       textsPairing: "broken",
       textsDevice: "Jordan's iPhone",
       liveTexts: "off",
@@ -178,7 +189,9 @@ const status: DeviceStatus = noPhone
       reconnecting: false,
       messagesError: params.has("nudge") ? "the iPhone refused message access; turn on Show Notifications for this PC" : null,
       contactsError: params.has("nudge") ? "the iPhone refused contact access" : null,
-      contactsShared: false,
+      // Sharing contacts unless a scenario below says otherwise (?contactsoff, ?justpaired…).
+      contactsShared: !params.has("nudge"),
+      contactsOff: false,
       textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
       textsDevice: setup ? null : "Jordan's iPhone",
       liveTexts: params.has("livetexts") ? "active" : "off",
@@ -194,9 +207,46 @@ if (params.has("away") && status.device) {
   } satisfies Partial<DeviceStatus>);
 }
 
+// Status-consistency scenarios: the switches card (Settings › iPhone), the health rows above it and
+// the sidebar must all agree in each.
+//   ?justpaired   texts just opened, Sync Contacts not answered yet: "Checking…" (≤ 60 s, then a
+//                 plain "No answer yet"), never forever
+//   ?contactsoff  re-paired: Sync Contacts off on the phone (empty phonebooks), names saved from
+//                 before still show. ?contactsoff&flip: the next check ("Check again") finds it on
+//   ?textsoff     Show Notifications off (the phone refused message access)
+//   ?textsmissing no texts pairing made on this PC yet
+//   ?radiooff     Bluetooth turned off in Windows while a relink was under way
+if (status.device && !forgotten) {
+  if (params.has("justpaired")) Object.assign(status, { contactsShared: false, contactsOff: false });
+  if (params.has("contactsoff")) Object.assign(status, { contactsShared: false, contactsOff: true });
+  if (params.has("textsoff")) {
+    Object.assign(status, {
+      services: { ...status.services, messages: false },
+      messagesError: "the iPhone refused message access; turn on Show Notifications for this PC",
+      contactsShared: false,
+    });
+  }
+  if (params.has("textsmissing")) {
+    Object.assign(status, { services: { ...status.services, messages: false }, textsPairing: "missing", textsDevice: null, contactsShared: false });
+  }
+  if (params.has("radiooff")) {
+    Object.assign(status, {
+      radio: "off",
+      connection: "connecting",
+      reconnecting: false,
+      battery: null,
+      services: { notifications: false, media: false, battery: false, messages: false },
+      contactsShared: false,
+    } satisfies Partial<DeviceStatus>);
+  }
+}
+
 // ?applemusic swaps Spotify for Apple Music, which lists skip ±15 s and Like/Dislike over AMS
 // (and no working repeat), so those controls can be reviewed in the browser.
 const appleMusic = params.has("applemusic");
+// ?speaker: Spotify on the phone is playing on a Spotify Connect speaker. The phone then reports the
+// title as "Song • Artist" and the artist as "Listening on <speaker>" (seen on a real iPhone).
+const onSpeaker = params.has("speaker") && !appleMusic;
 const nowPlaying: NowPlaying = noPhone || forgotten
   ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, repeat: null, available: [] }
   : {
@@ -206,9 +256,9 @@ const nowPlaying: NowPlaying = noPhone || forgotten
       elapsed: 74,
       elapsedAt: now,
       volume: 0.6,
-      title: "Teardrop",
-      artist: "Massive Attack",
-      album: "Mezzanine",
+      title: onSpeaker ? "Teardrop • Massive Attack" : "Teardrop",
+      artist: onSpeaker ? "Listening on Kitchen speaker" : "Massive Attack",
+      album: onSpeaker ? null : "Mezzanine",
       duration: 330,
       repeat: "off",
       available: [
@@ -287,6 +337,7 @@ const sms = (
   receivedAt: now - agoMin * min,
   status: direction === "in" ? "received" : "accepted",
   msgType,
+  gapBefore: false,
 });
 const messages: SmsMessage[] = noPhone
   ? []
@@ -329,9 +380,9 @@ const settings: Record<string, string> = {
   "ui.vips": setup ? "" : JSON.stringify([ZOE]),
   "ui.mutedApps": setup ? "" : JSON.stringify(["com.burbn.instagram"]),
 };
-// ?whatsnew: an older last-seen version so the card greets you on launch (0.5.9 + a collapsed 0.5.8).
+// ?whatsnew: an older last-seen version so the card greets you on launch (the newest entry + a collapsed one).
 // Otherwise record the current version, as a returning user would have, so it doesn't pop every run.
-if (whatsNewPreview) settings["ui.lastSeenVersion"] = "0.5.7";
+if (whatsNewPreview) settings["ui.lastSeenVersion"] = RELEASE_NOTES[2]?.version ?? "0.0.0";
 else if (!setup) settings["ui.lastSeenVersion"] = appVersion;
 let autostart = false;
 
@@ -340,6 +391,8 @@ let autostart = false;
 const spotifyState: SpotifyStatus = {
   connected: !noPhone && !params.has("spotifyoff"),
   account: !noPhone && !params.has("spotifyoff") ? "Jordan Lee" : null,
+  // ?spotifyreconnect: connected before tug asked for the Your top / Recent / Add to playlist scopes.
+  needsReconnect: params.has("spotifyreconnect"),
 };
 const artSvg =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="6" fill="#1db954"/><circle cx="24" cy="44" r="7" fill="#0b2e18"/><rect x="29" y="18" width="6" height="26" fill="#0b2e18"/><path d="M35 18 L52 14 V22 L35 26 Z" fill="#0b2e18"/></svg>';
@@ -352,7 +405,10 @@ const spotifyPlayer: SpotifyPlayer = {
   trackUri: "spotify:track:mock123",
   // The same song as the mock Now Playing, so the Like button and art show.
   trackName: "Teardrop",
-  deviceName: "Jordan's iPhone",
+  trackArtists: "Massive Attack",
+  deviceId: onSpeaker ? "spk" : "phone",
+  deviceName: onSpeaker ? "Kitchen speaker" : "Jordan's iPhone",
+  deviceKind: onSpeaker ? "Speaker" : "Smartphone",
 };
 const img = (seed: string) => `https://i.scdn.co/mock/${encodeURIComponent(seed)}`;
 const spotifyPlaylists: SpotifyPlaylist[] = [
@@ -406,9 +462,9 @@ const catalogueArtists: SpotifyArtist[] = [
   mockArtist("cg", "Childish Gambino"),
 ];
 const spotifyDevices: SpotifyDevice[] = [
-  { id: "phone", name: "Jordan's iPhone", kind: "Smartphone", isActive: true },
+  { id: "phone", name: "Jordan's iPhone", kind: "Smartphone", isActive: !onSpeaker },
   { id: "pc", name: "Spotify on this PC", kind: "Computer", isActive: false },
-  { id: "spk", name: "Kitchen speaker", kind: "Speaker", isActive: false },
+  { id: "spk", name: "Kitchen speaker", kind: "Speaker", isActive: onSpeaker },
 ];
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
@@ -499,6 +555,7 @@ const dropState: TugboatStatus = {
   texts: [],
   sentText: null,
   sending: false,
+  receiving: false,
   ended: null,
 };
 const sendDrop = () => void emit("tugboat-status", structuredClone(dropState));
@@ -547,6 +604,57 @@ if (dropOn || dropWait || dropNoNet) {
   }, 400);
 }
 
+// --- Developer tools (?devtools, ?devconfirm) ---
+const DEV_LABELS: Array<[DevToolsStatus["permissions"][number]["key"], string, boolean]> = [
+  ["codes", "Verification codes", false],
+  ["search", "Search texts and notifications", true],
+  ["dev_notifications", "Developer notifications", true],
+  ["tugboat_files", "Files from Tugboat", true],
+  ["phone_status", "Phone status", true],
+  ["media", "Music controls", false],
+  ["send_text", "Send texts", false],
+  ["tugboat_send", "Send files to your phone", true],
+];
+const devState: DevToolsStatus = {
+  enabled: params.has("devtools") || params.has("devconfirm"),
+  permissions: DEV_LABELS.map(([key, label, on]) => ({ key, label, on })),
+  clients: params.has("devtools")
+    ? [
+        { name: "Claude Code", kind: "mcp", lastUsed: Date.now() - 4 * 60_000 },
+        { name: "tug command", kind: "cli", lastUsed: Date.now() - 3 * 3_600_000 },
+      ]
+    : [],
+  cliPath: "C:\\Users\\Jordan\\AppData\\Local\\tug\\bin\\tug.exe",
+  cliDir: "C:\\Users\\Jordan\\AppData\\Local\\tug\\bin",
+  onPath: false,
+  bridgeRunning: true,
+  pending: null,
+};
+const sendDev = () => {
+  const copy = structuredClone(devState);
+  void emit("devtools-status", copy);
+  return copy;
+};
+if (params.has("devtools")) {
+  setTimeout(async () => {
+    const { useTugStore } = await import("../stores/tug");
+    useTugStore().openSettings("developer");
+  }, 400);
+}
+if (params.has("devconfirm")) {
+  setTimeout(() => {
+    devState.pending = {
+      id: 1,
+      tool: "Claude Code",
+      toName: "Zoe",
+      toAddress: ZOE,
+      message: "Running 10 minutes late, start without me!",
+      expiresAt: Date.now() + 120_000,
+    };
+    void emit("devtools-confirm", structuredClone(devState.pending));
+  }, 900);
+}
+
 mockIPC(
   (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
@@ -555,6 +663,16 @@ mockIPC(
       // a real version in the browser preview (unmocked, it rejects and both fall back to "dev").
       case "plugin:app|version":
         return appVersion;
+      // Sync Contacts is read by asking the phone: ?contactsoff&flip turns it on at the next check
+      // ("Check again", or the window coming to the front), as if the switch had just been flipped.
+      case "check_switches":
+        if (status.contactsOff && params.has("flip")) {
+          Object.assign(status, { contactsOff: false, contactsShared: true });
+          void emit("device-status", { ...status, services: { ...status.services } });
+        }
+        return null;
+      case "set_watching":
+        return null;
       case "get_status":
         return status;
       case "get_now_playing":
@@ -602,6 +720,14 @@ mockIPC(
         setTimeout(() => void emit("message", { ...m, status: "accepted" }), 700);
         return m;
       }
+      case "retry_message": {
+        const m = messages.find((x) => x.id === Number(a.id));
+        if (!m || m.status !== "failed") return Promise.reject("That message is already being sent");
+        Object.assign(m, { status: "pending", receivedAt: Date.now() });
+        setTimeout(() => void emit("message", { ...m }), 0);
+        setTimeout(() => void emit("message", Object.assign(m, { status: "accepted" })), 700);
+        return { ...m };
+      }
       // A stand-in report so Settings › Copy diagnostics works in the browser. The real one is
       // built and redacted in Rust (src-tauri/src/diagnostics.rs).
       case "copy_diagnostics": {
@@ -609,7 +735,7 @@ mockIPC(
           "tug diagnostics",
           "===============",
           "",
-          "app version:     0.5.7 (dev mock)",
+          `app version:     ${appVersion} (dev mock)`,
           "windows version: Microsoft Windows [Version 10.0.26200.0000]",
           `bluetooth:       ${status.radio === "on" ? "radio on" : "radio off"}, peripheral role supported`,
           "",
@@ -659,6 +785,27 @@ mockIPC(
         return null;
       case "tugboat_open_folder":
         console.log("[devMock] open Tugboat folder", a.path ?? dropFolder);
+        return null;
+      case "devtools_status":
+        return structuredClone(devState);
+      case "devtools_set_enabled":
+        devState.enabled = Boolean(a.enabled);
+        return sendDev();
+      case "devtools_set_permission": {
+        const p = devState.permissions.find((x) => x.key === a.key);
+        if (p) p.on = Boolean(a.on);
+        return sendDev();
+      }
+      case "devtools_revoke":
+        devState.clients = [];
+        return sendDev();
+      case "devtools_set_on_path":
+        devState.onPath = Boolean(a.on);
+        return sendDev();
+      case "devtools_confirm":
+        console.log("[devMock] confirmation answered:", a.send ? "Send" : "Don't send");
+        devState.pending = null;
+        void emit("devtools-confirm", null);
         return null;
       case "get_settings":
         return settings;
@@ -874,6 +1021,11 @@ mockIPC(
         return spotifyDevices;
       case "spotify_transfer":
         console.log("[devMock] spotify transfer to", a.deviceId);
+        for (const d of spotifyDevices) d.isActive = d.id === a.deviceId;
+        {
+          const d = spotifyDevices.find((x) => x.id === a.deviceId);
+          if (d) Object.assign(spotifyPlayer, { deviceId: d.id, deviceName: d.name, deviceKind: d.kind });
+        }
         return null;
       case "spotify_seek":
         nowPlaying.elapsed = Math.round(Number(a.positionMs ?? 0) / 1000);
@@ -915,6 +1067,32 @@ if (setup && params.has("btoff")) {
 
 if (params.has("pairing")) {
   setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913", confirmOnPhone: false }), 600);
+}
+
+// ?popupreply: a text pops up and is answered from the pop-up, as toast/mod.rs reports it: the
+// MAP worker's `message` events for the reply (pending, then accepted), then `toast-pressed` with
+// kind "replied" carrying the stored reply. &missed leaves the `message` events out.
+if (params.has("popupreply")) {
+  const popped = n("com.apple.MobileSMS", "Messages", "Zoe", "are you still coming?", 0);
+  popped.id = 610;
+  const text = sms("in", "are you still coming? ", 0);
+  setTimeout(() => {
+    popped.receivedAt = text.receivedAt = Date.now();
+    history.unshift(popped);
+    messages.push(text);
+    void emit("message", text);
+    void emit("notification", popped);
+  }, 1500);
+  setTimeout(() => {
+    const reply: SmsMessage = { ...sms("out", "yes, 10 minutes away", 0), receivedAt: Date.now(), status: "pending" };
+    messages.push(reply);
+    const accepted: SmsMessage = { ...reply, status: "accepted" };
+    if (!params.has("missed")) {
+      void emit("message", reply);
+      void emit("message", accepted);
+    }
+    void emit("toast-pressed", { kind: "replied", id: popped.id, message: accepted });
+  }, 3500);
 }
 
 // ?call: the phone rings. Answer or Decline takes it down (perform_action above); left alone,

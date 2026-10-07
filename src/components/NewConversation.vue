@@ -4,6 +4,7 @@ import { Info, Phone, Search, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
 import { cleanName, formatAddress, groupConversations } from "../lib/format";
+import { normalizeAddress } from "../lib/address";
 import AppAvatar from "./AppAvatar.vue";
 
 const tug = useTugStore();
@@ -66,7 +67,9 @@ const options = computed<Option[]>(() => {
   const out = [...recent.value.filter(matches).filter(take), ...contacts.value.filter(matches).filter(take)];
   // A typed number that isn't a saved contact can still be texted.
   if (digits.length >= 7 && !out.some((o) => o.address.endsWith(digits.slice(-10)))) {
-    const address = digits.length === 10 ? `+1${digits}` : query.value.trim().startsWith("+") ? `+${digits}` : digits;
+    // +1 only for a bare 10-digit number on a PC in a +1 region; anything else goes as typed and
+    // the iPhone reads it the way it would a number typed there.
+    const address = normalizeAddress(query.value.trim().startsWith("+") ? `+${digits}` : digits);
     out.unshift({ key: `n:${address}`, name: formatAddress(address), address, section: "Number" });
   }
   return out;

@@ -1,0 +1,48 @@
+name: Feature request
+description: An idea that would make tug better.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. tug only does what iOS (or Android) shares over Bluetooth with no app
+        on the phone, so some things aren't possible yet. See docs/FEATURES.md, "What iPhone doesn't
+        allow (yet)", and ROADMAP.md before you write, in case it's already planned or known to be
+        impossible.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+      placeholder: "When a text arrives while I'm in a full-screen game, I ..."
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like tug to do
+      description: Describe the experience, not the implementation. Mock-ups welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do now instead
+      description: Workarounds, other apps, or "pick up the phone".
+  - type: dropdown
+    id: phone
+    attributes:
+      label: Your phone
+      options:
+        - iPhone
+        - Android
+        - Both / doesn't matter
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched existing issues and the roadmap.
+          required: true

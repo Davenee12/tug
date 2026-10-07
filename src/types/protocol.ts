@@ -40,12 +40,16 @@ export interface DeviceStatus {
   awaitingUnlock: boolean;
   /** tug is rebuilding the link on its own (Bluetooth stalled, the PC woke): say "Reconnecting…", not "Waiting". */
   reconnecting: boolean;
+  /** The iPhone is away (out of range): steady until it connects again, not flipping with each retry. */
+  away?: boolean;
   /** Why message access isn't available, when the user can fix it. */
   messagesError: string | null;
   /** Why the phone's contacts aren't available, when the user can fix it. */
   contactsError: string | null;
   /** The phone shared contacts on the current connection (Sync Contacts on). */
   contactsShared: boolean;
+  /** The phone keeps sharing an empty phonebook (or refused): Sync Contacts is off. Never true with contactsShared. */
+  contactsOff: boolean;
   /** Whether the texts (Classic) pairing works, is missing, or needs making again. */
   textsPairing: TextsPairing;
   /** The phone Windows has paired for texts (what to remove when it needs re-pairing). */
@@ -98,6 +102,12 @@ export interface PhoneNotification {
   removedAt: number | null;
   /** Still on the phone in the current connection, so actions can be sent. */
   live: boolean;
+  /**
+   * The event that carried this inserted it: tug had never stored it before. False on updates and
+   * on every list/search read (iOS flags replays after a reconnect as pre-existing, including what
+   * arrived during the gap; this tells the gap's new ones apart).
+   */
+  fresh: boolean;
 }
 
 export type PlaybackState = "unknown" | "paused" | "playing" | "rewinding" | "fastForwarding";
@@ -178,13 +188,19 @@ export interface SmsMessage {
    * Outgoing: pending → accepted (taken by the iPhone; not proof of delivery) → sent (a MAP
    * SendingSuccess event confirmed it left), or failed. Without live texts a send stops at
    * accepted; the UI shows both accepted and sent as "Sent".
+   * Unconfirmed: the whole text went out but the phone never answered, so it may have sent.
    */
-  status: "received" | "pending" | "accepted" | "sent" | "failed";
+  status: "received" | "pending" | "accepted" | "sent" | "failed" | "unconfirmed";
   /**
    * The MAP message type the phone reported (SMS_GSM, SMS_CDMA, MMS, EMAIL, IM), for telling
    * iMessage (IM) from a plain text. Null for history from before tug stored it, and for sends.
    */
   msgType: string | null;
+  /**
+   * Texts from before this one may be missing: it came in a catch-up where every text the phone
+   * listed was new, so older ones from while tug was away may only be on the iPhone.
+   */
+  gapBefore: boolean;
 }
 
 export interface Contact {
@@ -242,6 +258,8 @@ export interface UiSettings {
   appIcons: boolean;
   /** A Windows pop-up when the iPhone's battery drops to 20% and 10%. */
   lowBattery: boolean;
+  /** tug's pop-ups play the Windows sound (read by the backend, `toast/mod.rs`). */
+  popupSound: boolean;
   /** Experimental Call buttons. Only a successful hands-free check (Settings › iPhone) turns them on. */
   dialing: boolean;
   /** Texts from unknown senders go to their own list in Messages: no badge, no pop-up (codes still pop up). */
@@ -277,6 +295,8 @@ export interface ToastSpec {
 export interface ToastPressed {
   kind: "open" | "read" | "replied" | "copied" | "calledBack";
   id: number;
+  /** A reply: the text as stored (same row as its `message` events); null for other presses. */
+  message: SmsMessage | null;
 }
 
 // --- Spotify connector (mirrors src-tauri/src/spotify/{mod,model}.rs) ---
@@ -286,6 +306,11 @@ export interface SpotifyStatus {
   connected: boolean;
   /** The connected account's display name, when connected. */
   account: string | null;
+  /**
+   * Connected before tug asked for a scope it now needs (Your top, Recent, Add to playlist), so
+   * those need a reconnect. Optional only so the store's initial value needn't name it.
+   */
+  needsReconnect?: boolean;
 }
 
 /** One of the user's own or followed playlists. */
@@ -398,7 +423,12 @@ export interface SpotifyPlayer {
   trackUri: string | null;
   /** The playing track's name, checked against the phone's title before Like is offered. */
   trackName: string | null;
+  /** The playing track's artists, "A, B" (the phone hides them on Spotify Connect). */
+  trackArtists: string | null;
+  /** The device Spotify says it is playing on (`/me/player` `device`). */
+  deviceId: string | null;
   deviceName: string | null;
+  deviceKind: string | null;
 }
 
 // --- Tugboat (src-tauri/src/tugboat/mod.rs, session.rs, qr.rs) ---
@@ -461,6 +491,8 @@ export interface TugboatStatus {
   sentText: string | null;
   /** The phone is downloading a file from the PC right now. */
   sending: boolean;
+  /** A file from the phone is arriving right now (an unfinished one may have been abandoned). */
+  receiving: boolean;
   /** Why Tugboat turned itself off. */
   ended: "idle" | "hidden" | null;
 }
@@ -637,4 +669,56 @@ export interface BtInventory {
   classicSdp: Probe<BtSdpRecord[]>;
   link: Probe<BtLinkReport>;
   audioPlayback: Probe<{ candidates: number; iphoneListed: boolean }>;
+}
+
+// ---- Developer tools (src-tauri/src/devtools) ----
+
+export type DevToolsPermissionKey =
+  | "codes"
+  | "search"
+  | "dev_notifications"
+  | "tugboat_files"
+  | "phone_status"
+  | "media"
+  | "send_text"
+  | "tugboat_send";
+
+/** One switch in Settings › Developer tools (`PermissionState`). */
+export interface DevToolsPermission {
+  key: DevToolsPermissionKey;
+  label: string;
+  on: boolean;
+}
+
+/** A tool that has used tug (`ClientRecord`). `name` is what it called itself. */
+export interface DevToolsClient {
+  name: string;
+  kind: "mcp" | "cli";
+  /** Unix ms. */
+  lastUsed: number;
+}
+
+/** The "send this text?" card (`ConfirmRequest`). */
+export interface DevToolsConfirm {
+  id: number;
+  /** Who's asking, as it named itself. */
+  tool: string;
+  toName: string;
+  toAddress: string;
+  message: string;
+  /** Unix ms after which it counts as not sent. */
+  expiresAt: number;
+}
+
+/** Everything Settings › Developer tools shows (`DevToolsStatus`). */
+export interface DevToolsStatus {
+  enabled: boolean;
+  permissions: DevToolsPermission[];
+  clients: DevToolsClient[];
+  /** Full path of the tug command (`...\bin\tug.exe`), or null if it isn't installed. */
+  cliPath: string | null;
+  cliDir: string | null;
+  onPath: boolean;
+  bridgeRunning: boolean;
+  pending: DevToolsConfirm | null;
 }

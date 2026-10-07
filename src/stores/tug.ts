@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
 import {
@@ -18,7 +18,7 @@ import {
   type Conversation,
   type Thread,
 } from "../lib/format";
-import { replyAddress, toastSpec } from "../lib/toastSpec";
+import { replyAddress, replyReadsConversation, toastSpec } from "../lib/toastSpec";
 import { shouldPopUp, type PopupEvent } from "../lib/popup";
 import { isVip, vipIndex } from "../lib/vips";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
@@ -29,6 +29,10 @@ import { MESSAGES_APP } from "../lib/format";
 import { batteryAlert } from "../lib/battery";
 import { copyText } from "../lib/clipboard";
 import { isAddressLike, normalizeAddress } from "../lib/address";
+import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync } from "../lib/messageSync";
+import { canSeeWindow } from "../lib/attention";
+import { grantedOnceCache } from "../lib/permission";
+import { arrivedDuringGap, GAP_COLLECT_MS, gapSummaryText, planGapPopups } from "../lib/reconnectPopups";
 import type { ToastSpec } from "../types/protocol";
 import { isKnownConversation, outgoingAddresses, senderIndex, senderMayToast, threadCounts } from "../lib/senders";
 import type {
@@ -51,9 +55,28 @@ import type {
   UiSettings,
 } from "../types/protocol";
 import { bestTrack, nextRepeat, sameSong } from "../lib/spotify";
+import {
+  activeFromDevices,
+  activeFromPlayer,
+  currentDevice,
+  phoneDevice,
+  pickerLabel,
+  pickerRows,
+  playingOnLine,
+  trackLines,
+  type PlaybackDevice,
+} from "../lib/playback";
 import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
+import {
+  CHECKING_MAX_MS,
+  phoneSwitches,
+  switchCheckDue,
+  switchesPending as anySwitchPending,
+  type SwitchContext,
+} from "../lib/phoneSwitches";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 import { useTugboatStore } from "./tugboat";
+import { useDevToolsStore } from "./devtools";
 
 /** The Spotify panel's tabs. */
 export type SpotifyTab = "search" | "playlists" | "recent" | "top" | "queue";
@@ -67,8 +90,10 @@ const DEFAULT_QUIET_HOURS = { enabled: false, start: "22:00", end: "07:00", days
 const SPOTIFY_NO_PHONE = "Open Spotify on your iPhone.";
 /** How long to wait for Spotify to open on the iPhone before giving up. */
 const SPOTIFY_WAIT_MS = 60_000;
+/** How long Spotify takes to report a transfer before tug re-reads where it is playing. */
+const SPOTIFY_TRANSFER_SETTLE_MS = 1_500;
 
-export type SettingsSection = "general" | "iphone" | "notifications" | "connectors" | "weather" | "privacy" | "about";
+export type SettingsSection = "general" | "iphone" | "notifications" | "connectors" | "weather" | "developer" | "privacy" | "about";
 const SEEN_KEEP = 300;
 /** How many cleared-code message ids to remember (they expire from the Feed in minutes anyway). */
 const CLEARED_CODES_KEEP = 200;
@@ -82,6 +107,10 @@ const CODE_TOAST_WINDOW_MS = 10 * 60 * 1000;
 const CODE_TEXT_TOAST_BASE = 1_000_000_000;
 /** The low-battery pop-up's toast id: outside notification and code-text ids, so a press only opens tug. */
 const BATTERY_TOAST_ID = 2_000_000_000;
+/** The "N more notifications" pop-up (the limiter's overflow): outside notification ids, a press opens tug. */
+const OVERFLOW_TOAST_ID = 2_000_000_001;
+/** The "arrived while your iPhone was reconnecting" summary pop-up: likewise, a press opens tug. */
+const GAP_TOAST_ID = 2_000_000_002;
 
 const EMPTY_STATUS: DeviceStatus = {
   radio: "unknown",
@@ -100,6 +129,7 @@ const EMPTY_STATUS: DeviceStatus = {
   messagesError: null,
   contactsError: null,
   contactsShared: false,
+  contactsOff: false,
   textsPairing: "unknown",
   textsDevice: null,
   liveTexts: "off",
@@ -119,6 +149,9 @@ const EMPTY_NOW_PLAYING: NowPlaying = {
   repeat: null,
   available: [],
 };
+
+/** A send the iPhone didn't take; the message stays in the conversation with Retry. */
+const NOT_SENT = "Your iPhone didn't send that text. Use Retry when it's nearby.";
 
 export const useTugStore = defineStore("tug", () => {
   const status = ref<DeviceStatus>(EMPTY_STATUS);
@@ -145,6 +178,7 @@ export const useTugStore = defineStore("tug", () => {
     closeToTray: true,
     appIcons: true,
     lowBattery: true,
+    popupSound: true,
     dialing: false,
     filterUnknown: true,
     knownSenders: [],
@@ -176,6 +210,10 @@ export const useTugStore = defineStore("tug", () => {
   const spotifyConnecting = ref(false);
   /** The "Play on" target: a chosen device, or null for the iPhone (the default). */
   const spotifyDevice = ref<SpotifyDevice | null>(null);
+  /** Spotify's device list, read when the "Play on" picker opens and after a transfer. */
+  const spotifyDevices = ref<SpotifyDevice[]>([]);
+  /** Where Spotify's API last said music is playing (devices list or player read, whichever came last). */
+  const spotifyApiDevice = ref<PlaybackDevice | null>(null);
 
   /** Who counts as a known sender (contacts, numbers you've texted, ones you moved), for Filter unknown senders. */
   const senders = computed(() => senderIndex(contacts.value, outgoingAddresses(messages.value), settings.value.knownSenders));
@@ -324,6 +362,7 @@ export const useTugStore = defineStore("tug", () => {
       spotifyPanelOpen.value ||
       whatsNewOpen.value ||
       useTugboatStore().open ||
+      !!useDevToolsStore().confirm ||
       !!pairingRequest.value ||
       !!ringing.value,
   );
@@ -339,8 +378,59 @@ export const useTugStore = defineStore("tug", () => {
   }
   let watchRenew: number | undefined;
   const pageVisible = ref(document.visibilityState === "visible");
+  const windowFocused = ref(document.hasFocus());
+  /**
+   * Someone can see the main view right now: the window is shown, focused and nothing covers it
+   * (lib/attention). Marking a conversation seen waits for this, so texts that land while tug sits
+   * in the tray on the Messages tab still count as unread (tray, taskbar dot, badge).
+   */
+  const canSee = computed(() =>
+    canSeeWindow({ visibility: pageVisible.value ? "visible" : "hidden", focused: windowFocused.value, overlayOpen: overlayOpen.value }),
+  );
+  const onWindowBlur = () => {
+    windowFocused.value = false;
+    leftWindow();
+  };
+  const onWindowFocus = () => {
+    windowFocused.value = true;
+    cameBack();
+    checkSwitches();
+  };
   // Registered in init() and removed in dispose(), so it's torn down with the rest (see teardown).
-  const onVisibilityChange = () => (pageVisible.value = document.visibilityState === "visible");
+  const onVisibilityChange = () => {
+    pageVisible.value = document.visibilityState === "visible";
+    if (document.hidden) leftWindow();
+    else {
+      cameBack();
+      // tug coming to the front is when a switch flipped on the phone should show: check now.
+      checkSwitches();
+    }
+  };
+
+  /**
+   * Since when tug has been out of sight (hidden in the tray, minimized or unfocused); null while
+   * it's in front. Coming back after a while re-reads the newest texts and adds any the window
+   * never got an event for (lib/messageSync), so a missed event can't leave a text out of its
+   * conversation until a restart. Cheap: one local read of RESYNC_LIMIT rows, at most once per return.
+   */
+  let awaySince: number | null = document.hidden || !document.hasFocus() ? Date.now() : null;
+  function leftWindow() {
+    awaySince ??= Date.now();
+  }
+  function cameBack() {
+    if (document.hidden) return;
+    const due = shouldResync(awaySince, Date.now());
+    awaySince = null;
+    if (!due || !messagesReady) return;
+    void api
+      .listMessages(RESYNC_LIMIT)
+      .then((list) => addMissingMessages(settledMessages(list, Date.now()), "recent texts"))
+      .catch(() => undefined);
+    // Notifications too: a missed `notification` or `notification-removed` event would otherwise
+    // leave one out of the Feed, or still showing after it was cleared on the phone (removedAt,
+    // live), until a restart.
+    void refreshLoadedNotifications();
+  }
   // The switches get flipped on the phone, with tug on any screen or in the tray. So for the
   // first minutes after launch or pairing, check fast whenever one is still off, too.
   const FRESH_MS = 5 * 60 * 1000;
@@ -357,10 +447,43 @@ export const useTugStore = defineStore("tug", () => {
       freshTimer = window.setTimeout(() => (fresh.value = false), FRESH_MS);
     },
   );
-  const switchesPending = computed(() => {
-    const s = status.value;
-    return !!s.device && (!s.services.notifications || !s.services.messages || contacts.value.length === 0);
-  });
+  // When answers about the switches became possible, so "Checking…" is bounded (CHECKING_MAX_MS)
+  // and never shows forever. `switchNow` ticks once more at the bound to flip it.
+  const connectedSince = ref<number | null>(null);
+  const messagesSince = ref<number | null>(null);
+  const switchNow = ref(Date.now());
+  let switchTimer: number | undefined;
+  function markSince(target: typeof connectedSince, up: boolean) {
+    if (up === (target.value != null)) return;
+    target.value = up ? Date.now() : null;
+    switchNow.value = Date.now();
+    window.clearTimeout(switchTimer);
+    switchTimer = window.setTimeout(() => (switchNow.value = Date.now()), CHECKING_MAX_MS + 250);
+  }
+  watch(() => status.value.connection === "connected", (up) => markSince(connectedSince, up), { immediate: true });
+  watch(() => status.value.services.messages, (up) => markSince(messagesSince, up), { immediate: true });
+  const switchContext = computed<SwitchContext>(() => ({
+    now: switchNow.value,
+    connectedSince: connectedSince.value,
+    messagesSince: messagesSince.value,
+    savedContacts: contacts.value.length,
+  }));
+  /** The iPhone's three switches: the one source every surface reads (card, health, nudge, copy). */
+  const switches = computed(() => phoneSwitches(status.value, switchContext.value));
+  // Not "no contacts saved": names kept from before a re-pair hid a Sync Contacts that was off.
+  const switchesPending = computed(() => !!status.value.device && anySwitchPending(switches.value));
+  /**
+   * Ask the phone about its switches now (window to the front, "Check again"). At most one per
+   * SWITCH_CHECK_GAP_MS: focus and visibility both fire on the same return.
+   */
+  let lastSwitchCheck: number | null = null;
+  function checkSwitches() {
+    if (!status.value.device) return;
+    const now = Date.now();
+    if (!switchCheckDue(lastSwitchCheck, now)) return;
+    lastSwitchCheck = now;
+    void api.checkSwitches().catch(() => undefined);
+  }
   /**
    * The Connect panel is on screen and tug is visible: the Feed stand-in (showConnect) outside
    * Settings, or Settings › iPhone. The same component shows in both places; watching keys off its
@@ -456,23 +579,44 @@ export const useTugStore = defineStore("tug", () => {
     return true;
   }
 
-  // Windows notification permission: ask once per launch, not on every notification.
-  let toastPermission: boolean | null = null;
+  /**
+   * Add any of these stored texts the window doesn't have (never overwriting one it has; see
+   * lib/messageSync). Texts normally arrive as `message` events, so finding one missing means an
+   * event never reached the window: say so in the log (counts only), next to the backend's account.
+   */
+  function addMissingMessages(list: SmsMessage[], what: string) {
+    const add = missingMessages(messages.value, list);
+    if (!add.length) return;
+    messages.value = [...messages.value, ...add].sort(byArrival);
+    void api.logFrontendError("note", "MissedText", `${what} missing from the window (${add.length}); added`, "").catch(() => undefined);
+  }
+
   const toasts = new ToastLimiter();
   let toastSummary: number | undefined;
-  /** Windows will show pop-ups (permission granted). The settings policy is `shouldPopUp`. */
-  async function hasToastPermission(): Promise<boolean> {
-    if (toastPermission === null) {
-      toastPermission = (await isPermissionGranted()) || (await requestPermission()) === "granted";
-    }
-    return toastPermission;
-  }
+  /**
+   * Windows will show pop-ups (permission granted). The settings policy is `shouldPopUp`. A grant is
+   * remembered for the launch; a refusal is asked again, so turning tug's notifications on in
+   * Windows Settings works without a restart (lib/permission).
+   */
+  const hasToastPermission = grantedOnceCache(
+    async () => (await isPermissionGranted()) || (await requestPermission()) === "granted",
+  );
+
+  /**
+   * Resolves once the saved settings and contacts are loaded. Listeners go in before the startup
+   * reads (so no event is lost), which left a notification arriving in the first moments of a
+   * launch judged against the defaults: muted apps, quiet hours, VIPs and known senders not yet
+   * known. Every pop-up decision waits for this.
+   */
+  let markReady: () => void = () => undefined;
+  let ready = new Promise<void>((resolve) => (markReady = resolve));
   /** Whether the settings let a pop-up through right now, for a given event (see lib/popup). */
   const popupAllowed = (event: PopupEvent) => shouldPopUp(event, settings.value, new Date());
 
   // Low phone battery: one pop-up at 20% and one at 10% per discharge (see lib/battery).
   let batteryAlerted: number | null = null;
   async function checkBattery(level: number | null) {
+    await ready;
     const r = batteryAlert(level, batteryAlerted);
     // An alert that couldn't be shown (switch off, Do not disturb…) isn't used up: it comes
     // when it can. Only a shown alert (or a charge, which resets it) moves the mark.
@@ -480,7 +624,7 @@ export const useTugStore = defineStore("tug", () => {
       batteryAlerted = r.alerted;
       return;
     }
-    // A low-battery alert is a system pop-up (no app, no VIP): held by Windows alerts off, DND or
+    // A low-battery alert is a system pop-up (no app, no VIP): held by Windows pop-ups off, DND or
     // quiet hours, like any other.
     if (!settings.value.lowBattery) return;
     if (!popupAllowed({ appId: "", isCall: false, isVip: false }) || !(await hasToastPermission())) return;
@@ -499,7 +643,8 @@ export const useTugStore = defineStore("tug", () => {
       callBack: false,
       clear: false,
     };
-    api.showToast(spec).catch(() => sendNotification({ title: spec.title, body: spec.body }));
+    // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
+    void api.showToast(spec).catch(() => undefined);
   }
 
   // A one-time code shouldn't pop up twice when it arrives on both an ANCS notification and a MAP
@@ -521,19 +666,60 @@ export const useTugStore = defineStore("tug", () => {
       toastSummary = window.setTimeout(() => {
         toastSummary = undefined;
         const held = toasts.takeHeld();
-        if (held > 0) sendNotification({ title: "tug", body: `${held} more notification${held === 1 ? "" : "s"}` });
+        // Through tug's own toast: the generic notification call never showed on the test PC.
+        if (held > 0) showInfoToast(OVERFLOW_TOAST_ID, "tug", `${held} more notification${held === 1 ? "" : "s"}`);
       }, toasts.windowMs);
     }
     return false;
   }
 
-  async function maybeToast(n: PhoneNotification) {
-    if (n.flags.silent || n.flags.preExisting) return;
+  /** A pop-up that only says something; pressing it opens tug (its id matches no notification). */
+  function showInfoToast(id: number, title: string, body: string) {
+    const spec: ToastSpec = { id, title, body, name: "", replyTo: null, markRead: false, code: null, callBack: false, clear: false };
+    void api.showToast(spec).catch(() => undefined);
+  }
+
+  /** The settings let this notification pop up (sender filter, muted apps, DND, quiet hours, VIPs). */
+  function popupEligible(n: PhoneNotification): boolean {
+    if (n.flags.silent) return false;
     // Unknown senders wait quietly in their own list, unless the text carries a one-time code.
-    if (settings.value.filterUnknown && !senderMayToast(n, senders.value)) return;
+    if (settings.value.filterUnknown && !senderMayToast(n, senders.value)) return false;
     // Settings policy: muted apps, Do not disturb, quiet hours, VIP let-through, call handling.
+    return popupAllowed(popupEventFor(n));
+  }
+
+  /**
+   * Since when the iPhone link has been lost (set when a connection drops, kept through the
+   * reconnect); null until an outage is seen this launch. Replayed notifications new to tug and
+   * posted after it arrived during the gap and may pop up (lib/reconnectPopups).
+   */
+  let linkLostAt: number | null = null;
+  let gapQueue: PhoneNotification[] = [];
+  let gapTimer: number | undefined;
+  /** Collect the replay's gap arrivals briefly, then pop up a few one by one or sum many up once. */
+  function queueGapPopup(n: PhoneNotification) {
+    gapQueue.push(n);
+    if (gapTimer !== undefined) return;
+    gapTimer = window.setTimeout(async () => {
+      gapTimer = undefined;
+      await ready;
+      const items = gapQueue.filter(popupEligible);
+      gapQueue = [];
+      const plan = planGapPopups(items);
+      if (plan.kind === "each") {
+        for (const x of plan.items) void maybeToast(x, { replayed: true });
+        return;
+      }
+      void hasToastPermission().then((ok) => ok && showInfoToast(GAP_TOAST_ID, "tug", gapSummaryText(plan.count)));
+    }, GAP_COLLECT_MS);
+  }
+
+  async function maybeToast(n: PhoneNotification, { replayed = false } = {}) {
+    await ready;
+    // Pre-existing is backlog, except a gap arrival replayed after a reconnect (queueGapPopup).
+    if (n.flags.preExisting && !replayed) return;
+    if (!popupEligible(n)) return;
     const event = popupEventFor(n);
-    if (!popupAllowed(event)) return;
     const code = findCode(n.message || n.subtitle)?.code ?? null;
     if (code !== null && recentlyCodeToasted(code)) return; // a text pop-up already carried this code
     // Claim the code before awaiting: the notification and the text for one code can arrive in the
@@ -544,7 +730,8 @@ export const useTugStore = defineStore("tug", () => {
     // With buttons for what applies (reply, mark read, copy code, call back, clear); the
     // backend falls back to a plain pop-up itself if Windows won't take that one.
     const spec = toastSpec(n, messages.value, contacts.value);
-    api.showToast(spec).catch(() => sendNotification({ title: spec.title, body: spec.body }));
+    // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
+    void api.showToast(spec).catch(() => undefined);
   }
 
   /**
@@ -554,6 +741,7 @@ export const useTugStore = defineStore("tug", () => {
    * on — the backend copies the code itself, and a code text has nothing to clear in the Feed.
    */
   async function maybeToastMessage(m: SmsMessage) {
+    await ready;
     const code = codeToastForMessage(m, notifications.value, { contacts: contacts.value });
     if (code === null || recentlyCodeToasted(code)) return;
     // A code text obeys the same policy as a notification carrying a code (Messages app, no call).
@@ -575,7 +763,8 @@ export const useTugStore = defineStore("tug", () => {
       callBack: false,
       clear: false,
     };
-    api.showToast(spec).catch(() => sendNotification({ title: spec.title, body: spec.body }));
+    // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
+    void api.showToast(spec).catch(() => undefined);
   }
 
   /**
@@ -583,7 +772,11 @@ export const useTugStore = defineStore("tug", () => {
    * reply, copied the code, asked the phone to call back). Bring tug's own state along,
    * the same way the in-app buttons do.
    */
-  function onToastPressed({ kind, id }: ToastPressed) {
+  function onToastPressed({ kind, id, message }: ToastPressed) {
+    // A reply carries the text as stored: the conversation shows it even if its events never came.
+    if (message) addMissingMessages([message], "pop-up reply");
+    // A reply the phone didn't take (failed, or not confirmed) leaves the conversation unread.
+    if (kind === "replied" && !replyReadsConversation(message)) return;
     const n = notifications.value.find((x) => x.id === id);
     if (!n) return;
     if (kind === "open") {
@@ -660,18 +853,21 @@ export const useTugStore = defineStore("tug", () => {
    * a new text from them starts the conversation again.
    */
   async function deleteConversation(c: { key: string; contact: string; addresses: string[]; notifications: PhoneNotification[] }) {
-    const gone = new Set(c.notifications.map((n) => n.id));
-    const removedNotifications = notifications.value.filter((n) => gone.has(n.id));
+    // The backend hides the whole conversation by sender and address, not just the rows loaded
+    // here (the newest pages), so its older part can't come back in Feed scroll or search.
+    const senders = [...new Map(c.notifications.map((n) => [`${n.appId}\u0000${n.title}`, [n.appId, n.title] as [string, string]])).values()];
+    const keys = new Set(c.notifications.map(threadKey));
+    const removedNotifications = notifications.value.filter((n) => keys.has(threadKey(n)));
     const removedMessages = messages.value.filter((m) => c.addresses.includes(m.address));
-    const nIds = removedNotifications.map((n) => n.id);
-    const mIds = removedMessages.map((m) => m.id);
+    let at: number;
     try {
-      await api.setHidden(nIds, mIds, true);
+      at = await api.setConversationHidden(senders, c.addresses, null);
     } catch (e) {
       notify("error", errorMessage(e));
       return;
     }
-    const hiddenMessages = new Set(mIds);
+    const gone = new Set(removedNotifications.map((n) => n.id));
+    const hiddenMessages = new Set(removedMessages.map((m) => m.id));
     notifications.value = notifications.value.filter((n) => !gone.has(n.id));
     messages.value = messages.value.filter((m) => !hiddenMessages.has(m.id));
     if (selectedThread.value === c.key) selectedThread.value = null;
@@ -680,10 +876,10 @@ export const useTugStore = defineStore("tug", () => {
       run: () => {
         flash.value = null;
         void attempt(async () => {
-          await api.setHidden(nIds, mIds, false);
+          await api.setConversationHidden(senders, c.addresses, at);
           for (const n of removedNotifications) upsert(notifications.value, n);
           for (const m of removedMessages) upsertMessage(m);
-          messages.value.sort((a, b) => a.receivedAt - b.receivedAt || a.id - b.id);
+          messages.value.sort(byArrival);
           selectedThread.value = c.key;
         });
       },
@@ -894,6 +1090,7 @@ export const useTugStore = defineStore("tug", () => {
       muteCalls: raw["ui.muteCalls"] === "true",
       closeToTray: raw["ui.closeToTray"] !== "false",
       lowBattery: raw["ui.lowBattery"] !== "false",
+      popupSound: raw["ui.popupSound"] !== "false",
       appIcons: raw["ui.appIcons"] !== "false",
       dialing: raw["ui.dialing"] === "true",
       filterUnknown: raw["ui.filterUnknown"] !== "false",
@@ -970,7 +1167,13 @@ export const useTugStore = defineStore("tug", () => {
     if (started) return;
     started = true;
     document.addEventListener("visibilitychange", onVisibilityChange);
-    teardown.push(() => document.removeEventListener("visibilitychange", onVisibilityChange));
+    window.addEventListener("blur", onWindowBlur);
+    window.addEventListener("focus", onWindowFocus);
+    teardown.push(() => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("blur", onWindowBlur);
+      window.removeEventListener("focus", onWindowFocus);
+    });
     teardown.push(
       installZoomShortcuts(
         () => zoom.value,
@@ -985,6 +1188,8 @@ export const useTugStore = defineStore("tug", () => {
       ...(await Promise.all([
         on("device-status", (s) => {
           const wasConnected = status.value.connection === "connected";
+          // The start of an outage: what's posted after it and replayed on reconnect is a gap arrival.
+          if (wasConnected && s.connection !== "connected") linkLostAt = Date.now();
           if (s.battery !== status.value.battery) void checkBattery(s.battery);
           status.value = s;
           // Notification UIDs die with the connection, so nothing stays actionable.
@@ -998,8 +1203,10 @@ export const useTugStore = defineStore("tug", () => {
         }),
         on("notification", (n) => {
           const added = upsert(notifications.value, n);
-          if (view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
-          if (added) void maybeToast(n);
+          // Seen only if someone is looking (MessageThreads marks the one on screen on coming back).
+          if (canSee.value && view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
+          if (added && arrivedDuringGap(n, linkLostAt, Date.now())) queueGapPopup(n);
+          else if (added) void maybeToast(n);
         }),
         on("notification-removed", (id) => {
           const n = notifications.value.find((x) => x.id === id);
@@ -1028,6 +1235,7 @@ export const useTugStore = defineStore("tug", () => {
         on("pairing-request", (req) => (pairingRequest.value = req)),
         on("pairing-request-closed", () => (pairingRequest.value = null)),
         on("open-latest-conversation", openLatestConversation),
+        on("open-settings", () => openSettings()),
         on("toast-pressed", onToastPressed),
       ])),
     );
@@ -1042,10 +1250,7 @@ export const useTugStore = defineStore("tug", () => {
     if (calls.value.length === 0) calls.value = recent;
     // Merge rather than replace: events may have arrived while these loaded.
     for (const n of first) upsert(notifications.value, n);
-    const live = new Set(messages.value.map((m) => m.id));
-    messages.value = [...msgs.filter((m) => !live.has(m.id)), ...messages.value].sort(
-      (a, b) => a.receivedAt - b.receivedAt || a.id - b.id,
-    );
+    messages.value = [...missingMessages(messages.value, msgs), ...messages.value].sort(byArrival);
     if (contacts.value.length === 0) contacts.value = people;
     status.value = s;
     statusKnown.value = true;
@@ -1056,8 +1261,13 @@ export const useTugStore = defineStore("tug", () => {
     // Let code rows age out of the Feed's recency window even when nothing else changes.
     clockTimer = window.setInterval(() => (clock.value = Date.now()), 60_000);
     await attempt(loadSettings);
+    // Settings and contacts are in: pop-ups held since the listeners went in can be judged now.
+    markReady();
     // Settings are in (so lastSeenVersion is known): decide whether to greet with "What's new".
     void checkWhatsNew();
+    // A phone that's already low when tug starts gets its alert now, not one step later:
+    // device-status only checks when the level changes, and the first status set it silently.
+    void checkBattery(status.value.battery);
     void loadSpotify();
   }
 
@@ -1067,6 +1277,9 @@ export const useTugStore = defineStore("tug", () => {
     // Everything with a lifetime gets cleared here, so init() can be called again cleanly (a
     // remount or dev hot-reload) without a leaked timer firing or an interval double-polling.
     window.clearTimeout(toastSummary);
+    window.clearTimeout(gapTimer);
+    gapTimer = undefined;
+    gapQueue = [];
     spotifyWait++;
     window.clearTimeout(freshTimer);
     window.clearTimeout(spotifySongTimer);
@@ -1074,10 +1287,15 @@ export const useTugStore = defineStore("tug", () => {
     window.clearTimeout(flashTimer);
     window.clearInterval(watchRenew);
     window.clearInterval(clockTimer);
+    window.clearTimeout(switchTimer);
+    window.clearTimeout(transferCheck);
+    transferCheck = undefined;
+    lastSwitchCheck = null;
     toastSummary = undefined;
     watchRenew = undefined;
     clockTimer = undefined;
     messagesReady = false;
+    ready = new Promise<void>((resolve) => (markReady = resolve));
     started = false;
   }
 
@@ -1191,12 +1409,47 @@ export const useTugStore = defineStore("tug", () => {
     playlists.value = [];
     spotifyPlayer.value = null;
     spotifyDevice.value = null;
+    spotifyDevices.value = [];
+    spotifyApiDevice.value = null;
   }
 
-  /** The current "Play on" target id for playback calls (null = the iPhone default). */
-  const spotifyTargetId = computed(() => spotifyDevice.value?.id ?? null);
-  /** The name of the current target, for messages ("Playing on <device>"). */
-  const spotifyTargetName = computed(() => spotifyDevice.value?.name ?? status.value.device?.name ?? "your iPhone");
+  /** The song as it should read (never "Listening on <device>" as the artist; see lib/playback). */
+  const trackView = computed(() =>
+    trackLines(nowPlaying.value, spotifyActive.value && spotifyPlayer.value ? spotifyPlayer.value : null),
+  );
+  /** Where music is really playing: Spotify's API first, the phone's "Listening on" hint as the fallback. */
+  const spotifyCurrentDevice = computed(() =>
+    currentDevice(spotify.value.connected ? spotifyApiDevice.value : null, trackView.value.hint, spotifyDevices.value),
+  );
+  /** "on Kitchen speaker" for Now Playing when music plays away from the iPhone (same name as the picker). */
+  const playingOn = computed(() => playingOnLine(spotifyCurrentDevice.value));
+  /** The "Play on" list, with "Current" on the device that is playing. */
+  const spotifyPickerRows = computed(() =>
+    pickerRows(spotifyDevices.value, spotifyCurrentDevice.value, status.value.device?.name ?? null),
+  );
+  /** The current "Play on" target id for playback calls: where music is playing, else the chosen device (null = the iPhone). */
+  const spotifyTargetId = computed(() => spotifyCurrentDevice.value?.id ?? spotifyDevice.value?.id ?? null);
+  /** The picker's label and the name in messages ("Playing on <device>"): always Spotify's name for it. */
+  const spotifyTargetName = computed(() => pickerLabel(spotifyPickerRows.value, spotifyDevice.value));
+
+  /** Re-read Spotify's devices (the picker opening): the list and which one is active. */
+  async function refreshSpotifyDevices(): Promise<void> {
+    if (!spotify.value.connected) return;
+    try {
+      const list = await api.spotifyDevices();
+      spotifyDevices.value = list;
+      spotifyApiDevice.value = activeFromDevices(list);
+    } catch (e) {
+      notify("error", errorMessage(e));
+    }
+  }
+  /** Spotify accepted a transfer: show it there now, then confirm with Spotify once it has caught up. */
+  let transferCheck: number | undefined;
+  function afterTransfer(device: SpotifyDevice) {
+    spotifyApiDevice.value = { id: device.id, name: device.name, kind: device.kind };
+    window.clearTimeout(transferCheck);
+    transferCheck = window.setTimeout(() => void refreshSpotifyDevices(), SPOTIFY_TRANSFER_SETTLE_MS);
+  }
 
   /** Bumped to cancel a pending "start when Spotify opens on the iPhone". */
   let spotifyWait = 0;
@@ -1321,29 +1574,29 @@ export const useTugStore = defineStore("tug", () => {
       // Move what's playing back to the iPhone now, not just the next play (prefer the paired
       // phone by name among Spotify's smartphones).
       const devices = await api.spotifyDevices().catch(() => [] as SpotifyDevice[]);
-      const phones = devices.filter((d) => d.kind.toLowerCase() === "smartphone");
-      const name = status.value.device?.name?.toLowerCase();
-      const phone = phones.find((d) => d.name.toLowerCase() === name) ?? phones[0];
+      if (devices.length) spotifyDevices.value = devices;
+      const phone = phoneDevice(devices, status.value.device?.name);
       if (!phone) {
         notify("info", "Open Spotify on your iPhone to move the music there.");
         return true;
       }
       if (phone.isActive) {
-        notify("info", "Playing on your iPhone.");
+        spotifyApiDevice.value = { id: phone.id, name: phone.name, kind: phone.kind };
+        notify("info", `Playing on ${phone.name}.`);
         return true;
       }
       const ok = await attempt(() => api.spotifyTransfer(phone.id).then(() => true));
       if (ok === true) {
-        notify("info", "Playing on your iPhone.");
-        void refreshSpotifyPlayer();
+        afterTransfer(phone);
+        notify("info", `Playing on ${phone.name}.`);
       }
       return ok === true;
     }
     const ok = await attempt(() => api.spotifyTransfer(device.id).then(() => true));
     if (ok === true) {
       spotifyDevice.value = device;
+      afterTransfer(device);
       notify("info", `Playing on ${device.name}.`);
-      void refreshSpotifyPlayer();
     }
     return ok === true;
   }
@@ -1359,6 +1612,8 @@ export const useTugStore = defineStore("tug", () => {
     // A transient read failure shouldn't nag; the next song or action reads again.
     try {
       spotifyPlayer.value = await api.spotifyPlayer();
+      // Spotify's own word on where it's playing (null: nothing active).
+      spotifyApiDevice.value = activeFromPlayer(spotifyPlayer.value);
     } catch {
       /* ignore */
     }
@@ -1410,7 +1665,7 @@ export const useTugStore = defineStore("tug", () => {
   const SPOTIFY_RECHECK_MS = 3_000;
   /** The snapshot is the song the phone is playing (so its art and Like belong to it). */
   const spotifyTrackVerified = computed(
-    () => sameSong(spotifyPlayer.value?.trackName, nowPlaying.value.title) === true,
+    () => sameSong(spotifyPlayer.value?.trackName, trackView.value.title) === true,
   );
   let spotifyReadFor = "";
   const songKey = () => `${nowPlaying.value.title}|${nowPlaying.value.artist}`;
@@ -1445,6 +1700,7 @@ export const useTugStore = defineStore("tug", () => {
       cancelSongRead();
       if (!spotifyActive.value) {
         spotifyPlayer.value = null;
+        spotifyApiDevice.value = null;
         spotifyReadFor = "";
       }
     },
@@ -1454,6 +1710,9 @@ export const useTugStore = defineStore("tug", () => {
   return {
     status,
     statusKnown,
+    switches,
+    switchContext,
+    checkSwitches,
     nowPlaying,
     // Spotify connector
     spotify,
@@ -1465,7 +1724,13 @@ export const useTugStore = defineStore("tug", () => {
     spotifyPanelOpen,
     spotifyPanelTab,
     spotifyDevice,
+    spotifyDevices,
+    spotifyPickerRows,
+    spotifyCurrentDevice,
     spotifyTargetName,
+    refreshSpotifyDevices,
+    trackView,
+    playingOn,
     loadSpotify,
     loadPlaylists,
     connectSpotify,
@@ -1519,6 +1784,7 @@ export const useTugStore = defineStore("tug", () => {
     hideCall,
     respondToCall,
     overlayOpen,
+    canSee,
     settingsSection,
     openSettings,
     closeSettings,
@@ -1559,15 +1825,32 @@ export const useTugStore = defineStore("tug", () => {
     clearCode,
     deleteConversation,
     appNameFor,
-    /** Send through the iPhone. The pending message appears via the `message` event. */
-    async sendMessage(address: string, text: string): Promise<boolean> {
+    /**
+     * Send through the iPhone. The pending message appears via the `message` event. "failed" means
+     * it's shown as "Not sent" with Retry (so the composer shouldn't keep the text too); "error"
+     * means nothing was recorded, so the composer keeps the text.
+     */
+    async sendMessage(address: string, text: string): Promise<"sent" | "failed" | "error"> {
       try {
-        await api.sendMessage(address, text);
-        return true;
+        const m = await api.sendMessage(address, text);
+        if (m.status !== "failed") return "sent";
+        notify("error", NOT_SENT);
+        return "failed";
       } catch (e) {
         notify("error", errorMessage(e));
-        return false;
+        return "error";
       }
+    },
+    /** Try a failed send again: the same message, to the number it was meant for. */
+    async retryMessage(id: number): Promise<boolean> {
+      try {
+        const m = await api.retryMessage(id);
+        if (m.status !== "failed") return true;
+        notify("error", NOT_SENT);
+      } catch (e) {
+        notify("error", errorMessage(e));
+      }
+      return false;
     },
     performAction: (id: number, positive: boolean) => attempt(() => api.performAction(id, positive)),
     /** Open a notification's web link in the default browser. Never clears the notification. */

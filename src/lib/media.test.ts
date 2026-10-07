@@ -13,6 +13,7 @@ import {
   supportsRepeat,
   supportsSkipBack,
   supportsSkipForward,
+  skipLabel,
   skipMode,
   skipTargetMs,
   type HoldTimers,
@@ -261,5 +262,14 @@ describe("createHoldRepeater", () => {
     r.start(step, () => false); // key auto-repeat / double pointer: ignored
     expect(calls).toBe(1);
     r.stop();
+  });
+});
+
+describe("skipLabel", () => {
+  it("only Spotify's exact seek says 15; the phone's skip carries no number (Podcasts jump 30)", () => {
+    expect(skipLabel("seek", "back")).toEqual({ text: "Back 15 seconds", seconds: 15 });
+    expect(skipLabel("seek", "forward")).toEqual({ text: "Forward 15 seconds", seconds: 15 });
+    expect(skipLabel("ams", "back")).toEqual({ text: "Skip back", seconds: null });
+    expect(skipLabel("ams", "forward")).toEqual({ text: "Skip forward", seconds: null });
   });
 });

@@ -146,6 +146,25 @@ const MIGRATIONS: &[&str] = &[
     UPDATE OR IGNORE contact_aliases SET alias = strip_invisible(alias) WHERE alias <> strip_invisible(alias);
     DELETE FROM contact_aliases WHERE alias <> strip_invisible(alias);
     "#,
+    // v9: texts from before this one may be missing (a catch-up after time away where the phone's
+    // short list was all new), so the conversation can say so instead of looking complete.
+    r#"
+    ALTER TABLE messages ADD COLUMN gap_before INTEGER NOT NULL DEFAULT 0;
+    "#,
+    // v10: aliases learned from group-text notifications ("Sam & Alex", "Sam, Alex & 2 others")
+    // could retitle every notification from that group as one contact. The learners skip those
+    // now; drop any already learned.
+    r#"
+    DELETE FROM contact_aliases WHERE group_like(alias);
+    "#,
+    // v11: the last 10 digits of a contact's number (`match_key`), so a text from the same number
+    // in another format (national "07700 900123" vs the contact's "+44 7700 900123") still shows
+    // the contact's name. A plain column, set on insert, so an older build can still write.
+    r#"
+    ALTER TABLE contacts ADD COLUMN match_key TEXT;
+    UPDATE contacts SET match_key = match_key(address);
+    CREATE INDEX contacts_match_key ON contacts (match_key);
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
@@ -165,6 +184,24 @@ pub(crate) fn clean_name(name: &str) -> String {
     name
 }
 
+/// Whether a notification title names several people, as iOS titles a group text ("Sam & Alex",
+/// "Sam, Alex & Jo", "Sam & 2 others"). Such a title is never one contact's name. Also callable from
+/// SQL as `group_like`.
+pub(crate) fn looks_like_group(title: &str) -> bool {
+    let t = clean_name(title).to_lowercase();
+    t.contains('&') || t.contains(',') || t.contains(" others")
+}
+
+/// The key that matches one phone number across formats: its last 10 digits, when it has at least
+/// 10 (emails and short codes have none, and only match exactly). Also callable from SQL.
+pub(crate) fn match_key(address: &str) -> Option<String> {
+    if address.contains('@') {
+        return None;
+    }
+    let digits: Vec<char> = address.chars().filter(char::is_ascii_digit).collect();
+    (digits.len() >= 10).then(|| digits[digits.len() - 10..].iter().collect())
+}
+
 /// How two names are compared (matching the UI's `nameKey`, format.ts): the cleaned name,
 /// lower-cased, without emoji variation selectors, so "sam ❤" and "sam ❤️" are one person.
 pub(crate) fn name_key(name: &str) -> String {
@@ -181,6 +218,12 @@ fn register_functions(conn: &Connection) -> Result<()> {
     conn.create_scalar_function("clean_name", 1, flags, |ctx| Ok(clean_name(&ctx.get::<String>(0)?)))?;
     conn.create_scalar_function("name_key", 1, flags, |ctx| {
         Ok(ctx.get::<Option<String>>(0)?.map(|s| name_key(&s)))
+    })?;
+    conn.create_scalar_function("match_key", 1, flags, |ctx| {
+        Ok(ctx.get::<Option<String>>(0)?.and_then(|s| match_key(&s)))
+    })?;
+    conn.create_scalar_function("group_like", 1, flags, |ctx| {
+        Ok(ctx.get::<Option<String>>(0)?.is_some_and(|s| looks_like_group(&s)))
     })?;
     conn.create_scalar_function("strip_invisible", 1, flags, |ctx| {
         Ok(ctx.get::<Option<String>>(0)?.map(|s| crate::text::strip_invisible(&s)))
@@ -248,6 +291,11 @@ pub struct StoredNotification {
     pub removed_at: Option<i64>,
     /// Still on the phone in the current connection, so actions can be sent.
     pub live: bool,
+    /// This upsert inserted the row: tug had never stored this notification before. False on an
+    /// update and on every read. iOS flags everything it replays after a resubscribe as
+    /// pre-existing, including what arrived while the link was down, so this is how the window
+    /// tells "new to tug" apart from "seen before, replayed" (and pops up only the former).
+    pub fresh: bool,
     /// Part of a conversation deleted in tug: kept so the phone's re-sent copy stays
     /// hidden, but never shown.
     #[serde(skip)]
@@ -325,6 +373,7 @@ impl Store {
                 .optional()?,
             None => None,
         };
+        let fresh = existing.is_none();
         let id = match existing {
             Some(id) => {
                 conn.execute(
@@ -371,9 +420,11 @@ impl Store {
                 conn.last_insert_rowid()
             }
         };
-        conn.query_row(&format!("{SELECT} WHERE n.id = ?1"), [id], |r| {
+        let mut stored = conn.query_row(&format!("{SELECT} WHERE n.id = ?1"), [id], |r| {
             map_row(r, Some(n.session))
-        })
+        })?;
+        stored.fresh = fresh;
+        Ok(stored)
     }
 
     /// Mark a notification removed from the phone. Returns its row id if known.
@@ -443,6 +494,9 @@ impl Store {
 
     /// Delete a conversation from tug (`Some(time)`), or undo that (`None`). Local only:
     /// nothing on the phone changes.
+    /// Hide (or, with `at: None`, unhide) rows by id. The app deletes whole conversations with
+    /// `set_conversation_hidden`; this is the row-level primitive the hidden-row tests use.
+    #[cfg(test)]
     pub fn set_hidden(&self, notifications: &[i64], messages: &[i64], at: Option<i64>) -> Result<()> {
         let ids = |v: &[i64]| serde_json::to_string(v).expect("ids serialize");
         let mut conn = self.conn();
@@ -454,6 +508,51 @@ impl Store {
         tx.execute(
             "UPDATE messages SET hidden_at = ?2 WHERE id IN (SELECT value FROM json_each(?1))",
             params![ids(messages), at],
+        )?;
+        tx.commit()
+    }
+
+    /// Delete a conversation from tug (`hidden: true`), or undo that delete (`hidden: false`
+    /// with the same `at`). A conversation is every notification from one of `senders`
+    /// ((app id, title) pairs, compared by app id and `name_key` of the title, so padding, case
+    /// and the inline-reply suffix don't matter) plus every text to or from one of `addresses`.
+    ///
+    /// By key rather than by row id: the window only has the newest pages loaded, and hiding
+    /// just those let the older part of a deleted conversation come back in Feed scroll and
+    /// search. Hiding stamps rows stored up to `at` that weren't already hidden; undo clears
+    /// exactly the rows stamped `at`, so an earlier delete of the same person stays deleted.
+    pub fn set_conversation_hidden(
+        &self,
+        senders: &[(String, String)],
+        addresses: &[String],
+        at: i64,
+        hidden: bool,
+    ) -> Result<()> {
+        let senders = serde_json::to_string(senders).expect("senders serialize");
+        let addresses = serde_json::to_string(addresses).expect("addresses serialize");
+        let (set, which) = if hidden {
+            ("?2", "hidden_at IS NULL AND received_at <= ?2")
+        } else {
+            ("NULL", "hidden_at = ?2")
+        };
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            &format!(
+                "UPDATE notifications SET hidden_at = {set}
+                 WHERE {which} AND EXISTS (
+                     SELECT 1 FROM json_each(?1) s
+                     WHERE json_extract(s.value, '$[0]') = notifications.app_id
+                       AND name_key(json_extract(s.value, '$[1]')) = name_key(notifications.title))"
+            ),
+            params![senders, at],
+        )?;
+        tx.execute(
+            &format!(
+                "UPDATE messages SET hidden_at = {set}
+                 WHERE {which} AND address IN (SELECT value FROM json_each(?1))"
+            ),
+            params![addresses, at],
         )?;
         tx.commit()
     }
@@ -521,6 +620,7 @@ fn map_row(r: &Row, live_session: Option<&str>) -> Result<StoredNotification> {
         negative_label: r.get(13)?,
         removed_at,
         hidden: r.get::<_, Option<i64>>(15)?.is_some(),
+        fresh: false,
     })
 }
 
@@ -589,6 +689,32 @@ mod tests {
             "a bare phrase isn't a suffix"
         );
         assert_eq!(clean_name(""), "");
+    }
+
+    #[test]
+    fn upsert_reports_whether_the_row_is_new_to_tug() {
+        let s = Store::in_memory().unwrap();
+        let replay = EventFlags {
+            pre_existing: true,
+            ..Default::default()
+        };
+        let text = attrs("com.apple.MobileSMS", "Jane", "running late");
+        // First sighting, live: new.
+        let first = insert(&s, "s1", 1, EventFlags::default(), &text);
+        assert!(first.fresh);
+        // The same UID updated in the same session: not new.
+        assert!(!insert(&s, "s1", 1, EventFlags::default(), &text).fresh);
+        // Replayed after a resubscribe (new session, new UID, same content): seen before, not new.
+        let again = insert(&s, "s2", 7, replay, &text);
+        assert_eq!(again.id, first.id);
+        assert!(!again.fresh);
+        // A text that arrived while the link was down: iOS flags it pre-existing too, but tug
+        // never stored it, so it's new.
+        let gap = insert(&s, "s2", 8, replay, &attrs("com.apple.MobileSMS", "Jane", "here now"));
+        assert!(gap.fresh);
+        assert!(gap.flags.pre_existing);
+        // Reads never claim new.
+        assert!(s.recent(10, None, None).unwrap().iter().all(|n| !n.fresh));
     }
 
     #[test]
@@ -692,6 +818,67 @@ mod tests {
         assert_ne!(name_key("sam \u{2764}"), name_key("sam"));
     }
 
+    /// Back to a real older database: undo the schema later migrations added, so they apply again.
+    fn rewind(conn: &Connection, version: i64) {
+        if version < 11 {
+            conn.execute_batch("DROP INDEX contacts_match_key; ALTER TABLE contacts DROP COLUMN match_key;")
+                .unwrap();
+        }
+        if version < 9 {
+            conn.execute_batch("ALTER TABLE messages DROP COLUMN gap_before")
+                .unwrap();
+        }
+        conn.pragma_update(None, "user_version", version).unwrap();
+    }
+
+    #[test]
+    fn match_key_is_the_last_ten_digits_of_a_real_number() {
+        assert_eq!(match_key("+447700900123").as_deref(), Some("7700900123"));
+        assert_eq!(match_key("07700900123").as_deref(), Some("7700900123"));
+        assert_eq!(match_key("+13025550173").as_deref(), Some("3025550173"));
+        assert_eq!(match_key("12345"), None, "short codes match exactly only");
+        assert_eq!(match_key("ana1234567890@example.com"), None);
+    }
+
+    #[test]
+    fn group_titles_are_recognised() {
+        for t in [
+            "Sam & Alex",
+            "Sam, Alex",
+            "Sam & 2 others",
+            "Sam, Alex & 1 other",
+            "\u{200E}Sam & Jo",
+        ] {
+            assert!(looks_like_group(t), "{t}");
+        }
+        for t in ["Sam", "zoe \u{1F49C}", "Dr Other", "Mothers Day"] {
+            assert!(!looks_like_group(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn upgrading_drops_aliases_learned_from_group_titles() {
+        let s = Store::in_memory().unwrap();
+        {
+            let conn = s.conn();
+            conn.execute_batch(
+                "INSERT INTO contact_aliases (address, alias) VALUES
+                     ('+13025550100', 'Sam & Alex'), ('+13025550100', 'Sam, Alex & 2 others'),
+                     ('+13025550100', 'Sammy');",
+            )
+            .unwrap();
+            rewind(&conn, 9);
+        }
+        migrate(&mut s.conn()).unwrap();
+        let left: Vec<String> = {
+            let conn = s.conn();
+            let mut stmt = conn.prepare("SELECT alias FROM contact_aliases").unwrap();
+            let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+            rows.collect::<Result<_>>().unwrap()
+        };
+        assert_eq!(left, vec!["Sammy".to_string()]);
+    }
+
     #[test]
     fn a_title_saved_with_an_invisible_mark_is_cleaned_and_its_replay_reuses_the_row() {
         // Rows saved before v8 kept WhatsApp's U+200E; the upgrade cleans them so the phone's
@@ -707,7 +894,7 @@ mod tests {
             )
             .unwrap();
             let id = conn.last_insert_rowid();
-            conn.pragma_update(None, "user_version", 7).unwrap();
+            rewind(&conn, 7);
             id
         };
         migrate(&mut s.conn()).unwrap();

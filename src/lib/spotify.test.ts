@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { bestTrack, idFromUri, matchPlaylists, matchScore, nextRepeat, normalize, playlistDetail, sameSong, seekFraction, trackLength } from "./spotify";
+import { bestTrack, idFromUri, matchPlaylists, matchScore, nextRepeat, normalize, playlistDetail, sameSong, seekFraction, trackLength, uniqueAlbums, uniqueSongs } from "./spotify";
 import type { SpotifyPlaylist, SpotifyTrack } from "../types/protocol";
+import { SPOTIFY_INVITE_ONLY, SPOTIFY_RECONNECT } from "./spotify";
+import modelRs from "../../src-tauri/src/spotify/model.rs?raw";
 
 const pl = (name: string): SpotifyPlaylist => ({ uri: `spotify:playlist:${name}`, id: name, name, owner: "Jordan", trackCount: 10, imageUrl: null, owned: true });
 const lists = [pl("Deep Focus"), pl("Morning Run"), pl("Discover Weekly"), pl("Coding Flow"), pl("Rainy Day Jazz")];
@@ -139,5 +141,38 @@ describe("sameSong", () => {
     expect(sameSong("   ", "Teardrop")).toBeNull();
     expect(sameSong("Teardrop", null)).toBeNull();
     expect(sameSong("Teardrop", "")).toBeNull();
+  });
+});
+
+describe("uniqueSongs / uniqueAlbums", () => {
+  const song = (name: string, album: string, durationMs: number, uri: string) => ({ uri, name, artists: "Test Artist", album, durationMs });
+  it("keeps one of each song when Spotify lists several releases of it", () => {
+    const a = song("Anybody", "Big Album", 189_000, "spotify:track:1");
+    const b = song("Anybody", "Big Album", 189_400, "spotify:track:2");
+    const c = song("anybody ", "Big Album", 188_900, "spotify:track:3");
+    const other = song("Anybody", "Other Album", 150_000, "spotify:track:4");
+    expect(uniqueSongs([a, b, c, other]).map((t) => t.uri)).toEqual(["spotify:track:1", "spotify:track:4"]);
+  });
+  it("drops copies of songs already on screen when more results load", () => {
+    const shown = [song("Anybody", "Big Album", 189_000, "spotify:track:1")];
+    const more = [song("Anybody", "Big Album", 189_000, "spotify:track:9"), song("Somebody", "Big Album", 200_000, "spotify:track:8")];
+    expect(uniqueSongs(more, shown).map((t) => t.uri)).toEqual(["spotify:track:8"]);
+  });
+  it("collapses deluxe/explicit copies of the same album title", () => {
+    const albums = [
+      { name: "Big Album", artists: "Test Artist" },
+      { name: "Big Album", artists: "Test Artist" },
+      { name: "Big Album (Deluxe)", artists: "Test Artist" },
+    ];
+    expect(uniqueAlbums(albums)).toHaveLength(2);
+  });
+});
+
+describe("Spotify messages shared with the Rust side", () => {
+  it("match src-tauri/src/spotify/model.rs word for word", () => {
+    // Rust wraps long string constants onto their own line; compare the text either way.
+    const rust = modelRs.replace(/\s+/g, " ");
+    expect(rust).toContain(`NOT_INVITED: &str = "${SPOTIFY_INVITE_ONLY}"`);
+    expect(rust).toContain(`RECONNECT_FOR_SCOPES: &str = "${SPOTIFY_RECONNECT}"`);
   });
 });

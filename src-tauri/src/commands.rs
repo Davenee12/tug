@@ -24,6 +24,7 @@ pub struct AppState {
     pub ble: BleHandle,
     pub spotify: Arc<Spotify>,
     pub tugboat: TugboatService,
+    pub devtools: Arc<crate::devtools::DevTools>,
 }
 
 type Result<T> = std::result::Result<T, String>;
@@ -104,7 +105,16 @@ pub async fn perform_action(state: State<'_, AppState>, id: i64, positive: bool)
 #[tauri::command]
 pub async fn media_command(state: State<'_, AppState>, command: String) -> Result<()> {
     let command = RemoteCommand::parse(&command).ok_or_else(|| format!("unknown media command {command}"))?;
-    state.ble.request(|reply| Command::Media { command, reply }).await
+    let requested_at = std::time::Instant::now();
+    state
+        .ble
+        .request(|reply| Command::Media {
+            command,
+            requested_at,
+            report_repeat: false,
+            reply,
+        })
+        .await
 }
 
 #[tauri::command]
@@ -182,10 +192,18 @@ pub fn get_contacts(state: State<'_, AppState>) -> Result<Vec<Contact>> {
     state.shared.store.contacts().map_err(|e| e.to_string())
 }
 
+/// Send a reply through the iPhone. Resolves with the stored message even when the phone didn't
+/// take it (status failed, shown with Retry); an error means nothing was saved, so the composer
+/// keeps the text.
 #[tauri::command]
 pub async fn send_message(state: State<'_, AppState>, address: String, text: String) -> Result<StoredMessage> {
-    let map = state.shared.map.get().cloned().ok_or("Message service isn't running")?;
-    map.send(address, text).await
+    crate::map::service::send_text(&state.shared, &address, &text).await
+}
+
+/// Send a failed message again: the same message, to the same number.
+#[tauri::command]
+pub async fn retry_message(state: State<'_, AppState>, id: i64) -> Result<StoredMessage> {
+    crate::map::service::retry_text(&state.shared, id).await
 }
 
 /// The phone's recent calls (PBAP call history), newest first.
@@ -278,12 +296,22 @@ pub async fn place_lookup(latitude: f64, longitude: f64) -> Result<String> {
 }
 
 /// The UI is showing the iPhone's switches (or stopped): check them every couple of seconds.
+/// Turning it on also checks Sync Contacts right away, not at the next due pull.
 #[tauri::command]
 pub fn set_watching(state: State<'_, AppState>, on: bool) {
     if state.shared.set_watching(on) {
         if let Some(map) = state.shared.map.get() {
-            map.refresh();
+            map.check_contacts();
         }
+    }
+}
+
+/// Check the iPhone's switches now: tug's window came to the front, or the user pressed
+/// "Check again". Sync Contacts is the one that needs a pull to read; the others follow live.
+#[tauri::command]
+pub fn check_switches(state: State<'_, AppState>) {
+    if let Some(map) = state.shared.map.get() {
+        map.check_contacts();
     }
 }
 
@@ -295,25 +323,38 @@ pub fn mark_read(state: State<'_, AppState>, message_ids: Vec<i64>) {
     }
 }
 
-/// Delete a conversation from tug (`hidden: true`) or undo that. Local only.
+/// Delete a conversation from tug, all of it rather than the rows the window has loaded:
+/// notifications from `senders` ((app id, title) pairs) and texts with `addresses`. Returns the
+/// delete's timestamp; passing it back as `undo_at` undoes exactly that delete. Local only.
 #[tauri::command]
-pub fn set_hidden(
+pub fn set_conversation_hidden(
     state: State<'_, AppState>,
-    notification_ids: Vec<i64>,
-    message_ids: Vec<i64>,
-    hidden: bool,
-) -> Result<()> {
-    let at = hidden.then(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0)
-    });
+    senders: Vec<(String, String)>,
+    addresses: Vec<String>,
+    undo_at: Option<i64>,
+) -> Result<i64> {
+    let (at, hidden) = match undo_at {
+        Some(at) => (at, false),
+        None => (
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+            true,
+        ),
+    };
     state
         .shared
         .store
-        .set_hidden(&notification_ids, &message_ids, at)
-        .map_err(|e| e.to_string())
+        .set_conversation_hidden(&senders, &addresses, at, hidden)
+        .map_err(|e| e.to_string())?;
+    Ok(at)
+}
+
+/// Whether Windows is blocking tug's pop-ups, for the warning in Settings.
+#[tauri::command]
+pub fn popups_blocked(app: tauri::AppHandle) -> bool {
+    crate::toast::blocked(&app)
 }
 
 /// Open a page of Windows Settings (setup's "Open Bluetooth settings" and friends). Only
@@ -547,10 +588,23 @@ pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<()> {
     use tauri_plugin_autostart::ManagerExt;
     let manager = app.autolaunch();
     if enabled {
-        manager.enable().map_err(|e| e.to_string())
+        manager.enable().map_err(|e| e.to_string())?;
+        // The plugin writes the exe path unquoted; quote it so a path with spaces (a user
+        // folder like "C:\Users\Sam Lee\...") always launches tug and nothing else.
+        if let Err(e) = crate::autostart::quote_run_value() {
+            log::warn!("autostart: couldn't quote the Run entry: {e}");
+        }
+        Ok(())
     } else {
         manager.disable().map_err(|e| e.to_string())
     }
+}
+
+/// The PC's region from Windows' Region setting (e.g. "US", "AU"), so the UI reads numbers typed
+/// without a country code the same way the Rust side does. None when Windows doesn't say.
+#[tauri::command]
+pub fn pc_region() -> Option<String> {
+    crate::map::address::pc_region().map(str::to_string)
 }
 
 // ---- Spotify connector (see src-tauri/src/spotify) ----
@@ -790,7 +844,8 @@ pub async fn spotify_set_saved(state: State<'_, AppState>, uri: String, saved: b
 }
 
 /// An uncaught frontend error (window.onerror, an unhandled promise rejection, or a Vue error),
-/// forwarded so a window crash leaves a trace in the log. Logged at warn, redacted and rate-limited
+/// forwarded so a window crash leaves a trace in the log; or a "note" that the window had to repair
+/// its state (a text it never got the event for). Logged at warn, redacted and rate-limited
 /// (see `frontend_log`); the frontend only ever sends the error's name, a trimmed message and the
 /// top of the stack, never a message body or a phone number.
 #[tauri::command]
@@ -869,6 +924,44 @@ pub fn tugboat_send_text(state: State<'_, AppState>, text: String) -> Result<()>
 #[tauri::command]
 pub fn tugboat_open_folder(state: State<'_, AppState>, path: Option<String>) -> Result<()> {
     state.tugboat.open_folder(path.as_deref())
+}
+
+// --- Developer tools (the bridge for AI tools and the `tug` command; see devtools/mod.rs) ---
+
+use crate::devtools::DevToolsStatus;
+
+#[tauri::command]
+pub fn devtools_status(state: State<'_, AppState>) -> DevToolsStatus {
+    state.devtools.status()
+}
+
+/// Settings › Developer tools › "Let AI tools use tug".
+#[tauri::command]
+pub fn devtools_set_enabled(state: State<'_, AppState>, enabled: bool) -> Result<DevToolsStatus> {
+    state.devtools.set_enabled(enabled)
+}
+
+#[tauri::command]
+pub fn devtools_set_permission(state: State<'_, AppState>, key: String, on: bool) -> Result<DevToolsStatus> {
+    state.devtools.set_permission(&key, on)
+}
+
+/// "Revoke access": a new token; connected AI tools must be restarted.
+#[tauri::command]
+pub fn devtools_revoke(state: State<'_, AppState>) -> Result<DevToolsStatus> {
+    state.devtools.revoke()
+}
+
+/// The confirmation card's Send (`send: true`) or Don't send.
+#[tauri::command]
+pub fn devtools_confirm(state: State<'_, AppState>, id: u64, send: bool) {
+    state.devtools.confirm(id, send);
+}
+
+/// "Add tug to PATH" / "Remove from PATH" (the user's own PATH only).
+#[tauri::command]
+pub fn devtools_set_on_path(state: State<'_, AppState>, on: bool) -> Result<DevToolsStatus> {
+    state.devtools.add_to_path(on)
 }
 
 #[cfg(test)]

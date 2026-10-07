@@ -35,6 +35,43 @@ const TRACK_ALBUM: u8 = 1;
 const TRACK_TITLE: u8 = 2;
 const TRACK_DURATION: u8 = 3;
 
+/// Identical presses closer together than this are one press (see [`CommandGate`]).
+pub const REPEAT_WINDOW: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// The error a media command asked with `report_repeat` comes back with when the gate dropped it
+/// as a repeat, so a caller that reports what happened (an AI tool) doesn't say "done".
+pub const REPEAT_IGNORED: &str = "ignored (same command just sent)";
+
+/// One press, one command. The Bluetooth actor writes media commands one at a time, so when a
+/// write stalls (the link stopped answering for a few seconds on 2026-10-07) every extra press
+/// made meanwhile queues up behind it and then goes out back to back: two Plays cancel out,
+/// two Previous jump two songs. The gate drops a command identical to the last one sent when it
+/// was asked for before that one finished, or within [`REPEAT_WINDOW`] of it finishing. Volume
+/// steps are exempt (press-and-hold sends them on purpose), and a failed write isn't recorded,
+/// so pressing again after an error is a real retry.
+#[derive(Debug, Default)]
+pub struct CommandGate {
+    last: Option<(RemoteCommand, std::time::Instant)>,
+}
+
+impl CommandGate {
+    /// Whether `command`, asked for at `requested_at`, should be sent.
+    pub fn admit(&self, command: RemoteCommand, requested_at: std::time::Instant) -> bool {
+        if matches!(command, RemoteCommand::VolumeUp | RemoteCommand::VolumeDown) {
+            return true;
+        }
+        match self.last {
+            Some((last, done)) if last == command => requested_at > done + REPEAT_WINDOW,
+            _ => true,
+        }
+    }
+
+    /// Record a command the phone accepted, at the moment the write finished.
+    pub fn sent(&mut self, command: RemoteCommand, done: std::time::Instant) {
+        self.last = Some((command, done));
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteCommand {
     Play,
@@ -356,6 +393,138 @@ impl NowPlaying {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Replays a queue through the gate the way the actor does: each admitted command is
+    /// written (taking `write` long) and recorded; returns what reached the phone.
+    fn replay(
+        gate: &mut CommandGate,
+        start: Instant,
+        queue: &[(RemoteCommand, u64)],
+        write: Duration,
+    ) -> Vec<RemoteCommand> {
+        let mut clock = start;
+        let mut sent = Vec::new();
+        for &(command, asked_ms) in queue {
+            let asked = start + Duration::from_millis(asked_ms);
+            clock = clock.max(asked);
+            if gate.admit(command, asked) {
+                clock += write;
+                gate.sent(command, clock);
+                sent.push(command);
+            }
+        }
+        sent
+    }
+
+    #[test]
+    fn presses_queued_behind_a_stalled_write_go_out_once() {
+        // The 2026-10-07 log: Play, Play, Previous, Previous pressed while the first write
+        // waited ~6 s on a link that had stopped answering, then all written in one second.
+        use RemoteCommand::*;
+        let mut gate = CommandGate::default();
+        let t0 = Instant::now();
+        let queue = [
+            (TogglePlayPause, 0),
+            (TogglePlayPause, 1500),
+            (PreviousTrack, 3000),
+            (PreviousTrack, 4000),
+        ];
+        // The first write takes 6 s; everything else was asked for before it finished.
+        let mut sent = Vec::new();
+        let first_done = t0 + Duration::from_secs(6);
+        assert!(gate.admit(TogglePlayPause, t0));
+        gate.sent(TogglePlayPause, first_done);
+        sent.push(TogglePlayPause);
+        let mut clock = first_done;
+        for &(c, ms) in &queue[1..] {
+            if gate.admit(c, t0 + Duration::from_millis(ms)) {
+                clock += Duration::from_millis(30);
+                gate.sent(c, clock);
+                sent.push(c);
+            }
+        }
+        assert_eq!(sent, vec![TogglePlayPause, PreviousTrack]);
+    }
+
+    #[test]
+    fn a_double_delivered_press_is_dropped() {
+        // Two listeners delivering the same press a few ms apart.
+        use RemoteCommand::*;
+        let mut gate = CommandGate::default();
+        let sent = replay(
+            &mut gate,
+            Instant::now(),
+            &[(NextTrack, 0), (NextTrack, 5)],
+            Duration::from_millis(40),
+        );
+        assert_eq!(sent, vec![NextTrack]);
+    }
+
+    #[test]
+    fn deliberate_presses_still_work() {
+        use RemoteCommand::*;
+        let mut gate = CommandGate::default();
+        let t0 = Instant::now();
+        let w = Duration::from_millis(40);
+        // Play then pause a second later; next twice a second apart; different commands back to back.
+        let sent = replay(
+            &mut gate,
+            t0,
+            &[
+                (TogglePlayPause, 0),
+                (TogglePlayPause, 1000),
+                (NextTrack, 2000),
+                (NextTrack, 3000),
+                (PreviousTrack, 3010),
+                (NextTrack, 3020),
+            ],
+            w,
+        );
+        assert_eq!(
+            sent,
+            vec![
+                TogglePlayPause,
+                TogglePlayPause,
+                NextTrack,
+                NextTrack,
+                PreviousTrack,
+                NextTrack
+            ]
+        );
+    }
+
+    #[test]
+    fn the_window_is_measured_from_the_end_of_the_write() {
+        use RemoteCommand::*;
+        let mut gate = CommandGate::default();
+        let t0 = Instant::now();
+        gate.sent(NextTrack, t0);
+        assert!(!gate.admit(NextTrack, t0 + REPEAT_WINDOW));
+        assert!(gate.admit(NextTrack, t0 + REPEAT_WINDOW + Duration::from_millis(1)));
+        assert!(
+            gate.admit(PreviousTrack, t0),
+            "a different command is never a duplicate"
+        );
+    }
+
+    #[test]
+    fn volume_steps_are_never_dropped() {
+        // Press-and-hold repeats every 90–180 ms by design.
+        use RemoteCommand::*;
+        let mut gate = CommandGate::default();
+        let queue: Vec<_> = (0..8).map(|i| (VolumeUp, i * 90)).collect();
+        let sent = replay(&mut gate, Instant::now(), &queue, Duration::from_millis(30));
+        assert_eq!(sent.len(), 8);
+    }
+
+    #[test]
+    fn a_failed_write_does_not_block_a_retry() {
+        use RemoteCommand::*;
+        let gate = CommandGate::default();
+        // Nothing recorded (the write failed): the immediate retry goes.
+        assert!(gate.admit(TogglePlayPause, Instant::now()));
+    }
 
     fn update(entity: u8, attr: u8, v: &str) -> Vec<u8> {
         let mut out = vec![entity, attr, 0];

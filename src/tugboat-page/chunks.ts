@@ -61,11 +61,17 @@ export function isFatal(code: string): boolean {
   return ["closed", "unauthorized", "in-use", "too-big", "no-space", "changed", "not-found"].includes(code);
 }
 
+/** A failed upload worth offering "Try again" for: not one the PC refused for good (too big, or
+ * Tugboat closed / the link expired / open elsewhere, where only a new scan helps). */
+export function canRetryUpload(code: string): boolean {
+  return !["too-big", "closed", "unauthorized", "in-use"].includes(code);
+}
+
 /** What to tell the person, for an error code from the PC (or "network" when it can't be reached). */
 export function messageFor(code: string): string {
   switch (code) {
     case "network":
-      return "Can't reach your PC. Make sure Tugboat is still open in tug and you're on the same Wi-Fi.";
+      return "Can't reach your PC. Make sure Tugboat is still open in tug and you're on the same Wi-Fi. If your PC changed networks, scan the new code on your PC.";
     case "closed":
       return "Tugboat was closed on your PC. Open Tugboat in tug and scan the new code.";
     case "unauthorized":

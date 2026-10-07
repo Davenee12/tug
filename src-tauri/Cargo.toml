@@ -1,9 +1,18 @@
 [package]
 name = "tug"
-version = "0.5.11"
+version = "0.5.12"
 description = "Bluetooth LE companion that mirrors iPhone notifications and media controls to Windows"
 authors = ["tug contributors"]
+license = "MIT"
 edition = "2021"
+
+# `tug` itself is the workspace root. The two small crates are the local bridge that companion
+# processes use to talk to the running app (`tug-bridge`) and the `tug` command plus MCP server
+# (`tug-cli`, shipped as `bin\tug.exe`; see docs/DEVELOPERS.md).
+default-run = "tug"
+
+[workspace]
+members = ["crates/tug-bridge", "crates/tug-cli"]
 
 [lib]
 # The `_lib` suffix avoids a bin/lib name clash on Windows (rust-lang/cargo#8519).
@@ -38,6 +47,11 @@ hmac = "0.12"
 sha2 = "0.10"
 qrcode = { version = "0.14", default-features = false }
 tauri-plugin-dialog = "2"
+# Developer tools (v0.5.12): the local bridge the `tug` command and MCP server talk to.
+tug-bridge = { path = "crates/tug-bridge" }
+# Verification codes for the bridge: a port of src/lib/codes.ts, whose look-arounds the
+# `regex` crate can't express.
+fancy-regex = "0.19"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
@@ -63,12 +77,16 @@ windows = { version = "0.62", features = [
   "Web_Http",
   "Web_Http_Headers",
   "Win32_Foundation",
+  # The PC's region (GetUserDefaultGeoName): whether a bare 10-digit number is a +1 number.
+  "Win32_Globalization",
   "Win32_NetworkManagement_IpHelper",
   "Win32_NetworkManagement_Ndis",
   "Win32_Networking_WinSock",
   "Win32_Security_Credentials",
   # Wake detection: the suspend/resume notification and the sleep-inclusive vs awake-only clocks.
   "Win32_System_Power",
+  # Settings › Developer tools › Add tug to PATH (the user's own PATH, HKCU only).
+  "Win32_System_Registry",
   "Win32_System_WindowsProgramming",
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",

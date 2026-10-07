@@ -13,19 +13,22 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::messages::StoredMessage;
-use crate::state::Shared;
+use crate::messages::{Status, StoredMessage, SOURCE_IPHONE_MAP};
+use crate::state::{events, Shared};
 
 pub enum MapCommand {
     Refresh,
+    /// Pull the phone's contacts now (the switches came on screen, tug's window came to the front,
+    /// or "Check again"), so a Sync Contacts flip shows up at once instead of at the next due pull.
+    CheckContacts,
     /// Pull recent calls once `after` has passed (a call that just ended needs a moment to
     /// reach the phone's log).
     RefreshCalls(Duration),
     /// Mark these stored messages read on the phone (those it still lists as unread).
     MarkRead(Vec<i64>),
-    Send {
-        address: String,
-        text: String,
+    /// Push this stored outgoing message (already saved as pending and on screen) to the phone.
+    Deliver {
+        id: i64,
         reply: oneshot::Sender<Result<StoredMessage, String>>,
     },
     /// Experimental: open the iPhone's hands-free link and, given a number, dial it.
@@ -50,6 +53,11 @@ impl MapHandle {
         let _ = self.tx.send(MapCommand::Refresh);
     }
 
+    /// Check Sync Contacts right away (see `MapCommand::CheckContacts`).
+    pub fn check_contacts(&self) {
+        let _ = self.tx.send(MapCommand::CheckContacts);
+    }
+
     pub fn refresh_calls(&self, after: Duration) {
         let _ = self.tx.send(MapCommand::RefreshCalls(after));
     }
@@ -58,10 +66,12 @@ impl MapHandle {
         let _ = self.tx.send(MapCommand::MarkRead(ids));
     }
 
-    pub async fn send(&self, address: String, text: String) -> Result<StoredMessage, String> {
+    /// Send a pending outgoing message the caller already stored and showed. The worker may be
+    /// busy (a sync or contacts pull) for a while, which is why the row is saved before queuing.
+    pub async fn deliver(&self, id: i64) -> Result<StoredMessage, String> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(MapCommand::Send { address, text, reply })
+            .send(MapCommand::Deliver { id, reply })
             .map_err(|_| "Message service stopped".to_string())?;
         rx.await.map_err(|_| "Message service stopped".to_string())?
     }
@@ -85,7 +95,65 @@ impl MapHandle {
     }
 }
 
+/// Save and show a reply as "Sending…" right away, then queue it for the worker: the worker can be
+/// busy with a sync or a contacts pull for a while, and the text mustn't vanish meanwhile. Resolves
+/// with the stored message even when the phone didn't take it (status failed, shown with Retry); an
+/// error means nothing was saved, so the caller keeps the text.
+pub async fn send_text(shared: &Shared, address: &str, text: &str) -> Result<StoredMessage, String> {
+    let map = shared.map.get().cloned().ok_or("Message service isn't running")?;
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Type a message first".into());
+    }
+    let address = crate::map::address::normalize(address);
+    let pending = shared
+        .store
+        .insert_outgoing(SOURCE_IPHONE_MAP, &address, text, crate::state::now_ms())
+        .map_err(|e| e.to_string())?;
+    shared.emit(events::MESSAGE, pending.clone());
+    deliver_or_fail(shared, &map, pending.id).await
+}
+
+/// Send a failed message again: the same row, to the number it was meant for, so a retry never
+/// duplicates it or goes to whichever number the conversation shows now.
+pub async fn retry_text(shared: &Shared, id: i64) -> Result<StoredMessage, String> {
+    let map = shared.map.get().cloned().ok_or("Message service isn't running")?;
+    let pending = shared
+        .store
+        .retry_outgoing(id, crate::state::now_ms())
+        .map_err(|e| e.to_string())?
+        .ok_or("That message is already being sent")?;
+    shared.emit(events::MESSAGE, pending.clone());
+    deliver_or_fail(shared, &map, pending.id).await
+}
+
+/// Hand a stored pending message to the worker. If the worker is gone, the message is marked failed
+/// (with Retry) rather than left on "Sending…".
+async fn deliver_or_fail(shared: &Shared, map: &MapHandle, id: i64) -> Result<StoredMessage, String> {
+    match map.deliver(id).await {
+        Ok(m) => Ok(m),
+        Err(e) => {
+            log::warn!("send not delivered: {e}");
+            let failed = shared
+                .store
+                .set_outgoing_status(id, Status::Failed, None)
+                .map_err(|e| e.to_string())?;
+            shared.emit(events::MESSAGE, failed.clone());
+            Ok(failed)
+        }
+    }
+}
+
 pub fn start(shared: Arc<Shared>) -> MapHandle {
+    // Nothing can be sending yet (the handle doesn't exist until this returns), so a send still
+    // pending was cut off by a crash or quit. Done here, before the worker thread starts, rather
+    // than on it: a send queued in the moment before the worker ran would otherwise be swept up
+    // as "interrupted" while it was really on its way.
+    match shared.store.fail_interrupted_sends() {
+        Ok(0) => {}
+        Ok(n) => log::info!("{n} interrupted send(s) marked not sent"),
+        Err(e) => log::warn!("checking interrupted sends failed: {e}"),
+    }
     let (tx, rx) = mpsc::unbounded_channel();
     #[cfg(windows)]
     {
@@ -108,7 +176,7 @@ pub fn start(shared: Arc<Shared>) -> MapHandle {
         tauri::async_runtime::spawn(async move {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
-                    MapCommand::Send { reply, .. } => {
+                    MapCommand::Deliver { reply, .. } => {
                         let _ = reply.send(Err("Messaging is only supported on Windows".into()));
                     }
                     MapCommand::Dial { reply, .. } => {
@@ -132,33 +200,28 @@ mod worker {
 
     use super::MapCommand;
     use crate::map::address::normalize;
+    use crate::map::contacts_watch::{check_now_at, ContactsWatch, Pull, Transition};
     use crate::map::health::{Attempt, Health, LiveTexts, TextsPairing};
     use crate::map::listing;
     use crate::map::mns::{self, Outgoing};
     use crate::map::obex::RSP_NOT_FOUND;
     use crate::map::pick::choose_device;
     use crate::map::session::{
-        find_devices, pull_call_history, pull_contacts, MapDevice, MapError, MapSession, PBAP_TURN,
+        find_devices, pull_call_history, pull_contacts, MapDevice, MapError, MapSession, PushError, PBAP_TURN,
     };
     use crate::messages::{IncomingMessage, Status, StoredMessage, SOURCE_IPHONE_MAP};
     use crate::state::{events, keys, ConnectionState, Shared};
 
     const FIRST_SYNC_DELAY: Duration = Duration::from_secs(3);
-    /// Contacts (a full PBAP pull) are retried no faster than this while watching.
-    const CONTACTS_WATCHING: Duration = Duration::from_secs(10);
     /// How many of the newest inbox messages to look at each poll.
     const LIST_MAX: u16 = 20;
     /// Once per launch, page further back than that: a fresh install otherwise only sees the
     /// last few texts, often all from one person, and other recent chats never show up.
     const BACKFILL_MAX: u16 = 100;
-    /// The phone sends nothing when a contact is added or renamed, so look again this often
-    /// (a pull of a few hundred contacts takes about a second).
-    const CONTACTS_RESYNC: Duration = Duration::from_secs(15 * 60);
-    const CONTACTS_RETRY: Duration = Duration::from_secs(10 * 60);
-    /// An empty phonebook or a refusal means Sync Contacts is still off: it's often switched
-    /// on moments after messages connect, so look again soon, then back off.
-    const CONTACTS_UNSHARED_RETRY: Duration = Duration::from_secs(20);
-    const CONTACTS_UNSHARED_QUICK_TRIES: u32 = 15;
+    // How often contacts are pulled (and when an empty phonebook means Sync Contacts is off), and
+    // when a "check now" pulls, live in `contacts_watch`, pure and unit-tested.
+    /// `LAST_TEXT_SYNC` is only read as "has tug synced before", so it's written at most this often.
+    const LAST_TEXT_SYNC_EVERY: Duration = Duration::from_secs(60);
     const CONTACTS_PULL_TIMEOUT: Duration = Duration::from_secs(90);
     /// The slow WITH-PHOTO phonebook pull runs off this worker, so give it well over the ~60 s it
     /// took on a test phone for 27 photos — nothing is waiting on it, and a timeout only ends the
@@ -176,7 +239,8 @@ mod worker {
     /// While someone else holds the phone's one PBAP connection (`PBAP_TURN`: the photo pass, or
     /// the Bluetooth inventory's phonebook check), look again this much later rather than waiting.
     const CALLS_BUSY_RETRY: Duration = Duration::from_secs(5);
-    const CONTACTS_BUSY_RETRY: Duration = Duration::from_secs(30);
+    /// Only a try-lock on `PBAP_TURN` per look, so looking again soon is cheap.
+    const CONTACTS_BUSY_RETRY: Duration = Duration::from_secs(10);
     const PHOTOS_BUSY_RETRY: Duration = Duration::from_secs(30);
     /// Connect, hands-free setup, dial and a moment to hear the call start, end to end. Kept
     /// short: texts (send, sync, mark read) wait on this worker while a call is being placed.
@@ -220,10 +284,13 @@ mod worker {
         /// Classic device the MAP session is on; contacts come from the same phone.
         device_id: Option<String>,
         next_contacts_sync: Instant,
-        unshared_contact_pulls: u32,
-        /// The last contacts pull came back with people in it, so Sync Contacts is on: an empty
-        /// call list then really means the history was cleared.
-        contacts_shared: bool,
+        /// Whether the phone is sharing contacts (Sync Contacts), judged from its answers; also
+        /// decides when to ask again. Shared means an empty call list really is a cleared history.
+        contacts: ContactsWatch,
+        last_contacts_pull: Option<Instant>,
+        /// A fingerprint of the last phonebook saved: frequent re-checks only save, re-learn names
+        /// and refresh the window when something actually changed.
+        phonebook_sig: Option<u64>,
         backfilled: bool,
         health: Health,
         /// The phone Windows has paired for texts, found even when connecting to it fails.
@@ -260,6 +327,13 @@ mod worker {
         /// night; reset on success and bypassed on a real change (see the poll loop and `map.refresh`).
         connect_failures: u32,
         next_retry: Option<Instant>,
+        /// Messages read in tug while the phone couldn't be reached, to mark read on the phone
+        /// after the next successful sync instead of dropping the request.
+        queued_reads: Vec<i64>,
+        /// Texts whose download keeps timing out, so one can't block every newer text.
+        fetch_tries: FetchTries,
+        /// When `LAST_TEXT_SYNC` was last written (at most every `LAST_TEXT_SYNC_EVERY`).
+        text_sync_saved: Option<Instant>,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -272,8 +346,9 @@ mod worker {
             session: None,
             device_id: None,
             next_contacts_sync: Instant::now(),
-            unshared_contact_pulls: 0,
-            contacts_shared: false,
+            contacts: ContactsWatch::default(),
+            last_contacts_pull: None,
+            phonebook_sig: None,
             backfilled: false,
             health: Health::default(),
             texts_device: None,
@@ -292,7 +367,11 @@ mod worker {
             last_type_counts: None,
             connect_failures: 0,
             next_retry: None,
+            queued_reads: Vec::new(),
+            fetch_tries: FetchTries::default(),
+            text_sync_saved: None,
         };
+        // Interrupted sends were already marked failed in `start`, before any send could be queued.
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
             Ok(0) => {}
@@ -310,11 +389,25 @@ mod worker {
                 cmd = commands.recv() => match cmd {
                     None => break,
                     Some(MapCommand::Refresh) => w.refresh().await,
+                    Some(MapCommand::CheckContacts) => {
+                        // Either way: the user may have just turned Sync Contacts on OR off. Only a
+                        // check that brings the pull forward does anything: a second ask (focus +
+                        // visibility, "Check again") finds it already due and costs nothing, rather
+                        // than another inbox listing and phonebook pull ahead of any send.
+                        if let Some(at) = w.contacts_due_now() {
+                            if at <= Instant::now() {
+                                w.refresh().await;
+                            } else {
+                                // Too soon after the last pull: wake for it once the gap is up.
+                                next = next.min(at);
+                            }
+                        }
+                    }
                     // Wake for it: the next refresh pulls the calls once they're due.
                     Some(MapCommand::RefreshCalls(after)) => next = next.min(w.calls_soon(after)),
                     Some(MapCommand::MarkRead(ids)) => w.mark_read(&ids).await,
-                    Some(MapCommand::Send { address, text, reply }) => {
-                        let _ = reply.send(w.send(&address, &text).await);
+                    Some(MapCommand::Deliver { id, reply }) => {
+                        let _ = reply.send(w.deliver(id).await);
                     }
                     Some(MapCommand::Dial { number, reply }) => {
                         let _ = reply.send(w.dial(number.as_deref()).await);
@@ -421,6 +514,15 @@ mod worker {
                 self.texts_device = Some(device.name.clone());
                 let session = MapSession::connect(&device.id).await?;
                 log::info!("message access connected to {}", device.name);
+                // A different phone: nothing it shared (or didn't) carries over.
+                if self.device_id.as_deref().is_some_and(|id| id != device.id) {
+                    self.contacts.forget();
+                    self.phonebook_sig = None;
+                    self.publish_contacts();
+                }
+                // A fresh texts connection: check Sync Contacts straight away, not at the next due
+                // pull (a re-pair resets the switch, and it may have been flipped meanwhile).
+                self.next_contacts_sync = Instant::now();
                 // Only once connecting worked: a device that won't connect isn't "the phone".
                 self.remember_texts_device(&device.id);
                 // The LE side often reports the bare "iPhone"; the Classic side carries the real
@@ -515,17 +617,33 @@ mod worker {
             self.stop_live_texts();
         }
 
-        fn set_contacts_shared(&mut self, shared: bool) {
-            self.contacts_shared = shared;
-            self.shared.update_status(|s| s.contacts_shared = shared);
+        /// Mirror the Sync Contacts judgement into the status (emitted at once if it changed).
+        fn publish_contacts(&self) {
+            let (on, off) = (self.contacts.shared(), self.contacts.off());
+            self.shared.update_status(|s| {
+                s.contacts_shared = on;
+                s.contacts_off = off;
+            });
+        }
+
+        /// Pull contacts as soon as possible (no sooner than `contacts_watch::CHECK_GAP` after the
+        /// last). Returns when, if that brought the pull forward; `None` if one was already due by
+        /// then, so the caller doesn't refresh again for nothing.
+        fn contacts_due_now(&mut self) -> Option<Instant> {
+            let at = check_now_at(Instant::now(), self.last_contacts_pull, self.next_contacts_sync)?;
+            self.next_contacts_sync = at;
+            Some(at)
         }
 
         fn fail(&mut self, e: &MapError) {
             if self.session.take().is_some() {
                 log::info!("message access dropped: {e}");
             }
-            // What the phone shares is per connection; ask again on the next one.
-            self.set_contacts_shared(false);
+            // What the phone shares is per connection; ask again on the next one, and treat its
+            // first phonebook as new (saved, and the photo pass started) rather than "unchanged".
+            self.contacts.connection_dropped();
+            self.phonebook_sig = None;
+            self.publish_contacts();
             self.reset_photo_pass();
             self.stop_live_texts();
             let shown = match e {
@@ -605,7 +723,7 @@ mod worker {
         /// match is handle-first then newest-unconfirmed; see `mns::choose_outgoing`.
         async fn confirm_send(&mut self, handle: Option<&str>, status: Status) {
             let store = self.shared.store.clone();
-            let candidates = match store.outgoing_unconfirmed(SOURCE_IPHONE_MAP) {
+            let candidates = match store.outgoing_unconfirmed(SOURCE_IPHONE_MAP, now_ms()) {
                 Ok(c) => c,
                 Err(e) => return log::warn!("reading unconfirmed sends failed: {e}"),
             };
@@ -637,21 +755,6 @@ mod worker {
             }
         }
 
-        /// When to ask again while contacts aren't shared yet: soon at first, then the usual retry.
-        fn soon(&mut self) -> Duration {
-            // While the switches are on screen, still not every 2 s: each try is a whole PBAP
-            // connection to the phone.
-            if self.shared.watching() {
-                return CONTACTS_WATCHING;
-            }
-            self.unshared_contact_pulls += 1;
-            if self.unshared_contact_pulls <= CONTACTS_UNSHARED_QUICK_TRIES {
-                CONTACTS_UNSHARED_RETRY
-            } else {
-                CONTACTS_RETRY
-            }
-        }
-
         /// Pull the phone's contacts (PBAP) now and then, for names and new chats.
         async fn sync_contacts_if_due(&mut self) {
             let Some(device_id) = self.device_id.clone() else {
@@ -675,17 +778,37 @@ mod worker {
                 .unwrap_or(Err(MapError::Timeout));
             // Released before the photo pass below takes its own turn.
             drop(turn);
+            self.last_contacts_pull = Some(Instant::now());
+            let watching = self.shared.watching();
+            let pull = match &pulled {
+                Ok(entries) if entries.is_empty() => Pull::Empty,
+                Ok(_) => Pull::Shared,
+                Err(MapError::ContactsConsent) => Pull::Refused,
+                Err(_) => Pull::Failed,
+            };
+            let outcome = self.contacts.record(pull, watching);
+            self.next_contacts_sync = Instant::now() + outcome.next;
+            // The toggle follows at once: the status event goes out before the slower save below.
+            self.publish_contacts();
+            match outcome.transition {
+                Some(Transition::Off) => log::info!(
+                    "Sync Contacts looks off on the iPhone (it shared no contacts); checking every {}s",
+                    outcome.next.as_secs()
+                ),
+                Some(Transition::On) => log::info!("Sync Contacts is on again: the iPhone is sharing contacts"),
+                None => {}
+            }
             match pulled {
                 // The iPhone answers with an empty list, not a refusal, while Sync Contacts is
-                // off. Keep any names already saved and ask again rather than in 6 hours.
+                // off. Keep any names already saved and keep asking (`contacts_watch`).
                 Ok(entries) if entries.is_empty() => {
-                    self.set_contacts_shared(false);
-                    log::debug!("the iPhone shared no contacts (Sync Contacts off?), asking again soon");
-                    self.next_contacts_sync = Instant::now() + self.soon();
+                    // It answered, so it isn't refusing any more (the switch is just off).
+                    self.shared.update_status(|s| s.contacts_error = None);
+                    if outcome.log_empty {
+                        log::debug!("the iPhone shared no contacts (Sync Contacts off?), asking again soon");
+                    }
                 }
                 Ok(entries) => {
-                    self.unshared_contact_pulls = 0;
-                    self.set_contacts_shared(true);
                     // Names and numbers only. save_phonebook never touches the photo column, so the
                     // references the background photo pass set are preserved across every fast sync.
                     let mut rows: Vec<(String, String)> = Vec::new();
@@ -694,6 +817,24 @@ mod worker {
                             rows.push((normalize(n), e.name.clone()));
                         }
                     }
+                    let sig = {
+                        use std::hash::{Hash, Hasher};
+                        let mut sorted = rows.clone();
+                        sorted.sort();
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        sorted.hash(&mut h);
+                        h.finish()
+                    };
+                    let first_share = self.phonebook_sig.is_none() || outcome.transition == Some(Transition::On);
+                    if !first_share && self.phonebook_sig == Some(sig) {
+                        // Same phonebook as last time: the check did its job (the switch is on).
+                        self.shared.update_status(|s| s.contacts_error = None);
+                        // Still give faces their turn: after a reconnect this is the only pull that
+                        // runs, and the pass checks for itself whether it's due (at most daily).
+                        self.maybe_sync_photos();
+                        return;
+                    }
+                    self.phonebook_sig = Some(sig);
                     match self.shared.store.save_phonebook(&rows) {
                         Ok(n) => {
                             log::info!("contacts synced: {} people, {n} numbers", entries.len());
@@ -708,24 +849,23 @@ mod worker {
                         Err(e) => log::warn!("saving contacts failed: {e}"),
                     }
                     self.shared.update_status(|s| s.contacts_error = None);
-                    self.next_contacts_sync = Instant::now() + CONTACTS_RESYNC;
                     // Recent calls sit behind the same switch: if it just came on, they're there too.
-                    self.next_calls_sync = Instant::now();
+                    if first_share {
+                        self.next_calls_sync = Instant::now();
+                    }
                     // Faces come from a slower WITH-PHOTO pull on its own PBAP link, off this worker
                     // so texts keep flowing; start it now that the contact rows exist (at most daily).
                     self.maybe_sync_photos();
                 }
                 Err(e) => {
-                    log::info!("contacts sync failed: {e}");
-                    let consent = matches!(e, MapError::ContactsConsent);
-                    if consent {
-                        self.set_contacts_shared(false);
+                    let consent = pull == Pull::Refused;
+                    // A refusal repeats every check while the switch is off: it's logged with the
+                    // transition, not every 30 s.
+                    if !consent {
+                        log::info!("contacts sync failed: {e}");
                     }
                     let shown = consent.then(|| e.to_string());
                     self.shared.update_status(|s| s.contacts_error = shown);
-                    // A refusal is the switch still being off, like an empty list: during setup
-                    // it's usually flipped seconds later, so ask again soon.
-                    self.next_contacts_sync = Instant::now() + if consent { self.soon() } else { CONTACTS_RETRY };
                 }
             }
         }
@@ -838,7 +978,7 @@ mod worker {
                 // An empty answer is also how Sync Contacts being off looks, so it only wipes the
                 // list when contacts are coming through (then the history really was cleared).
                 // (A refusal shows as the contacts error.)
-                Ok(calls) if calls.is_empty() && !self.contacts_shared && !self.shared.calls().is_empty() => {
+                Ok(calls) if calls.is_empty() && !self.contacts.shared() && !self.shared.calls().is_empty() => {
                     log::info!("the iPhone shared no recent calls; keeping the ones tug has");
                 }
                 Ok(calls) => {
@@ -892,6 +1032,12 @@ mod worker {
                     self.device_id = None;
                     self.set_state(false, None);
                 }
+                // Forgotten (or never chosen): nothing about Sync Contacts carries over.
+                if self.contacts != ContactsWatch::default() {
+                    self.contacts.forget();
+                    self.phonebook_sig = None;
+                    self.publish_contacts();
+                }
                 return;
             }
             let result = self.sync().await;
@@ -902,6 +1048,12 @@ mod worker {
                 self.retry_deferred_photos();
             }
             self.check_mns_grace();
+            // Recent calls come over PBAP, not message access: a failed text sync shouldn't leave
+            // Recents stale. Only while the phone is linked (otherwise the pull just waits out its
+            // timeout), and no more often than calls are due anyway.
+            if result.is_err() && self.shared.status().connection == ConnectionState::Connected {
+                self.sync_calls_if_due().await;
+            }
             match result {
                 Ok(0) => self.note_sync_ok(),
                 Ok(n) => {
@@ -959,7 +1111,16 @@ mod worker {
         async fn sync(&mut self) -> Result<usize, MapError> {
             let shared = self.shared.clone();
             let backfill = !self.backfilled;
-            let session = self.ensure().await?;
+            // Taken out for the loop (the session borrows the worker) and put back after it.
+            // (A listing error further down loses this launch's counts; they just start again.)
+            let mut tries = std::mem::take(&mut self.fetch_tries);
+            let session = match self.ensure().await {
+                Ok(session) => session,
+                Err(e) => {
+                    self.fetch_tries = tries;
+                    return Err(e);
+                }
+            };
             if let Err(e) = session.update_inbox().await {
                 log::debug!("UpdateInbox: {e}");
             }
@@ -998,7 +1159,29 @@ mod worker {
                 }
                 type_counts = Some((sms_gsm, im, other));
             }
+            // iOS lists only about the 10 newest texts, and paging further back finds nothing. When
+            // tug has synced before and every listed text is new, older texts from while tug was
+            // away may have fallen off that list: mark the oldest new one so the conversation says
+            // so rather than looking complete. (The first sync ever has no "before" to miss.)
+            let synced_before = shared.store.setting(keys::LAST_TEXT_SYNC)?.is_some();
+            let mut all_new = true;
+            for m in &listed {
+                if shared.store.has_message(SOURCE_IPHONE_MAP, &m.handle)? {
+                    all_new = false;
+                    break;
+                }
+            }
+            let mut mark_gap = may_have_missed(synced_before, listed.len(), all_new);
+            if mark_gap {
+                log::info!(
+                    "all {} listed texts are new; older ones may only be on the iPhone",
+                    listed.len()
+                );
+            }
             let mut added = 0;
+            // A download that timed out leaves the session in an unknown state: stop the sync there
+            // (dropping the session) once what's been fetched is saved.
+            let mut stop: Option<MapError> = None;
             // Oldest first so arrival order matches the phone.
             for item in listed.iter().rev() {
                 if shared.store.has_message(SOURCE_IPHONE_MAP, &item.handle)? {
@@ -1008,19 +1191,44 @@ mod worker {
                     }
                     continue;
                 }
-                let (originator, full_body) = match session.get_message(&item.handle).await {
-                    Ok(msg) => (msg.originator_address, msg.body),
+                // Given up on after repeated timeouts: keep its preview (or skip it) without asking.
+                let fetched = if tries.given_up(&item.handle) {
+                    None
+                } else {
+                    Some(session.get_message(&item.handle).await)
+                };
+                let (originator, full_body) = match fetched {
+                    None if item.subject.is_empty() => continue,
+                    None => (None, String::new()),
+                    Some(Ok(msg)) => (msg.originator_address, msg.body),
+                    // One text the phone is slow to hand over mustn't block every newer one forever:
+                    // try it again on the next few syncs, then settle for its preview like a refusal.
+                    Some(Err(MapError::Timeout)) => {
+                        stop = Some(MapError::Timeout);
+                        if !tries.timed_out(&item.handle) {
+                            log::info!("message {} timed out; trying again next sync", item.handle);
+                            break;
+                        }
+                        log::info!("message {} keeps timing out; using its preview", item.handle);
+                        if item.subject.is_empty() {
+                            break;
+                        }
+                        (None, String::new())
+                    }
                     // The phone refused this one message (e.g. an attachment it won't serialize).
                     // Don't let it block every newer text or drop the session: keep the listing's
                     // preview if there is one, otherwise skip it.
-                    Err(MapError::Obex { code, .. }) => {
+                    Some(Err(MapError::Obex { code, .. })) => {
                         log::info!("phone refused message {}: {code:#04x}; using its preview", item.handle);
                         if item.subject.is_empty() {
                             continue;
                         }
                         (None, String::new())
                     }
-                    Err(e) => return Err(e),
+                    Some(Err(e)) => {
+                        stop = Some(e);
+                        break;
+                    }
                 };
                 let address = normalize(originator.as_deref().unwrap_or(&item.sender_addressing));
                 let body = if full_body.is_empty() {
@@ -1041,9 +1249,16 @@ mod worker {
                     unread_on_phone: !item.read,
                     msg_type: Some(item.msg_type.as_str()).filter(|t| !t.is_empty()),
                 })?;
-                if let Some(m) = stored {
+                if let Some(mut m) = stored {
+                    if mark_gap {
+                        m = shared.store.mark_gap_before(m.id)?;
+                        mark_gap = false;
+                    }
                     shared.emit(events::MESSAGE, m);
                     added += 1;
+                }
+                if stop.is_some() {
+                    break;
                 }
             }
             if added > 0 {
@@ -1053,8 +1268,23 @@ mod worker {
                     shared.emit(events::CONTACTS, shared.store.contacts()?);
                 }
             }
+            self.fetch_tries = tries;
+            if let Some(e) = stop {
+                return Err(e);
+            }
             // Only once it all went through: a sync that failed partway looks back again.
             self.backfilled = true;
+            // Only whether tug has synced before is read back, so a write a minute is plenty (live
+            // texts and the poll can sync every few seconds).
+            if self.text_sync_saved.is_none_or(|t| t.elapsed() >= LAST_TEXT_SYNC_EVERY) {
+                shared.store.set_setting(keys::LAST_TEXT_SYNC, &now_ms().to_string())?;
+                self.text_sync_saved = Some(Instant::now());
+            }
+            // Reads that waited for the phone to come back.
+            if !self.queued_reads.is_empty() {
+                let ids = std::mem::take(&mut self.queued_reads);
+                self.mark_read(&ids).await;
+            }
             // Once per change, not every poll (logged here, after the session borrow ends).
             if let Some(counts @ (sms_gsm, im, other)) = type_counts {
                 if self.last_type_counts != Some(counts) {
@@ -1076,7 +1306,10 @@ mod worker {
             let store = self.shared.store.clone();
             let session = match self.ensure().await {
                 Ok(s) => s,
-                Err(e) => return log::debug!("mark read: {e}"),
+                Err(e) => {
+                    log::debug!("mark read: {e}; will try after the next sync");
+                    return queue_reads(&mut self.queued_reads, ids);
+                }
             };
             for handle in &handles {
                 match session.set_read(handle, true).await {
@@ -1096,7 +1329,8 @@ mod worker {
                     // Refused for another reason; try again next time it's opened.
                     Err(MapError::Obex { code, .. }) => log::info!("phone refused mark-read for {handle}: {code:#04x}"),
                     Err(e) => {
-                        log::debug!("mark read failed: {e}");
+                        log::debug!("mark read failed: {e}; will try after the next sync");
+                        queue_reads(&mut self.queued_reads, ids);
                         return self.fail(&e);
                     }
                 }
@@ -1104,40 +1338,134 @@ mod worker {
             log::info!("marked {} message(s) read on the iPhone", handles.len());
         }
 
-        async fn send(&mut self, address: &str, text: &str) -> Result<StoredMessage, String> {
-            let text = text.trim();
-            if text.is_empty() {
-                return Err("Type a message first".into());
+        /// One PushMessage on the session (opening one if needed).
+        async fn push(&mut self, m: &StoredMessage) -> Result<Option<String>, PushError> {
+            match self.ensure().await {
+                Ok(session) => session.push_message(&m.address, &m.body).await,
+                Err(error) => Err(PushError {
+                    error,
+                    maybe_taken: false,
+                }),
             }
-            let address = normalize(address);
+        }
+
+        /// Push a pending outgoing message (stored and shown by the command that queued it; see
+        /// `commands::send_message`) to the phone, to the number on that row, and record how it
+        /// went. A failure is recorded on the message (shown as "Not sent" with Retry).
+        async fn deliver(&mut self, id: i64) -> Result<StoredMessage, String> {
             let store = self.shared.store.clone();
             let pending = store
-                .insert_outgoing(SOURCE_IPHONE_MAP, &address, text, now_ms())
-                .map_err(|e| e.to_string())?;
-            self.shared.emit(events::MESSAGE, pending.clone());
-
-            let result = match self.ensure().await {
-                Ok(session) => session.push_message(&address, text).await,
-                Err(e) => Err(e),
-            };
-            let (status, handle, error) = match result {
-                Ok(handle) => (Status::Accepted, handle, None),
+                .outgoing(id)
+                .map_err(|e| e.to_string())?
+                .ok_or("That message no longer exists")?;
+            // Only a pending row is sent: never a second push of one already taken or failed.
+            if pending.status != Status::Pending {
+                return Ok(pending);
+            }
+            let mut result = self.push(&pending).await;
+            // The cached session can be dead without tug knowing (the phone walked off and came
+            // back). If it failed before the phone could have the text, reconnect and try once more.
+            if let Err(e) = &result {
+                if after_push_failure(&e.error, e.maybe_taken) == PushOutcome::RetryOnce {
+                    log::info!("send failed on the open session ({e}); reconnecting to try once more");
+                    self.fail(&e.error);
+                    result = self.push(&pending).await;
+                }
+            }
+            let (status, handle) = match result {
+                Ok(handle) => (Status::Accepted, handle),
                 Err(e) => {
-                    log::warn!("send failed: {e}");
-                    let message = e.to_string();
-                    self.fail(&e);
-                    (Status::Failed, None, Some(message))
+                    let outcome = after_push_failure(&e.error, e.maybe_taken);
+                    log::warn!("send failed: {e} ({outcome:?})");
+                    // A refusal comes over a working link: keep the session for the next sync.
+                    if !matches!(e.error, MapError::Obex { .. }) {
+                        self.fail(&e.error);
+                    }
+                    if outcome == PushOutcome::MaySent {
+                        (Status::Unconfirmed, None)
+                    } else {
+                        (Status::Failed, None)
+                    }
                 }
             };
             let updated = store
                 .set_outgoing_status(pending.id, status, handle.as_deref())
                 .map_err(|e| e.to_string())?;
             self.shared.emit(events::MESSAGE, updated.clone());
-            match error {
-                Some(e) => Err(e),
-                None => Ok(updated),
+            Ok(updated)
+        }
+    }
+
+    /// A text whose download times out this many times is given up on (its listing preview is kept).
+    const FETCH_TIMEOUT_TRIES: u32 = 3;
+
+    /// Per-text download timeouts this launch. Pure, so it's unit-tested.
+    #[derive(Default)]
+    struct FetchTries {
+        timeouts: std::collections::HashMap<String, u32>,
+    }
+
+    impl FetchTries {
+        /// Note a timeout; true once this text has timed out `FETCH_TIMEOUT_TRIES` times.
+        fn timed_out(&mut self, handle: &str) -> bool {
+            let n = self.timeouts.entry(handle.to_string()).or_default();
+            *n += 1;
+            *n >= FETCH_TIMEOUT_TRIES
+        }
+
+        fn given_up(&self, handle: &str) -> bool {
+            self.timeouts.get(handle).is_some_and(|n| *n >= FETCH_TIMEOUT_TRIES)
+        }
+    }
+
+    /// At most this many reads wait for the phone; past it the oldest are dropped (opening the
+    /// conversation again asks again).
+    const QUEUED_READS_MAX: usize = 500;
+
+    /// Add reads to the waiting queue, once each, keeping the newest `QUEUED_READS_MAX`. Pure, so
+    /// it's unit-tested.
+    fn queue_reads(queue: &mut Vec<i64>, ids: &[i64]) {
+        for id in ids {
+            if !queue.contains(id) {
+                queue.push(*id);
             }
         }
+        if queue.len() > QUEUED_READS_MAX {
+            queue.drain(..queue.len() - QUEUED_READS_MAX);
+        }
+    }
+
+    /// What to do after a PushMessage failed.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum PushOutcome {
+        /// The link failed before the phone could have the text: reconnect and push once more.
+        RetryOnce,
+        /// The whole text went out but no answer came: it may have sent, so never push it again.
+        MaySent,
+        /// A definite no (the phone refused it, or tug couldn't reach message access at all).
+        Failed,
+    }
+
+    /// Pure, so it's unit-tested. A dead link (closed, a Windows socket error, or no answer in
+    /// time) before the final packet went out is worth one more try on a fresh session; the same
+    /// after the final packet means the phone may have it, and a second push could text them twice.
+    fn after_push_failure(e: &MapError, maybe_taken: bool) -> PushOutcome {
+        let link = matches!(e, MapError::Closed | MapError::Timeout | MapError::Win(_));
+        match (link, maybe_taken) {
+            (true, false) => PushOutcome::RetryOnce,
+            (true, true) => PushOutcome::MaySent,
+            (false, _) => PushOutcome::Failed,
+        }
+    }
+
+    /// iOS lists about this many of the newest inbox texts, however many are asked for.
+    const PHONE_LIST_CAP: usize = 10;
+
+    /// Whether a sync may have missed texts: tug has synced before, the phone's list was full, and
+    /// every text on it was new, so older ones from while tug was away may have fallen off it.
+    /// Pure, so it's unit-tested.
+    fn may_have_missed(synced_before: bool, listed: usize, all_new: bool) -> bool {
+        synced_before && all_new && listed >= PHONE_LIST_CAP
     }
 
     /// Whether the contact-photo pass is due: never pulled before, or the last successful pull was
@@ -1207,7 +1535,11 @@ mod worker {
 
     #[cfg(test)]
     mod tests {
-        use super::{map_retry_delay, photo_sync_due, MAP_RETRY_CAP};
+        use super::{
+            after_push_failure, map_retry_delay, may_have_missed, photo_sync_due, queue_reads, FetchTries, PushOutcome,
+            MAP_RETRY_CAP, QUEUED_READS_MAX,
+        };
+        use crate::map::session::MapError;
         use std::time::Duration;
 
         #[test]
@@ -1221,6 +1553,60 @@ mod worker {
                 "never over the cap"
             );
             assert_eq!(map_retry_delay(0), Duration::from_secs(30), "no underflow at zero");
+        }
+
+        #[test]
+        fn a_text_that_keeps_timing_out_is_given_up_after_a_few_tries() {
+            let mut t = FetchTries::default();
+            assert!(!t.given_up("H1"));
+            assert!(!t.timed_out("H1"));
+            assert!(!t.timed_out("H1"));
+            assert!(!t.given_up("H1"));
+            assert!(t.timed_out("H1"), "third timeout gives up");
+            assert!(t.given_up("H1"));
+            assert!(!t.given_up("H2"), "per text");
+        }
+
+        #[test]
+        fn reads_wait_for_the_phone_once_each_and_bounded() {
+            let mut q = Vec::new();
+            queue_reads(&mut q, &[1, 2]);
+            queue_reads(&mut q, &[2, 3]);
+            assert_eq!(q, vec![1, 2, 3]);
+            let many: Vec<i64> = (10..10 + QUEUED_READS_MAX as i64).collect();
+            queue_reads(&mut q, &many);
+            assert_eq!(q.len(), QUEUED_READS_MAX);
+            assert_eq!(q.last(), many.last(), "the newest are kept");
+            assert!(!q.contains(&1), "the oldest are dropped");
+        }
+
+        #[test]
+        fn a_dead_link_retries_once_only_before_the_phone_could_have_the_text() {
+            assert_eq!(after_push_failure(&MapError::Closed, false), PushOutcome::RetryOnce);
+            assert_eq!(after_push_failure(&MapError::Timeout, false), PushOutcome::RetryOnce);
+            assert_eq!(after_push_failure(&MapError::Timeout, true), PushOutcome::MaySent);
+            assert_eq!(after_push_failure(&MapError::Closed, true), PushOutcome::MaySent);
+            let refused = MapError::Obex {
+                op: "PushMessage",
+                code: 0xC3,
+            };
+            assert_eq!(after_push_failure(&refused, false), PushOutcome::Failed);
+            assert_eq!(after_push_failure(&MapError::Consent, false), PushOutcome::Failed);
+        }
+
+        #[test]
+        fn a_full_list_of_new_texts_after_a_previous_sync_may_have_missed_some() {
+            assert!(may_have_missed(true, 10, true));
+            assert!(may_have_missed(true, 20, true));
+            assert!(
+                !may_have_missed(false, 10, true),
+                "first sync ever: nothing before to miss"
+            );
+            assert!(
+                !may_have_missed(true, 10, false),
+                "an already-known text means the list overlaps"
+            );
+            assert!(!may_have_missed(true, 4, true), "a short list is the whole inbox");
         }
 
         #[test]

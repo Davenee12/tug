@@ -134,13 +134,36 @@ impl Actor {
 
     /// Write one Remote Command. A successful write only means iOS handed it to the player,
     /// not that the player acted on it, so the log notes whether the player listed it.
-    pub(super) async fn send_media_command(&mut self, command: ams::RemoteCommand) -> Result<(), String> {
+    pub(super) async fn send_media_command(
+        &mut self,
+        command: ams::RemoteCommand,
+        requested_at: std::time::Instant,
+        report_repeat: bool,
+    ) -> Result<(), String> {
+        // One press, one command: a repeat that queued behind the previous write is the same press.
+        if !self.media_gate.admit(command, requested_at) {
+            log::debug!(
+                "dropped duplicate AMS command {} (pressed again before the last one went through)",
+                command.as_str()
+            );
+            return if report_repeat {
+                Err(ams::REPEAT_IGNORED.into())
+            } else {
+                Ok(())
+            };
+        }
         let np = self.shared.now_playing();
+        let waited = requested_at.elapsed();
         let context = format!(
-            "player {:?}, listed as supported: {}, repeat now: {:?}",
+            "player {:?}, listed as supported: {}, repeat now: {:?}, waited {} ms",
             np.player.as_deref().unwrap_or("?"),
-            np.lists(command),
-            np.repeat
+            if np.available.is_empty() {
+                "not yet known".to_string()
+            } else {
+                np.lists(command).to_string()
+            },
+            np.repeat,
+            waited.as_millis()
         );
         if self.wedged() {
             log::info!(
@@ -163,6 +186,7 @@ impl Actor {
         }
         match result {
             Ok(()) => {
+                self.media_gate.sent(command, std::time::Instant::now());
                 log::info!(
                     "AMS command {} ({}) sent: ok ({context})",
                     command.as_str(),
@@ -177,8 +201,7 @@ impl Actor {
                     command.id(),
                     describe_error(&e)
                 );
-                if e.is_closed() {
-                    self.relink("media controls were closed by Windows");
+                if self.on_closed(&e) {
                     return Err(RECONNECTING.into());
                 }
                 Err(e.to_string())

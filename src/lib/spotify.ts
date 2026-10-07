@@ -1,7 +1,19 @@
 // Pure Spotify helpers used by the UI and the Ctrl+K palette: fuzzy-matching a typed name to a
 // playlist ("play deep focus"), and the repeat-button cycle. No IPC here, so it's unit-tested.
 
-import type { RepeatMode, SpotifyPlaylist, SpotifyTrack } from "../types/protocol";
+import type { RepeatMode, SpotifyAlbum, SpotifyPlaylist, SpotifyTrack } from "../types/protocol";
+
+/**
+ * tug's Spotify app is in Spotify's Development Mode: only accounts added to its allow-list can
+ * connect. The label and line shown wherever Connect is offered, and (mirroring `NOT_INVITED` in
+ * `src-tauri/src/spotify/model.rs`) the message a listener who isn't on the list sees.
+ */
+export const SPOTIFY_BETA_LABEL = "Beta — invite only";
+export const SPOTIFY_BETA_NOTE = "Spotify only lets invited accounts connect for now.";
+export const SPOTIFY_INVITE_ONLY =
+  "This Spotify connection is in an invite-only beta. Ask to be added, or use your iPhone's Spotify app.";
+/** A connection made before tug asked for these features' scopes. Mirrors `RECONNECT_FOR_SCOPES` in model.rs. */
+export const SPOTIFY_RECONNECT = "Reconnect Spotify to use Your top, Recent and Add to playlist.";
 
 /** Lowercase, drop punctuation/emoji, collapse spaces: "Deep Focus 🎧" → "deep focus". */
 export function normalize(s: string): string {
@@ -105,4 +117,48 @@ export function trackLength(ms: number): string {
 export function seekFraction(clientX: number, rect: { left: number; width: number }): number {
   if (rect.width <= 0) return 0;
   return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+}
+
+/** Title, artists and album, normalised: copies of one song share this; length is compared apart. */
+function songKey(t: Pick<SpotifyTrack, "name" | "artists" | "album">): string {
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  return `${norm(t.name)}\u0000${norm(t.artists)}\u0000${norm(t.album)}`;
+}
+
+/** Copies of a song can differ by a fraction of a second in length; a different cut differs more. */
+const SAME_LENGTH_MS = 2000;
+
+/**
+ * Spotify lists the same song once per release (the album, a deluxe edition, explicit and clean
+ * cuts, other countries' copies), each with its own id, so a search can show "Anybody" three times.
+ * Keep the first of each — Spotify ranks the most-played copy first — including against results
+ * already on screen when more are loaded.
+ */
+export function uniqueSongs<T extends Pick<SpotifyTrack, "name" | "artists" | "album" | "durationMs">>(
+  incoming: T[],
+  shown: T[] = [],
+): T[] {
+  const lengths = new Map<string, number[]>();
+  const isCopy = (t: T) => (lengths.get(songKey(t)) ?? []).some((d) => Math.abs(d - t.durationMs) <= SAME_LENGTH_MS);
+  const remember = (t: T) => lengths.set(songKey(t), [...(lengths.get(songKey(t)) ?? []), t.durationMs]);
+  shown.forEach(remember);
+  const out: T[] = [];
+  for (const t of incoming) {
+    if (isCopy(t)) continue;
+    remember(t);
+    out.push(t);
+  }
+  return out;
+}
+
+/** The same for albums: one entry per title and artists (deluxe/explicit copies collapse). */
+export function uniqueAlbums<T extends Pick<SpotifyAlbum, "name" | "artists">>(incoming: T[], shown: T[] = []): T[] {
+  const key = (a: T) => `${a.name.trim().toLowerCase()}\u0000${a.artists.trim().toLowerCase()}`;
+  const seen = new Set(shown.map(key));
+  return incoming.filter((a) => {
+    const k = key(a);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }

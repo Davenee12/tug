@@ -33,6 +33,7 @@ function note(title: string, message: string, atMin = 0, extra: Partial<PhoneNot
     negativeLabel: "Clear",
     removedAt: null,
     live: true,
+    fresh: false,
     ...extra,
   };
 }
@@ -50,6 +51,7 @@ function sms(address: string, body: string, atMin = 0, direction: "in" | "out" =
     receivedAt: T0 + atMin * min,
     status: direction === "in" ? "received" : "accepted",
     msgType: null,
+    gapBefore: false,
   };
 }
 

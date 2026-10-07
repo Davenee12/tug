@@ -48,6 +48,9 @@ const CLIENT_ID: &str = "61a67dc51282488092dbf75214d6e7b8";
 /// Settings key for the account name shown in Settings (not secret — the refresh token is the
 /// only secret, and it lives in Credential Manager).
 const ACCOUNT_KEY: &str = "ui.spotifyAccount";
+/// Settings key for the scopes Spotify granted (the token endpoint's `scope`), so a connection
+/// made before tug asked for a newer scope can be told to reconnect instead of failing.
+const SCOPE_KEY: &str = "spotify.grantedScope";
 /// Refresh the access token this long before it actually expires.
 const EXPIRY_SKEW_MS: i64 = 60_000;
 
@@ -57,6 +60,9 @@ const EXPIRY_SKEW_MS: i64 = 60_000;
 pub struct SpotifyStatus {
     pub connected: bool,
     pub account: Option<String>,
+    /// Connected without a scope tug now needs (Your top, Recent, Add to playlist): reconnect.
+    /// False while the granted scopes aren't known yet (they're recorded at the next refresh).
+    pub needs_reconnect: bool,
 }
 
 /// The Spotify-specific Now Playing augmentation. Mirrored in `src/types/protocol.ts`.
@@ -74,7 +80,12 @@ pub struct SpotifyPlayer {
     pub track_uri: Option<String>,
     /// The playing track's name, checked against the phone's title before Like is offered.
     pub track_name: Option<String>,
+    /// The playing track's artists, "A, B".
+    pub track_artists: Option<String>,
+    /// The device Spotify says it is playing on (`/me/player` `device`).
+    pub device_id: Option<String>,
     pub device_name: Option<String>,
+    pub device_kind: Option<String>,
 }
 
 #[derive(Default)]
@@ -124,9 +135,19 @@ impl Spotify {
     }
 
     pub fn status(&self) -> SpotifyStatus {
+        let connected = self.connected();
+        let granted = self.store.setting(SCOPE_KEY).ok().flatten();
         SpotifyStatus {
-            connected: self.connected(),
+            connected,
             account: self.store.setting(ACCOUNT_KEY).ok().flatten(),
+            needs_reconnect: connected && granted.is_some_and(|g| !auth::missing_scopes(&g).is_empty()),
+        }
+    }
+
+    /// Remember what Spotify granted (sent with every token response).
+    fn record_scope(&self, scope: Option<&str>) {
+        if let Some(scope) = scope {
+            let _ = self.store.set_setting(SCOPE_KEY, scope);
         }
     }
 
@@ -170,6 +191,7 @@ impl Spotify {
             .refresh_token
             .ok_or("Spotify didn't return a refresh token; please try connecting again.")?;
         creds::store(creds::TARGET, &refresh)?;
+        self.record_scope(tokens.scope.as_deref());
         {
             let mut s = lock(&self.session);
             s.access_token = Some(tokens.access_token);
@@ -177,10 +199,19 @@ impl Spotify {
         }
 
         // Record the account name to show in Settings (best-effort; never logged).
-        if let Ok(resp) = self.api(Method::Get, "/me", None) {
-            if let Some(name) = model::account_name(&resp.body) {
-                let _ = self.store.set_setting(ACCOUNT_KEY, &name);
+        match self.api(Method::Get, "/me", None) {
+            Ok(resp) => {
+                if let Some(name) = model::account_name(&resp.body) {
+                    let _ = self.store.set_setting(ACCOUNT_KEY, &name);
+                }
             }
+            // Signed in, but the account isn't on tug's Spotify app allow-list: every request
+            // would be refused, so don't leave it looking connected.
+            Err(ApiError::NotInvited) => {
+                let _ = self.disconnect();
+                return Err(model::NOT_INVITED.into());
+            }
+            Err(_) => {}
         }
         Ok(self.status())
     }
@@ -188,6 +219,7 @@ impl Spotify {
     pub fn disconnect(&self) -> Result<(), String> {
         creds::delete(creds::TARGET)?;
         let _ = self.store.delete_setting(ACCOUNT_KEY);
+        let _ = self.store.delete_setting(SCOPE_KEY);
         let mut s = lock(&self.session);
         s.access_token = None;
         s.expires_at_ms = 0;
@@ -239,6 +271,7 @@ impl Spotify {
         if let Some(new_refresh) = tokens.refresh_token {
             let _ = creds::store(creds::TARGET, &new_refresh);
         }
+        self.record_scope(tokens.scope.as_deref());
         let mut s = lock(&self.session);
         s.access_token = Some(tokens.access_token.clone());
         s.expires_at_ms = now_ms() + tokens.expires_in_ms;
@@ -549,7 +582,10 @@ impl Spotify {
             album_art,
             track_uri: snap.track_uri,
             track_name: snap.track_name,
+            track_artists: snap.track_artists,
+            device_id: snap.device_id,
             device_name: snap.device_name,
+            device_kind: snap.device_kind,
         }))
     }
 
@@ -629,6 +665,8 @@ struct Tokens {
     access_token: String,
     refresh_token: Option<String>,
     expires_in_ms: i64,
+    /// The granted scopes, space-separated.
+    scope: Option<String>,
 }
 
 /// Parse an OAuth token response (`access_token`, optional `refresh_token`, `expires_in`).
@@ -638,6 +676,7 @@ fn parse_tokens(json: &str) -> Option<Tokens> {
         access_token: v.get("access_token")?.as_str()?.to_string(),
         refresh_token: v.get("refresh_token").and_then(Value::as_str).map(str::to_string),
         expires_in_ms: v.get("expires_in").and_then(Value::as_i64).unwrap_or(3600) * 1000,
+        scope: v.get("scope").and_then(Value::as_str).map(str::to_string),
     })
 }
 
@@ -652,6 +691,10 @@ mod tests {
         assert_eq!(t.access_token, "AT");
         assert_eq!(t.refresh_token.as_deref(), Some("RT"));
         assert_eq!(t.expires_in_ms, 3_600_000);
+        assert_eq!(t.scope, None);
+        let t = parse_tokens(r#"{"access_token":"AT","scope":"user-top-read user-library-read","expires_in":3600}"#)
+            .unwrap();
+        assert_eq!(t.scope.as_deref(), Some("user-top-read user-library-read"));
         // A refresh response often omits the refresh token (reuse the old one).
         let t = parse_tokens(r#"{"access_token":"AT2","expires_in":3600}"#).unwrap();
         assert_eq!(t.refresh_token, None);

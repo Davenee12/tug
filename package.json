@@ -1,7 +1,8 @@
 {
   "name": "tug",
   "private": true,
-  "version": "0.5.11",
+  "version": "0.5.12",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,9 +11,10 @@
     "dev:tugboat": "vite --config vite.tugboat.config.ts",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:release": "node scripts/remap-paths.mjs tauri build",
-    "check": "npm run build:tugboat && vue-tsc --noEmit && vitest run --dir src && cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml",
-    "test": "vitest run --dir src"
+    "build:release": "node scripts/remap-paths.mjs node scripts/build-cli.mjs --release && node scripts/remap-paths.mjs tauri build",
+    "check": "npm run build:tugboat && vue-tsc --noEmit && vitest run --dir src && cargo fmt --manifest-path src-tauri/Cargo.toml --all --check && cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml --workspace",
+    "test": "vitest run --dir src",
+    "build:cli": "node scripts/build-cli.mjs"
   },
   "dependencies": {
     "@fontsource/eb-garamond": "^5.3.0",

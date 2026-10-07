@@ -45,10 +45,24 @@ impl Actor {
     pub(super) fn restart_link(&mut self) {
         self.drop_link();
         self.retry_in = 0;
-        self.shared.update_status(|s| {
-            s.connection = ConnectionState::Connecting;
-            s.reconnecting = true;
-        });
+        // An away phone stays shown as away: "Reconnecting…" would flip back on the next failure.
+        if self.away_since.is_none() {
+            self.shared.update_status(|s| {
+                s.connection = ConnectionState::Connecting;
+                s.reconnecting = true;
+            });
+        }
+    }
+
+    /// Windows closed tug's GATT objects (seen right after a link blip on some adapters, and when a
+    /// service is unticked in Settings): nothing on this link works any more, so rebuild it now
+    /// instead of waiting for the next subscription check. Returns whether it did.
+    pub(super) fn on_closed(&mut self, e: &BleError) -> bool {
+        if !e.is_closed() {
+            return false;
+        }
+        self.relink("Windows closed tug's Bluetooth objects for the iPhone");
+        true
     }
 
     /// The phone's name as it is now: saved, and shown everywhere tug names the phone.
@@ -79,24 +93,57 @@ impl Actor {
 
     pub(super) async fn connect(&mut self) {
         let Some(id) = self.device_id.clone() else { return };
+        let linked = self.link.as_ref().is_some_and(|l| l.connected);
+        // Windows says the link is down: its link-up event connects at once (`on_connection`), so
+        // don't block the actor on discovery that can't succeed; poke it only now and then.
+        let since_poke = self.last_poke.map(|t| t.elapsed());
+        if link_policy::wait_for_link_up(self.link.is_some(), linked, since_poke) {
+            let left = link_policy::LINK_DOWN_POKE.saturating_sub(since_poke.unwrap_or_default());
+            self.retry_in = self
+                .retry_in
+                .max(u32::try_from(left.as_secs()).unwrap_or(u32::MAX).max(1));
+            return;
+        }
         log::debug!("connecting to {id}");
-        self.shared
-            .update_status(|s| s.connection = ConnectionState::Connecting);
+        if link_policy::shows_connecting(self.connect_failures, linked, self.away_since.is_some()) {
+            self.shared
+                .update_status(|s| s.connection = ConnectionState::Connecting);
+        }
         if self.link.is_none() {
             match self.open_link(&id).await {
                 Ok(link) => self.link = Some(link),
                 Err(e) => {
-                    self.fail_connect(e.to_string(), false);
+                    self.fail_connect(&e);
                     return;
                 }
             }
         }
-        match self.setup_services().await {
+        if !self.link.as_ref().is_some_and(|l| l.connected) {
+            self.last_poke = Some(Instant::now());
+        }
+        // Don't let a phone that isn't there hold the actor (and every click) for the full 30 s: the
+        // short budget only applies while Windows reports the link down. With the link up, setup
+        // gets its normal limits — uncached discovery can take well over 10 s on this adapter, and a
+        // short budget there would drop and rebuild a working link forever. The first connect after
+        // adopting a phone keeps the full budget too (a fresh bond waits on "Allow").
+        let link_down = !self.link.as_ref().is_some_and(|l| l.connected);
+        let setup = if self.connected_since_adopt && link_down {
+            tokio::time::timeout(link_policy::RECONNECT_DISCOVERY, self.setup_services())
+                .await
+                .unwrap_or(Err(BleError::TimedOut))
+        } else {
+            self.setup_services().await
+        };
+        match setup {
             Ok(()) => {
                 if self.connect_failures > 0 {
                     log::info!("connected after {} failed attempt(s)", self.connect_failures);
                 }
                 self.connect_failures = 0;
+                self.away_since = None;
+                self.last_poke = None;
+                self.connected_since_adopt = true;
+                self.adopt_timeouts = 0;
                 if let Some(l) = self.link.as_mut() {
                     l.connected = true;
                 }
@@ -109,6 +156,7 @@ impl Actor {
                     s.pairing_stale = false;
                     s.awaiting_unlock = false;
                     s.reconnecting = false;
+                    s.away = false;
                 });
                 // The texts/contacts/calls side sits behind the same phone; a fresh BLE link is a
                 // good moment to retry message access rather than waiting out its own backoff.
@@ -126,26 +174,47 @@ impl Actor {
                 }
                 self.shared.set_live_session(None);
                 self.shared.update_status(|s| s.awaiting_phone_allow = false);
-                // The iPhone is connected but isn't offering ANCS — it's locked after a restart, or
-                // mid-update before its first unlock. Those attempts can't succeed until it's
-                // unlocked, so back off far and say so instead of a silent 30 s loop all night.
-                let linked = self.link.as_ref().is_some_and(|l| l.connected);
-                let awaiting_unlock = linked && matches!(e, BleError::NotFound(_));
-                if awaiting_unlock && !self.shared.status().awaiting_unlock {
-                    log::info!(
-                        "the iPhone is connected but not sharing notifications yet (locked, or just restarted) — unlock it to reconnect"
-                    );
+                if let Some(status) = self
+                    .link
+                    .as_ref()
+                    .and_then(|l| l._gatt_session.as_ref())
+                    .and_then(|g| g.SessionStatus().ok())
+                {
+                    log::debug!("connect failed with the GATT session {status:?}");
                 }
-                self.fail_connect(e.to_string(), awaiting_unlock);
-                // One refusal can be a glitch; two in a row means the phone dropped the bond.
-                let stale = e.is_stale_bond() && self.connect_failures >= 2;
+                self.fail_connect(&e);
+                // A timed-out attempt may have left Windows' device/session objects for this phone
+                // stuck (switching back to a phone needed a restart): open fresh ones next time.
+                // Not for a phone that's simply away (link down): dropping the link would lose its
+                // link-up handler and the wait for it, and every retry would poll discovery again.
+                if e.is_timeout() {
+                    if link_policy::drop_link_on_timeout(!link_down, self.connected_since_adopt) {
+                        // drop_link forgets "unlock your iPhone" (right for Forget or a switch);
+                        // this is the same phone, so keep what the failed attempt decided.
+                        let awaiting_unlock = self.shared.status().awaiting_unlock;
+                        self.drop_link();
+                        self.shared.update_status(|s| s.awaiting_unlock = awaiting_unlock);
+                    } else {
+                        // Wait for Windows' link-up from now (`wait_for_link_up`), poking only
+                        // every LINK_DOWN_POKE.
+                        self.last_poke = Some(Instant::now());
+                    }
+                    if !self.connected_since_adopt {
+                        self.adopt_timeouts = self.adopt_timeouts.saturating_add(1);
+                    }
+                }
+                // One refusal can be a glitch; two in a row means the phone dropped the bond. A newly
+                // adopted phone that never connects and keeps timing out needs pairing again too.
+                let stale = (e.is_stale_bond() && self.connect_failures >= 2)
+                    || link_policy::suggests_pair_again(self.connected_since_adopt, self.adopt_timeouts);
                 self.shared.update_status(|s| s.pairing_stale = stale);
             }
         }
     }
 
-    pub(super) fn fail_connect(&mut self, message: String, awaiting_unlock: bool) {
+    pub(super) fn fail_connect(&mut self, e: &BleError) {
         self.connect_failures = self.connect_failures.saturating_add(1);
+        let message = e.to_string();
         // A phone at the edge of range fails every few seconds all night: log the first
         // few, then every tenth.
         if self.connect_failures <= 3 || self.connect_failures.is_multiple_of(10) {
@@ -153,23 +222,41 @@ impl Actor {
         } else {
             log::debug!("connect attempt failed ({} in a row): {message}", self.connect_failures);
         }
-        let linked = self.link.as_ref().is_some_and(|l| l.connected);
-        // A connected-but-no-ANCS failure (phone locked/restarting) can't succeed until unlocked:
-        // back off (up to 2 min). Otherwise the usual short backoff for a reachable/absent phone.
-        let (base, cap) = if awaiting_unlock {
-            (UNLOCK_RETRY_SECS, MAX_UNLOCK_RETRY_SECS)
-        } else if linked {
-            (RETRY_CONNECTED_SECS, MAX_RETRY_SECS)
-        } else {
-            (RETRY_IDLE_SECS, MAX_RETRY_SECS)
+        let status = self.shared.status();
+        let before = link_policy::Before {
+            linked: self.link.as_ref().is_some_and(|l| l.connected),
+            awaiting_unlock: status.awaiting_unlock,
+            away: self.away_since.is_some(),
+            failures: self.connect_failures,
+            reconnecting: status.reconnecting,
+        };
+        let after = link_policy::after_failure(before, e.failure());
+        // The iPhone is connected but isn't offering ANCS — it's locked after a restart, or
+        // mid-update before its first unlock. Those attempts can't succeed until it's
+        // unlocked, so back off far and say so instead of a silent 30 s loop all night.
+        if after.awaiting_unlock && !before.awaiting_unlock {
+            log::info!(
+                "the iPhone is connected but not sharing notifications yet (locked, or just restarted) — unlock it to reconnect"
+            );
+        }
+        if after.away && self.away_since.is_none() {
+            log::info!("the iPhone is away; waiting for it to come back");
+            self.away_since = Some(Instant::now());
+        }
+        let (base, cap) = match after.backoff {
+            link_policy::Backoff::Unlock => (UNLOCK_RETRY_SECS, MAX_UNLOCK_RETRY_SECS),
+            link_policy::Backoff::Connected => (RETRY_CONNECTED_SECS, MAX_RETRY_SECS),
+            link_policy::Backoff::Idle => (RETRY_IDLE_SECS, MAX_RETRY_SECS),
         };
         self.retry_in = retry_delay(base, self.connect_failures, cap);
-        let failures = self.connect_failures;
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
-            s.last_error = Some(message);
-            s.awaiting_unlock = awaiting_unlock;
-            s.reconnecting = still_reconnecting(s.reconnecting, failures, awaiting_unlock);
+            if after.publish_error || s.last_error.is_none() {
+                s.last_error = Some(message);
+            }
+            s.awaiting_unlock = after.awaiting_unlock;
+            s.reconnecting = after.reconnecting;
+            s.away = after.away;
         });
     }
 
@@ -268,6 +355,9 @@ impl Actor {
             let have_ancs = self.link.as_ref().is_some_and(|l| l.ancs.is_some());
             if up == LinkUp::Blip && have_ancs {
                 log::debug!("iPhone link blip (down then up); keeping notifications subscribed");
+                // On some adapters Windows closes tug's GATT objects across a blip; the subscription
+                // check notices (and relinks), so run it on the next tick instead of in 15 s.
+                self.cccd_check_in = 0;
                 // pump() holds requests back while the link is down; send any that queued meanwhile.
                 self.pump().await;
                 return;
@@ -276,11 +366,13 @@ impl Actor {
             if !have_ancs {
                 // Normally connect right away. After repeated failures the link is probably
                 // flapping at the edge of range: let it settle instead of retrying on every blip.
-                self.retry_in = if self.connect_failures < FLAPPING_AFTER {
-                    0
-                } else {
-                    self.retry_in.min(FLAP_SETTLE_SECS)
-                };
+                // A locked phone keeps its unlock backoff: the link coming up doesn't unlock it.
+                self.retry_in = link_policy::retry_on_link_up(
+                    self.retry_in,
+                    self.connect_failures >= FLAPPING_AFTER,
+                    FLAP_SETTLE_SECS,
+                    self.shared.status().awaiting_unlock,
+                );
             }
             return;
         }
@@ -316,12 +408,21 @@ impl Actor {
             l.session_id = None;
         }
         self.shared.set_live_session(None);
-        // Keep any backoff: a link going down mid-flap isn't a reason to hurry.
-        self.retry_in = retry_delay(RETRY_CONNECTED_SECS, self.connect_failures, MAX_RETRY_SECS);
+        // Down past the blip grace: the phone is away until it connects again.
+        self.away_since.get_or_insert_with(Instant::now);
+        // Keep any backoff: a link going down mid-flap isn't a reason to hurry. A locked phone's
+        // longer unlock backoff survives too (it's still locked; only "unlock" clears that).
+        let awaiting_unlock = self.shared.status().awaiting_unlock;
+        self.retry_in = link_policy::retry_after_link_down(
+            self.retry_in,
+            retry_delay(RETRY_CONNECTED_SECS, self.connect_failures, MAX_RETRY_SECS),
+            awaiting_unlock,
+        );
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
             s.battery = None;
-            s.awaiting_unlock = false;
+            s.reconnecting = false;
+            s.away = true;
             s.services = Services {
                 messages: s.services.messages,
                 ..Services::default()
@@ -349,8 +450,14 @@ impl Actor {
 
         // ANCS is required; media and battery are optional extras.
         let ancs = self.setup_ancs(&device, gen).await?;
+        // Optional, unless they show the link itself is gone: carrying on over a dead link (seen
+        // after a wake) only waits out more timeouts before it's rebuilt anyway.
         let media = match self.setup_media(&device, gen).await {
             Ok(m) => Some(m),
+            Err(e) if e.link_is_dead() => {
+                log::info!("AMS setup found the link gone: {e}");
+                return Err(e);
+            }
             Err(e) => {
                 log::info!("AMS unavailable: {e}");
                 None
@@ -358,6 +465,10 @@ impl Actor {
         };
         let battery = match self.setup_battery(&device, gen).await {
             Ok(b) => Some(b),
+            Err(e) if e.link_is_dead() => {
+                log::info!("Battery Service setup found the link gone: {e}");
+                return Err(e);
+            }
             Err(e) => {
                 log::info!("Battery Service unavailable: {e}");
                 None
@@ -490,6 +601,29 @@ impl Actor {
         }
     }
 
+    /// After a wake: does the link still answer? Reads the ANCS Notification Source subscription back,
+    /// bounded by `link_policy::WAKE_CHECK`.
+    pub(super) async fn wake_check(&self) -> link_policy::WakeCheck {
+        use link_policy::WakeCheck;
+        let Some(ch) = self
+            .link
+            .as_ref()
+            .and_then(|l| l.ancs.as_ref())
+            .map(|a| a.notification_source.characteristic().clone())
+        else {
+            return WakeCheck::Failed;
+        };
+        match tokio::time::timeout(link_policy::WAKE_CHECK, winrt::notify_enabled(&ch)).await {
+            Ok(Ok(_)) => WakeCheck::Answered,
+            Ok(Err(e)) if e.is_closed() => WakeCheck::Closed,
+            Ok(Err(e)) if e.is_timeout() => WakeCheck::TimedOut,
+            // An unanswered link after sleep is dead even if Windows never says so: rebuild it.
+            Ok(Err(e)) if e.link_is_dead() => WakeCheck::TimedOut,
+            Ok(Err(_)) => WakeCheck::Failed,
+            Err(_) => WakeCheck::TimedOut,
+        }
+    }
+
     /// Media and battery are optional at connect time; if they failed (e.g. Windows
     /// still held them for a previous process), keep trying while linked.
     pub(super) async fn retry_optional_services(&mut self) {
@@ -507,7 +641,12 @@ impl Actor {
                     }
                     self.shared.update_status(|s| s.services.media = true);
                 }
-                Err(e) => log::debug!("media retry: {e}"),
+                Err(e) => {
+                    log::debug!("media retry: {e}");
+                    if self.on_closed(&e) {
+                        return;
+                    }
+                }
             }
         }
         if need_battery {
@@ -519,21 +658,14 @@ impl Actor {
                     }
                     self.shared.update_status(|s| s.services.battery = true);
                 }
-                Err(e) => log::debug!("battery retry: {e}"),
+                Err(e) => {
+                    log::debug!("battery retry: {e}");
+                    self.on_closed(&e);
+                }
             }
         }
     }
 }
-
-/// Whether the status should still say "Reconnecting…" after a failed connect attempt: only while tug
-/// is rebuilding the link on its own, for the first few attempts. After that it's an ordinary
-/// "Waiting for iPhone"; and a locked phone asks to be unlocked instead. Pure, so it's unit-tested.
-fn still_reconnecting(reconnecting: bool, failures: u32, awaiting_unlock: bool) -> bool {
-    reconnecting && !awaiting_unlock && failures < RECONNECTING_ATTEMPTS
-}
-
-/// Failed connect attempts after an automatic relink that still show as "Reconnecting…".
-const RECONNECTING_ATTEMPTS: u32 = 3;
 
 /// Turn a watcher id into a `BluetoothLEDevice`. A phone paired through
 /// Windows Settings appears as a Classic device; its LE side shares the address.
@@ -549,24 +681,4 @@ pub(super) async fn resolve_le_device(
     }
     let classic = BluetoothDevice::FromIdAsync(&hid)?.await?;
     BluetoothLEDevice::FromBluetoothAddressAsync(classic.BluetoothAddress()?)?.await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reconnecting_shows_for_a_few_failed_attempts_then_waits() {
-        assert!(still_reconnecting(true, 1, false));
-        assert!(still_reconnecting(true, 2, false));
-        assert!(
-            !still_reconnecting(true, RECONNECTING_ATTEMPTS, false),
-            "now an ordinary wait"
-        );
-        assert!(!still_reconnecting(true, 1, true), "a locked phone asks to be unlocked");
-        assert!(
-            !still_reconnecting(false, 1, false),
-            "only after tug relinked on its own"
-        );
-    }
 }

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // A copy of the iPhone's Settings › Bluetooth › ⓘ screen for this PC; its switches follow the
-// real ones. Each is on, off, or unknown (no signal yet) — tug never shows a switch as off
-// before the phone has answered. When one is off, it names what to do and where.
+// real ones (lib/phoneSwitches). Each is on, off, checking (briefly, pulsing) or waiting (can't be
+// read right now, with the reason) — tug never shows a switch as off before the phone has
+// answered, and never "Checking…" forever. When one is off, it names what to do.
 import type { PhoneSwitch } from "../lib/phoneSwitches";
 defineProps<{ switches: PhoneSwitch[] }>();
+defineEmits<{ recheck: [] }>();
 </script>
 
 <template>
@@ -16,25 +18,33 @@ defineProps<{ switches: PhoneSwitch[] }>();
             <span class="block text-[14px] text-ink">{{ x.label }}</span>
             <span class="block text-[12px] text-muted">{{ x.why }}{{ x.required ? "" : " · optional" }}</span>
           </span>
-          <!-- unknown: a neutral, waiting toggle; off: gray; on: green -->
+          <!-- checking: a neutral, pulsing toggle; waiting: neutral, still; off: gray; on: green -->
           <span
             :class="[
               'relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors duration-500',
-              x.state === 'on' ? 'bg-success' : x.state === 'unknown' ? 'bg-surface-cream-strong opacity-60' : 'bg-surface-cream-strong',
+              x.state === 'on' ? 'bg-success' : x.state === 'off' ? 'bg-surface-cream-strong' : 'bg-surface-cream-strong opacity-60',
             ]"
           >
             <span
               :class="[
                 'absolute top-[2px] left-0 size-[22px] rounded-full bg-canvas shadow-sm transition-transform duration-500',
                 x.state === 'on' ? 'translate-x-[20px]' : 'translate-x-[2px]',
-                x.state === 'unknown' ? 'animate-pulse motion-reduce:animate-none' : '',
+                x.state === 'checking' ? 'animate-pulse motion-reduce:animate-none' : '',
               ]"
             />
           </span>
         </div>
-        <!-- Name exactly what to do when a switch is off, and where to find it. -->
-        <p v-if="x.state === 'off'" class="mt-1.5 text-[12px] text-body">{{ x.fix }}</p>
-        <p v-else-if="x.state === 'unknown'" class="mt-1.5 text-[12px] text-muted-soft">Checking…</p>
+        <!-- Off: exactly what to do. Checking/waiting: say so, and why. -->
+        <p v-if="x.note" :class="['mt-1.5 text-[12px]', x.state === 'off' ? 'text-body' : 'text-muted-soft']">
+          {{ x.note }}
+          <button
+            v-if="x.recheck"
+            class="ml-1 font-medium text-muted underline-offset-2 hover:underline"
+            @click="$emit('recheck')"
+          >
+            Check again
+          </button>
+        </p>
       </li>
     </ul>
   </div>

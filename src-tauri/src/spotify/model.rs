@@ -176,7 +176,13 @@ pub struct PlayerSnapshot {
     /// The playing track's name, so the UI can check this is the song the phone reports.
     pub track_name: Option<String>,
     pub art_url: Option<String>,
+    /// The playing track's artists, "A, B" (the phone hides them on Spotify Connect).
+    pub track_artists: Option<String>,
+    /// The device Spotify is playing on: the truth for "Play on" and Now Playing.
+    pub device_id: Option<String>,
     pub device_name: Option<String>,
+    /// Spotify's device type ("Smartphone", "Speaker"…).
+    pub device_kind: Option<String>,
 }
 
 /// Parse `GET /me/player`. Returns `None` for an empty body (HTTP 204: nothing is playing).
@@ -208,13 +214,20 @@ pub fn parse_player(json: &str) -> Option<PlayerSnapshot> {
             .and_then(|i| i.get("album"))
             .and_then(|a| a.get("images"))
             .and_then(best_image_url),
-        device_name: v
-            .get("device")
-            .and_then(|d| d.get("name"))
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string),
+        track_artists: item.map(joined_artists).filter(|a| !a.is_empty()),
+        device_id: device_str(&v, "id"),
+        device_name: device_str(&v, "name"),
+        device_kind: device_str(&v, "type"),
     })
+}
+
+fn device_str(player: &Value, key: &str) -> Option<String> {
+    player
+        .get("device")
+        .and_then(|d| d.get(key))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Parse `GET /me/library/contains` (a JSON array of booleans): whether the first item is saved.
@@ -281,6 +294,17 @@ pub fn token_expired(expires_at_ms: i64, now_ms: i64, skew_ms: i64) -> bool {
 /// `SPOTIFY_NO_PHONE` in `src/stores/tug.ts`.
 pub const NO_PHONE: &str = "Open Spotify on your iPhone.";
 
+/// What a listener who isn't on tug's Spotify app allow-list sees. tug's Spotify app is in
+/// Spotify's Development Mode, which only lets accounts added in its dashboard connect; everyone
+/// else gets a 403 "user may not be registered". Mirrored by `SPOTIFY_INVITE_ONLY` in
+/// `src/lib/spotify.ts`.
+pub const NOT_INVITED: &str =
+    "This Spotify connection is in an invite-only beta. Ask to be added, or use your iPhone's Spotify app.";
+
+/// A connection made before tug asked for the scopes behind these features. Mirrored by
+/// `SPOTIFY_RECONNECT` in `src/lib/spotify.ts`.
+pub const RECONNECT_FOR_SCOPES: &str = "Reconnect Spotify to use Your top, Recent and Add to playlist.";
+
 /// A Spotify Web API error, classified from the HTTP status and body so the connector can react
 /// (refresh on 401, wait on 429) and show the user something plain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,6 +317,10 @@ pub enum ApiError {
     PremiumRequired,
     /// 404 with no active device: Spotify isn't open on the iPhone.
     NoActiveDevice,
+    /// 403 "user may not be registered": the account isn't on the Development Mode allow-list.
+    NotInvited,
+    /// 403 "Insufficient client scope": connected before tug asked for a scope this needs.
+    MissingScope,
     /// Any other error status, with a cleaned-up message.
     Other { status: u16, message: String },
 }
@@ -331,6 +359,8 @@ impl ApiError {
             ),
             Self::PremiumRequired => "This needs Spotify Premium on the connected account.".into(),
             Self::NoActiveDevice => NO_PHONE.into(),
+            Self::NotInvited => NOT_INVITED.into(),
+            Self::MissingScope => RECONNECT_FOR_SCOPES.into(),
             Self::Other { status, message } if message.is_empty() => format!("Spotify error (HTTP {status})."),
             Self::Other { message, .. } => format!("Spotify: {message}"),
         }
@@ -346,12 +376,24 @@ pub fn classify(status: u16, body: &str, retry_after: Option<u64>) -> ApiError {
             retry_after: retry_after.unwrap_or(1),
         },
         403 if lower.contains("premium") => ApiError::PremiumRequired,
+        403 if not_registered(&lower) => ApiError::NotInvited,
+        403 if lower.contains("scope") => ApiError::MissingScope,
         404 if lower.contains("no active device") || lower.contains("no_active_device") => ApiError::NoActiveDevice,
         _ => ApiError::Other {
             status,
             message: error_message(body),
         },
     }
+}
+
+/// Spotify's Development Mode refusal for an account that isn't allow-listed. Seen worded as
+/// "User not registered in the Developer Dashboard" and "Check settings on
+/// developer.spotify.com/dashboard, the user may not be registered."
+fn not_registered(lower: &str) -> bool {
+    lower.contains("not registered")
+        || lower.contains("may not be registered")
+        || lower.contains("developer dashboard")
+        || lower.contains("developer.spotify.com/dashboard")
 }
 
 /// Pull the human part out of a Spotify error body (`{"error":{"message":"…"}}`, or the OAuth
@@ -973,8 +1015,8 @@ mod tests {
             "is_playing": true,
             "shuffle_state": true,
             "repeat_state": "context",
-            "device": {"name":"Jordan's iPhone","type":"Smartphone"},
-            "item": {"uri":"spotify:track:abc","name":"Teardrop","album":{"images":[{"url":"https://i.scdn.co/big","width":640},{"url":"https://i.scdn.co/mid","width":300}]}}
+            "device": {"id":"dev-ph","name":"Jordan's iPhone","type":"Smartphone"},
+            "item": {"uri":"spotify:track:abc","name":"Teardrop","artists":[{"name":"Massive Attack"},{"name":"Liz Fraser"}],"album":{"images":[{"url":"https://i.scdn.co/big","width":640},{"url":"https://i.scdn.co/mid","width":300}]}}
         }"#;
         let p = parse_player(json).unwrap();
         assert!(p.is_playing && p.shuffle);
@@ -983,6 +1025,9 @@ mod tests {
         assert_eq!(p.track_name.as_deref(), Some("Teardrop"));
         assert_eq!(p.art_url.as_deref(), Some("https://i.scdn.co/mid"));
         assert_eq!(p.device_name.as_deref(), Some("Jordan's iPhone"));
+        assert_eq!(p.device_id.as_deref(), Some("dev-ph"));
+        assert_eq!(p.device_kind.as_deref(), Some("Smartphone"));
+        assert_eq!(p.track_artists.as_deref(), Some("Massive Attack, Liz Fraser"));
         // 204/empty body: nothing playing.
         assert_eq!(parse_player(""), None);
         assert_eq!(parse_player("   "), None);
@@ -1068,6 +1113,28 @@ mod tests {
             ),
             ApiError::NoActiveDevice
         );
+        for body in [
+            r#"{"error":{"status":403,"message":"Check settings on developer.spotify.com/dashboard, the user may not be registered."}}"#,
+            r#"{"error":{"status":403,"message":"User not registered in the Developer Dashboard"}}"#,
+            "User not registered in the Developer Dashboard",
+        ] {
+            assert_eq!(classify(403, body, None), ApiError::NotInvited, "{body}");
+        }
+        assert!(ApiError::NotInvited.user_message().contains("invite-only beta"));
+        assert_eq!(
+            classify(
+                403,
+                r#"{"error":{"status":403,"message":"Insufficient client scope"}}"#,
+                None
+            ),
+            ApiError::MissingScope
+        );
+        assert!(ApiError::MissingScope.user_message().starts_with("Reconnect Spotify"));
+        // Other 403s stay generic.
+        assert!(matches!(
+            classify(403, r#"{"error":{"status":403,"message":"Forbidden"}}"#, None),
+            ApiError::Other { status: 403, .. }
+        ));
         let other = classify(500, r#"{"error":{"message":"Server error"}}"#, None);
         assert_eq!(
             other,

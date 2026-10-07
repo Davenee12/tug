@@ -27,6 +27,7 @@ const CONNECTED: DeviceStatus = {
   messagesError: null,
   contactsError: null,
   contactsShared: false,
+  contactsOff: false,
   textsPairing: "ok",
   textsDevice: "Jordan's iPhone",
   liveTexts: "off",

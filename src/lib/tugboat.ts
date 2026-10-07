@@ -21,6 +21,7 @@ export const TUGBOAT_OFF: TugboatStatus = {
   texts: [],
   sentText: null,
   sending: false,
+  receiving: false,
   ended: null,
 };
 
@@ -29,9 +30,27 @@ export function showConnectHelp(s: Pick<TugboatStatus, "phase">, shownAt: number
   return s.phase === "waiting" && shownAt !== null && now - shownAt >= HELP_AFTER_MS;
 }
 
-/** Files are still moving either way (closing would cut them off). */
-export function transferring(s: Pick<TugboatStatus, "incoming" | "sending">): boolean {
-  return s.sending || s.incoming.some((i) => !i.done);
+/**
+ * Files are moving either way right now (closing would cut them off). From the backend's live
+ * flags, not "an upload is unfinished": one the phone abandoned stays unfinished forever.
+ */
+export function transferring(s: Pick<TugboatStatus, "sending" | "receiving">): boolean {
+  return s.sending || s.receiving;
+}
+
+/** Why closing Tugboat would lose something, or null when it can just close: files still moving
+ * either way, or files offered to the phone that it hasn't saved yet (they're gone once it closes). */
+export type CloseWarning = "moving" | "unsaved";
+export function closeWarning(s: Pick<TugboatStatus, "sending" | "receiving" | "outgoing">): CloseWarning | null {
+  if (transferring(s)) return "moving";
+  if (s.outgoing.some((o) => o.downloads === 0)) return "unsaved";
+  return null;
+}
+
+/** "phone" → "Phone": a phone name at the start of a sentence. Leaves names like "iPhone" alone. */
+export function capitalised(name: string): string {
+  if (/^[a-z][A-Z]/.test(name)) return name;
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 /** One plain sentence for files that couldn't be offered to the phone, or null if all were. */

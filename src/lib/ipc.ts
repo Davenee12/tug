@@ -10,6 +10,8 @@ import type {
   SearchResults,
   SmsMessage,
   DeviceStatus,
+  DevToolsConfirm,
+  DevToolsStatus,
   TugboatSkipped,
   TugboatStatus,
   TugboatTextArrived,
@@ -64,7 +66,10 @@ export const api = {
   setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
   listMessages: (limit: number) => invoke<SmsMessage[]>("list_messages", { limit }),
   getContacts: () => invoke<Contact[]>("get_contacts"),
+  /** Resolves with the stored message even when the phone didn't take it (status "failed"); throws only when nothing was recorded. */
   sendMessage: (address: string, text: string) => invoke<SmsMessage>("send_message", { address, text }),
+  /** Send a failed message again: the same message, to the same number. */
+  retryMessage: (id: number) => invoke<SmsMessage>("retry_message", { id }),
   refreshMessages: () => invoke<void>("refresh_messages"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
   /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */
@@ -77,13 +82,17 @@ export const api = {
   logFrontendError: (kind: string, name: string, message: string, source: string) =>
     invoke<void>("log_frontend_error", { kind, name, message, source }),
   setUnread: (count: number) => invoke<void>("set_unread", { count }),
+  popupsBlocked: () => invoke<boolean>("popups_blocked"),
   openWindowsSettings: (page: "bluetooth" | "location" | "notifications") => invoke<void>("open_windows_settings", { page }),
   /** Open an http(s) link (a notification's "Open in browser") in the default browser. */
   openUrl: (url: string) => invoke<void>("open_url", { url }),
-  setHidden: (notificationIds: number[], messageIds: number[], hidden: boolean) =>
-    invoke<void>("set_hidden", { notificationIds, messageIds, hidden }),
+  /** Delete a conversation (all of it, by sender and address); returns the delete's stamp, which undoes it as `undoAt`. */
+  setConversationHidden: (senders: [string, string][], addresses: string[], undoAt: number | null) =>
+    invoke<number>("set_conversation_hidden", { senders, addresses, undoAt }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),
   setWatching: (on: boolean) => invoke<void>("set_watching", { on }),
+  /** Check the iPhone's switches now (Sync Contacts is read by asking the phone). */
+  checkSwitches: () => invoke<void>("check_switches"),
   appIcon: (appId: string) => invoke<string | null>("app_icon", { appId }),
   appWebsite: (appId: string) => invoke<string | null>("app_website", { appId }),
   contactPhoto: (key: string) => invoke<string | null>("contact_photo", { key }),
@@ -142,6 +151,17 @@ export const api = {
   tugboatSendText: (text: string) => invoke<void>("tugboat_send_text", { text }),
   /** Open the Tugboat folder, or select a file Tugboat saved. */
   tugboatOpenFolder: (path: string | null) => invoke<void>("tugboat_open_folder", { path }),
+  // --- Developer tools ---
+  devtoolsStatus: () => invoke<DevToolsStatus>("devtools_status"),
+  /** "Let AI tools use tug". */
+  devtoolsSetEnabled: (enabled: boolean) => invoke<DevToolsStatus>("devtools_set_enabled", { enabled }),
+  devtoolsSetPermission: (key: string, on: boolean) => invoke<DevToolsStatus>("devtools_set_permission", { key, on }),
+  /** A new token: connected AI tools must be restarted. */
+  devtoolsRevoke: () => invoke<DevToolsStatus>("devtools_revoke"),
+  /** The confirmation card's Send (true) or Don't send. */
+  devtoolsConfirm: (id: number, send: boolean) => invoke<void>("devtools_confirm", { id, send }),
+  /** Add tug's command folder to (or remove it from) the user's PATH. */
+  devtoolsSetOnPath: (on: boolean) => invoke<DevToolsStatus>("devtools_set_on_path", { on }),
 };
 
 interface EventPayloads {
@@ -156,12 +176,16 @@ interface EventPayloads {
   message: SmsMessage;
   contacts: Contact[];
   "open-latest-conversation": null;
+  "open-settings": null;
   calls: CallRecord[];
   "toast-pressed": ToastPressed;
   "tugboat-status": TugboatStatus;
   "tugboat-text": TugboatTextArrived;
   /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */
   "tugboat-dropped": TugboatSkipped[];
+  "devtools-status": DevToolsStatus;
+  /** A text an AI tool (or `tug text`) wants to send; null once it's answered or gone. */
+  "devtools-confirm": DevToolsConfirm | null;
 }
 
 export function on<E extends keyof EventPayloads>(

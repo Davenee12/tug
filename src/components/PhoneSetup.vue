@@ -4,6 +4,7 @@ import { CircleAlert, LoaderCircle, RefreshCw, Smartphone } from "lucide-vue-nex
 import { useTugStore } from "../stores/tug";
 import { bondHint, pairingProblem, setupDeviceLists } from "../lib/pairings";
 import { api } from "../lib/ipc";
+import { connectionSentence } from "../lib/connectionStatus";
 import type { DiscoveredDevice } from "../types/protocol";
 
 // The paired iPhone, or the steps to pair one. Shared by first-run setup (the inline
@@ -97,7 +98,7 @@ const advertisingLabel = computed(
         here, then pair again.
       </p>
       <div class="flex gap-2">
-        <button class="btn-primary btn-sm" @click="startOver">{{ confirmStartOver ? "Tap again to start over" : "Start over" }}</button>
+        <button class="btn-primary btn-sm" @click="startOver">{{ confirmStartOver ? "Click again to start over" : "Start over" }}</button>
         <button class="btn-secondary btn-sm" @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
       </div>
     </div>
@@ -118,7 +119,7 @@ const advertisingLabel = computed(
         Start over clears the pairings tug made and begins again. Also tap <em>Forget This Device</em> for this PC under Settings › Bluetooth on the iPhone.
       </p>
       <button class="btn-secondary btn-sm self-start" @click="startOver">
-        {{ confirmStartOver ? "Tap again to start over" : "Start over" }}
+        {{ confirmStartOver ? "Click again to start over" : "Start over" }}
       </button>
     </div>
 
@@ -135,13 +136,10 @@ const advertisingLabel = computed(
       <p class="caption-upper text-muted">Paired iPhone</p>
       <p class="headline mt-1 text-[24px]">{{ s.device.name }}</p>
       <p class="mt-1 text-[13px] text-muted">
-        <template v-if="s.connection === 'connected'">Connected. tug reconnects by itself when you come back in range.</template>
-        <template v-else>
-          Waiting for your iPhone. Keep Bluetooth on and the phone nearby; iOS reconnects on its own once it's bonded.
-        </template>
+        {{ connectionSentence(s) }}
       </p>
       <button class="btn-secondary btn-sm mt-4" @click="forget">
-        {{ confirmForget ? "Tap again to forget" : "Forget this iPhone" }}
+        {{ confirmForget ? "Click again to forget" : "Forget this iPhone" }}
       </button>
       <p class="mt-2 text-[12px] text-muted-soft">
         Also tap <em>Forget This Device</em> under Settings › Bluetooth on the iPhone before pairing again.

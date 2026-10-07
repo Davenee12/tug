@@ -10,17 +10,30 @@ use base64::Engine as _;
 pub const AUTHORIZE_URL: &str = "https://accounts.spotify.com/authorize";
 pub const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 
-/// The scopes tug asks for: read the user's playlists (incl. private/followed), read and
-/// control playback, and read/modify the library (for Like). Space-separated in the request.
+/// The scopes tug asks for: read the user's playlists (incl. private/followed) and add songs to
+/// their own, read and control playback, read/modify the library (for Like), and read top items
+/// and recently played (the panel's Your top and Recent). Space-separated in the request.
 pub const SCOPES: &[&str] = &[
     "playlist-read-private",
     "playlist-read-collaborative",
+    "playlist-modify-private",
+    "playlist-modify-public",
     "user-read-playback-state",
     "user-modify-playback-state",
     "user-read-currently-playing",
     "user-library-read",
     "user-library-modify",
+    "user-top-read",
+    "user-read-recently-played",
 ];
+
+/// The scopes in [`SCOPES`] that a granted `scope` string (space-separated, as the token
+/// endpoint returns it) lacks. A connection made before tug asked for a scope keeps working for
+/// everything else, but needs reconnecting for the features that use the missing ones.
+pub fn missing_scopes(granted: &str) -> Vec<&'static str> {
+    let have: Vec<&str> = granted.split_whitespace().collect();
+    SCOPES.iter().copied().filter(|s| !have.contains(s)).collect()
+}
 
 /// base64url without padding, as PKCE (and OAuth state) want it.
 fn b64url(bytes: &[u8]) -> String {
@@ -227,6 +240,28 @@ mod tests {
 
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn missing_scopes_compares_with_what_was_granted() {
+        // Everything granted (in any order): nothing missing.
+        let all: Vec<&str> = SCOPES.iter().rev().copied().collect();
+        assert!(missing_scopes(&all.join(" ")).is_empty());
+        // A connection from before Your top, Recent and Add to playlist.
+        let old = "playlist-read-private playlist-read-collaborative user-read-playback-state \
+                   user-modify-playback-state user-read-currently-playing user-library-read user-library-modify";
+        assert_eq!(
+            missing_scopes(old),
+            vec![
+                "playlist-modify-private",
+                "playlist-modify-public",
+                "user-top-read",
+                "user-read-recently-played"
+            ]
+        );
+        assert_eq!(missing_scopes("").len(), SCOPES.len());
+        // Whole words only.
+        assert!(missing_scopes("user-top-read-extra").contains(&"user-top-read"));
     }
 
     #[test]

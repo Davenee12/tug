@@ -97,6 +97,20 @@ pub enum MapError {
 
 pub type Result<T> = std::result::Result<T, MapError>;
 
+/// A PushMessage that failed, and whether the phone may have taken it anyway: the final packet
+/// went out but its answer never came (or the link died waiting), so the text may be on its way.
+#[derive(Debug)]
+pub struct PushError {
+    pub error: MapError,
+    pub maybe_taken: bool,
+}
+
+impl std::fmt::Display for PushError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
 // Defined in the pure `pick` module (with the selection logic that is unit-tested there).
 pub use super::pick::MapDevice;
 
@@ -413,8 +427,16 @@ impl MapSession {
 
     /// PushMessage to the outbox. Success means *accepted by the iPhone*; it does
     /// not confirm carrier delivery. Returns the handle iOS assigned, if any.
-    pub async fn push_message(&mut self, recipient: &str, text: &str) -> Result<Option<String>> {
-        self.goto_msg().await?;
+    pub async fn push_message(
+        &mut self,
+        recipient: &str,
+        text: &str,
+    ) -> std::result::Result<Option<String>, PushError> {
+        let early = |error| PushError {
+            error,
+            maybe_taken: false,
+        };
+        self.goto_msg().await.map_err(early)?;
         let object = bmessage::compose(recipient, text);
         let first = vec![
             self.link.conn(),
@@ -433,13 +455,23 @@ impl MapSession {
                 chunk.to_vec(),
             ));
             let opcode = if last { obex::OP_PUT_FINAL } else { obex::OP_PUT };
-            let resp = self.link.exchange(&obex::request(opcode, &[], &headers), false).await?;
+            // Before the final packet the phone can't have the whole text; once it's out, a lost
+            // answer leaves it unknown whether the phone took it.
+            let resp = self
+                .link
+                .exchange(&obex::request(opcode, &[], &headers), false)
+                .await
+                .map_err(|error| PushError {
+                    error,
+                    maybe_taken: last,
+                })?;
             let expected = if last { obex::RSP_SUCCESS } else { obex::RSP_CONTINUE };
             if resp.code != expected {
-                return Err(MapError::Obex {
+                // A refusal is a definite answer: not sent.
+                return Err(early(MapError::Obex {
                     op: "PushMessage",
                     code: resp.code,
-                });
+                }));
             }
             if last {
                 return Ok(resp.name().map(str::to_string));

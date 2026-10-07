@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { ChevronRight, Info, Phone, Plus, RotateCcw, SendHorizontal, ShieldQuestionMark } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { replyUnavailable } from "../lib/availability";
 import { clockTime, dayLabel, formatAddress, groupConversations, threadKey, type Conversation, type ConversationItem } from "../lib/format";
 import { shouldStickToBottom } from "../lib/scroll";
-import { bubbleKind, distinguishesIMessage } from "../lib/messageType";
+import { bubbleKind, distinguishesIMessage, messageText } from "../lib/messageType";
 import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import ConversationRow from "./ConversationRow.vue";
 import { findCode } from "../lib/codes";
+import type { SmsMessage } from "../types/protocol";
 
 const tug = useTugStore();
 const convs = computed(() => {
@@ -61,12 +63,14 @@ function select(key: string) {
   tug.markSeen(key);
 }
 
-// Opening Messages without a choice shows the newest conversation, which counts as seen
-// (in tug only) — unless something is covering it, e.g. the New message picker (Ctrl+N).
+// The conversation on screen counts as seen (in tug only), including the newest one Messages
+// opens without a choice — but only while someone can see it: the window shown and focused, and
+// nothing covering it (e.g. the New message picker, Ctrl+N). Hidden in the tray, a new text stays
+// unread (tray, taskbar dot); coming back to the window marks the one on screen then.
 watch(
-  () => [selected.value?.key, tug.overlayOpen] as const,
+  () => [selected.value?.key, selected.value?.notifications.length, tug.canSee] as const,
   ([key]) => {
-    if (key && tug.view === "messages" && !tug.overlayOpen && tug.newCount(key, selected.value!.notifications)) {
+    if (key && tug.view === "messages" && tug.canSee && tug.newCount(key, selected.value!.notifications)) {
       tug.markSeen(key);
     }
   },
@@ -76,29 +80,17 @@ watch(
 // The conversation on screen is read: clear it on the phone (and so the Feed) and mark its
 // texts read there — on open, when new texts land in it, and when you come back to it. That
 // includes the newest one Messages shows by default (a deliberate choice). Clearing the phone can't
-// be undone, so only while you can actually see it: the window is focused and nothing
-// (search, the picker, settings, pairing) covers it.
-const focused = ref(document.hasFocus());
-const onFocus = () => (focused.value = true);
-const onBlur = () => (focused.value = false);
-onMounted(() => {
-  window.addEventListener("focus", onFocus);
-  window.addEventListener("blur", onBlur);
-});
-onUnmounted(() => {
-  window.removeEventListener("focus", onFocus);
-  window.removeEventListener("blur", onBlur);
-});
+// be undone, so only while you can actually see it: the window is shown and focused and nothing
+// (search, the picker, settings, pairing) covers it (the store's canSee).
 const lookingAt = (c: Conversation | null): c is Conversation =>
-  !!c && c.items.length > 0 && focused.value && tug.view === "messages" && !tug.overlayOpen;
+  !!c && c.items.length > 0 && tug.canSee && tug.view === "messages";
 watch(
   () =>
     [
       selected.value?.key,
       selected.value?.items.length,
       selected.value?.notifications.length,
-      focused.value,
-      tug.overlayOpen,
+      tug.canSee,
       tug.selectedThread,
     ] as const,
   () => {
@@ -179,7 +171,16 @@ const statusLabel = (i: ConversationItem) => {
   if (i.kind !== "message" || i.m.direction !== "out") return "";
   // "accepted" (the iPhone took it) and "sent" (a MAP SendingSuccess event confirmed it, when
   // live texts are working) both read as "Sent" — a send the user can trust either way.
-  return { pending: "Sending…", accepted: "Sent", sent: "Sent", failed: "Not sent", received: "" }[i.m.status];
+  // "unconfirmed": the whole text went out but the phone never answered. No Retry: it may have
+  // sent, and a second try could text them twice.
+  return {
+    pending: "Sending…",
+    accepted: "Sent",
+    sent: "Sent",
+    failed: "Not sent",
+    unconfirmed: "May have sent — check your iPhone",
+    received: "",
+  }[i.m.status];
 };
 
 // Composer: replies go through the iPhone over message access (MAP).
@@ -210,8 +211,8 @@ const canReply = computed(
 const replyHint = computed(() => {
   if (!selected.value) return "";
   if (selected.value.appId !== "com.apple.MobileSMS") return `Reply to ${selected.value.appLabel} messages on your phone.`;
-  if (tug.status.messagesError) return tug.status.messagesError;
-  if (!tug.status.services.messages) return "Connecting to your iPhone's messages…";
+  const unavailable = replyUnavailable(tug.status, tug.switchContext);
+  if (unavailable) return unavailable;
   if (!selected.value.addresses.length) return "tug will learn this number when their next text arrives.";
   return "";
 });
@@ -224,11 +225,24 @@ async function send(text = draft.value) {
   // Keyed by the conversation it was typed in, even if another is opened while it sends.
   const key = conv.key;
   if (text === draftFor(key)) setDraftFor(key, "");
-  const ok = await tug.sendMessage(to, text);
-  if (!ok && !draftFor(key)) setDraftFor(key, text);
+  const result = await tug.sendMessage(to, text);
+  // Only when nothing was recorded: a failed send already shows as "Not sent" with Retry, and
+  // putting the text back too invited sending it twice.
+  if (result === "error" && !draftFor(key)) setDraftFor(key, text);
   // You've answered, so their notifications on the phone are done with.
-  if (ok) void tug.clearItems(conv.notifications);
+  if (result === "sent") void tug.clearItems(conv.notifications);
   sending.value = false;
+}
+
+// Retry resends that same message to the number it was meant for (not a new copy to whichever
+// number the conversation shows now); on success the "Not sent" state goes away.
+const retrying = ref<number | null>(null);
+async function retry(m: SmsMessage) {
+  if (retrying.value !== null) return;
+  retrying.value = m.id;
+  const conv = selected.value;
+  if ((await tug.retryMessage(m.id)) && conv) void tug.clearItems(conv.notifications);
+  retrying.value = null;
 }
 
 function onKey(e: KeyboardEvent) {
@@ -312,6 +326,12 @@ function onKey(e: KeyboardEvent) {
       <div ref="scroller" class="flex-1 overflow-y-auto px-8 py-6">
         <template v-for="(item, i) in selected.items" :key="item.id">
           <div v-if="showDay(i)" class="caption-upper my-4 text-center text-muted-soft">{{ dayLabel(item.at) }}</div>
+          <p
+            v-if="item.kind === 'message' && item.m.gapBefore"
+            class="mx-auto my-3 flex max-w-md items-center justify-center gap-1.5 text-center text-[12px] text-muted"
+          >
+            <Info :size="12" class="shrink-0" /> Earlier texts from while tug was away may only be on your iPhone.
+          </p>
           <div
             :data-item="item.id"
             :class="[
@@ -330,7 +350,7 @@ function onKey(e: KeyboardEvent) {
               <span v-if="item.kind === 'notification' && item.n.subtitle" class="mb-0.5 block text-[12px] font-medium text-muted">
                 {{ item.n.subtitle }}
               </span>
-              {{ item.body || "(no preview)" }}
+              {{ item.kind === "message" ? messageText(item.m) : item.body || "(no preview)" }}
             </div>
             <span class="mx-1 mt-1 flex items-center gap-1.5 font-mono text-[11px] text-muted-soft">
               {{ clockTime(item.at) }}
@@ -340,7 +360,8 @@ function onKey(e: KeyboardEvent) {
               <button
                 v-if="item.kind === 'message' && item.m.status === 'failed'"
                 class="flex items-center gap-1 rounded px-1 text-ink active:bg-surface-card"
-                @click="send(item.body)"
+                :disabled="retrying !== null"
+                @click="retry(item.m)"
               >
                 <RotateCcw :size="11" /> Retry
               </button>

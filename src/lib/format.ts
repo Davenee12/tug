@@ -251,9 +251,18 @@ export interface Conversation {
   notifications: PhoneNotification[];
 }
 
-function messageTime(m: SmsMessage): Date {
+/**
+ * When a message belongs in its conversation. Sent ones use the PC's clock (they have no phone
+ * time). Received ones use the earlier of the phone's time and the PC's: the phone's clock can run
+ * a few seconds ahead of the PC's (and its time carries no zone), which put a quick reply above the
+ * text it answers; a received text can't have been sent after tug got it. Older texts caught up
+ * later keep the phone's (earlier) time.
+ */
+export function messageTime(m: Pick<SmsMessage, "sentAt" | "receivedAt">): Date {
+  const received = new Date(m.receivedAt);
   const d = m.sentAt ? new Date(m.sentAt) : null;
-  return d && !Number.isNaN(d.getTime()) ? d : new Date(m.receivedAt);
+  if (!d || Number.isNaN(d.getTime())) return received;
+  return d.getTime() < received.getTime() ? d : received;
 }
 
 /** A notification and a MAP message are the same text if body matches within this window. */

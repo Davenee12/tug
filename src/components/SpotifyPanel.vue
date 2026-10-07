@@ -18,15 +18,23 @@ import {
 } from "lucide-vue-next";
 import { useTugStore, type SpotifyTab } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
-import { idFromUri, playlistDetail } from "../lib/spotify";
+import {
+  idFromUri,
+  playlistDetail,
+  SPOTIFY_BETA_LABEL,
+  SPOTIFY_BETA_NOTE,
+  SPOTIFY_RECONNECT,
+  uniqueAlbums,
+  uniqueSongs,
+} from "../lib/spotify";
 import { api, errorMessage } from "../lib/ipc";
+import type { PickerRow } from "../lib/playback";
 import type {
   SpotifyAlbum,
   SpotifyArtist,
   SpotifyPlaylist,
   SpotifySearch,
   SpotifyTrack,
-  SpotifyDevice,
 } from "../types/protocol";
 import SpotifyArt from "./SpotifyArt.vue";
 import SpotifyTrackRow from "./SpotifyTrackRow.vue";
@@ -143,8 +151,9 @@ async function runSearch() {
   try {
     const r = await api.spotifySearch(q, ["track", "album", "artist", "playlist"], 0);
     if (mine !== searchSeq) return;
-    results.value = r;
+    // Offsets count what Spotify returned (so "Show more" pages on), not what's shown.
     offsets.value = { tracks: r.tracks.length, albums: r.albums.length, artists: r.artists.length, playlists: r.playlists.length };
+    results.value = { ...r, tracks: uniqueSongs(r.tracks), albums: uniqueAlbums(r.albums) };
   } catch (e) {
     if (mine === searchSeq) tug.notify("error", errorMessage(e));
   } finally {
@@ -159,7 +168,9 @@ async function showMore(kind: "track" | "album" | "artist" | "playlist") {
   try {
     const r = await api.spotifySearch(q, [kind], offsets.value[key]);
     const cur = results.value;
-    cur[key] = [...cur[key], ...(r[key] as never[])] as never;
+    const fresh =
+      key === "tracks" ? uniqueSongs(r.tracks, cur.tracks) : key === "albums" ? uniqueAlbums(r.albums, cur.albums) : r[key];
+    cur[key] = [...cur[key], ...(fresh as never[])] as never;
     cur.more[key] = r.more[key];
     offsets.value[key] += r[key].length;
   } catch (e) {
@@ -213,6 +224,12 @@ async function loadTop() {
     await load((v: SpotifyArtist[]) => (topArtists.value = v), () => api.spotifyTopArtists(topRange.value));
   }
 }
+/** Reconnect for the newer scopes, then load the tab that needed them. */
+async function reconnect() {
+  if (!(await tug.connectSpotify())) return;
+  if (tab.value === "recent") void loadRecent();
+  else if (tab.value === "top") void loadTop();
+}
 async function loadQueue() {
   await load((v) => (queue.value = v), () => api.spotifyQueue());
 }
@@ -222,6 +239,8 @@ watch(
   [tab, topMode, topRange],
   ([t]) => {
     detail.value = null;
+    // Connected before tug asked for these scopes: the tab shows how to fix it, not an error.
+    if ((t === "recent" || t === "top") && tug.spotify.needsReconnect) return;
     if (t === "recent") void loadRecent();
     else if (t === "top") {
       topTracks.value = null;
@@ -239,27 +258,26 @@ onMounted(async () => {
 });
 
 // --- Device picker ("Play on") ------------------------------------------------------------
+// The list, its "Current" marker and the button's label all come from the store's one idea of
+// where music is playing (Spotify's API first; see lib/playback), refreshed each time it opens.
 const devicesOpen = ref(false);
-const devices = ref<SpotifyDevice[]>([]);
 async function toggleDevices() {
   devicesOpen.value = !devicesOpen.value;
-  if (devicesOpen.value) {
-    try {
-      devices.value = await api.spotifyDevices();
-    } catch (e) {
-      tug.notify("error", errorMessage(e));
-    }
-  }
+  if (devicesOpen.value) await tug.refreshSpotifyDevices();
 }
+const currentKind = computed(() => tug.spotifyPickerRows.find((r) => r.current)?.kind ?? "Smartphone");
 function deviceIcon(kind: string) {
   const k = kind.toLowerCase();
   if (k === "computer") return Monitor;
   if (k === "smartphone") return Smartphone;
   return Speaker;
 }
-async function pickDevice(d: SpotifyDevice | null) {
+async function pickDevice(row: PickerRow) {
   devicesOpen.value = false;
-  await tug.chooseDevice(d);
+  if (row.current) return;
+  if (row.phone) return void tug.chooseDevice(null);
+  const d = tug.spotifyDevices.find((x) => x.id === row.id);
+  if (d) await tug.chooseDevice(d);
 }
 
 const TAB_BTN = "flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-medium";
@@ -279,13 +297,14 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
       <header class="flex items-center gap-3 border-b border-hairline-soft px-5 py-3">
         <ListMusic :size="18" class="shrink-0 text-accent-teal" />
         <span class="headline text-[18px] text-ink">Spotify</span>
+        <span class="pill bg-surface-card px-2 py-0 text-[11px] text-muted" :title="SPOTIFY_BETA_NOTE">{{ SPOTIFY_BETA_LABEL }}</span>
         <div class="relative ml-auto">
           <button
             class="flex items-center gap-1.5 rounded-full border border-hairline px-2.5 py-1 text-[12px] text-body active:bg-surface-card"
             aria-label="Choose where to play"
             @click="toggleDevices"
           >
-            <Smartphone :size="13" />
+            <component :is="deviceIcon(currentKind)" :size="13" />
             <span class="max-w-[140px] truncate">{{ tug.spotifyTargetName }}</span>
             <ChevronDown :size="13" />
           </button>
@@ -294,23 +313,17 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
             <div class="absolute right-0 top-9 z-20 w-60 overflow-hidden rounded-lg border border-hairline bg-canvas py-1 shadow-lg">
               <p class="caption-upper px-3 py-1.5 text-muted-soft">Play on</p>
               <button
+                v-for="row in tug.spotifyPickerRows"
+                :key="row.id ?? row.name"
                 class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-body active:bg-surface-card"
-                @click="pickDevice(null)"
+                :aria-current="row.current ? 'true' : undefined"
+                @click="pickDevice(row)"
               >
-                <Smartphone :size="15" /> <span class="flex-1 truncate">iPhone</span>
-                <span v-if="!tug.spotifyDevice" class="text-[11px] text-accent-teal">Current</span>
+                <component :is="deviceIcon(row.kind)" :size="15" />
+                <span class="flex-1 truncate">{{ row.name }}</span>
+                <span v-if="row.current" class="text-[11px] text-accent-teal">Current</span>
               </button>
-              <button
-                v-for="d in devices.filter((x) => x.kind.toLowerCase() !== 'smartphone')"
-                :key="d.id"
-                class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-body active:bg-surface-card"
-                @click="pickDevice(d)"
-              >
-                <component :is="deviceIcon(d.kind)" :size="15" />
-                <span class="flex-1 truncate">{{ d.name }}</span>
-                <span v-if="tug.spotifyDevice?.id === d.id" class="text-[11px] text-accent-teal">Current</span>
-              </button>
-              <p v-if="devices.filter((x) => x.kind.toLowerCase() !== 'smartphone').length === 0" class="px-3 py-2 text-[12px] text-muted-soft">
+              <p v-if="tug.spotifyPickerRows.length === 1" class="px-3 py-2 text-[12px] text-muted-soft">
                 No other Spotify devices are active.
               </p>
             </div>
@@ -509,6 +522,15 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
         </section>
 
         <!-- Recent tab -->
+        <section v-else-if="(tab === 'recent' || tab === 'top') && tug.spotify.needsReconnect" class="p-2">
+          <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
+            <p class="text-[13px] text-body">{{ SPOTIFY_RECONNECT }}</p>
+            <button class="btn-primary btn-sm" :disabled="tug.spotifyConnecting" @click="reconnect">
+              {{ tug.spotifyConnecting ? "Connecting…" : "Reconnect" }}
+            </button>
+          </div>
+        </section>
+
         <section v-else-if="tab === 'recent'" class="p-2">
           <div v-if="tabLoading && !recent" class="flex items-center justify-center gap-2 py-12 text-[13px] text-muted">
             <Loader2 :size="16" class="animate-spin" /> Loading…
