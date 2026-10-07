@@ -14,6 +14,9 @@ pub enum Failure {
     TimedOut,
     /// The phone is connected but isn't offering ANCS (locked after a restart, or mid-update).
     NotFound,
+    /// No ANCS and not an Apple device (an Android phone): unlocking won't help, and retrying
+    /// often won't either.
+    NotAnIphone,
     /// Anything else (refused, closed, a Windows error).
     Other,
 }
@@ -75,7 +78,9 @@ pub fn after_failure(before: Before, failure: Failure) -> After {
     let unreachable = matches!(failure, Failure::Unreachable | Failure::TimedOut);
     let away = before.away || (!before.linked && unreachable);
     let reconnecting = !away && before.reconnecting && !awaiting_unlock && before.failures < RECONNECTING_ATTEMPTS;
-    let backoff = if awaiting_unlock {
+    // Not an iPhone: nothing will change soon, so retry as rarely as a locked phone (but never
+    // say "unlock").
+    let backoff = if awaiting_unlock || (before.linked && failure == Failure::NotAnIphone) {
         Backoff::Unlock
     } else if before.linked {
         Backoff::Connected
@@ -225,6 +230,20 @@ mod tests {
         assert!(a.awaiting_unlock);
         assert_eq!(a.backoff, Backoff::Unlock);
         assert!(!a.away);
+    }
+
+    #[test]
+    fn a_phone_that_isnt_an_iphone_never_asks_for_an_unlock_but_backs_off_far() {
+        let a = after_failure(
+            Before {
+                linked: true,
+                awaiting_unlock: true,
+                ..before()
+            },
+            Failure::NotAnIphone,
+        );
+        assert!(!a.awaiting_unlock);
+        assert_eq!(a.backoff, Backoff::Unlock);
     }
 
     #[test]

@@ -606,10 +606,25 @@ impl Store {
         Ok(())
     }
 
+    /// Settings › Data & privacy › Clear history: everything tug copied from the phone's activity
+    /// (notifications, texts and their search index, the recent-calls list, names learned from
+    /// notifications) goes. Settings, the pairing and the phone's contacts stay; the iPhone keeps
+    /// its own. Texts the phone still lists come back at the next sync, as on a fresh install.
     pub fn clear_history(&self) -> Result<()> {
-        self.conn().execute_batch(
-            "DELETE FROM notifications; INSERT INTO notifications_fts (notifications_fts) VALUES ('rebuild');",
-        )
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "DELETE FROM notifications;
+             INSERT INTO notifications_fts (notifications_fts) VALUES ('rebuild');
+             DELETE FROM messages;
+             INSERT INTO messages_fts (messages_fts) VALUES ('rebuild');
+             DELETE FROM contact_aliases;",
+        )?;
+        tx.execute(
+            "DELETE FROM settings WHERE key IN (?1, ?2)",
+            params![crate::map::calls::RECENT_CALLS, crate::state::keys::LAST_TEXT_SYNC],
+        )?;
+        tx.commit()
     }
 
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
@@ -731,6 +746,54 @@ mod tests {
         assert_eq!(clean_name(""), "");
         // Localized reply suffixes aren't guessed at (see the TODO in clean_name): left as sent.
         assert_eq!(clean_name("Zoé a répondu"), "Zoé a répondu");
+    }
+
+    #[test]
+    fn clear_history_clears_what_it_promises_and_keeps_the_rest() {
+        let s = Store::in_memory().unwrap();
+        insert(
+            &s,
+            "s1",
+            1,
+            EventFlags::default(),
+            &attrs("com.apple.MobileSMS", "Jane", "running late"),
+        );
+        s.conn()
+            .execute_batch(
+                "INSERT INTO messages (source, handle, direction, address, body, received_at, status)
+                     VALUES ('iphone-map', 'h1', 'in', '+15550100001', 'see you at noon', 1, 'received');
+                 INSERT INTO contacts (address, name) VALUES ('+15550100001', 'Jane Doe');
+                 INSERT INTO contact_aliases (address, alias) VALUES ('+15550100001', 'Janey');",
+            )
+            .unwrap();
+        s.set_setting(crate::map::calls::RECENT_CALLS, "[]").unwrap();
+        s.set_setting(crate::state::keys::LAST_TEXT_SYNC, "1").unwrap();
+        s.set_setting(crate::state::keys::DEVICE_ID, "phone").unwrap();
+        s.set_setting("toasts", "false").unwrap();
+
+        s.clear_history().unwrap();
+
+        let count = |sql: &str| s.conn().query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(count("SELECT count(*) FROM notifications"), 0);
+        assert_eq!(count("SELECT count(*) FROM messages"), 0);
+        assert_eq!(
+            count("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'noon'"),
+            0
+        );
+        assert_eq!(
+            count("SELECT count(*) FROM notifications_fts WHERE notifications_fts MATCH 'late'"),
+            0
+        );
+        assert_eq!(count("SELECT count(*) FROM contact_aliases"), 0);
+        assert_eq!(s.setting(crate::map::calls::RECENT_CALLS).unwrap(), None);
+        assert_eq!(s.setting(crate::state::keys::LAST_TEXT_SYNC).unwrap(), None);
+        // Kept: the phone's contacts, the pairing and settings.
+        assert_eq!(count("SELECT count(*) FROM contacts"), 1);
+        assert_eq!(
+            s.setting(crate::state::keys::DEVICE_ID).unwrap().as_deref(),
+            Some("phone")
+        );
+        assert_eq!(s.setting("toasts").unwrap().as_deref(), Some("false"));
     }
 
     #[test]

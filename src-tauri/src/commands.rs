@@ -91,7 +91,9 @@ pub fn search_all(state: State<'_, AppState>, query: String, limit: u32) -> Resu
 
 #[tauri::command]
 pub fn clear_history(state: State<'_, AppState>) -> Result<()> {
-    state.shared.store.clear_history().map_err(|e| e.to_string())
+    state.shared.store.clear_history().map_err(|e| e.to_string())?;
+    crate::bt_inventory::clear_last_report();
+    Ok(())
 }
 
 #[tauri::command]
@@ -881,6 +883,12 @@ pub async fn tugboat_stop(state: State<'_, AppState>) -> Result<()> {
 #[tauri::command]
 pub fn tugboat_status(state: State<'_, AppState>) -> TugboatStatus {
     state.tugboat.status()
+}
+
+/// Whether this Windows account is an administrator, for Tugboat's "Can't connect?" help.
+#[tauri::command]
+pub fn tugboat_user_is_admin() -> bool {
+    crate::tugboat::user_is_admin()
 }
 
 /// "Copy link" in the Tugboat panel: the QR link, kept out of clipboard history and sync. Sync on

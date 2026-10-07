@@ -284,6 +284,7 @@ pub fn run() {
             commands::tugboat_start,
             commands::tugboat_stop,
             commands::tugboat_status,
+            commands::tugboat_user_is_admin,
             commands::tugboat_copy_link,
             commands::tugboat_pick_files,
             commands::tugboat_remove_offer,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { connectionBusy, connectionLabel, connectionSentence } from "./connectionStatus";
+import { connectionBusy, connectionLabel, connectionSentence, NOT_AN_IPHONE } from "./connectionStatus";
+import winrtRs from "../../src-tauri/src/ble/winrt.rs?raw";
 
 const base = { connection: "connected" as const, awaitingUnlock: false, reconnecting: false, radio: "on" as const };
 
@@ -74,11 +75,18 @@ describe("connectionSentence agrees with the sidebar label", () => {
     { connection: "disconnected" as const, away: true, reconnecting: true, label: "iPhone away", sentence: /out of range/ },
     { connection: "disconnected" as const, awaitingUnlock: true, reconnecting: true, label: "Unlock your iPhone", sentence: /Unlock it/ },
     { connection: "connecting" as const, awaitingUnlock: true, label: "Connecting…", sentence: /^Connecting/ },
+    // An Android phone paired by mistake: never "Unlock your iPhone".
+    { connection: "disconnected" as const, notIphone: true, label: "Not an iPhone", sentence: /doesn't look like an iPhone/ },
+    { connection: "disconnected" as const, notIphone: true, awaitingUnlock: true, label: "Not an iPhone", sentence: /works with iPhone/ },
   ];
   it.each(cases)("$label", (c) => {
     const s = { ...base, ...c, device };
     expect(connectionLabel(s)).toBe(c.label);
     expect(connectionSentence(s)).toMatch(c.sentence);
+  });
+
+  it("says what the Rust side logs for a phone that isn't an iPhone", () => {
+    expect(winrtRs).toContain(`NOT_AN_IPHONE: &str = "${NOT_AN_IPHONE}"`);
   });
 
   it("asks to pair when nothing is set up", () => {

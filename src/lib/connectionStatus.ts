@@ -5,7 +5,10 @@
 
 import type { DeviceStatus } from "../types/protocol";
 
-type StatusInputs = Pick<DeviceStatus, "connection" | "awaitingUnlock" | "reconnecting" | "radio" | "away">;
+type StatusInputs = Pick<DeviceStatus, "connection" | "awaitingUnlock" | "reconnecting" | "radio" | "away" | "notIphone">;
+
+/** The paired phone isn't an iPhone (an Android phone). Mirrors `NOT_AN_IPHONE` in ble/winrt.rs. */
+export const NOT_AN_IPHONE = "This doesn't look like an iPhone. tug works with iPhone for now.";
 
 /** Bluetooth is off or missing: nothing can connect, whatever the link last said. */
 export function radioDown(s: Pick<DeviceStatus, "radio">): boolean {
@@ -29,6 +32,8 @@ export function connectionLabel(s: StatusInputs): string {
   if (radioDown(s)) return s.radio === "off" ? "Bluetooth is off" : "No Bluetooth";
   const reconnecting = showsReconnecting(s);
   if (s.connection === "connecting") return reconnecting ? "Reconnecting…" : "Connecting…";
+  // Not an iPhone at all: unlocking would never help.
+  if (s.notIphone) return "Not an iPhone";
   // A locked phone needs the user; tug rebuilding the link on its own doesn't.
   if (s.awaitingUnlock) return "Unlock your iPhone";
   // Out of range: one steady state while tug keeps trying quietly (failed retries don't flip it).
@@ -57,6 +62,7 @@ export function connectionSentence(s: StatusInputs & Pick<DeviceStatus, "device"
   const reconnecting = "Reconnecting to your iPhone. No need to do anything.";
   if (s.connection === "connecting") return showsReconnecting(s) ? reconnecting : "Connecting to your iPhone…";
   // A stale awaitingUnlock flag must never claim a forgotten phone is "connected" (handled above).
+  if (s.notIphone) return NOT_AN_IPHONE;
   if (s.awaitingUnlock) return "Your iPhone is connected but locked. Unlock it to reconnect.";
   // Away before reconnecting, as in the label: one steady "out of range" while tug retries quietly.
   if (s.away) return "Your iPhone is out of range. tug reconnects by itself when it's back.";
