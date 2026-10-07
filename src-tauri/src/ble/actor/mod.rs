@@ -269,6 +269,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         inventory: inventory::InventoryState::default(),
         away_since: None,
         last_poke: None,
+        radio_recheck_in: link_policy::RADIO_RECHECK_SECS,
         connected_since_adopt: true,
         adopt_timeouts: 0,
     };
@@ -327,6 +328,8 @@ struct Actor {
     away_since: Option<Instant>,
     /// When a connect last tried a link Windows reports down (see `link_policy::wait_for_link_up`).
     last_poke: Option<Instant>,
+    /// Seconds until the radio is read again while it isn't On.
+    radio_recheck_in: u32,
     /// Whether the adopted phone has connected since it was adopted (true for a remembered one).
     connected_since_adopt: bool,
     /// Timed-out connects since adopting the phone, while it hasn't connected yet.
@@ -531,11 +534,27 @@ impl Actor {
                 self.connect_failures = 0;
                 self.link_down_at = None;
                 self.retry_in = 0;
+                self.last_poke = None;
                 self.shared.update_status(|s| s.awaiting_unlock = false);
-                // After resume the old GATT handles are stale and Windows may never fire a reconnect
-                // for them, so drop the link and let the next tick open a fresh one.
+                // After resume the old GATT handles can be stale and Windows may never fire a
+                // reconnect for them. Read the subscription back (bounded): a link that answers is
+                // kept, so a short sleep doesn't cost a full reconnect and its notification replay.
                 if self.link.is_some() {
-                    self.relink(&format!("woke ({how})"));
+                    let check = self.wake_check().await;
+                    let (linked, subscribed) = self
+                        .link
+                        .as_ref()
+                        .map_or((false, false), |l| (l.connected, l.ancs.is_some()));
+                    if link_policy::keep_link_after_wake(linked, subscribed, check) {
+                        log::info!("the iPhone link survived the sleep ({check:?}); keeping it");
+                        self.cccd_check_in = 0;
+                    } else {
+                        self.relink(&format!("woke ({how}; link check: {check:?})"));
+                    }
+                }
+                // The radio may have changed while asleep without an event reaching tug.
+                if self.shared.status().radio != RadioState::On {
+                    self.recheck_radio().await;
                 }
                 // Nudge the texts/contacts/calls worker to rebuild its MAP session too.
                 if let Some(map) = self.shared.map.get() {
@@ -586,6 +605,7 @@ impl Actor {
                 }
             }
             Event::Radio(state) => {
+                log::info!("Bluetooth radio: {state:?}");
                 self.shared.update_status(|s| {
                     s.radio = state;
                     // With Bluetooth off there's nothing to reconnect: the UI says it's off instead.
@@ -699,6 +719,16 @@ impl Actor {
         if self.discovered_dirty {
             self.discovered_dirty = false;
             self.emit_discovered();
+        }
+
+        // A radio that isn't On is read again now and then: a missed StateChanged would otherwise
+        // leave a stale "off" blocking every connect below until tug restarted.
+        if self.shared.status().radio == RadioState::On {
+            self.radio_recheck_in = link_policy::RADIO_RECHECK_SECS;
+        } else if self.radio_recheck_in > 0 {
+            self.radio_recheck_in -= 1;
+        } else {
+            self.recheck_radio().await;
         }
 
         // A lost Data Source response would otherwise stall the queue forever. (Not while the queue is

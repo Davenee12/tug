@@ -590,6 +590,27 @@ impl Actor {
         }
     }
 
+    /// After a wake: does the link still answer? Reads the ANCS Notification Source subscription back,
+    /// bounded by `link_policy::WAKE_CHECK`.
+    pub(super) async fn wake_check(&self) -> link_policy::WakeCheck {
+        use link_policy::WakeCheck;
+        let Some(ch) = self
+            .link
+            .as_ref()
+            .and_then(|l| l.ancs.as_ref())
+            .map(|a| a.notification_source.characteristic().clone())
+        else {
+            return WakeCheck::Failed;
+        };
+        match tokio::time::timeout(link_policy::WAKE_CHECK, winrt::notify_enabled(&ch)).await {
+            Ok(Ok(_)) => WakeCheck::Answered,
+            Ok(Err(e)) if e.is_closed() => WakeCheck::Closed,
+            Ok(Err(e)) if e.is_timeout() => WakeCheck::TimedOut,
+            Ok(Err(_)) => WakeCheck::Failed,
+            Err(_) => WakeCheck::TimedOut,
+        }
+    }
+
     /// Media and battery are optional at connect time; if they failed (e.g. Windows
     /// still held them for a previous process), keep trying while linked.
     pub(super) async fn retry_optional_services(&mut self) {
