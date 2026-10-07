@@ -122,9 +122,19 @@ async fn run(command: Command) -> i32 {
             }
         }
         Command::Text { to, message } => {
-            eprintln!("Confirm it in tug: Send or Don't send (2 minutes)…");
-            let _ = std::io::stderr().flush();
-            match call_as::<SendResult>(&c, Call::SendText { to, message }).await {
+            let call = call_as::<SendResult>(&c, Call::SendText { to, message });
+            tokio::pin!(call);
+            // Only once tug has accepted the request and is showing the card (an error, like the
+            // switch being off, comes back at once).
+            let answer = tokio::select! {
+                r = &mut call => r,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(800)) => {
+                    eprintln!("Check tug: Send or Don't send (it won't send by itself; 2 minutes)…");
+                    let _ = std::io::stderr().flush();
+                    call.await
+                }
+            };
+            match answer {
                 Ok(r) => {
                     let (line, ok) = format::send_outcome(&r);
                     println!("{line}");
