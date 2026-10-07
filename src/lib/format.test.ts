@@ -39,6 +39,7 @@ function note(title: string, message: string, atMin: number, extra: Partial<Phon
     negativeLabel: "Clear",
     removedAt: null,
     live: true,
+    fresh: false,
     ...extra,
   };
 }
