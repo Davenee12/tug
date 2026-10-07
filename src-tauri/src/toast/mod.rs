@@ -289,6 +289,14 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 None => Err("Message service isn't running".to_string()),
             };
             match sent {
+                // A send the phone refused is saved as failed (with Retry in the conversation), not
+                // returned as an error: say so, and still hand the row to the window.
+                Ok(stored) if stored.status == crate::messages::Status::Failed => {
+                    log::info!("reply from a pop-up not sent (row {id}, message {})", stored.id);
+                    let body = format!("Use Retry in the conversation when your iPhone is nearby.\n\u{201c}{text}\u{201d}");
+                    note(&app, id, &format!("Couldn't send to {who}"), &body, false);
+                    pressed_with(PressKind::Replied, Some(stored));
+                }
                 Ok(stored) => {
                     log::info!("sent a reply from a pop-up (row {id}, message {})", stored.id);
                     note(&app, id, &format!("Sent to {who}"), &text, true);

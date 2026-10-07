@@ -335,7 +335,11 @@ mod worker {
                     None => break,
                     Some(MapCommand::Refresh) => w.refresh().await,
                     Some(MapCommand::CheckContacts) => {
-                        w.contacts_due_now();
+                        // Only while Sync Contacts isn't confirmed on: once it's sharing, the 5-minute
+                        // resync is enough, and a pull on every focus would hold up sending.
+                        if !w.contacts.shared() {
+                            w.contacts_due_now();
+                        }
                         w.refresh().await;
                     }
                     // Wake for it: the next refresh pulls the calls once they're due.

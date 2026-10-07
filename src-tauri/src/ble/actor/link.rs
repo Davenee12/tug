@@ -121,10 +121,13 @@ impl Actor {
         if !self.link.as_ref().is_some_and(|l| l.connected) {
             self.last_poke = Some(Instant::now());
         }
-        // A phone that has connected before answers discovery in well under a second; don't let a
-        // phone that isn't there hold the actor (and every click) for the full 30 s. The first
-        // connect after adopting a phone keeps the full budget (a fresh bond waits on "Allow").
-        let setup = if self.connected_since_adopt {
+        // Don't let a phone that isn't there hold the actor (and every click) for the full 30 s: the
+        // short budget only applies while Windows reports the link down. With the link up, setup
+        // gets its normal limits — uncached discovery can take well over 10 s on this adapter, and a
+        // short budget there would drop and rebuild a working link forever. The first connect after
+        // adopting a phone keeps the full budget too (a fresh bond waits on "Allow").
+        let link_down = !self.link.as_ref().is_some_and(|l| l.connected);
+        let setup = if self.connected_since_adopt && link_down {
             tokio::time::timeout(link_policy::RECONNECT_DISCOVERY, self.setup_services())
                 .await
                 .unwrap_or(Err(BleError::TimedOut))
@@ -606,6 +609,8 @@ impl Actor {
             Ok(Ok(_)) => WakeCheck::Answered,
             Ok(Err(e)) if e.is_closed() => WakeCheck::Closed,
             Ok(Err(e)) if e.is_timeout() => WakeCheck::TimedOut,
+            // An unanswered link after sleep is dead even if Windows never says so: rebuild it.
+            Ok(Err(e)) if e.link_is_dead() => WakeCheck::TimedOut,
             Ok(Err(_)) => WakeCheck::Failed,
             Err(_) => WakeCheck::TimedOut,
         }
