@@ -29,9 +29,6 @@ const MAX_TEXTS: usize = 20;
 const DISK_MARGIN: u64 = 256 * 1024 * 1024;
 /// The page polls every ~2 s while it's on screen; quieter than this and it's in the background.
 const ACTIVE: Duration = Duration::from_secs(8);
-/// Where unfinished uploads are written, inside the Drop folder (same volume, so finishing is a
-/// rename). Removed when Drop starts and stops.
-const INCOMING: &str = ".incoming";
 
 /// What the session tells the outside world.
 pub trait Sink: Send + Sync {
@@ -261,6 +258,9 @@ pub struct Session {
     pub keys: Keys,
     /// `Pictures\tug Drop`.
     pub folder: PathBuf,
+    /// Where unfinished uploads are written (tug's local app data, not the Pictures folder, so a
+    /// OneDrive-synced Pictures never uploads half-received files). Emptied on start and stop.
+    pub incoming: PathBuf,
     state: Mutex<State>,
     closed: AtomicBool,
     sink: Arc<dyn Sink>,
@@ -276,10 +276,11 @@ pub fn now_ms() -> i64 {
 }
 
 impl Session {
-    pub fn new(secret: &[u8], folder: PathBuf, sink: Arc<dyn Sink>) -> Session {
+    pub fn new(secret: &[u8], folder: PathBuf, incoming: PathBuf, sink: Arc<dyn Sink>) -> Session {
         Session {
             keys: Keys::derive(secret),
             folder,
+            incoming,
             state: Mutex::new(State {
                 auth: Auth::new(),
                 phone: None,
@@ -302,12 +303,8 @@ impl Session {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn incoming_dir(&self) -> PathBuf {
-        self.folder.join(INCOMING)
-    }
-
     fn part_path(&self, id: &str) -> PathBuf {
-        self.incoming_dir().join(format!("{id}.part"))
+        self.incoming.join(format!("{id}.part"))
     }
 
     // --- Lifetime ---
@@ -445,9 +442,8 @@ impl Session {
             PlanError::TooBig => ApiError::TooBig,
             PlanError::BadChunkSize => ApiError::BadRequest,
         })?;
-        let incoming = self.incoming_dir();
-        fs::create_dir_all(&incoming).map_err(|e| io_err("create the Drop folder", e))?;
-        hide(&incoming);
+        fs::create_dir_all(&self.incoming).map_err(|e| io_err("create the incoming folder", e))?;
+        fs::create_dir_all(&self.folder).map_err(|e| io_err("create the Drop folder", e))?;
         // Enough room for this file and whatever else is still arriving, with a margin.
         let pending: u64 = {
             let st = self.state();
@@ -457,9 +453,12 @@ impl Session {
                 .map(|u| u.plan.size - u.bytes)
                 .sum()
         };
-        if let Some(free) = free_space(&incoming) {
-            if free < req.size + pending + DISK_MARGIN {
-                return Err(ApiError::NoSpace);
+        // Both where it's written and where it ends up (they differ if Pictures is on another drive).
+        for dir in [&self.incoming, &self.folder] {
+            if let Some(free) = free_space(dir) {
+                if free < req.size + pending + DISK_MARGIN {
+                    return Err(ApiError::NoSpace);
+                }
             }
         }
         let part = File::create(self.part_path(id)).map_err(|e| io_err("create a partial file", e))?;
@@ -550,7 +549,12 @@ impl Session {
         }
         let (final_name, final_path) = self.reserve_name(&name)?;
         // Replaces the empty placeholder `reserve_name` created, which is what makes the name ours.
-        if let Err(e) = fs::rename(&part, &final_path) {
+        // Across drives a rename can't work (ERROR_NOT_SAME_DEVICE), so copy instead.
+        let moved = match fs::rename(&part, &final_path) {
+            Err(e) if e.raw_os_error() == Some(17) => fs::copy(&part, &final_path).and_then(|_| fs::remove_file(&part)),
+            other => other,
+        };
+        if let Err(e) = moved {
             let _ = fs::remove_file(&final_path);
             return Err(io_err("save a received file", e));
         }
@@ -812,11 +816,10 @@ fn offer_plan(size: u64) -> Plan {
     }
 }
 
-/// Remove unfinished uploads left in the Drop folder (an abandoned or crashed session).
-pub fn clean_incoming(folder: &Path) {
-    let dir = folder.join(INCOMING);
+/// Remove unfinished uploads (an abandoned or crashed session's `.part` files).
+pub fn clean_incoming(dir: &Path) {
     if dir.exists() {
-        if let Err(e) = fs::remove_dir_all(&dir) {
+        if let Err(e) = fs::remove_dir_all(dir) {
             log::warn!("drop: couldn't remove unfinished files: {:?}", e.kind());
         }
     }
@@ -866,20 +869,6 @@ pub fn mime_for(name: &str) -> &'static str {
         _ => "application/octet-stream",
     }
 }
-
-/// Mark the unfinished-uploads folder hidden, so it doesn't clutter Explorer while it exists.
-#[cfg(windows)]
-fn hide(dir: &Path) {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::core::PCWSTR;
-    use windows::Win32::Storage::FileSystem::{SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN};
-    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
-    // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the call.
-    let _ = unsafe { SetFileAttributesW(PCWSTR(wide.as_ptr()), FILE_ATTRIBUTE_HIDDEN) };
-}
-
-#[cfg(not(windows))]
-fn hide(_dir: &Path) {}
 
 /// Free bytes on the volume holding `dir`.
 #[cfg(windows)]
