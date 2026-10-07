@@ -6,7 +6,11 @@ import {
   hourLabel,
   localTime,
   outlook,
+  isStale,
   parseForecast,
+  placeHour,
+  REFRESH_MS,
+  withCurrentHour,
   placeName,
   temp,
   wind,
@@ -148,5 +152,49 @@ group("weather", () => {
   it("labels days", () => {
     expect(dayLabel("2026-10-05", "2026-10-05")).toBe("Today");
     expect(dayLabel("2026-10-06", "2026-10-05")).toBe(new Date(2026, 9, 6).toLocaleDateString(undefined, { weekday: "short" }));
+  });
+});
+
+group("refreshing", () => {
+  it("treats a forecast as due a minute early, so a timer tick never just misses it", () => {
+    const fetched = 1_000_000;
+    expect(isStale(fetched, fetched + REFRESH_MS - 61_000)).toBe(false);
+    expect(isStale(fetched, fetched + REFRESH_MS - 60_000)).toBe(true);
+    // The interval starts a moment before the download lands: the next tick still refreshes.
+    expect(isStale(fetched + 800, fetched + REFRESH_MS)).toBe(true);
+  });
+});
+
+group("now follows the clock between downloads", () => {
+  const forecast: Forecast = {
+    fetchedAt: 0,
+    timezone: "UTC",
+    now: { time: "2026-10-06T14:00", temp: 20, feels: 19, code: 3, day: true, wind: 10, humidity: 60 },
+    hours: [
+      { time: "2026-10-06T14:00", temp: 20, code: 3, day: true, rain: 10 },
+      { time: "2026-10-06T15:00", temp: 22, code: 1, day: true, rain: 0 },
+      { time: "2026-10-06T16:00", temp: 23, code: 0, day: true, rain: 0 },
+    ],
+    days: [],
+  };
+  const at = (iso: string) => Date.parse(`${iso}Z`);
+
+  it("names the place's hour in its own time zone", () => {
+    expect(placeHour(at("2026-10-06T15:30:00"), "UTC")).toBe("2026-10-06T15");
+    expect(placeHour(at("2026-10-06T15:30:00"), "America/New_York")).toBe("2026-10-06T11");
+  });
+
+  it("keeps the downloaded conditions within the hour they were fetched", () => {
+    expect(withCurrentHour(forecast, at("2026-10-06T14:45:00"))).toBe(forecast);
+  });
+
+  it("moves to the next hour's temperature and sky once the hour turns", () => {
+    const f = withCurrentHour(forecast, at("2026-10-06T15:05:00"));
+    expect(f.now).toMatchObject({ time: "2026-10-06T15:00", temp: 22, code: 1, feels: 19, wind: 10, humidity: 60 });
+    expect(f.hours.map((h) => h.time)).toEqual(["2026-10-06T15:00", "2026-10-06T16:00"]);
+  });
+
+  it("keeps the last download when the clock runs past the hourly data", () => {
+    expect(withCurrentHour(forecast, at("2026-10-07T09:00:00"))).toBe(forecast);
   });
 });

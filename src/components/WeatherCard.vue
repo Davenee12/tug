@@ -16,7 +16,7 @@ import {
   Sun,
 } from "lucide-vue-next";
 import { useWeatherStore } from "../stores/weather";
-import { dayLabel, describe, hourLabel, localTime, outlook, searchPlaces, temp, wind, type Place, type Sky } from "../lib/weather";
+import { dayLabel, describe, hourLabel, localTime, outlook, searchPlaces, temp, wind, withCurrentHour, type Place, type Sky } from "../lib/weather";
 import { relativeTime } from "../lib/format";
 import { errorMessage } from "../lib/ipc";
 import { friendlyLocateError } from "../lib/locating";
@@ -36,7 +36,9 @@ const ICONS: Record<Sky, [Component, Component]> = {
 };
 const icon = (code: number, day = true) => ICONS[describe(code).sky][day ? 0 : 1];
 
-const f = computed(() => w.forecast);
+// "Now" follows the place's clock through the hourly forecast between downloads (`now` ticks on
+// the minute, below).
+const f = computed(() => (w.forecast ? withCurrentHour(w.forecast, now.value.getTime()) : null));
 const t = (c: number) => `${temp(c, w.unit)}°`;
 const today = computed(() => f.value?.days[0] ?? null);
 const line = computed(() => (f.value ? outlook(f.value) : null));
