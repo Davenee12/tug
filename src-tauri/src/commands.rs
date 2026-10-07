@@ -104,7 +104,15 @@ pub async fn perform_action(state: State<'_, AppState>, id: i64, positive: bool)
 #[tauri::command]
 pub async fn media_command(state: State<'_, AppState>, command: String) -> Result<()> {
     let command = RemoteCommand::parse(&command).ok_or_else(|| format!("unknown media command {command}"))?;
-    state.ble.request(|reply| Command::Media { command, reply }).await
+    let requested_at = std::time::Instant::now();
+    state
+        .ble
+        .request(|reply| Command::Media {
+            command,
+            requested_at,
+            reply,
+        })
+        .await
 }
 
 #[tauri::command]

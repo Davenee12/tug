@@ -33,6 +33,16 @@ export function skipMode(
   return listed ? "ams" : "none";
 }
 
+/**
+ * The skip button's words. Only Spotify's seek is an exact 15 s; the phone's own skip command jumps
+ * whatever the player chooses (Podcasts and Audible use 30 s), so those buttons carry no number.
+ */
+export function skipLabel(mode: SkipMode, direction: "back" | "forward"): { text: string; seconds: number | null } {
+  const word = direction === "back" ? "Back" : "Forward";
+  if (mode === "seek") return { text: `${word} ${SKIP_SECONDS} seconds`, seconds: SKIP_SECONDS };
+  return { text: direction === "back" ? "Skip back" : "Skip forward", seconds: null };
+}
+
 /** Where a ±seconds jump lands, in ms, kept inside the song (short of its very end). */
 export function skipTargetMs(elapsedSec: number, deltaSec: number, durationSec: number | null): number {
   let target = elapsedSec + deltaSec;

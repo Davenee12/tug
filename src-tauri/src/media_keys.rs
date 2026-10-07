@@ -136,6 +136,7 @@ pub fn desired(np: &NowPlaying, now_ms: i64) -> SmtcState {
     };
     // AMS reports 0 while paused; Windows only needs the rate to advance a playing track.
     let rate = np.rate.filter(|r| playing && r.is_finite() && *r != 0.0).unwrap_or(1.0);
+    let shown = shown_track(np.title.as_deref().unwrap_or(""), np.artist.as_deref().unwrap_or(""));
     SmtcState {
         enabled: true,
         status,
@@ -143,12 +144,26 @@ pub fn desired(np: &NowPlaying, now_ms: i64) -> SmtcState {
         pause: command_for(Button::Pause, np).is_some(),
         next: command_for(Button::Next, np).is_some(),
         previous: command_for(Button::Previous, np).is_some(),
-        title: np.title.clone().unwrap_or_default(),
-        artist: np.artist.clone().unwrap_or_default(),
+        title: shown.0,
+        artist: shown.1,
         album: np.album.clone().unwrap_or_default(),
         rate,
         timeline: timeline(np, playing, rate, now_ms),
     }
+}
+
+/// Title and artist for the flyout. On Spotify Connect the iPhone sends the title as
+/// "Song • Artist" and the artist as "Listening on <device>"; the flyout shows the song and the
+/// artist, never the device hint as an artist (as the Now Playing card, `src/lib/playback.ts`).
+fn shown_track(title: &str, artist: &str) -> (String, String) {
+    let hint = artist.trim().to_lowercase();
+    if hint.starts_with("listening on ") && hint.len() > "listening on ".len() {
+        return match title.rsplit_once(" • ") {
+            Some((song, by)) if !song.trim().is_empty() => (song.trim().to_string(), by.trim().to_string()),
+            _ => (title.to_string(), String::new()),
+        };
+    }
+    (title.to_string(), artist.to_string())
 }
 
 /// The position now: the phone's last report, advanced while playing (as the card does).
@@ -262,7 +277,11 @@ mod smtc {
                         log::info!("media key {button:?}: sending {}", command.as_str());
                         // The actor logs the outcome of every AMS command; nothing waits here.
                         let (reply, _) = tokio::sync::oneshot::channel();
-                        ble.send(Command::Media { command, reply });
+                        ble.send(Command::Media {
+                            command,
+                            requested_at: std::time::Instant::now(),
+                            reply,
+                        });
                     }
                     None => log::info!("media key {button:?} ignored: the iPhone's player doesn't offer it"),
                 }
@@ -419,6 +438,26 @@ mod tests {
         np.rate = Some(2.0);
         let s = desired(&np, 0);
         assert_eq!((s.status, s.rate), (Status::Playing, 2.0));
+    }
+
+    #[test]
+    fn spotify_connect_hint_is_never_the_artist() {
+        let mut np = spotify();
+        np.title = Some("Sweet Music • Voice, Trini Baby".into());
+        np.artist = Some("Listening on Kitchen Echo Dot".into());
+        let s = desired(&np, 0);
+        assert_eq!(
+            (s.title.as_str(), s.artist.as_str()),
+            ("Sweet Music", "Voice, Trini Baby")
+        );
+        // No bullet in the title: the song stays whole and the artist is blank.
+        np.title = Some("Sweet Music".into());
+        let s = desired(&np, 0);
+        assert_eq!((s.title.as_str(), s.artist.as_str()), ("Sweet Music", ""));
+        // A normal track with a bullet in its title is left alone.
+        let mut np = spotify();
+        np.title = Some("A • B".into());
+        assert_eq!(desired(&np, 0).title, "A • B");
     }
 
     #[test]
