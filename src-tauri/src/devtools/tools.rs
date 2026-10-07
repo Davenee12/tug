@@ -303,7 +303,15 @@ async fn media(dt: &DevTools, action: MediaAction) -> Result<serde_json::Value, 
         MediaAction::Next => RemoteCommand::NextTrack,
         MediaAction::Previous => RemoteCommand::PreviousTrack,
     };
-    let sent = tokio::time::timeout(MEDIA_TIMEOUT, dt.ble.request(|reply| Command::Media { command, reply })).await;
+    let sent = tokio::time::timeout(
+        MEDIA_TIMEOUT,
+        dt.ble.request(|reply| Command::Media {
+            command,
+            requested_at: std::time::Instant::now(),
+            reply,
+        }),
+    )
+    .await;
     match sent {
         Ok(Ok(())) => json(serde_json::json!({ "done": command.as_str() })),
         Ok(Err(e)) => Err(BridgeError::new(
