@@ -4,7 +4,7 @@ import { Check, LoaderCircle, RefreshCw, Smartphone } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { bondHint, leftoverPhone, pairingProblem, setupDeviceLists, startedOutsideTug } from "../lib/pairings";
 import { canSkipSwitches, connectStep, rescanDue } from "../lib/connectFlow";
-import { phoneSwitches } from "../lib/phoneSwitches";
+import { connectionBusy, connectionSentence } from "../lib/connectionStatus";
 import { api } from "../lib/ipc";
 import { phoneModel } from "../lib/phoneModel";
 import PhoneArt from "./PhoneArt.vue";
@@ -23,7 +23,8 @@ const tug = useTugStore();
 const s = computed(() => tug.status);
 const step = computed(() => connectStep(s.value, tug.pairingRequest, tug.connectSkipped));
 const canSkip = computed(() => tug.showConnect && canSkipSwitches(s.value));
-const switches = computed(() => phoneSwitches(s.value));
+// The same switches every other surface reads (store), so this card can't disagree with health.
+const switches = computed(() => tug.switches);
 
 // Discovery runs only while this panel is on screen (started below, stopped on unmount), so tug
 // never scans in the background. One row per iPhone comes straight from setupDeviceLists.
@@ -180,7 +181,9 @@ onUnmounted(() => {
   if (scanning.value) void tug.stopDiscovery();
 });
 
-const connecting = computed(() => s.value.connection !== "connected");
+// The link in the sidebar's words: a spinner only while tug is actually connecting.
+const busy = computed(() => connectionBusy(s.value));
+const sentence = computed(() => connectionSentence(s.value));
 // Settings › iPhone pictures the exact phone (the Feed's first-run panel stays as it was).
 const settingsArt = computed(() => props.context === "settings");
 const model = computed(() => phoneModel(s.value.device?.model));
@@ -242,12 +245,10 @@ const model = computed(() => phoneModel(s.value.device?.model));
                   Look at your iPhone and tap <strong class="font-medium text-body-strong">Allow</strong> to let this PC see your notifications.
                 </p>
               </div>
-              <p v-else-if="connecting" class="mt-2 flex items-center gap-2 text-[13px] text-muted">
-                <LoaderCircle :size="14" class="animate-spin" /> Connecting to your iPhone…
+              <p v-else-if="busy" class="mt-2 flex items-center gap-2 text-[13px] text-muted">
+                <LoaderCircle :size="14" class="animate-spin" /> {{ sentence }}
               </p>
-              <p v-else class="mt-1 text-[13px] text-muted">
-                Connected. tug reconnects by itself when you come back in range.
-              </p>
+              <p v-else class="mt-1 text-[13px] text-muted">{{ sentence }}</p>
             </div>
           </div>
         </section>
@@ -258,7 +259,7 @@ const model = computed(() => phoneModel(s.value.device?.model));
             On your iPhone, open <strong class="font-medium text-body-strong">Settings › Bluetooth</strong>, tap
             <strong class="font-medium text-body-strong">ⓘ</strong> next to this PC, and turn these on. They light up here as you do.
           </p>
-          <PhoneSwitches :switches="switches" />
+          <PhoneSwitches :switches="switches" @recheck="tug.checkSwitches()" />
           <button
             v-if="canSkip"
             class="mx-auto mt-2 block text-[13px] text-muted underline-offset-2 hover:underline"

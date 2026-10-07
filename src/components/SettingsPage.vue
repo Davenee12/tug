@@ -52,7 +52,7 @@ onUnmounted(() => {
 
 // ---- iPhone: Connection health ----
 const health = computed<HealthLink[]>(() =>
-  connectionHealth(tug.status, { contacts: tug.contacts.length, calls: tug.calls.length }),
+  connectionHealth(tug.status, { contacts: tug.contacts.length, calls: tug.calls.length }, tug.switchContext),
 );
 const lastErrorAge = computed(() => errorAge(tug.status.lastErrorAt, now.value));
 const STATE_META: Record<LinkState, { dot: string; label: string }> = {
@@ -60,6 +60,7 @@ const STATE_META: Record<LinkState, { dot: string; label: string }> = {
   off: { dot: "bg-accent-amber", label: "Needs attention" },
   error: { dot: "bg-error", label: "Problem" },
   waiting: { dot: "bg-muted-soft", label: "Waiting" },
+  unavailable: { dot: "bg-muted-soft", label: "Not available" },
 };
 
 const diagnostics = ref<"idle" | "copying" | "done">("idle");

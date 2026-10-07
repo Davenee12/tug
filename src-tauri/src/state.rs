@@ -133,6 +133,10 @@ pub struct DeviceStatus {
     /// Whether the phone shared contacts on the current connection (Sync Contacts on). Not
     /// "tug has contacts saved": kept history made the setup checklist say on while it was off.
     pub contacts_shared: bool,
+    /// The phone keeps answering with an empty phonebook (or refused): Sync Contacts is off. A
+    /// definite answer, so the UI says "off" instead of "Checking…" while tug keeps asking every
+    /// ~30 s (`map::contacts_watch`). Never true together with `contacts_shared`.
+    pub contacts_off: bool,
     /// Whether the texts (Classic) pairing works, is missing, or needs making again.
     pub texts_pairing: TextsPairing,
     /// The phone Windows has paired for texts (what to remove when it needs re-pairing).

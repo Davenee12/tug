@@ -133,6 +133,7 @@ const status: DeviceStatus = noPhone
       messagesError: null,
       contactsError: null,
       contactsShared: false,
+      contactsOff: false,
       textsPairing: "missing",
       textsDevice: null,
       liveTexts: "off",
@@ -156,6 +157,7 @@ const status: DeviceStatus = noPhone
       messagesError: null,
       contactsError: null,
       contactsShared: false,
+      contactsOff: false,
       textsPairing: "broken",
       textsDevice: "Jordan's iPhone",
       liveTexts: "off",
@@ -178,7 +180,9 @@ const status: DeviceStatus = noPhone
       reconnecting: false,
       messagesError: params.has("nudge") ? "the iPhone refused message access; turn on Show Notifications for this PC" : null,
       contactsError: params.has("nudge") ? "the iPhone refused contact access" : null,
-      contactsShared: false,
+      // Sharing contacts unless a scenario below says otherwise (?contactsoff, ?justpaired…).
+      contactsShared: !params.has("nudge"),
+      contactsOff: false,
       textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
       textsDevice: setup ? null : "Jordan's iPhone",
       liveTexts: params.has("livetexts") ? "active" : "off",
@@ -192,6 +196,40 @@ if (params.has("away") && status.device) {
     services: { notifications: false, media: false, battery: false, messages: false },
     liveTexts: "off",
   } satisfies Partial<DeviceStatus>);
+}
+
+// Status-consistency scenarios: the switches card (Settings › iPhone), the health rows above it and
+// the sidebar must all agree in each.
+//   ?justpaired   texts just opened, Sync Contacts not answered yet: "Checking…" (≤ 60 s, then a
+//                 plain "No answer yet"), never forever
+//   ?contactsoff  re-paired: Sync Contacts off on the phone (empty phonebooks), names saved from
+//                 before still show. ?contactsoff&flip: the next check ("Check again") finds it on
+//   ?textsoff     Show Notifications off (the phone refused message access)
+//   ?textsmissing no texts pairing made on this PC yet
+//   ?radiooff     Bluetooth turned off in Windows while a relink was under way
+if (status.device && !forgotten) {
+  if (params.has("justpaired")) Object.assign(status, { contactsShared: false, contactsOff: false });
+  if (params.has("contactsoff")) Object.assign(status, { contactsShared: false, contactsOff: true });
+  if (params.has("textsoff")) {
+    Object.assign(status, {
+      services: { ...status.services, messages: false },
+      messagesError: "the iPhone refused message access; turn on Show Notifications for this PC",
+      contactsShared: false,
+    });
+  }
+  if (params.has("textsmissing")) {
+    Object.assign(status, { services: { ...status.services, messages: false }, textsPairing: "missing", textsDevice: null, contactsShared: false });
+  }
+  if (params.has("radiooff")) {
+    Object.assign(status, {
+      radio: "off",
+      connection: "connecting",
+      reconnecting: false,
+      battery: null,
+      services: { notifications: false, media: false, battery: false, messages: false },
+      contactsShared: false,
+    } satisfies Partial<DeviceStatus>);
+  }
 }
 
 // ?applemusic swaps Spotify for Apple Music, which lists skip ±15 s and Like/Dislike over AMS
@@ -499,6 +537,7 @@ const dropState: TugboatStatus = {
   texts: [],
   sentText: null,
   sending: false,
+  receiving: false,
   ended: null,
 };
 const sendDrop = () => void emit("tugboat-status", structuredClone(dropState));
@@ -555,6 +594,16 @@ mockIPC(
       // a real version in the browser preview (unmocked, it rejects and both fall back to "dev").
       case "plugin:app|version":
         return appVersion;
+      // Sync Contacts is read by asking the phone: ?contactsoff&flip turns it on at the next check
+      // ("Check again", or the window coming to the front), as if the switch had just been flipped.
+      case "check_switches":
+        if (status.contactsOff && params.has("flip")) {
+          Object.assign(status, { contactsOff: false, contactsShared: true });
+          void emit("device-status", { ...status, services: { ...status.services } });
+        }
+        return null;
+      case "set_watching":
+        return null;
       case "get_status":
         return status;
       case "get_now_playing":

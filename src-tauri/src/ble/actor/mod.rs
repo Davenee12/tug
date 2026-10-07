@@ -577,6 +577,11 @@ impl Actor {
                     // With Bluetooth off there's nothing to reconnect: the UI says it's off instead.
                     if matches!(state, RadioState::Off | RadioState::Unavailable) {
                         s.reconnecting = false;
+                        // `tick` doesn't connect with the radio off, so a relink that had set
+                        // "connecting" would otherwise say "Connecting…" until Bluetooth came back.
+                        if s.connection == ConnectionState::Connecting {
+                            s.connection = ConnectionState::Disconnected;
+                        }
                     }
                 });
                 if state == RadioState::On {

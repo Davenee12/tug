@@ -278,12 +278,22 @@ pub async fn place_lookup(latitude: f64, longitude: f64) -> Result<String> {
 }
 
 /// The UI is showing the iPhone's switches (or stopped): check them every couple of seconds.
+/// Turning it on also checks Sync Contacts right away, not at the next due pull.
 #[tauri::command]
 pub fn set_watching(state: State<'_, AppState>, on: bool) {
     if state.shared.set_watching(on) {
         if let Some(map) = state.shared.map.get() {
-            map.refresh();
+            map.check_contacts();
         }
+    }
+}
+
+/// Check the iPhone's switches now: tug's window came to the front, or the user pressed
+/// "Check again". Sync Contacts is the one that needs a pull to read; the others follow live.
+#[tauri::command]
+pub fn check_switches(state: State<'_, AppState>) {
+    if let Some(map) = state.shared.map.get() {
+        map.check_contacts();
     }
 }
 

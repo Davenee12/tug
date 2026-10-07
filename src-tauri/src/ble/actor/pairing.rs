@@ -403,6 +403,8 @@ impl Actor {
             s.texts_device = None;
             s.messages_error = None;
             s.contacts_error = None;
+            s.contacts_shared = false;
+            s.contacts_off = false;
             s.services = Services::default();
         });
         // Best effort: a stale Windows bond makes re-pairing fail silently. The Classic (texts)

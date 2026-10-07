@@ -29,6 +29,7 @@ const CONNECTED: DeviceStatus = {
   messagesError: null,
   contactsError: null,
   contactsShared: true,
+  contactsOff: false,
   textsPairing: "ok",
   textsDevice: "Jordan's iPhone",
   liveTexts: "off",
@@ -42,6 +43,7 @@ const FRESH: DeviceStatus = {
   battery: null,
   services: { notifications: false, media: false, battery: false, messages: false },
   contactsShared: false,
+  contactsOff: false,
   textsPairing: "missing",
   textsDevice: null,
 };
@@ -187,6 +189,7 @@ describe("optionalNudge", () => {
       messagesError: "the iPhone refused message access; turn on Show Notifications for this PC",
       contactsError: "the iPhone refused contact access",
       contactsShared: false,
+      contactsOff: false,
     };
     const nudge = optionalNudge(s);
     expect(nudge.map((x) => x.key)).toEqual(["messages", "contacts"]);

@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { MessageSquare, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { callsEmptyHint } from "../lib/availability";
 import { callKey, callKeys, callName, callTime, clockTime, formatAddress, groupCalls, MESSAGES_APP } from "../lib/format";
 import { preservedScrollTop } from "../lib/scroll";
 import type { CallDirection, CallRecord } from "../types/protocol";
@@ -80,13 +81,8 @@ const time = (c: CallRecord) => {
   return at ? clockTime(at) : "";
 };
 
-const emptyHint = computed(() => {
-  const s = tug.status;
-  if (s.contactsError) return s.contactsError;
-  if (!s.device) return "Recent calls appear once your iPhone is set up.";
-  if (!s.services.messages) return "Recent calls come over the same link as your texts. They'll appear once it's connected.";
-  return "They come over the same link as your contacts, so Sync Contacts needs to be on (Settings › Bluetooth › ⓘ next to this PC).";
-});
+// Same answer as the Sync Contacts switch (lib/availability): never "turn it on" while it's on.
+const emptyHint = computed(() => callsEmptyHint(tug.status, tug.switchContext));
 </script>
 
 <template>
