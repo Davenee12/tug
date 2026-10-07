@@ -14,9 +14,20 @@ describe("shared test vector (also asserted by cargo test in src-tauri/src/tugbo
   });
 
   it("seals to the same bytes and opens them", () => {
-    const sealed = seal(keys, enc(vector.ad), enc(vector.plaintext), hexToBytes(vector.nonce));
+    const a = vector.ads;
+    const up = ad.up(a.fileId, a.index);
+    const sealed = seal(keys, up, enc(vector.plaintext), hexToBytes(vector.nonce));
     expect(bytesToHex(sealed)).toBe(vector.sealed);
-    expect(new TextDecoder().decode(open(keys, enc(vector.ad), sealed))).toBe(vector.plaintext);
+    expect(new TextDecoder().decode(open(keys, up, sealed))).toBe(vector.plaintext);
+  });
+
+  it("builds every associated-data string byte for byte", () => {
+    const a = vector.ads;
+    const text = (b: Uint8Array) => new TextDecoder().decode(b);
+    expect(text(ad.up(a.fileId, a.index))).toBe(a.up);
+    expect(text(ad.down(a.offerId, a.offerIndex))).toBe(a.down);
+    expect(text(ad.request(vector.mac.client, BigInt(vector.mac.seq)))).toBe(a.req);
+    expect(text(ad.response(vector.mac.client, BigInt(vector.mac.seq)))).toBe(a.res);
   });
 
   it("signs requests the same way", () => {

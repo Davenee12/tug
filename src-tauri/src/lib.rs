@@ -121,6 +121,22 @@ pub fn run() {
         // Closing the window hides tug to the tray instead of quitting (Quit is in the tray
         // menu), so the phone stays mirrored and notifications keep arriving.
         .on_window_event(|window, event| {
+            // Tugboat: files dropped onto tug's window are offered to the phone from here, so the
+            // page script never gets to name a path to offer.
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    if !paths.is_empty() {
+                        state.tugboat.offer_dropped(paths.clone());
+                    }
+                }
+                return;
+            }
+            if let tauri::WindowEvent::Focused(true) = event {
+                if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    state.tugboat.window_shown();
+                }
+                return;
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() != "main" || !tray::installed() {
                     return;
@@ -137,6 +153,9 @@ pub fn run() {
                     let _ = window.hide();
                     if let Some(state) = state {
                         tray::hint_once(window.app_handle(), &state.shared.store);
+                        // Nothing on screen would show Tugboat still listening: stop it (after any
+                        // transfer in progress).
+                        state.tugboat.window_hidden();
                     }
                 }
             }
@@ -214,7 +233,7 @@ pub fn run() {
             commands::tugboat_start,
             commands::tugboat_stop,
             commands::tugboat_status,
-            commands::tugboat_offer_files,
+            commands::tugboat_copy_link,
             commands::tugboat_pick_files,
             commands::tugboat_remove_offer,
             commands::tugboat_send_text,

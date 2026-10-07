@@ -26,9 +26,12 @@ rusqlite = { version = "0.40", features = ["bundled", "functions"] }
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
 log = "0.4"
 thiserror = "2"
-# Tugboat (phone <-> PC over the local Wi-Fi): a small HTTP server while Drop is open, the
+# Tugboat (phone <-> PC over the local Wi-Fi): a small HTTP server while Tugboat is open, the
 # phone page's chunks sealed with XChaCha20-Poly1305 under keys derived from the QR's secret.
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+# Tugboat's own accept loop: header timeouts and a connection cap, which axum::serve lacks.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
 hmac = "0.12"
@@ -75,7 +78,6 @@ webview2-com = "0.39"
 [dev-dependencies]
 # The Tugboat integration test plays the phone over a real socket.
 hyper = { version = "1", features = ["client", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -6,8 +6,11 @@
 //! scanned the code can drive the session. Associated data names the direction, the file and the
 //! chunk index, so a chunk can't be swapped, replayed into another file, or reflected back.
 //!
-//! Honest limit: this stops anyone passively listening on the Wi-Fi. The page itself is served
+//! Honest limits: this stops anyone passively listening on the Wi-Fi. The page itself is served
 //! over plain HTTP, so an active attacker who tampers with the first page load could still win.
+//! The secret also lives, for that session only, wherever the link went: the phone's browser
+//! history may keep the first URL (the page strips the `#` right away, but the history entry can
+//! remain), and "Copy link" puts it on the PC clipboard (kept out of clipboard history and sync).
 //! Never call it end-to-end secure.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -188,10 +191,24 @@ mod tests {
         enc_key: String,
         auth_key: String,
         nonce: String,
-        ad: String,
+        ads: AdVector,
         plaintext: String,
         sealed: String,
         mac: MacVector,
+    }
+
+    /// The associated-data strings each builder must produce, byte for byte.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AdVector {
+        file_id: String,
+        index: u32,
+        offer_id: String,
+        offer_index: u32,
+        up: String,
+        down: String,
+        req: String,
+        res: String,
     }
 
     #[derive(Deserialize)]
@@ -220,10 +237,17 @@ mod tests {
         let keys = Keys::derive(&hex(&v.secret));
         assert_eq!(to_hex(&keys.enc), v.enc_key);
         assert_eq!(to_hex(&keys.auth), v.auth_key);
+        // Every associated-data builder, byte for byte (the page asserts the same strings).
+        let a = &v.ads;
+        assert_eq!(ad::up(&a.file_id, a.index), a.up.as_bytes());
+        assert_eq!(ad::down(&a.offer_id, a.offer_index), a.down.as_bytes());
+        assert_eq!(ad::request(&v.mac.client, v.mac.seq), a.req.as_bytes());
+        assert_eq!(ad::response(&v.mac.client, v.mac.seq), a.res.as_bytes());
         let nonce: [u8; NONCE_LEN] = hex(&v.nonce).try_into().unwrap();
-        let sealed = keys.seal_with_nonce(&nonce, v.ad.as_bytes(), v.plaintext.as_bytes());
+        let up = ad::up(&a.file_id, a.index);
+        let sealed = keys.seal_with_nonce(&nonce, &up, v.plaintext.as_bytes());
         assert_eq!(to_hex(&sealed), v.sealed);
-        assert_eq!(keys.open(v.ad.as_bytes(), &sealed).unwrap(), v.plaintext.as_bytes());
+        assert_eq!(keys.open(&up, &sealed).unwrap(), v.plaintext.as_bytes());
         let mac = keys.request_mac(&v.mac.client, v.mac.seq, &v.mac.method, &v.mac.path);
         assert_eq!(b64(&mac), v.mac.mac);
     }

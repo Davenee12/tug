@@ -26,7 +26,7 @@ fn embed_tugboat_page() {
         let placeholder = out.join("tugboat-placeholder.html");
         std::fs::write(
             &placeholder,
-            "<!doctype html><meta charset=utf-8><title>Tugboat</title>\
+            "<!doctype html><meta charset=utf-8><title>Tugboat · tug</title>\
              <p>The Tugboat page wasn't built. Run <code>npm run build</code>.</p>",
         )
         .expect("write the placeholder page");

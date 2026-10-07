@@ -4,8 +4,9 @@
 //! which seals everything with keys derived from the secret (see `crypto.rs`).
 //!
 //! Lifetime: the server runs only while Tugboat is open, on the one address the phone can reach
-//! (`net.rs`). It stops when the panel closes, when tug quits, or after 10 minutes without a
-//! request; the secret is useless after that. Unfinished uploads are removed on start and stop.
+//! (`net.rs`). It stops when the panel closes, when tug quits, when tug's window hides to the tray
+//! (once any transfer in progress finishes), or after 10 minutes without a request; the secret is
+//! useless after that. Unfinished uploads are removed on start and stop.
 //! tug never touches Windows Firewall: Windows asks the user the first time on its own.
 //!
 //! The pure parts (keys and sealing, auth, file names, adapter ranking, chunk bookkeeping) are
@@ -39,6 +40,10 @@ use session::{Session, Sink, Skipped, TugboatIncoming, TugboatOffer, TugboatText
 
 /// Event carrying a fresh `TugboatStatus` whenever anything in the panel changes.
 pub const EVENT: &str = "tugboat-status";
+/// Text from the phone went (or failed to go) onto the clipboard: `{ ok: bool }`.
+pub const TEXT_EVENT: &str = "tugboat-text";
+/// Files were dropped onto tug's window and offered: the ones skipped, so the panel can say why.
+pub const DROPPED_EVENT: &str = "tugboat-dropped";
 /// Tugboat turns itself off after this long without a request from the phone (or a panel action).
 pub const IDLE_LIMIT: Duration = Duration::from_secs(10 * 60);
 const TICK: Duration = Duration::from_secs(2);
@@ -64,6 +69,8 @@ pub enum Phase {
 #[serde(rename_all = "camelCase")]
 pub enum Ended {
     Idle,
+    /// tug's window was hidden to the tray.
+    Hidden,
 }
 
 /// Everything the Tugboat panel shows. Mirrored in `src/types/protocol.ts`.
@@ -87,7 +94,14 @@ pub struct TugboatStatus {
     pub texts: Vec<TugboatText>,
     /// Text currently offered to the phone.
     pub sent_text: Option<String>,
+    /// The phone is downloading a file from the PC right now.
+    pub sending: bool,
     pub ended: Option<Ended>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TextArrived {
+    ok: bool,
 }
 
 struct Endpoint {
@@ -100,8 +114,9 @@ struct Endpoint {
 }
 
 impl Endpoint {
-    /// Stop accepting; give open requests a moment, then cut them off (the session is already
-    /// closed, so anything still running only gets "closed" back).
+    /// Stop accepting and end every open connection: the serve loop aborts them all when told to
+    /// stop. The task is aborted too a moment later, in case it was busy. (On close the session is
+    /// marked closed first, so anything that slips through only gets "closed" back.)
     fn close(mut self) {
         if let Some(tx) = self.shutdown.take() {
             let _ = tx.send(());
@@ -123,6 +138,11 @@ struct Running {
     /// The last port listened on, reused after a network blip so the link changes as little as
     /// possible.
     port: u16,
+    /// The address last shown in the QR code. When it changes the session is unbound (a new
+    /// address is a new browser origin); a blip back to the same address isn't a change.
+    advertised: Option<(Ipv4Addr, u16)>,
+    /// tug's window was hidden while files were moving: stop as soon as they're done.
+    stop_when_quiet: bool,
 }
 
 struct Inner {
@@ -164,11 +184,18 @@ impl Sink for PanelSink {
     fn text(&self, text: &str) {
         let Some(inner) = self.0.upgrade() else { return };
         let text = text.to_string();
-        // The WinRT clipboard needs the main (STA) thread.
+        let app = inner.app.clone();
+        // The WinRT clipboard needs the main (STA) thread. The panel says what happened only once
+        // it really did.
         let _ = inner.app.run_on_main_thread(move || {
-            if let Err(e) = crate::clipboard::set_text(&text) {
-                log::warn!("tugboat: couldn't put the phone's text on the clipboard: {e}");
-            }
+            let ok = match crate::clipboard::set_text(&text) {
+                Ok(()) => true,
+                Err(e) => {
+                    log::warn!("tugboat: couldn't put the phone's text on the clipboard: {e}");
+                    false
+                }
+            };
+            let _ = app.emit(TEXT_EVENT, TextArrived { ok });
         });
     }
 }
@@ -189,14 +216,10 @@ fn tugboat_folder(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "Couldn't find your Pictures folder.".to_string())
 }
 
-/// The link in the QR code. Once a phone is bound, its client id rides along after the secret, so
-/// after a network change (a new address is a new browser origin, with fresh storage) the same
-/// phone re-scans as itself instead of being turned away as "another device".
-fn link(ip: Ipv4Addr, port: u16, secret: &[u8], bound: Option<&str>) -> String {
-    match bound {
-        Some(client) => format!("http://{ip}:{port}/#{}.{client}", crypto::b64(secret)),
-        None => format!("http://{ip}:{port}/#{}", crypto::b64(secret)),
-    }
+/// The link in the QR code: the address, and the secret after the `#`. Nothing else, ever: who's
+/// bound stays on the PC, so a second phone scanning a re-shown code can't pass for the first.
+fn link(ip: Ipv4Addr, port: u16, secret: &[u8]) -> String {
+    format!("http://{ip}:{port}/#{}", crypto::b64(secret))
 }
 
 async fn open_endpoint(
@@ -212,7 +235,7 @@ async fn open_endpoint(
         Err(e) => return Err(e),
     };
     let port = listener.local_addr()?.port();
-    let url = link(ip, port, secret, session.bound_client().as_deref());
+    let url = link(ip, port, secret);
     let qr = qr::encode(&url);
     let (tx, rx) = oneshot::channel::<()>();
     let task = tauri::async_runtime::spawn(server::serve(listener, session, async {
@@ -231,6 +254,11 @@ async fn open_endpoint(
 
 impl TugboatService {
     pub fn new(app: AppHandle) -> TugboatService {
+        // Partial uploads a crash left behind are pre-sized (up to 8 GB each): free that space now
+        // rather than whenever Tugboat is next opened.
+        if let Ok(dir) = incoming_dir(&app) {
+            session::clean_incoming(&dir);
+        }
         TugboatService {
             inner: Arc::new(Inner {
                 app,
@@ -282,6 +310,7 @@ impl TugboatService {
                 outgoing: Vec::new(),
                 texts: Vec::new(),
                 sent_text: None,
+                sending: false,
                 ended,
             };
         };
@@ -307,6 +336,7 @@ impl TugboatService {
             outgoing: snap.outgoing,
             texts: snap.texts,
             sent_text: snap.sent_text,
+            sending: snap.sending,
             ended: None,
         }
     }
@@ -320,7 +350,12 @@ impl TugboatService {
         let incoming = incoming_dir(&self.inner.app)?;
         {
             let incoming = incoming.clone();
-            let _ = tokio::task::spawn_blocking(move || session::clean_incoming(&incoming)).await;
+            let folder = folder.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                session::clean_incoming(&incoming);
+                session::sweep_temp(&folder);
+            })
+            .await;
         }
         let secret = crypto::new_secret();
         let sink: Arc<dyn Sink> = Arc::new(PanelSink(Arc::downgrade(&self.inner)));
@@ -349,12 +384,15 @@ impl TugboatService {
                 return Ok(self.status());
             }
             let port = endpoint.as_ref().map_or(0, |e| e.port);
+            let advertised = endpoint.as_ref().map(|e| (e.ip, e.port));
             *run = Some(Running {
                 generation,
                 secret,
                 session,
                 endpoint,
                 port,
+                advertised,
+                stop_when_quiet: false,
             });
         }
         *lock(&self.inner.ended) = None;
@@ -374,7 +412,12 @@ impl TugboatService {
             }
             let incoming = r.session.incoming.clone();
             let _ = tokio::task::spawn_blocking(move || session::clean_incoming(&incoming)).await;
-            log::info!("tugboat: closed{}", if ended.is_some() { " (idle)" } else { "" });
+            let why = match ended {
+                Some(Ended::Idle) => " (idle)",
+                Some(Ended::Hidden) => " (window hidden)",
+                None => "",
+            };
+            log::info!("tugboat: closed{why}");
         }
         *lock(&self.inner.ended) = ended;
         self.emit();
@@ -398,14 +441,18 @@ impl TugboatService {
     async fn supervise(&self, generation: u64) {
         let mut ticks = 0u32;
         let mut was_active = false;
+        let mut was_sending = false;
         loop {
             tokio::time::sleep(TICK).await;
-            let (session, ip, port) = {
+            let (session, ip, port, stop_when_quiet) = {
                 let run = lock(&self.inner.running);
                 match run.as_ref() {
-                    Some(r) if r.generation == generation => {
-                        (r.session.clone(), r.endpoint.as_ref().map(|e| e.ip), r.port)
-                    }
+                    Some(r) if r.generation == generation => (
+                        r.session.clone(),
+                        r.endpoint.as_ref().map(|e| e.ip),
+                        r.port,
+                        r.stop_when_quiet,
+                    ),
                     _ => return,
                 }
             };
@@ -413,9 +460,15 @@ impl TugboatService {
                 self.stop(Some(Ended::Idle)).await;
                 return;
             }
+            if stop_when_quiet && !session.transferring() {
+                self.stop(Some(Ended::Hidden)).await;
+                return;
+            }
             let active = session.phone_active();
-            if active != was_active {
+            let sending = session.sending();
+            if active != was_active || sending != was_sending {
                 was_active = active;
+                was_sending = sending;
                 self.emit();
             }
             ticks += 1;
@@ -442,15 +495,19 @@ impl TugboatService {
             e.close();
         }
         let endpoint = match ip {
-            Some(ip) => open_endpoint(ip, port_hint, &secret, session).await.ok(),
+            Some(ip) => open_endpoint(ip, port_hint, &secret, session.clone()).await.ok(),
             None => None,
         };
+        let mut moved = false;
         {
             let mut run = lock(&self.inner.running);
             match run.as_mut() {
                 Some(r) if r.generation == generation => {
                     if let Some(e) = &endpoint {
                         r.port = e.port;
+                        let now = Some((e.ip, e.port));
+                        moved = r.advertised.is_some() && r.advertised != now;
+                        r.advertised = now;
                     }
                     r.endpoint = endpoint;
                 }
@@ -462,7 +519,59 @@ impl TugboatService {
                 }
             }
         }
+        // A new address is a new browser origin: the phone comes back with a new client id, so let
+        // whoever scans the new code bind (the panel shows the code again and says so).
+        if moved {
+            log::info!("tugboat: new address, waiting for the phone to scan again");
+            session.unbind();
+        }
         self.emit();
+    }
+
+    /// tug's window hid to the tray. Nothing on screen would show Tugboat is still listening, so
+    /// stop now, or as soon as files already moving are done.
+    pub fn window_hidden(&self) {
+        {
+            let mut run = lock(&self.inner.running);
+            let Some(r) = run.as_mut() else { return };
+            if r.session.transferring() {
+                r.stop_when_quiet = true;
+                return;
+            }
+        }
+        let svc = self.clone();
+        tauri::async_runtime::spawn(async move { svc.stop(Some(Ended::Hidden)).await });
+    }
+
+    /// The window is back: a transfer that outlived the hide can keep Tugboat open after all.
+    pub fn window_shown(&self) {
+        if let Some(r) = lock(&self.inner.running).as_mut() {
+            r.stop_when_quiet = false;
+        }
+    }
+
+    /// Files dropped onto tug's window (handled here, not in the webview, so page script can never
+    /// name paths to offer): open Tugboat if needed, offer them, and tell the panel what was skipped.
+    pub fn offer_dropped(&self, paths: Vec<PathBuf>) {
+        let svc = self.clone();
+        tauri::async_runtime::spawn(async move {
+            match svc.offer(paths).await {
+                Ok(skipped) => {
+                    let _ = svc.inner.app.emit(DROPPED_EVENT, skipped);
+                }
+                Err(e) => log::warn!("tugboat: couldn't offer dropped files: {e}"),
+            }
+        });
+    }
+
+    /// "Copy link": the QR link on the clipboard, kept out of Windows' clipboard history and cloud
+    /// sync, since it carries the session secret.
+    pub fn copy_link(&self) -> Result<(), String> {
+        let url = lock(&self.inner.running)
+            .as_ref()
+            .and_then(|r| r.endpoint.as_ref().map(|e| e.url.clone()))
+            .ok_or("Tugboat isn't open.")?;
+        crate::clipboard::set_text_private(&url)
     }
 
     /// Offer files to the phone, opening Tugboat first if it's closed (files dragged onto tug).
