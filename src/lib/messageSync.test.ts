@@ -16,6 +16,7 @@ function sms(id: number, direction: "in" | "out", receivedAt: number, extra: Par
     receivedAt,
     status: direction === "in" ? "received" : "accepted",
     msgType: direction === "in" ? "SMS_GSM" : null,
+    gapBefore: false,
     ...extra,
   };
 }
