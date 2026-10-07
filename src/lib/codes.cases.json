@@ -1,5 +1,5 @@
 {
-  "about": "Shared cases for findCode (src/lib/codes.ts) and its Rust port (src-tauri/src/codes.rs): both test suites read this file, so the two can't drift. code null = no code.",
+  "about": "Shared cases for findCode (src/lib/codes.ts) and its Rust port (src-tauri/src/codes.rs): both test suites read this file, so the two can't drift. code null = no code. sender (optional) = who sent it, for the short-code rule.",
   "cases": [
     { "text": "Your code is 482913. Don't share it with anyone.", "code": "482913" },
     { "text": "G-482913 is your Google verification code.", "code": "482913", "shown": "G-482913" },
@@ -23,6 +23,23 @@
     { "text": "Your code is 482913, or use backup code 771204", "code": null },
     { "text": "Code 482913. Again: 482913", "code": "482913" },
     { "text": "Your login code: 1234567890", "code": null },
-    { "text": "Login at 12:30:45 with code 5521", "code": "5521" }
+    { "text": "Login at 12:30:45 with code 5521", "code": "5521" },
+    { "text": "Ihr Bestätigungscode lautet 482913", "code": "482913" },
+    { "text": "Votre code de vérification est 482913", "code": "482913" },
+    { "text": "Seu código é 4829", "code": "4829" },
+    { "text": "Il tuo codice è 739104", "code": "739104" },
+    { "text": "Uw verificatiecode is 551204", "code": "551204" },
+    { "text": "Din engångskod är 662190", "code": "662190" },
+    { "text": "Ваш код: 381920", "code": "381920" },
+    { "text": "認証コード：482913", "code": "482913" },
+    { "text": "您的验证码是 482913", "code": "482913" },
+    { "text": "인증번호 [482913]", "code": "482913" },
+    { "text": "My postcode is 2031", "code": null },
+    { "text": "482913 ist dein Zugang", "code": null },
+    { "text": "482913 ist dein Zugang", "sender": "72975", "code": "482913" },
+    { "text": "Accès : 482913", "sender": "‪38 800‬", "code": "482913" },
+    { "text": "482913 ist dein Zugang", "sender": "+44 7700 900123", "code": null },
+    { "text": "Saldo 1250, Karte 4417", "sender": "72975", "code": null },
+    { "text": "Treffen um 18:30, Tisch 12", "sender": "72975", "code": null }
   ]
 }

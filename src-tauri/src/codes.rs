@@ -9,13 +9,70 @@ use std::sync::LazyLock;
 
 use fancy_regex::Regex;
 
-/// Words that mean "this message carries a code".
+/// Words that mean "this message carries a code", in English and the iPhone's other major
+/// languages, as whole words (Unicode-aware edges). Mirrors `CUE_WORDS` in `src/lib/codes.ts`.
+const CUE_WORDS: &[&str] = &[
+    // en
+    "code",
+    "codes",
+    "passcode",
+    "pass code",
+    "verification",
+    "verify",
+    "otp",
+    "one[- ]time",
+    "2fa",
+    "two[- ]factor",
+    "security",
+    "login",
+    "log in",
+    "sign[- ]in",
+    "pin",
+    r"authenticat\p{L}*",
+    r"confirm\p{L}*",
+    // es, pt
+    "código",
+    "codigo",
+    "verificación",
+    "verificação",
+    "clave",
+    "senha", // fr
+    "vérification",
+    "vérifier", // de
+    "bestätigungscode",
+    "sicherheitscode",
+    "anmeldecode",
+    "verifizierungscode",
+    "aktivierungscode",
+    "freischaltcode",
+    // it
+    "codice",
+    "verifica", // nl
+    "verificatiecode",
+    "beveiligingscode",
+    "inlogcode",
+    "bevestigingscode", // sv, no, da, pl, tr, ru
+    "kod",
+    "koden",
+    "kode",
+    "kodu",
+    "engångskod",
+    "doğrulama",
+    "код",
+    "кода",
+];
+
 static CUE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)\b(code|codes|passcode|pass code|verification|verify|otp|one[- ]time|2fa|two[- ]factor|security|login|log in|sign[- ]in|pin|authenticat[A-Za-z0-9_]*|confirm[A-Za-z0-9_]*|código|codigo)\b",
-    )
-    .expect("CUE compiles")
+    let w = r"[\p{L}\p{N}_]";
+    Regex::new(&format!("(?i)(?<!{w})(?:{})(?!{w})", CUE_WORDS.join("|"))).expect("CUE compiles")
 });
+
+/// Scripts without spaces between words: matched anywhere (ja, zh, ko).
+static CUE_ANYWHERE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"コード|验证码|驗證碼|校验码|认证码|인증\s?번호|인증\s?코드").expect("compiles"));
+
+/// A short-code sender (3–6 digits, as banks and services text from).
+static SHORT_CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9]{3,6}$").expect("compiles"));
 
 /// 4–8 digits, optionally split once by a dash or space (482-913), or a provider prefix like
 /// G-482913. Not part of a longer number, a price, a time or a phone number.
@@ -44,7 +101,25 @@ pub struct FoundCode {
 
 /// The one code in `text`, or `None` (no cue word, no candidate, or several different numbers).
 pub fn find_code(text: &str) -> Option<FoundCode> {
-    if text.is_empty() || !CUE.is_match(text).unwrap_or(false) {
+    find_code_from(text, None)
+}
+
+/// [`find_code`], also accepting a text from a short-code `sender` ("72975") that holds exactly
+/// one 4–8 digit number, whatever language it's in.
+pub fn find_code_from(text: &str, sender: Option<&str>) -> Option<FoundCode> {
+    if text.is_empty() {
+        return None;
+    }
+    let cued = CUE.is_match(text).unwrap_or(false) || CUE_ANYWHERE.is_match(text).unwrap_or(false);
+    let short_code = sender.is_some_and(|s| {
+        // iOS wraps numbers in notification titles in invisible direction marks.
+        let s: String = crate::text::strip_invisible(s)
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        SHORT_CODE.is_match(&s).unwrap_or(false)
+    });
+    if !cued && !short_code {
         return None;
     }
     let phones: Vec<(usize, usize)> = PHONE.find_iter(text).flatten().map(|m| (m.start(), m.end())).collect();
@@ -71,7 +146,11 @@ pub fn find_code(text: &str) -> Option<FoundCode> {
             shown: whole.as_str().to_string(),
         });
     }
-    // Several numbers and nothing to tell them apart: don't guess.
+    // Several numbers and nothing to tell them apart: don't guess. Without a cue word, only a text
+    // with exactly one number counts.
+    if !cued && found.len() != 1 {
+        return None;
+    }
     let first = found.first()?;
     found.iter().all(|f| f.code == first.code).then(|| first.clone())
 }
@@ -88,7 +167,7 @@ mod tests {
         assert!(cases.len() >= 20);
         for c in cases {
             let text = c["text"].as_str().unwrap();
-            let found = find_code(text);
+            let found = find_code_from(text, c.get("sender").and_then(|s| s.as_str()));
             assert_eq!(found.as_ref().map(|f| f.code.as_str()), c["code"].as_str(), "{text}");
             if let Some(shown) = c.get("shown").and_then(|s| s.as_str()) {
                 assert_eq!(found.unwrap().shown, shown, "{text}");

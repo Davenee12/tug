@@ -41,7 +41,7 @@ describe("findCode", () => {
   // The same cases run against the Rust port (src-tauri/src/codes.rs), which the bridge uses.
   it("agrees with the shared cases", () => {
     for (const c of shared.cases) {
-      const found = findCode(c.text);
+      const found = findCode(c.text, "sender" in c ? c.sender : null);
       expect(found?.code ?? null, c.text).toBe(c.code);
       if ("shown" in c && c.shown) expect(found?.shown, c.text).toBe(c.shown);
     }

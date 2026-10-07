@@ -175,6 +175,9 @@ pub(crate) fn clean_name(name: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
+    // TODO(localization): iOS rewrites an inline reply's title in the phone's language too, but
+    // the exact localized phrases aren't confirmed, so only English is stripped (as in format.ts
+    // `IOS_REPLY_SUFFIX`). Add a language here once a real iPhone shows its wording.
     for suffix in [" replied to your message", " replied to you"] {
         let cut = name.len().wrapping_sub(suffix.len());
         if name.len() >= suffix.len() && name.is_char_boundary(cut) && name[cut..].eq_ignore_ascii_case(suffix) {
@@ -189,8 +192,45 @@ pub(crate) fn clean_name(name: &str) -> String {
 /// SQL as `group_like`.
 pub(crate) fn looks_like_group(title: &str) -> bool {
     let t = clean_name(title).to_lowercase();
-    t.contains('&') || t.contains(',') || t.contains(" others")
+    if t.contains('&') || t.contains(',') || t.contains(" others") {
+        return true;
+    }
+    let words: Vec<&str> = t.split_whitespace().collect();
+    // "Sam y 2 más", "Sam et 2 autres", "Sam und 2 weitere", "Sam e altri 2": a count and "others".
+    let has_count = words.iter().any(|w| w.chars().all(|c| c.is_ascii_digit()));
+    if has_count && words.iter().any(|w| OTHERS_WORDS.contains(w)) {
+        return true;
+    }
+    // "Sam y Alex", "Sam et Alex", "Sam und Alex": two single names joined, nothing else. Kept to
+    // one word each side so a name with a joiner in it ("José Ortega y Gasset") stays a name.
+    matches!(words.as_slice(), [_, joiner, _] if GROUP_JOINERS.contains(joiner))
 }
+
+/// "and" in the iPhone's major languages, as a two-person group title joins the names.
+const GROUP_JOINERS: &[&str] = &["and", "y", "et", "und", "e", "en", "och", "og", "i", "ve"];
+/// "others"/"more" as a group title counts the rest ("Sam & 2 others").
+const OTHERS_WORDS: &[&str] = &[
+    "others",
+    "more",
+    "más",
+    "mas",
+    "autres",
+    "weitere",
+    "weiteren",
+    "andere",
+    "anderen",
+    "altri",
+    "outros",
+    "outras",
+    "mais",
+    "andra",
+    "andre",
+    "innych",
+    "inne",
+    "kişi",
+    "другие",
+    "других",
+];
 
 /// The key that matches one phone number across formats: its last 10 digits, when it has at least
 /// 10 (emails and short codes have none, and only match exactly). Also callable from SQL.
@@ -689,6 +729,43 @@ mod tests {
             "a bare phrase isn't a suffix"
         );
         assert_eq!(clean_name(""), "");
+        // Localized reply suffixes aren't guessed at (see the TODO in clean_name): left as sent.
+        assert_eq!(clean_name("Zoé a répondu"), "Zoé a répondu");
+    }
+
+    #[test]
+    fn group_titles_in_other_languages() {
+        for title in [
+            "Sam & Alex",
+            "Sam, Alex & Jo",
+            "Sam & 2 others",
+            "Sam y Alex",
+            "Sam et Alex",
+            "Sam und Alex",
+            "Sam e Alex",
+            "Sam en Alex",
+            "Sam and Alex",
+            "Sam y 2 más",
+            "Sam et 2 autres",
+            "Sam und 2 weitere",
+            "Sam e altri 2",
+            "Sam e mais 2",
+            "Sam en 2 anderen",
+        ] {
+            assert!(looks_like_group(title), "{title}");
+        }
+        for name in [
+            "Sam",
+            "Sam Lee",
+            "José Ortega y Gasset",
+            "Mary Ann",
+            "Elena 2",
+            "Yves",
+            "Sam e",
+            "Y Alex",
+        ] {
+            assert!(!looks_like_group(name), "{name}");
+        }
     }
 
     #[test]

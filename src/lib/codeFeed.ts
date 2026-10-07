@@ -67,7 +67,7 @@ function notificationCodes(notifications: PhoneNotification[]): NoteCode[] {
   const out: NoteCode[] = [];
   for (const n of notifications) {
     if (n.appId !== MESSAGES_APP || !isConversation(n)) continue;
-    const found = findCode(n.message || n.subtitle);
+    const found = findCode(n.message || n.subtitle, n.title);
     if (found) out.push({ conversationKey: threadKey(n), code: found.code, at: n.receivedAt });
   }
   return out;
@@ -94,7 +94,7 @@ export function codeEntries(messages: SmsMessage[], notifications: PhoneNotifica
   const groups = new Map<string, CodeEntry>();
   for (const m of messages) {
     if (m.direction !== "in" || m.receivedAt < since || cleared.has(m.id)) continue;
-    const found = findCode(m.body);
+    const found = findCode(m.body, m.address);
     if (!found) continue;
     const conversationKey = threadKey({ appId: MESSAGES_APP, title: senderName(m, nameFor) });
     if (coveredByNotification(index, conversationKey, found.code, m.receivedAt, windowMs)) continue;
@@ -147,12 +147,12 @@ export function newestCode(
   let best: { code: string; at: number; from: PhoneNotification[] } | null = null;
   for (const n of notifications) {
     if (n.receivedAt < since) continue;
-    const found = findCode(n.message || n.subtitle);
+    const found = findCode(n.message || n.subtitle, n.title);
     if (found && (!best || n.receivedAt > best.at)) best = { code: found.code, at: n.receivedAt, from: [n] };
   }
   for (const m of messages) {
     if (m.direction !== "in" || m.receivedAt < since) continue;
-    const found = findCode(m.body);
+    const found = findCode(m.body, m.address);
     if (found && (!best || m.receivedAt > best.at)) best = { code: found.code, at: m.receivedAt, from: [] };
   }
   return best && { code: best.code, from: best.from };
@@ -175,7 +175,7 @@ export interface CodeToastOptions {
 export function codeToastForMessage(m: SmsMessage, notifications: PhoneNotification[], opts: CodeToastOptions = {}): string | null {
   const now = opts.now ?? Date.now();
   if (m.direction !== "in" || now - m.receivedAt > (opts.liveMs ?? DEFAULT_LIVE_MS)) return null;
-  const found = findCode(m.body);
+  const found = findCode(m.body, m.address);
   if (!found) return null;
   const nameFor = new Map((opts.contacts ?? []).map((c) => [c.address, c.name]));
   const conversationKey = threadKey({ appId: MESSAGES_APP, title: senderName(m, nameFor) });

@@ -50,13 +50,29 @@ export function avatarTone(appId: string): string {
   return AVATAR_TONES[h % AVATAR_TONES.length];
 }
 
-/** When the phone says it happened, falling back to when tug saw it. */
+/** How far the phone's time may drift from when tug saw a notification before tug distrusts it. */
+const CLOCK_SKEW_MS = 5 * 60_000;
+
+/**
+ * When the phone says it happened, falling back to when tug saw it. The phone's time has no zone
+ * (it's read as this PC's local time), so on a phone set to a different time zone it's off by
+ * hours: then tug's own receive time is shown instead. A time more than ~5 minutes after tug saw
+ * it can only be a zone (or clock) mismatch. One more than ~5 minutes before is a mismatch too for
+ * a notification that arrived live; one the phone replayed on connecting (pre-existing) may
+ * simply be old, so its own time is kept.
+ */
 export function notificationTime(n: PhoneNotification): Date {
+  const received = new Date(n.receivedAt);
   if (n.postedAt) {
     const d = new Date(n.postedAt);
-    if (!Number.isNaN(d.getTime())) return d;
+    if (!Number.isNaN(d.getTime())) {
+      const ahead = d.getTime() - n.receivedAt;
+      if (ahead > CLOCK_SKEW_MS) return received;
+      if (-ahead > CLOCK_SKEW_MS && !n.flags.preExisting) return received;
+      return d;
+    }
   }
-  return new Date(n.receivedAt);
+  return received;
 }
 
 export function clockTime(d: Date): string {
@@ -102,7 +118,11 @@ export function isConversation(n: PhoneNotification): boolean {
   return n.appId in MESSAGING_APPS && !!n.title;
 }
 
-/** iOS rewrites the title of an inline reply ("zoe replied to you"); it's still zoe. */
+/**
+ * iOS rewrites the title of an inline reply ("zoe replied to you"); it's still zoe.
+ * TODO(localization): iOS words this in the phone's language too, but the localized phrases
+ * aren't confirmed, so only English is stripped (as store.rs `clean_name`). Add one once seen.
+ */
 const IOS_REPLY_SUFFIX = /\s+replied to (you|your message)$/i;
 
 /**
@@ -474,18 +494,46 @@ export function isDismissLabel(label: string): boolean {
   return /^(|clear|dismiss|close|delete)$/i.test(label.trim());
 }
 
+// Words a call's negative action is labelled with (decline / end / hang up, and "call" itself) in
+// the iPhone's major languages. Latin-script words match whole words; the rest match anywhere.
+const CALL_WORDS = new Set([
+  // en
+  "decline", "end", "hang", "reject", "call",
+  // es
+  "rechazar", "colgar", "finalizar", "llamada",
+  // fr
+  "refuser", "raccrocher", "terminer", "appel",
+  // de
+  "ablehnen", "auflegen", "beenden", "anruf",
+  // it
+  "rifiuta", "riaggancia", "termina", "chiamata",
+  // pt
+  "recusar", "desligar", "encerrar", "terminar", "chamada",
+  // nl
+  "weigeren", "weiger", "ophangen", "beëindigen", "beëindig", "oproep",
+  // ru, uk, tr, pl, sv
+  "отклонить", "завершить", "відхилити", "завершити", "reddet", "sonlandır", "odrzuć", "zakończ", "avvisa", "avsluta",
+]);
+const CALL_SUBSTRINGS = ["拒否", "終了", "拒绝", "拒絕", "挂断", "掛斷", "结束", "結束", "거절", "종료", "通話", "通话"];
+
+/** Whether a negative-action label belongs to a call (Decline, End Call, Raccrocher, 拒否, ...). */
+export function isCallLabel(label: string): boolean {
+  const t = label.trim().toLowerCase();
+  if (!t) return false;
+  if (CALL_SUBSTRINGS.some((w) => t.includes(w))) return true;
+  return t.split(/[\s'’.,-]+/u).some((w) => CALL_WORDS.has(w));
+}
+
 /**
- * Can tug clear this notification on the phone? Only while it's still there and its negative
- * action really is a dismiss. Never a call: Decline / End Call are only sent by their own buttons.
+ * Can tug clear this notification on the phone? Only while it's still there and iOS offers a
+ * negative action that isn't about a call. Decided from ANCS itself (the negative-action flag, and
+ * never an incoming call) so a Clear labelled "Löschen", "Effacer" or "清除" counts; the label only
+ * rules out a call's Decline / End Call (in the major languages), which tug sends only from its own
+ * buttons. An English dismiss label is always a clear.
  */
 export function canClear(n: PhoneNotification): boolean {
-  return (
-    n.live &&
-    n.removedAt == null &&
-    n.flags.negativeAction &&
-    n.category !== "incomingCall" &&
-    isDismissLabel(n.negativeLabel)
-  );
+  if (!n.live || n.removedAt != null || !n.flags.negativeAction || n.category === "incomingCall") return false;
+  return isDismissLabel(n.negativeLabel) || !isCallLabel(n.negativeLabel);
 }
 
 const lastDigits = (s: string | null | undefined) => (s ?? "").replace(/\D/g, "").slice(-10);

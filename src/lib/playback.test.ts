@@ -5,6 +5,7 @@ import {
   activeFromPlayer,
   connectHint,
   currentDevice,
+  isConnectLine,
   pickerLabel,
   pickerRows,
   playingOnLine,
@@ -67,6 +68,22 @@ describe("trackLines", () => {
   it("shows ordinary tracks exactly as the phone sent them", () => {
     const np = { title: "A • B", artist: "Massive Attack", album: "Mezzanine" };
     expect(trackLines(np)).toEqual({ ...np, hint: null });
+    // Another player's bullet title is its own business.
+    expect(trackLines({ ...np, player: "Podcasts" })).toEqual({ ...np, hint: null });
+  });
+  it("recognises Spotify Connect on an iPhone in another language by its shape", () => {
+    for (const artist of ["Écoute sur Cuisine", "Wiedergabe auf Küche", "Escuchando en Salón", "正在 客厅 上收听"]) {
+      const np = { title: "Sweet Music • Voice, Trini Baby", artist, album: null, player: "Spotify" };
+      expect(isConnectLine(np), artist).toBe(true);
+      // The song and artist split out; the device stays unknown (only the English hint names it).
+      expect(trackLines(np)).toEqual({ title: "Sweet Music", artist: "Voice, Trini Baby", album: null, hint: null });
+    }
+  });
+  it("keeps a real Spotify artist who is also in the title", () => {
+    const np = { title: "Intro • Massive Attack", artist: "Massive Attack", album: null, player: "Spotify" };
+    expect(isConnectLine(np)).toBe(false);
+    expect(trackLines(np).artist).toBe("Massive Attack");
+    expect(isConnectLine({ title: "Teardrop", artist: "Massive Attack", player: "Spotify" })).toBe(false);
   });
 });
 

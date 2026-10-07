@@ -29,7 +29,7 @@ const when = computed(() => relativeTime(notificationTime(latest.value)));
 const ringing = computed(() => latest.value.category === "incomingCall" && latest.value.live);
 const clearable = computed(() => items.value.some(canClear));
 // A verification code in the newest notification: copy it right from the row.
-const code = computed(() => findCode(latest.value.message || latest.value.subtitle));
+const code = computed(() => findCode(latest.value.message || latest.value.subtitle, latest.value.title));
 // A web page to open for this app, but only for app stacks — conversation threads (people) never
 // get an "Open" button. For a stack the latest notification stands in (same app for all items).
 // Every app can be opened: its best page when tug knows one, else the app's own website.
