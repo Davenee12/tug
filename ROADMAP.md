@@ -73,6 +73,29 @@ Move photos, files and text between the phone and PC over home Wi-Fi with no app
 scan a QR in tug, a tug page opens in Safari, send or receive. See docs/COMPANION-PLAN.md
 "Phase 0.5" for the design and safety notes.
 
+**Landed (PR `feat/tug-drop`, not yet released):**
+- **Entry points:** a Drop button in the sidebar under the iPhone, `drop` in Ctrl+K, and files
+  dragged onto tug's window (opens Drop with them offered). Works with Bluetooth down.
+- **Panel:** QR code + "Type the link instead"; "Can't connect?" help after 30 s (same Wi-Fi, allow
+  tug on Private networks, guest Wi-Fi/VPN/Private Relay); then the connected phone, files and
+  text in both directions with progress, Show in folder and Copy.
+- **Phone page** (bundled into tug, no CDN): Photos & videos / Files buttons, chunked resumable
+  uploads, a paste box that lands on the PC clipboard, Get → Save for PC files (1 GB cap), text to
+  copy, light/dark.
+- **Safety:** plain HTTP on the gateway adapter's address only, random port, new 128-bit secret
+  per open (in the `#`, never sent); XChaCha20-Poly1305 per chunk with direction/file/chunk bound
+  in; every request MAC'd, first phone binds, replays refused. Stops passive sniffing, not an
+  active attacker on the first page load. Stops on close, quit, or 10 idle minutes; never touches
+  the firewall.
+- **Files:** saved to Pictures › tug Drop (Pictures known folder), sanitized names, " (2)" on
+  collisions, 8 GB per file, free-space check; half-received files live in app data, never in
+  (possibly OneDrive-synced) Pictures. HEIC kept as-is.
+- **Verify on Dave's iPhone before release:** Photos picker upload incl. Live Photos and a large
+  video with the phone locking mid-way (resume), the Windows firewall prompt, Save of a PC file on
+  iOS (Files › Downloads), Copy on the page, light/dark on the phone.
+- **Not in v1:** zip of several files, HEIC→JPEG, Save to Photos (needs the share sheet, which
+  wants HTTPS), mDNS.
+
 ## Future — companion apps (planned, see docs/COMPANION-PLAN.md)
 tug stays zero-setup on the phone by default. A tug phone app is the step that unlocks files,
 clipboard and Wi-Fi speed. Order: **Phase 0** reliability and polish (now) → **Phase 1** the tug

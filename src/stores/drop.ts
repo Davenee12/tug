@@ -35,6 +35,14 @@ export const useDropStore = defineStore("drop", () => {
     if (started) return;
     started = true;
     teardown.push(await on("drop-status", apply));
+    // After a window reload Drop may still be running: show it again rather than leave it unseen.
+    try {
+      const s = await api.dropStatus();
+      apply(s);
+      if (s.phase !== "off") open.value = true;
+    } catch {
+      /* the next event will tell */
+    }
     try {
       const { getCurrentWebview } = await import("@tauri-apps/api/webview");
       teardown.push(
