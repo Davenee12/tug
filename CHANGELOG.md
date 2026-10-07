@@ -1,5 +1,123 @@
 # Changelog
 
+## v0.5.12 — 2026-10-07
+
+tug for developers: your AI tools and your terminal can use your phone through tug, always with
+you in charge. Plus a reliability release: a steadier connection, texts and notifications that
+don't go missing, and screens that tell the truth. Merged as #93–#101. tug is now open source
+under the MIT licence. The connection and texting fixes are built and unit-tested but haven't all
+been tried on a phone yet.
+
+### New
+- **Developer tools** (Settings › Developer tools, **off until you turn it on**): tug runs a local
+  MCP server for AI tools such as **Claude Code, Codex, Cursor and VS Code**, with copy-paste setup
+  for each. Once on, AI tools can find the newest verification code, search your texts and
+  notifications, read GitHub, Slack, Linear, Jira, Sentry, PagerDuty, Vercel and Netlify
+  notifications, look at files you sent with Tugboat, see your phone's battery and what's playing,
+  control music and ask to send a text. Each of these has its own switch; **verification codes,
+  music controls and texts start off**.
+- **Texts are always your call:** when an AI tool (or `tug text`) wants to send a text, tug shows a
+  card with who it's to and the exact message. Nothing is sent unless you click **Send** within
+  2 minutes; focus starts on Don't send, Esc means Don't send, and Send only works once the card
+  has been up a moment and tug's window is in front.
+- **The `tug` command:** `tug code` (the newest code, `--copy` to put it on the clipboard),
+  `tug boat <file>` (send files to your phone with Tugboat), `tug text <name> "<message>"`,
+  `tug status`, and `tug mcp` (the MCP server). **Add tug to PATH** in Settings puts it in any new
+  terminal, only for your Windows account, and **Remove from PATH** undoes it.
+- **Connected tools and Revoke access:** Settings lists which tools have used tug and when, and
+  Revoke access disconnects all of them at once.
+- **Pop-up sound** switch in Settings › General, for when the iPhone's own chime is enough.
+- **A warning when Windows is blocking tug's pop-ups**, with a button straight to the right Windows
+  setting.
+
+### Improved
+- **Steadier "iPhone away":** when the phone is out of range or locked, tug shows one calm status
+  instead of flickering between Connecting and Disconnected, and stays responsive to clicks while
+  it waits.
+- **Faster recovery after a Bluetooth blip:** notifications come back within a moment instead of
+  being dead for about 15 seconds.
+- **Waking the PC keeps a healthy connection** instead of always reconnecting from scratch, and
+  rebuilds one that didn't survive the sleep right away.
+- **Sync Contacts tells the truth:** it shows Off when the iPhone isn't sharing contacts (instead of
+  "Checking…" forever), and tug notices it being turned on or off within seconds while the
+  switches are on screen.
+- **Every status agrees:** the sidebar, Settings › iPhone, the connection panel and the health rows
+  use the same wording for the same state.
+- **Spotify on a speaker:** Now Playing shows the real song, artist and the device it's playing on,
+  and Play on marks the device that's actually playing.
+- **Spotify search shows each song once**, instead of one row per album or edition.
+- **Recent calls are kept** across restarts, and still load when texts can't connect.
+- **Names on texts:** a contact saved as "+44 …" now matches a text from "07…", and people who
+  text from an email address get their name too.
+- **Skip buttons only say 15** when the jump really is 15 seconds (podcasts and audiobooks skip
+  their own amount).
+- **A photo with no caption** reads "Photo or attachment — open it on your iPhone" instead of
+  "(no preview)".
+- Many wording fixes so what tug says matches what it does: Data & privacy lists Spotify and
+  Tugboat under what goes online, the Connect panel only says it's looking while it is, a tray
+  **Settings…** item and a Settings button on the Connect panel, Mute calls lives under Quiet hours,
+  and Tugboat asks before closing when the phone hasn't saved files yet.
+
+### Fixed
+- **One press, one music command:** a press made while the phone was slow to answer could go out
+  twice (two Plays cancel out, two Previous skip two songs).
+- **Pop-up replies always show in the conversation.** If the window missed the reply while hidden
+  in the tray, tug adds it when you press the pop-up or come back to the window (this fixes the
+  known issue in v0.5.11).
+- **Texts that arrive while the iPhone reconnects pop up** instead of being treated as old news;
+  more than three at once become one summary pop-up.
+- **Unread counts stay right while tug is hidden,** and the tray icon shows a dot when there are
+  unread texts.
+- **Deleted conversations stay deleted,** including their older texts and notifications, and Undo
+  brings back exactly what was deleted.
+- **Retry doesn't send a second copy:** it resends the same message to the same number.
+- **No more stuck "Sending…":** a send shows straight away even when tug is busy, a send cut off by
+  quitting is marked failed with Retry, and a send that may have reached the phone says "May have
+  sent — check your iPhone" rather than risking a double text.
+- **Texts read in tug are marked read on the iPhone** even if it was out of reach at the time.
+- **One slow text can't hold up every newer one.**
+- **A quick reply sorts after the text it answers.**
+- **An honest note when texts may be missing:** after time away, if the iPhone only shared its last
+  10 texts, the conversation says earlier ones may only be on the phone.
+- **Weather:** changing place can't be overwritten by the old place's forecast, and "Today" moves on
+  at midnight even offline.
+- **The low-battery alert fires at launch** when the phone is already low.
+- **Pop-ups follow your settings from the first second** (muted apps, quiet hours, VIPs), and turning
+  tug's notifications back on in Windows works without a restart.
+- A failed reply from a pop-up says it wasn't sent and points to Retry.
+- Group texts can no longer teach tug the wrong name for a person.
+- The sidebar no longer shows "Connecting…" next to "Bluetooth is off".
+
+### Developer
+- **Developer bridge:** `crates/tug-bridge` (named pipe with a protected DACL and explicit owner,
+  versioned JSON lines, HMAC token proof over fresh nonces so the token never crosses the pipe;
+  clients refuse a pipe not owned by the user at medium integrity or above and never show
+  pre-auth text; token file labelled medium/no-read-up) and `crates/tug-cli` (the `tug` command
+  and an `rmcp` stdio MCP server, shipped as `bin\tug.exe`). App side in `src-tauri/src/devtools/`:
+  switches, per-tool rate limits, the confirmation state machine (`confirm.rs`), PATH (HKCU only),
+  content-free tool logging. Results carrying other people's words are wrapped as untrusted data.
+  Independent security review: the block and all should-fixes applied. See docs/DEVELOPERS.md.
+- Verification codes have a Rust port tested against the same `src/lib/codes.cases.json` as the
+  TypeScript.
+- Connection decisions are pure functions in `link_policy.rs` (blip recovery via `on_closed`, the
+  sticky `away` status, wake keep-or-relink); the radio is re-read every 45 s while not On;
+  advertising retries every failure with backoff.
+- `ams::CommandGate` in the Bluetooth actor drops a duplicate media command pressed before the
+  previous one finished or within 300 ms (volume exempt).
+- `map/contacts_watch.rs` decides when an empty phonebook means Sync Contacts is off
+  (`DeviceStatus.contactsOff`) and the pull schedule; `src/lib/phoneSwitches.ts` and
+  `connectionStatus.ts` are the one source for switch and link wording.
+- Texts: the pending row is saved before the MAP worker gets it (`MapCommand::Deliver`), a new
+  `unconfirmed` status, `after_push_failure`, a queued mark-read list, per-text fetch timeouts.
+  Schema v9 (`messages.gap_before`), v10 (drop group-like aliases), v11 (`contacts.match_key`).
+- Notifications: `upsert_notification` reports `fresh`; reconnect-gap pop-ups
+  (`src/lib/reconnectPopups.ts`); unread marking waits for `canSee` (`src/lib/attention.ts`);
+  conversation delete by key with a delete stamp; pop-up decisions wait for settings.
+- Dev mock: `?devtools`, `?devconfirm`, `?speaker`, `?popupreply` (`&missed`).
+- Open-source foundation: MIT licence, README, CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md,
+  issue and PR templates, docs/FEATURES.md and docs/ARCHITECTURE.md. Agent notes (CLAUDE.md,
+  `.claude/`) are no longer tracked.
+
 ## v0.5.11 — 2026-10-07
 
 Tugboat: send photos, files and text between your phone and PC over Wi-Fi, with no app on the
@@ -25,8 +143,8 @@ phone. Plus your exact iPhone in the sidebar and a round of fixes. Merged as #83
   reconnects cleanly, says "Reconnecting…", and keeps the iPhone able to find the PC.
 
 ### Known issues
-- A reply typed in the Windows pop-up is sent, but doesn't appear in the conversation until a later
-  release.
+- A reply typed in the Windows pop-up is sent, but sometimes didn't appear in the conversation.
+  Fixed in v0.5.12.
 
 ### Developer
 - `tugboat/` (axum on the LAN IPv4 only, HKDF + XChaCha20-Poly1305 per chunk, MAC-authenticated
@@ -377,7 +495,7 @@ Stability release (Sprint 2): fixes found by a full review of the app, each with
 
 ## v0.5.0 — 2026-10-04
 
-First release. Verified end to end on an iPhone 15 Pro Max with Windows 11.
+First release. Verified end to end on a real iPhone with Windows 11.
 
 ### Notifications
 - Every iPhone notification mirrored over Bluetooth LE (Apple Notification Center Service), with

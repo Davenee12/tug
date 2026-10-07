@@ -17,9 +17,9 @@
 //                                     the "Your iPhone has forgotten this PC" notice, with Remove
 //   http://localhost:1420/?nudge      connected, notifications on, but texts/contacts off: the Feed's
 //                                     dismissible "Get more from tug" nudge
-//   http://localhost:1420/?whatsnew   the "What's new" card on launch, previewing 0.5.9 with the
-//                                     earlier 0.5.8 update collapsed (version faked to 0.5.9, last
-//                                     seen 0.5.7). Reopen it any time from Settings › About.
+//   http://localhost:1420/?whatsnew   the "What's new" card on launch, previewing the newest entry in
+//                                     whatsNew.ts with the one before it collapsed (last seen faked to
+//                                     two releases back). Reopen it any time from Settings › About.
 //   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
 //   http://localhost:1420/?call       a call rings 1.5 s after load (rings out after 30 s, as a missed call)
@@ -45,6 +45,7 @@
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
+import { RELEASE_NOTES } from "./whatsNew";
 import type { CallRecord, Contact, DevToolsStatus, DeviceStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
@@ -58,10 +59,10 @@ const noRepeat = params.has("norepeat");
 const repeatIgnored = params.has("repeatignored");
 // The model identifier the mock phone reports over its Device Information Service.
 const model = params.has("nomodel") ? null : params.get("model") || "iPhone16,2";
-// ?whatsnew: fake the app version to 0.5.9 so the upcoming entry shows too; otherwise report the
-// shipping version so Settings › About and the card read a real number in the browser preview.
+// The mock reports the newest What's new version as the app version, so Settings › About and the
+// card read the release being built. ?whatsnew also fakes an older last-seen version (below).
 const whatsNewPreview = params.has("whatsnew");
-const appVersion = whatsNewPreview ? "0.5.9" : "0.5.8";
+const appVersion = RELEASE_NOTES[0].version;
 const now = Date.now();
 const min = 60_000;
 
@@ -379,9 +380,9 @@ const settings: Record<string, string> = {
   "ui.vips": setup ? "" : JSON.stringify([ZOE]),
   "ui.mutedApps": setup ? "" : JSON.stringify(["com.burbn.instagram"]),
 };
-// ?whatsnew: an older last-seen version so the card greets you on launch (0.5.9 + a collapsed 0.5.8).
+// ?whatsnew: an older last-seen version so the card greets you on launch (the newest entry + a collapsed one).
 // Otherwise record the current version, as a returning user would have, so it doesn't pop every run.
-if (whatsNewPreview) settings["ui.lastSeenVersion"] = "0.5.7";
+if (whatsNewPreview) settings["ui.lastSeenVersion"] = RELEASE_NOTES[2]?.version ?? "0.0.0";
 else if (!setup) settings["ui.lastSeenVersion"] = appVersion;
 let autostart = false;
 
@@ -732,7 +733,7 @@ mockIPC(
           "tug diagnostics",
           "===============",
           "",
-          "app version:     0.5.7 (dev mock)",
+          `app version:     ${appVersion} (dev mock)`,
           "windows version: Microsoft Windows [Version 10.0.26200.0000]",
           `bluetooth:       ${status.radio === "on" ? "radio on" : "radio off"}, peripheral role supported`,
           "",

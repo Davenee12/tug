@@ -1,0 +1,101 @@
+name: Bug report
+description: Something in tug doesn't work the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. A security problem? Please don't file it here:
+        use **Security › Report a vulnerability** instead (see SECURITY.md).
+
+        **Privacy:** issues are public. Don't paste real messages, phone numbers, contact names,
+        email addresses or your phone's name. Replace them with made-up ones.
+  - type: input
+    id: tug-version
+    attributes:
+      label: tug version
+      description: Settings › About.
+      placeholder: "0.5.12"
+    validations:
+      required: true
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      description: Press Win+R, type `winver`, and copy the version and build.
+      placeholder: "Windows 11 24H2 (build 26100)"
+    validations:
+      required: true
+  - type: input
+    id: phone
+    attributes:
+      label: Phone model and iOS version
+      description: On the iPhone, Settings › General › About. Android? Say which phone and Android version.
+      placeholder: "iPhone 13, iOS 26.0"
+    validations:
+      required: true
+  - type: input
+    id: adapter
+    attributes:
+      label: Bluetooth adapter (if you know it)
+      description: Built-in, or the make and model of a USB dongle. Device Manager › Bluetooth shows it.
+      placeholder: "Built-in Intel Wireless Bluetooth, or a USB dongle"
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Connecting or pairing
+        - Notifications or pop-ups
+        - Texts
+        - Contacts or calls
+        - Music or Spotify
+        - Tugboat
+        - Search (Ctrl+K)
+        - Developer tools, the tug command or MCP
+        - Settings
+        - Installing or updating
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open tug with the iPhone connected
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: Screenshots help. Blur or crop anything personal first.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        In tug, open **Settings › About › Copy diagnostics** (also under Settings › iPhone) and paste
+        it here. tug removes phone numbers, names and message contents, but please read it through
+        before posting and remove anything else you'd rather keep private.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched existing issues and this hasn't been reported.
+          required: true
+        - label: I removed personal information (real names, numbers, messages) from everything above.
+          required: true

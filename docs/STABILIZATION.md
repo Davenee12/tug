@@ -18,7 +18,7 @@ code before it entered this list.
 
 ## Health: 🟡 Functional, needs improvement
 
-Core workflows work on real hardware (iPhone 15 Pro Max): notifications, media, battery, message
+Core workflows work on real hardware (a recent iPhone): notifications, media, battery, message
 read/send, contacts. No security issues or crash paths in the Bluetooth LE core. But there are real
 data-integrity bugs (wrong recipient, wrong name, vanishing or merged items), one crash path in
 messaging, and **zero frontend tests** around the logic that groups and merges conversations.

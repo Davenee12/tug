@@ -1,6 +1,6 @@
 # tug companion apps — plan
 
-Status: **planned, not started** (2026-10-06). tug today needs nothing on the phone: it talks to
+Status: **parked** (2026-10-07). Phase 0.5 (Tugboat) shipped in v0.5.11; the phone apps are not started. tug today needs nothing on the phone: it talks to
 the iPhone over Bluetooth using what iOS shares with any accessory (notifications, music, battery,
 texts received, contacts, calls). That stays the default. This plan covers what a **tug app on the
 phone** would add, in what order, and what each step needs from the maintainer.
@@ -30,7 +30,7 @@ v0.5.x, keeping the cadence (every 5th version bug-fix only). Reliability first:
 notifications, PC sleep/wake, polish of setup, texts, notifications and Spotify. Nothing in later
 phases is worth building on an unreliable base.
 
-### Phase 0.5 — Tugboat (formerly tug Drop) (v0.5.11) — no app, no fees, iPhone and Android
+### Phase 0.5 — Tugboat (shipped in v0.5.11) — no app, no fees, iPhone and Android
 "AirDrop between your iPhone and your Windows PC."
 - Click **Tugboat** in tug → a QR code → the phone's camera opens a small tug page in Safari,
   Chrome or Samsung Internet. Nothing installed on the phone; works the same on iPhone and Android.
@@ -77,9 +77,8 @@ phases is worth building on an unreliable base.
 - **As built (v0.5.11, `src-tauri/src/tugboat/`, `src/tugboat-page/`):** the page uses @noble/ciphers +
   @noble/hashes (audited, pure JS) rather than libsodium; keys via HKDF-SHA256; every request is
   MAC'd and the first phone binds the session. PC → phone is one Save button per file (no zip in
-  v1). A shared test vector proves the JS and Rust crypto agree. Renamed from "tug Drop" to
-  **Tugboat** (Dave, 2026-10-06); received files go to `Pictures\Tugboat`. Future CLI verb:
-  `tug boat <file>`.
+  v1). A shared test vector proves the JS and Rust crypto agree. Received files go to
+  `Pictures\Tugboat`. Since v0.5.12 the `tug boat <file>` command sends files from a terminal.
 
 ### Phase 1 — the tug protocol (Rust, desktop side only)
 The foundation every companion app talks to. Designed once, in Rust, before any phone code.

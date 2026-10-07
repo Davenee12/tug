@@ -6,7 +6,7 @@
 // ⚠️ EVERY RELEASE: add an entry here, newest first, and keep the top version in step with
 //    package.json / tauri.conf.json. An entry whose version is newer than the installed app is
 //    held back until the app actually reaches it, so it's fine to add 0.5.9's lines before 0.5.9
-//    ships. See the comment in CLAUDE.md too.
+//    ships. See CONTRIBUTING.md too.
 
 /** One release's notes, as shown in the "What's new" card. */
 export interface ReleaseNote {
@@ -20,6 +20,17 @@ export interface ReleaseNote {
 
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
+  {
+    version: "0.5.12",
+    title: "tug for developers, and a steadier tug",
+    highlights: [
+      "tug for developers: let AI tools like Claude Code and Cursor use your phone, or type tug in a terminal. Off until you turn it on in Settings › Developer tools, and a text only sends when you click Send.",
+      "Steadier connection: one calm status while your iPhone is away, and quicker recovery after a Bluetooth hiccup or waking your PC.",
+      "Texts you can trust: replies always show in the conversation, Retry never sends twice, and nothing sits on “Sending…”.",
+      "Texts that arrive while tug reconnects still pop up, and the tray icon shows when you have unread texts.",
+      "Sync Contacts shows Off when it's off, and Spotify shows the real song, artist and speaker.",
+    ],
+  },
   {
     version: "0.5.11",
     title: "Meet Tugboat",
