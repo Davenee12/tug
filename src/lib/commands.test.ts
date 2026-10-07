@@ -174,7 +174,7 @@ describe("call", () => {
 
   it("says why instead of offering a call that can't work", () => {
     expect(parseActions("call priya", people, {})).toEqual([
-      { kind: "call-setup", label: "Can't call Priya yet: only missed calls can be called back" },
+      { kind: "call-setup", label: "Can't call Priya yet: turn on Settings › iPhone › Call from tug" },
     ]);
   });
 

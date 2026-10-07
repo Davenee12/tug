@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { CHUNK, chunkBounds, chunkCount, formatSize, isFatal, messageFor, missing, nextSeq, receivedBytes, retryDelay } from "./chunks";
+import {
+  CHUNK,
+  canRetryUpload,
+  chunkBounds,
+  chunkCount,
+  formatSize,
+  isFatal,
+  messageFor,
+  missing,
+  nextSeq,
+  receivedBytes,
+  retryDelay,
+} from "./chunks";
 
 describe("chunks", () => {
   it("cuts files like the PC does", () => {
@@ -67,5 +79,21 @@ describe("retries and messages", () => {
     expect(formatSize(1536)).toBe("1.5 KB");
     expect(formatSize(412_000_000)).toBe("393 MB");
     expect(formatSize(3 * 1024 ** 3)).toBe("3.0 GB");
+  });
+});
+
+describe("retrying a failed upload", () => {
+  it("offers Try again for a dropped connection or a full disk", () => {
+    expect(canRetryUpload("network")).toBe(true);
+    expect(canRetryUpload("no-space")).toBe(true);
+    expect(canRetryUpload("error")).toBe(true);
+  });
+
+  it("doesn't when only a new scan or a smaller file helps", () => {
+    for (const code of ["too-big", "closed", "unauthorized", "in-use"]) expect(canRetryUpload(code)).toBe(false);
+  });
+
+  it("points to a new scan when the PC can't be reached", () => {
+    expect(messageFor("network")).toMatch(/scan the new code on your PC/);
   });
 });

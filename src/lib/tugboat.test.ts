@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { TUGBOAT_OFF, HELP_AFTER_MS, percent, showConnectHelp, skippedMessage, transferring } from "./tugboat";
+import { TUGBOAT_OFF, HELP_AFTER_MS, capitalised, closeWarning, percent, showConnectHelp, skippedMessage, transferring } from "./tugboat";
+import type { TugboatOffer } from "../types/protocol";
 
 describe("Tugboat panel decisions", () => {
   it("offers connection help only after 30 s with no phone", () => {
@@ -42,5 +43,28 @@ describe("Tugboat panel decisions", () => {
     expect(percent(0, 0)).toBe(100);
     expect(percent(5, 10)).toBe(50);
     expect(percent(11, 10)).toBe(100);
+  });
+});
+
+describe("closing Tugboat", () => {
+  const offer = (downloads: number) => ({ id: "o1", name: "a.jpg", size: 10, downloads }) as unknown as TugboatOffer;
+
+  it("just closes with nothing pending", () => {
+    expect(closeWarning(TUGBOAT_OFF)).toBeNull();
+    expect(closeWarning({ ...TUGBOAT_OFF, outgoing: [offer(1)] })).toBeNull();
+  });
+
+  it("asks while files are moving", () => {
+    expect(closeWarning({ ...TUGBOAT_OFF, sending: true, outgoing: [offer(0)] })).toBe("moving");
+  });
+
+  it("asks when an offered file hasn't been saved on the phone yet", () => {
+    expect(closeWarning({ ...TUGBOAT_OFF, outgoing: [offer(1), offer(0)] })).toBe("unsaved");
+  });
+
+  it("capitalises a phone name for a headline", () => {
+    expect(capitalised("phone")).toBe("Phone");
+    expect(capitalised("Android phone")).toBe("Android phone");
+    expect(capitalised("iPhone")).toBe("iPhone");
   });
 });

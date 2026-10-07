@@ -480,7 +480,7 @@ export const useTugStore = defineStore("tug", () => {
       batteryAlerted = r.alerted;
       return;
     }
-    // A low-battery alert is a system pop-up (no app, no VIP): held by Windows alerts off, DND or
+    // A low-battery alert is a system pop-up (no app, no VIP): held by Windows pop-ups off, DND or
     // quiet hours, like any other.
     if (!settings.value.lowBattery) return;
     if (!popupAllowed({ appId: "", isCall: false, isVip: false }) || !(await hasToastPermission())) return;
@@ -1028,6 +1028,7 @@ export const useTugStore = defineStore("tug", () => {
         on("pairing-request", (req) => (pairingRequest.value = req)),
         on("pairing-request-closed", () => (pairingRequest.value = null)),
         on("open-latest-conversation", openLatestConversation),
+        on("open-settings", () => openSettings()),
         on("toast-pressed", onToastPressed),
       ])),
     );

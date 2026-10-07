@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { Check, LoaderCircle, RefreshCw, Smartphone } from "lucide-vue-next";
+import { Check, LoaderCircle, RefreshCw, Settings, Smartphone } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { bondHint, leftoverPhone, pairingProblem, setupDeviceLists, startedOutsideTug } from "../lib/pairings";
 import { canSkipSwitches, connectStep, rescanDue } from "../lib/connectFlow";
@@ -191,7 +191,10 @@ const model = computed(() => phoneModel(s.value.device?.model));
     <div :class="['flex flex-col gap-6', context === 'feed' ? 'mx-auto w-full max-w-[560px] px-8 py-10' : '']">
       <!-- Heading (only when this panel stands in for the Feed; Settings already titles the page). -->
       <div v-if="context === 'feed'">
-        <p class="caption-upper text-muted">Welcome to tug</p>
+        <div class="flex items-center justify-between gap-3">
+          <p class="caption-upper text-muted">Welcome to tug</p>
+          <button class="btn-secondary btn-sm" @click="tug.openSettings()"><Settings :size="13" /> Settings</button>
+        </div>
         <h1 class="headline mt-2 text-[40px] leading-[1.1]">Connect your iPhone</h1>
       </div>
 
@@ -205,7 +208,7 @@ const model = computed(() => phoneModel(s.value.device?.model));
         </p>
         <button class="btn-secondary btn-sm self-start" :disabled="resetting" @click="startOver">
           <LoaderCircle v-if="resetting" :size="13" class="animate-spin" />
-          {{ confirmReset ? "Tap again to start over" : "Start over" }}
+          {{ confirmReset ? "Click again to start over" : "Start over" }}
         </button>
       </div>
 
@@ -218,7 +221,7 @@ const model = computed(() => phoneModel(s.value.device?.model));
         <div class="flex gap-2">
           <button class="btn-primary btn-sm" :disabled="resetting" @click="startOver">
             <LoaderCircle v-if="resetting" :size="13" class="animate-spin" />
-            {{ confirmReset ? "Tap again to remove" : "Remove" }}
+            {{ confirmReset ? "Click again to remove" : "Remove" }}
           </button>
           <button class="btn-secondary btn-sm" @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
         </div>
@@ -270,7 +273,7 @@ const model = computed(() => phoneModel(s.value.device?.model));
 
         <button class="btn-secondary btn-sm self-start" :disabled="resetting" @click="startOver">
           <LoaderCircle v-if="resetting" :size="13" class="animate-spin" />
-          {{ confirmReset ? "Tap again to start over" : "Start over" }}
+          {{ confirmReset ? "Click again to start over" : "Start over" }}
         </button>
         <p class="-mt-4 text-[12px] text-muted-soft">
           Also tap <em>Forget This Device</em> under Settings › Bluetooth on the iPhone before pairing again.
@@ -329,7 +332,7 @@ const model = computed(() => phoneModel(s.value.device?.model));
             </button>
             <button class="btn-secondary btn-sm" :disabled="busyId !== null || removing" @click="removeLeftover(leftover.id)">
               <LoaderCircle v-if="removing" :size="13" class="animate-spin" />
-              {{ confirmRemove ? "Tap again to remove" : "Remove" }}
+              {{ confirmRemove ? "Click again to remove" : "Remove" }}
             </button>
           </div>
         </div>
@@ -345,7 +348,7 @@ const model = computed(() => phoneModel(s.value.device?.model));
               <div class="min-w-0 flex-1">
                 <p class="truncate text-[14px] font-medium text-ink">{{ phoneLabel(d) }}</p>
                 <p v-if="d.connected" class="text-[12px] font-medium text-accent-teal">Connected now</p>
-                <p v-else-if="isNameless(d)" class="text-[12px] text-muted-soft">finding name…</p>
+                <p v-else-if="isNameless(d)" class="text-[12px] text-muted-soft">Finding name…</p>
                 <p v-else-if="d.paired" class="text-[12px] text-muted">Paired</p>
               </div>
               <button
@@ -357,8 +360,11 @@ const model = computed(() => phoneModel(s.value.device?.model));
                 {{ d.paired ? "Use" : "Pair" }}
               </button>
             </li>
-            <li v-if="primaryPhones.length === 0" class="flex items-center gap-3 rounded-xl border border-dashed border-hairline px-4 py-6 text-[13px] text-muted-soft">
+            <li v-if="primaryPhones.length === 0 && scanning" class="flex items-center gap-3 rounded-xl border border-dashed border-hairline px-4 py-6 text-[13px] text-muted-soft">
               <LoaderCircle :size="15" class="animate-spin" /> Looking for your iPhone… keep Settings › Bluetooth open on it.
+            </li>
+            <li v-else-if="primaryPhones.length === 0" class="rounded-xl border border-dashed border-hairline px-4 py-6 text-[13px] text-muted-soft">
+              Not looking right now. Press Look again with Settings › Bluetooth open on your iPhone.
             </li>
           </ul>
           <p v-if="connectError" class="mt-3 text-[13px] text-error">{{ connectError }}</p>
