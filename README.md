@@ -59,9 +59,13 @@ npm install
 npm run tauri dev     # the real app, with Bluetooth
 npm run dev           # UI only in a browser, with sample data (src/lib/devMock.ts)
 npm run check         # vue-tsc + vitest + cargo fmt + clippy -D warnings + cargo test
-npx tauri build --no-bundle   # src-tauri/target/release/tug.exe
-npx tauri build               # installer: src-tauri/target/release/bundle/nsis/tug_<version>_x64-setup.exe
+npm run build:release -- --no-bundle   # src-tauri/target/release/tug.exe
+npm run build:release                  # installer: src-tauri/target/release/bundle/nsis/tug_<version>_x64-setup.exe
 ```
+
+Build releases with `npm run build:release` rather than a bare `npx tauri build`: it wraps the build
+in `scripts/remap-paths.mjs`, which remaps local paths (your user folder, Cargo's registry, the repo)
+so the exe doesn't carry your Windows user name.
 
 Browser preview URLs: `/` (connected, sample history), `/?setup` (first run), `/?pairing` (PIN dialog),
 `/?call` (a call rings), `/?whatsnew` (the What's new card), `/?applemusic`, `/?spotifyoff`,
