@@ -69,7 +69,7 @@ image cache caps, crash diagnostics, code pop-up dedupe, contact names. See CHAN
   planned for v0.5.14).
 - **Spotify for everyone** needs Spotify's Extended Quota (registered business, 250k users).
 
-## v0.5.11 — Tugboat (formerly tug Drop) (next feature release, after v0.5.10)
+## v0.5.11 — Tugboat (formerly tug Drop) (release PR open, 2026-10-07)
 Move photos, files and text between the phone and PC over home Wi-Fi with no app and no fees:
 scan a QR in tug, a tug page opens in the phone's browser (iPhone or Android), send or receive. See docs/COMPANION-PLAN.md
 "Phase 0.5" for the design and safety notes.
@@ -91,9 +91,12 @@ ships a `tug` CLI.
 - Docs page with copy-paste setup per tool; "Works with" badges.
 
 ## v0.5.13 — use more of Bluetooth (planned, Dave 2026-10-06)
-1. **Bluetooth inventory probe** (PR `feat/bt-inventory`; ships whenever it's ready): logs one
-   privacy-safe `bt-inventory:` line once per app run (and 15 min later) so we learn what the
-   phone really exposes before building on it.
+1. **Bluetooth inventory probe** (shipped in v0.5.11). First run on an iPhone 15 Pro Max found:
+   Current Time Service with time zone and DST (travel-aware time is possible); AMS volume,
+   playback rate, duration and repeat (queue index/count/shuffle need subscribing first); battery
+   level only, no charging state; a favourites phonebook (PBAP `fav`) plus call history, no speed
+   dial; Windows lists the iPhone for AudioPlaybackConnection (PC-as-speaker is feasible); link
+   at 15 ms interval on 2M PHY.
 2. **Small wins, if the inventory confirms them:** ANCS categories (a coming-up card from Schedule
    alerts, a voicemail card, Important pinned, the phone's own action labels); deeper AMS (a real
    phone volume bar, "Song 4 of 12", playback speed, Apple Music shuffle/repeat state);
