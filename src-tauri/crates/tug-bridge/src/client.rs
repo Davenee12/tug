@@ -110,7 +110,8 @@ pub async fn call_over<S: AsyncRead + AsyncWrite + Unpin>(
     };
     let token = token()?;
     if !auth::verify_server(&token, &client_nonce, &server_nonce, &server_proof) {
-        // Either an impostor, or tug's token changed since we read it (Revoke access).
+        // Either an impostor, or tug's token changed since we read it (Revoke access): the
+        // caller tells the two apart by looking at the token file again.
         return Err(ClientError::Impostor);
     }
     write_msg(
@@ -219,12 +220,29 @@ impl Client {
         call: &Call,
         limit: Duration,
     ) -> Result<serde_json::Value, ClientError> {
-        timeout(limit, async {
+        let result = timeout(limit, async {
             let stream = self.open().await?;
             call_over(stream, info, || self.token(), call).await
         })
         .await
-        .map_err(|_| ClientError::Timeout)?
+        .map_err(|_| ClientError::Timeout)?;
+        match result {
+            Err(ClientError::Impostor) if self.token_changed() => Err(ClientError::Bridge(BridgeError::new(
+                ErrorCode::Unauthorized,
+                crate::server::REVOKED_MESSAGE,
+            ))),
+            other => other,
+        }
+    }
+
+    /// The token file no longer holds the token this client read: tug's access was revoked
+    /// (not an impostor). The kept token stays, so revoking really does lock this client out.
+    fn token_changed(&self) -> bool {
+        let cached = self.token.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        match (cached, self.token_path.as_ref().map(|p| token_file::load(p))) {
+            (Some(old), Some(Ok(now))) => old != now,
+            _ => false,
+        }
     }
 
     /// `call`, with the answer read as `T`.
@@ -486,6 +504,20 @@ mod tests {
             let r = t.await.unwrap();
             assert!(r.is_ok(), "{r:?}");
         }
+        // Revoke access: tug and the file get a new token; this client kept the old one, so it's
+        // told it was revoked (not that an impostor answered), and stays locked out.
+        let rotated = auth::new_token();
+        *server.token.lock().unwrap() = Some(rotated.clone());
+        crate::win::write_private_file(&dir.join("bridge.token"), rotated.as_bytes()).unwrap();
+        for _ in 0..2 {
+            let err = client.call(&Call::PhoneStatus, CALL_TIMEOUT).await.unwrap_err();
+            assert_eq!(err.code(), Some(ErrorCode::Unauthorized), "{err:?}");
+            assert!(err.to_string().contains("Revoke access"));
+        }
+        // A fresh client (a restarted AI tool) reads the new token and works.
+        let fresh = Client::new(pipe.clone(), Some(dir.join("bridge.token")), info());
+        assert!(fresh.call(&Call::PhoneStatus, CALL_TIMEOUT).await.is_ok());
+
         stop_tx.send(()).unwrap();
         serving.await.unwrap().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
