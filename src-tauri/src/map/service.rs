@@ -314,6 +314,8 @@ mod worker {
         /// Messages read in tug while the phone couldn't be reached, to mark read on the phone
         /// after the next successful sync instead of dropping the request.
         queued_reads: Vec<i64>,
+        /// Texts whose download keeps timing out, so one can't block every newer text.
+        fetch_tries: FetchTries,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -347,6 +349,7 @@ mod worker {
             connect_failures: 0,
             next_retry: None,
             queued_reads: Vec::new(),
+            fetch_tries: FetchTries::default(),
         };
         // Nothing is sending yet, so a send still pending was cut off by a crash or quit.
         match w.shared.store.fail_interrupted_sends() {
@@ -1020,7 +1023,16 @@ mod worker {
         async fn sync(&mut self) -> Result<usize, MapError> {
             let shared = self.shared.clone();
             let backfill = !self.backfilled;
-            let session = self.ensure().await?;
+            // Taken out for the loop (the session borrows the worker) and put back after it.
+            // (A listing error further down loses this launch's counts; they just start again.)
+            let mut tries = std::mem::take(&mut self.fetch_tries);
+            let session = match self.ensure().await {
+                Ok(session) => session,
+                Err(e) => {
+                    self.fetch_tries = tries;
+                    return Err(e);
+                }
+            };
             if let Err(e) = session.update_inbox().await {
                 log::debug!("UpdateInbox: {e}");
             }
@@ -1079,6 +1091,9 @@ mod worker {
                 );
             }
             let mut added = 0;
+            // A download that timed out leaves the session in an unknown state: stop the sync there
+            // (dropping the session) once what's been fetched is saved.
+            let mut stop: Option<MapError> = None;
             // Oldest first so arrival order matches the phone.
             for item in listed.iter().rev() {
                 if shared.store.has_message(SOURCE_IPHONE_MAP, &item.handle)? {
@@ -1088,19 +1103,44 @@ mod worker {
                     }
                     continue;
                 }
-                let (originator, full_body) = match session.get_message(&item.handle).await {
-                    Ok(msg) => (msg.originator_address, msg.body),
+                // Given up on after repeated timeouts: keep its preview (or skip it) without asking.
+                let fetched = if tries.given_up(&item.handle) {
+                    None
+                } else {
+                    Some(session.get_message(&item.handle).await)
+                };
+                let (originator, full_body) = match fetched {
+                    None if item.subject.is_empty() => continue,
+                    None => (None, String::new()),
+                    Some(Ok(msg)) => (msg.originator_address, msg.body),
+                    // One text the phone is slow to hand over mustn't block every newer one forever:
+                    // try it again on the next few syncs, then settle for its preview like a refusal.
+                    Some(Err(MapError::Timeout)) => {
+                        stop = Some(MapError::Timeout);
+                        if !tries.timed_out(&item.handle) {
+                            log::info!("message {} timed out; trying again next sync", item.handle);
+                            break;
+                        }
+                        log::info!("message {} keeps timing out; using its preview", item.handle);
+                        if item.subject.is_empty() {
+                            break;
+                        }
+                        (None, String::new())
+                    }
                     // The phone refused this one message (e.g. an attachment it won't serialize).
                     // Don't let it block every newer text or drop the session: keep the listing's
                     // preview if there is one, otherwise skip it.
-                    Err(MapError::Obex { code, .. }) => {
+                    Some(Err(MapError::Obex { code, .. })) => {
                         log::info!("phone refused message {}: {code:#04x}; using its preview", item.handle);
                         if item.subject.is_empty() {
                             continue;
                         }
                         (None, String::new())
                     }
-                    Err(e) => return Err(e),
+                    Some(Err(e)) => {
+                        stop = Some(e);
+                        break;
+                    }
                 };
                 let address = normalize(originator.as_deref().unwrap_or(&item.sender_addressing));
                 let body = if full_body.is_empty() {
@@ -1129,6 +1169,9 @@ mod worker {
                     shared.emit(events::MESSAGE, m);
                     added += 1;
                 }
+                if stop.is_some() {
+                    break;
+                }
             }
             if added > 0 {
                 let named = !shared.store.learn_contacts()?.is_empty();
@@ -1136,6 +1179,10 @@ mod worker {
                 if named || aliased {
                     shared.emit(events::CONTACTS, shared.store.contacts()?);
                 }
+            }
+            self.fetch_tries = tries;
+            if let Some(e) = stop {
+                return Err(e);
             }
             // Only once it all went through: a sync that failed partway looks back again.
             self.backfilled = true;
@@ -1253,6 +1300,28 @@ mod worker {
                 .map_err(|e| e.to_string())?;
             self.shared.emit(events::MESSAGE, updated.clone());
             Ok(updated)
+        }
+    }
+
+    /// A text whose download times out this many times is given up on (its listing preview is kept).
+    const FETCH_TIMEOUT_TRIES: u32 = 3;
+
+    /// Per-text download timeouts this launch. Pure, so it's unit-tested.
+    #[derive(Default)]
+    struct FetchTries {
+        timeouts: std::collections::HashMap<String, u32>,
+    }
+
+    impl FetchTries {
+        /// Note a timeout; true once this text has timed out `FETCH_TIMEOUT_TRIES` times.
+        fn timed_out(&mut self, handle: &str) -> bool {
+            let n = self.timeouts.entry(handle.to_string()).or_default();
+            *n += 1;
+            *n >= FETCH_TIMEOUT_TRIES
+        }
+
+        fn given_up(&self, handle: &str) -> bool {
+            self.timeouts.get(handle).is_some_and(|n| *n >= FETCH_TIMEOUT_TRIES)
         }
     }
 
@@ -1374,7 +1443,7 @@ mod worker {
     #[cfg(test)]
     mod tests {
         use super::{
-            after_push_failure, map_retry_delay, may_have_missed, photo_sync_due, queue_reads, PushOutcome,
+            after_push_failure, map_retry_delay, may_have_missed, photo_sync_due, queue_reads, FetchTries, PushOutcome,
             MAP_RETRY_CAP, QUEUED_READS_MAX,
         };
         use crate::map::session::MapError;
@@ -1391,6 +1460,18 @@ mod worker {
                 "never over the cap"
             );
             assert_eq!(map_retry_delay(0), Duration::from_secs(30), "no underflow at zero");
+        }
+
+        #[test]
+        fn a_text_that_keeps_timing_out_is_given_up_after_a_few_tries() {
+            let mut t = FetchTries::default();
+            assert!(!t.given_up("H1"));
+            assert!(!t.timed_out("H1"));
+            assert!(!t.timed_out("H1"));
+            assert!(!t.given_up("H1"));
+            assert!(t.timed_out("H1"), "third timeout gives up");
+            assert!(t.given_up("H1"));
+            assert!(!t.given_up("H2"), "per text");
         }
 
         #[test]
