@@ -193,7 +193,7 @@ pub fn run() {
             commands::send_message,
             commands::refresh_messages,
             commands::copy_text,
-            commands::set_hidden,
+            commands::set_conversation_hidden,
             commands::set_unread,
             commands::open_windows_settings,
             commands::open_url,

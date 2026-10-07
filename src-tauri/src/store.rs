@@ -451,6 +451,9 @@ impl Store {
 
     /// Delete a conversation from tug (`Some(time)`), or undo that (`None`). Local only:
     /// nothing on the phone changes.
+    /// Hide (or, with `at: None`, unhide) rows by id. The app deletes whole conversations with
+    /// `set_conversation_hidden`; this is the row-level primitive the hidden-row tests use.
+    #[cfg(test)]
     pub fn set_hidden(&self, notifications: &[i64], messages: &[i64], at: Option<i64>) -> Result<()> {
         let ids = |v: &[i64]| serde_json::to_string(v).expect("ids serialize");
         let mut conn = self.conn();
@@ -462,6 +465,51 @@ impl Store {
         tx.execute(
             "UPDATE messages SET hidden_at = ?2 WHERE id IN (SELECT value FROM json_each(?1))",
             params![ids(messages), at],
+        )?;
+        tx.commit()
+    }
+
+    /// Delete a conversation from tug (`hidden: true`), or undo that delete (`hidden: false`
+    /// with the same `at`). A conversation is every notification from one of `senders`
+    /// ((app id, title) pairs, compared by app id and `name_key` of the title, so padding, case
+    /// and the inline-reply suffix don't matter) plus every text to or from one of `addresses`.
+    ///
+    /// By key rather than by row id: the window only has the newest pages loaded, and hiding
+    /// just those let the older part of a deleted conversation come back in Feed scroll and
+    /// search. Hiding stamps rows stored up to `at` that weren't already hidden; undo clears
+    /// exactly the rows stamped `at`, so an earlier delete of the same person stays deleted.
+    pub fn set_conversation_hidden(
+        &self,
+        senders: &[(String, String)],
+        addresses: &[String],
+        at: i64,
+        hidden: bool,
+    ) -> Result<()> {
+        let senders = serde_json::to_string(senders).expect("senders serialize");
+        let addresses = serde_json::to_string(addresses).expect("addresses serialize");
+        let (set, which) = if hidden {
+            ("?2", "hidden_at IS NULL AND received_at <= ?2")
+        } else {
+            ("NULL", "hidden_at = ?2")
+        };
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            &format!(
+                "UPDATE notifications SET hidden_at = {set}
+                 WHERE {which} AND EXISTS (
+                     SELECT 1 FROM json_each(?1) s
+                     WHERE json_extract(s.value, '$[0]') = notifications.app_id
+                       AND name_key(json_extract(s.value, '$[1]')) = name_key(notifications.title))"
+            ),
+            params![senders, at],
+        )?;
+        tx.execute(
+            &format!(
+                "UPDATE messages SET hidden_at = {set}
+                 WHERE {which} AND address IN (SELECT value FROM json_each(?1))"
+            ),
+            params![addresses, at],
         )?;
         tx.commit()
     }
