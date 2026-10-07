@@ -23,6 +23,22 @@ smartwatch or car kit does, using the Bluetooth services Apple publishes for acc
 | Weather on the Feed | Open-Meteo | ✅ |
 | Group texts, photos/attachments, texts sent from the phone itself, iMessage vs SMS | Not exposed by iOS over Bluetooth | Out of scope |
 
+## For developers: AI tools and the `tug` command
+
+Turn on **Settings › Developer tools › Let AI tools use tug** and your AI tools (Claude Code,
+Codex, Cursor, VS Code) can use your phone through tug's MCP server: the newest 2FA code, search
+your texts and notifications, GitHub/CI/deploy notifications, Tugboat files (a phone screenshot
+straight into the agent), what's playing, and texts that only send after you click **Send** in
+tug. Setup is copy-paste from that page:
+
+```bash
+claude mcp add --scope user tug -- "C:\Users\<you>\AppData\Local\tug\bin\tug.exe" mcp
+```
+
+And in a terminal: `tug code --copy`, `tug boat screenshot.png`, `tug text Sam "On my way"`,
+`tug status`. Local only (a pipe only your Windows user can open), off by default, per-tool
+switches, nothing logged but tool names. See [docs/DEVELOPERS.md](docs/DEVELOPERS.md).
+
 ## Requirements
 
 - Windows 10 2004+ or Windows 11.
@@ -86,10 +102,14 @@ src-tauri/src/
   spotify/        Spotify connector (sign-in, Web API, rate-limit backoff)
   media_keys.rs   Windows media keys and flyout (SMTC) for the iPhone's music
   toast/, tray.rs Windows pop-ups with actions; tray icon
+  devtools/       Developer tools: the bridge's tools, switches, rate limits, send confirmation
   store.rs        SQLite history (FTS5 search), settings; versioned migrations
   state.rs        Status/now-playing shared with the UI; event names
   commands.rs     Tauri commands called from the UI
   cache_trim.rs, diagnostics.rs, frontend_log.rs, webview_watch.rs  upkeep and crash logging
+src-tauri/crates/
+  tug-bridge/     The local bridge: named pipe, versioned JSON protocol, token handshake
+  tug-cli/        The tug command and `tug mcp` (MCP server), shipped as bin\tug.exe
 src/
   stores/tug.ts   Pinia store: all UI state, backend events, Windows toasts
   components/     DeviceRail, FeedPanel, MessageThreads, CallsPanel, NowPlayingCard, Settings…
