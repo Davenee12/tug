@@ -4640,6 +4640,7 @@ version = "0.5.11"
 dependencies = [
  "getrandom 0.3.4",
  "hmac",
+ "log",
  "serde",
  "serde_json",
  "sha2",

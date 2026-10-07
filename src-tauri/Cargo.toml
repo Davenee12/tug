@@ -7,7 +7,7 @@ edition = "2021"
 
 # `tug` itself is the workspace root. The two small crates are the local bridge that companion
 # processes use to talk to the running app (`tug-bridge`) and the `tug` command plus MCP server
-# (`tug-cli`, shipped as `bin	ug.exe`; see docs/DEVELOPERS.md).
+# (`tug-cli`, shipped as `bin\tug.exe`; see docs/DEVELOPERS.md).
 default-run = "tug"
 
 [workspace]
