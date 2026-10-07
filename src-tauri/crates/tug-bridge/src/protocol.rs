@@ -51,13 +51,28 @@ pub struct ClientInfo {
     pub kind: ClientKind,
 }
 
+/// Characters that change how text around them is shown without being seen themselves:
+/// zero-width spaces and joiners, and bidirectional overrides/isolates (which can make a name
+/// read differently from what it is).
+pub fn is_invisible_format(c: char) -> bool {
+    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// Text from somewhere else, made safe to print in a terminal or log line: no control
+/// characters (no escape sequences, no line breaks) and no invisible formatting characters.
+pub fn printable(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control() && !is_invisible_format(*c))
+        .collect()
+}
+
 impl ClientInfo {
     /// A name safe to show and log: printable, single line, at most 40 characters.
     pub fn display_name(&self) -> String {
         let clean: String = self
             .name
             .chars()
-            .filter(|c| !c.is_control())
+            .filter(|c| !c.is_control() && !is_invisible_format(*c))
             .take(40)
             .collect::<String>()
             .trim()
@@ -212,9 +227,10 @@ impl Permission {
     ];
 
     /// On once the master switch is on, unless the user turned it off. Reading is on; anything
-    /// that acts on the phone (music, texts) starts off.
+    /// that acts on the phone (music, texts) starts off, and so do verification codes: a code is
+    /// a key to an account, so handing it to an AI tool is something to choose, not a default.
     pub fn default_on(self) -> bool {
-        !matches!(self, Permission::Media | Permission::SendText)
+        !matches!(self, Permission::Media | Permission::SendText | Permission::Codes)
     }
 
     pub fn key(self) -> &'static str {
@@ -759,11 +775,11 @@ mod tests {
     #[test]
     fn permissions_default_to_read_on_act_off() {
         let eff = effective_permissions(&BTreeMap::new());
-        assert!(eff[&Permission::Codes] && eff[&Permission::Search] && eff[&Permission::PhoneStatus]);
-        assert!(!eff[&Permission::Media] && !eff[&Permission::SendText]);
-        let saved = BTreeMap::from([("media".to_string(), true), ("codes".to_string(), false)]);
+        assert!(eff[&Permission::Search] && eff[&Permission::PhoneStatus] && eff[&Permission::TugboatFiles]);
+        assert!(!eff[&Permission::Media] && !eff[&Permission::SendText] && !eff[&Permission::Codes]);
+        let saved = BTreeMap::from([("media".to_string(), true), ("search".to_string(), false)]);
         let eff = effective_permissions(&saved);
-        assert!(eff[&Permission::Media] && !eff[&Permission::Codes]);
+        assert!(eff[&Permission::Media] && !eff[&Permission::Search]);
         for p in Permission::ALL {
             assert_eq!(Permission::from_key(p.key()), Some(p));
         }
@@ -795,6 +811,8 @@ mod tests {
         assert_eq!(c("claude-code").display_name(), "claude-code");
         assert_eq!(c("evil\nname\u{1b}[31m").display_name(), "evilname[31m");
         assert_eq!(c("").display_name(), "An AI tool");
+        assert_eq!(c("claude\u{202E}edoc\u{200B}").display_name(), "claudeedoc");
+        assert_eq!(printable("a\u{1b}[2Jb\nc\u{2066}d"), "a[2Jbcd");
         assert_eq!(c(&"a".repeat(100)).display_name().len(), 40);
     }
 }

@@ -131,8 +131,11 @@ pub async fn handle_connection<S: AsyncRead + AsyncWrite + Send + Unpin>(stream:
     send(&mut w, &answer).await;
 }
 
-/// Listen on `pipe_name` until `shutdown` resolves. The pipe's ACL lets only `user_sid` in,
-/// remote clients are refused, and creating it fails if anything else already holds the name.
+/// Listen on `pipe_name` until `shutdown` resolves. The pipe's ACL lets only `user_sid` in (and
+/// names it the owner, which clients check), remote clients are refused, and creating the first
+/// instance fails if anything else already holds the name: that's the only fatal error. Making a
+/// later instance can fail for a moment (resources); that's logged and retried with a backoff
+/// instead of ending the bridge.
 #[cfg(windows)]
 pub async fn serve(
     pipe_name: String,
@@ -144,7 +147,7 @@ pub async fn serve(
     use tokio::net::windows::named_pipe::ServerOptions;
     use tokio::sync::Semaphore;
 
-    let sec = crate::win::UserOnly::new(&user_sid)?;
+    let sec = crate::win::UserOnly::pipe(&user_sid)?;
     let mut opts = ServerOptions::new();
     opts.reject_remote_clients(true).first_pipe_instance(true);
     // SAFETY: `sec` outlives every call; the attributes are only read during creation.
@@ -161,9 +164,23 @@ pub async fn serve(
             r = server.connect() => r,
             _ = &mut shutdown => return Ok(()),
         };
-        // A fresh instance for the next client, before serving this one.
-        // SAFETY: as above.
-        let next = unsafe { opts.create_with_security_attributes_raw(&pipe_name, sec.as_raw())? };
+        // A fresh instance for the next client. Until one exists, new clients see the pipe as
+        // busy and retry for a few seconds, then give up with a plain message.
+        let mut backoff = Duration::from_millis(250);
+        let next = loop {
+            // SAFETY: as above.
+            match unsafe { opts.create_with_security_attributes_raw(&pipe_name, sec.as_raw()) } {
+                Ok(s) => break s,
+                Err(e) => {
+                    log::warn!("devtools bridge: couldn't open another pipe instance ({e}); retrying");
+                    tokio::select! {
+                        _ = tokio::time::sleep(backoff) => {}
+                        _ = &mut shutdown => return Ok(()),
+                    }
+                    backoff = (backoff * 2).min(Duration::from_secs(30));
+                }
+            }
+        };
         let conn = std::mem::replace(&mut server, next);
         if connected.is_err() {
             // The client went away between connecting and being accepted.
