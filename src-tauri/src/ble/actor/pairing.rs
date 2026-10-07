@@ -391,6 +391,8 @@ impl Actor {
         let _ = store.delete_setting(keys::DEVICE_MODEL);
         // Forget the remembered texts phone too, so a new phone isn't matched to the old id.
         let _ = store.delete_setting(keys::TEXTS_DEVICE_ID);
+        // The old phone's recent calls (saved for the next launch) go with it.
+        self.shared.set_calls(Vec::new());
         self.shared.update_status(|s| {
             s.device = None;
             s.connection = ConnectionState::NoDevice;

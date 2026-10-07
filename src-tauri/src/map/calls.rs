@@ -2,12 +2,12 @@
 //! Each call is a vCard whose `X-IRMC-CALL-DATETIME` carries the direction as a parameter
 //! (`;MISSED` in 2.1, `;TYPE=MISSED` in 3.0) and the time, phone-local unless it ends in `Z`.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::address::normalize;
 use super::vcard::{property, structured_name, unfold};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CallDirection {
     Incoming,
@@ -28,7 +28,7 @@ impl CallDirection {
 }
 
 /// One call from the phone's recents. Mirrored in `src/types/protocol.ts`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CallRecord {
     pub direction: CallDirection,
@@ -38,6 +38,32 @@ pub struct CallRecord {
     pub number: Option<String>,
     /// ISO time: phone-local without a zone, or UTC with `Z` when the phone says so.
     pub at: Option<String>,
+}
+
+/// Settings key for the last recent-calls list, so Recents isn't empty after every launch until the
+/// phone answers again.
+const RECENT_CALLS: &str = "recent_calls";
+
+/// The recent calls saved by `save`; empty if none (or unreadable).
+pub fn load(store: &crate::store::Store) -> Vec<CallRecord> {
+    store
+        .setting(RECENT_CALLS)
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+/// Keep the latest recent-calls list for the next launch (an empty list clears it).
+pub fn save(store: &crate::store::Store, calls: &[CallRecord]) {
+    let saved = if calls.is_empty() {
+        store.delete_setting(RECENT_CALLS)
+    } else {
+        store.set_setting(RECENT_CALLS, &serde_json::to_string(calls).expect("calls serialize"))
+    };
+    if let Err(e) = saved {
+        log::warn!("saving recent calls failed: {e}");
+    }
 }
 
 /// Parse a call-history object. `default` is the direction for a list that is one kind of
@@ -137,6 +163,30 @@ pub fn merge(lists: Vec<Vec<CallRecord>>, max: usize) -> Vec<CallRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_calls_survive_a_restart() {
+        let store = crate::store::Store::in_memory().unwrap();
+        assert!(load(&store).is_empty());
+        let calls = vec![
+            CallRecord {
+                direction: CallDirection::Missed,
+                name: Some("Priya".into()),
+                number: Some("+13025550100".into()),
+                at: Some("2026-10-07T09:15:00".into()),
+            },
+            CallRecord {
+                direction: CallDirection::Incoming,
+                name: None,
+                number: None,
+                at: None,
+            },
+        ];
+        save(&store, &calls);
+        assert_eq!(load(&store), calls);
+        save(&store, &[]);
+        assert!(load(&store).is_empty(), "an empty list clears it");
+    }
 
     #[test]
     fn parses_a_combined_list_in_either_vcard_version() {
