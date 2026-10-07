@@ -1,0 +1,28 @@
+{
+  "about": "Shared cases for findCode (src/lib/codes.ts) and its Rust port (src-tauri/src/codes.rs): both test suites read this file, so the two can't drift. code null = no code.",
+  "cases": [
+    { "text": "Your code is 482913. Don't share it with anyone.", "code": "482913" },
+    { "text": "G-482913 is your Google verification code.", "code": "482913", "shown": "G-482913" },
+    { "text": "Your Uber code: 4829. Never share this code.", "code": "4829" },
+    { "text": "123456 is your Instagram code. Don't share it.", "code": "123456" },
+    { "text": "Use 482-913 to verify your account", "code": "482913", "shown": "482-913" },
+    { "text": "Chase: Your one-time passcode is 48291337. It expires in 10 minutes.", "code": "48291337" },
+    { "text": "Your Microsoft security code is 7731", "code": "7731" },
+    { "text": "Sign in to Netflix with 591 204", "code": "591204", "shown": "591 204" },
+    { "text": "WhatsApp code 384-221. You can also tap on this link to verify your phone", "code": "384221" },
+    { "text": "Tu código de verificación es 991827", "code": "991827" },
+    { "text": "Call me at 302-555-0173 when you land", "code": null },
+    { "text": "meet at 7:30?", "code": null },
+    { "text": "Order #123456 has shipped", "code": null },
+    { "text": "Your total is $1234.50", "code": null },
+    { "text": "omw, 10 mins", "code": null },
+    { "text": "Verify your number: (302) 555-0173", "code": null },
+    { "text": "Security alert: sign-in from a new device in 2026", "code": null },
+    { "text": "Your PIN reset code for 2026 is 2026", "code": "2026" },
+    { "text": "", "code": null },
+    { "text": "Your code is 482913, or use backup code 771204", "code": null },
+    { "text": "Code 482913. Again: 482913", "code": "482913" },
+    { "text": "Your login code: 1234567890", "code": null },
+    { "text": "Login at 12:30:45 with code 5521", "code": "5521" }
+  ]
+}
