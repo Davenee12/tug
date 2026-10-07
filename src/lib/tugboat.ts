@@ -41,7 +41,7 @@ export function transferring(s: Pick<TugboatStatus, "sending" | "receiving">): b
 /** Why closing Tugboat would lose something, or null when it can just close: files still moving
  * either way, or files offered to the phone that it hasn't saved yet (they're gone once it closes). */
 export type CloseWarning = "moving" | "unsaved";
-export function closeWarning(s: Pick<TugboatStatus, "incoming" | "sending" | "outgoing">): CloseWarning | null {
+export function closeWarning(s: Pick<TugboatStatus, "sending" | "receiving" | "outgoing">): CloseWarning | null {
   if (transferring(s)) return "moving";
   if (s.outgoing.some((o) => o.downloads === 0)) return "unsaved";
   return null;
