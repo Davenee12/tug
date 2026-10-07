@@ -16,7 +16,7 @@ const CONNECTED: DeviceStatus = {
   radio: "on",
   peripheralSupported: true,
   advertising: "on",
-  device: { id: "x", name: "Jordan's iPhone" },
+  device: { id: "x", name: "Jordan's iPhone", model: null },
   connection: "connected",
   battery: 76,
   services: { notifications: true, media: true, battery: true, messages: true },
@@ -57,12 +57,12 @@ describe("connectStep", () => {
   });
 
   it("asks for Allow once paired while iOS holds the connection open", () => {
-    const s = { ...FRESH, device: { id: "a", name: "Jordan's iPhone" }, connection: "connecting" as const, awaitingPhoneAllow: true };
+    const s = { ...FRESH, device: { id: "a", name: "Jordan's iPhone", model: null }, connection: "connecting" as const, awaitingPhoneAllow: true };
     expect(connectStep(s, null)).toBe("allow");
   });
 
   it("shows the switches while paired and connecting, before notifications are on", () => {
-    const s = { ...FRESH, device: { id: "a", name: "Jordan's iPhone" }, connection: "connected" as const };
+    const s = { ...FRESH, device: { id: "a", name: "Jordan's iPhone", model: null }, connection: "connected" as const };
     expect(connectStep(s, null)).toBe("switches");
   });
 
@@ -125,7 +125,7 @@ describe("nextShowConnect", () => {
   });
 
   it("holds the panel up through pairing and the switches until notifications work", () => {
-    const paired = { ...FRESH, device: { id: "a", name: "Jordan's iPhone" }, connection: "connecting" as const };
+    const paired = { ...FRESH, device: { id: "a", name: "Jordan's iPhone", model: null }, connection: "connecting" as const };
     expect(nextShowConnect(true, true, paired)).toBe(true);
   });
 

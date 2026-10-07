@@ -37,6 +37,7 @@ use super::{Command, Reply};
 use crate::ams::{self, NowPlaying};
 use crate::ancs::{self, Category, EventFlags, EventId, ParseError, Response};
 use crate::ancs_queue::{Request, RequestQueue, MAX_ATTEMPTS};
+use crate::device_info;
 use crate::state::{
     events, keys, AdvertisingState, AppName, ConnectionState, DiscoveredDevice, PairedDevice, PairingRequest,
     RadioState, Services, Shared, Transport,
@@ -111,6 +112,11 @@ enum Event {
         data: Vec<u8>,
     },
     Battery {
+        gen: u64,
+        data: Vec<u8>,
+    },
+    /// The phone's Model Number String (Device Information Service), read once per connection.
+    Model {
         gen: u64,
         data: Vec<u8>,
     },
@@ -389,8 +395,14 @@ impl Actor {
         let store = &self.shared.store;
         if let (Ok(Some(id)), Ok(name)) = (store.setting(keys::DEVICE_ID), store.setting(keys::DEVICE_NAME)) {
             let name = name.unwrap_or_else(|| "iPhone".into());
+            // The last model the phone reported, so the sidebar pictures it before it reconnects.
+            let model = store.setting(keys::DEVICE_MODEL).ok().flatten();
             self.shared.update_status(|s| {
-                s.device = Some(PairedDevice { id: id.clone(), name });
+                s.device = Some(PairedDevice {
+                    id: id.clone(),
+                    name,
+                    model,
+                });
                 s.connection = ConnectionState::Disconnected;
             });
             self.device_id = Some(id);
@@ -486,6 +498,7 @@ impl Actor {
                     self.shared.update_status(|s| s.battery = Some(level.min(100)));
                 }
             }
+            Event::Model { gen, data } if event_is_current(gen, current) => self.on_model_number(&data),
             Event::Connection { gen, connected, at } if Some(gen) == link_gen => {
                 self.on_connection(connected, at).await
             }
@@ -515,6 +528,7 @@ impl Actor {
             | Event::MediaEntity { .. }
             | Event::MediaCommands { .. }
             | Event::Battery { .. }
+            | Event::Model { .. }
             | Event::Connection { .. }
             | Event::Name { .. } => log::debug!("ignored event from a replaced link"),
             Event::Advertising(status) => {
