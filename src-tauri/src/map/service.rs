@@ -966,6 +966,12 @@ mod worker {
                 self.retry_deferred_photos();
             }
             self.check_mns_grace();
+            // Recent calls come over PBAP, not message access: a failed text sync shouldn't leave
+            // Recents stale. Only while the phone is linked (otherwise the pull just waits out its
+            // timeout), and no more often than calls are due anyway.
+            if result.is_err() && self.shared.status().connection == ConnectionState::Connected {
+                self.sync_calls_if_due().await;
+            }
             match result {
                 Ok(0) => self.note_sync_ok(),
                 Ok(n) => {
