@@ -114,7 +114,7 @@ What goes online, and only when you use it:
 
 Tugboat stays on your local network, and the developer bridge only accepts programs on your PC
 running as you. Copy diagnostics removes numbers, names and message text before anything reaches
-the clipboard. More in [docs/FEATURES.md](docs/FEATURES.md#privacy--data).
+the clipboard. Full details, and how to delete everything: **[docs/PRIVACY.md](docs/PRIVACY.md)**.
 
 ## Build from source
 

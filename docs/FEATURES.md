@@ -234,6 +234,8 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
 
 ## Privacy & data
 
+The full policy, including how to delete everything, is in [PRIVACY.md](PRIVACY.md).
+
 - **No tug servers, no account, no analytics, no telemetry, no update checker.**
 - Your history (notifications, texts, contacts, settings) lives in a database on your PC:
   `%APPDATA%\dev.davejames.tug\tug.db`. Cached app icons, Spotify art and contact photos sit in
