@@ -6,9 +6,9 @@
 //! The report is PRIVACY-SAFE by construction: it only ever holds UUIDs, property flags, field
 //! names, counts, enums, lengths and harmless values (time-zone offset, model id, firmware
 //! strings, volume, queue counts). Strings that could carry anything personal go through
-//! `diagnostics::redact` (`safe_text`). It's logged once per connection (and again 15 minutes
-//! later) at INFO as a single line starting with [`LOG_MARKER`], returned by the `bt_inventory`
-//! command, and included in Copy diagnostics.
+//! `diagnostics::redact` (`safe_text`). It's logged at INFO as a single line starting with
+//! [`LOG_MARKER`] once per app run shortly after the first connection (and again 15 minutes later),
+//! returned by the `bt_inventory` command, and included in Copy diagnostics.
 //!
 //! This module is pure (types, decoders, tallies, formatting) and unit-tested; the WinRT probing
 //! lives in `ble::actor::inventory` (BLE) and `map::probe` (Classic SDP, PBAP, MAP).
@@ -205,18 +205,24 @@ pub struct PhonebookAnswer {
     pub size: Option<u16>,
 }
 
+/// What `field_counts` covers: the inventory never pulls vCards of its own.
+pub const FIELD_COUNTS_SCOPE: &str =
+    "only the fields tug's own contacts pulls ask for (name, number, and photo for the photo pass) are counted";
+
 /// Phonebook Access (contacts).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PbapReport {
     /// Which phonebooks answer: pb, ich, och, mch, cch, fav, spd (asked once per run).
     pub phonebooks: BTreeMap<String, PhonebookAnswer>,
-    /// vCard property names per contact, by pull ("all fields" is the inventory's own pull).
+    /// Why the phonebook check didn't run (or failed) in this report, when it didn't.
+    pub phonebooks_note: Option<String>,
+    /// vCard property names per contact, by tug's own pull ("contacts", "contacts+photos").
     pub field_counts: BTreeMap<String, VcardFieldCounts>,
+    /// What `field_counts` covers ([`FIELD_COUNTS_SCOPE`]).
+    pub field_counts_scope: String,
     /// Unix ms of the inventory's own PBAP probe, if it has run.
     pub probed_at: Option<i64>,
-    /// Why the inventory's own all-fields pull failed, if it did.
-    pub field_pull_error: Option<String>,
 }
 
 /// An OBEX response code, named: `0xC4 not found`.
@@ -307,6 +313,42 @@ impl BtInventory {
             audio_playback: Probe::Unavailable(why()),
         }
     }
+
+    /// The Bluetooth LE link stopped answering during the GATT pass: everything after it (the
+    /// Windows link details, audio, the Classic half) is skipped rather than asked of a radio that
+    /// isn't answering, and says why. What the pass already found, and the ANCS tally, are kept.
+    pub fn skip_after_link_loss(&mut self, why: &str) {
+        let why = || why.to_string();
+        self.link = Probe::Unavailable(why());
+        self.audio_playback = Probe::Unavailable(why());
+        self.classic_sdp = Probe::Unavailable(why());
+        self.pbap = Probe::Unavailable(why());
+        self.map = Probe::Unavailable(why());
+    }
+}
+
+/// The phonebook size questions stop after this many fail (time out, error, or keep streaming):
+/// each failure costs a fresh PBAP connection, and a phone that failed twice won't do better.
+pub const MAX_FAILED_PHONEBOOKS: usize = 2;
+
+/// Whether to ask the next phonebook for its size after `failed` failures.
+pub fn keep_asking_phonebooks(failed: usize) -> bool {
+    failed < MAX_FAILED_PHONEBOOKS
+}
+
+/// Why the inventory's own PBAP probe won't run in this report, if it won't. It needs Sync Contacts
+/// on (tug's own pull has seen people), isn't run with the Connect report (tug's contacts sync is
+/// busy right after connecting), and runs once per run, a failure retried slowly.
+pub fn pbap_probe_skip(trigger: Trigger, contacts_shared: bool, due: bool) -> Option<&'static str> {
+    if !contacts_shared {
+        Some("not asked: contacts aren't shared with this PC (Sync Contacts is off, or tug hasn't pulled them yet)")
+    } else if trigger == Trigger::Connect {
+        Some("not asked yet: the inventory's phonebook check runs with the 15-minute report")
+    } else if !due {
+        Some("not asked again: the phonebook check runs once per run (a failure is retried after 30 minutes)")
+    } else {
+        None
+    }
 }
 
 /// Connection parameters from WinRT's units (interval 1.25 ms, timeout 10 ms).
@@ -384,6 +426,7 @@ pub fn diagnostics_section(report: Option<&BtInventory>) -> String {
 // ---- and the once-per-run PBAP probe result.
 
 /// The tallies and caches, shared by the BLE actor, the MAP worker and the commands.
+#[derive(Debug, PartialEq)]
 pub struct State {
     pub ancs: Option<AncsTally>,
     pub ams_commands: Option<Vec<u8>>,
@@ -396,20 +439,38 @@ pub struct State {
     pub last_report: Option<BtInventory>,
 }
 
-static STATE: Mutex<State> = Mutex::new(State {
-    ancs: None,
-    ams_commands: None,
-    listing_types: BTreeMap::new(),
-    mns_events: BTreeMap::new(),
-    vcard_fields: BTreeMap::new(),
-    pbap: None,
-    pbap_attempted_at: None,
-    last_report: None,
-});
+impl State {
+    const fn new() -> Self {
+        State {
+            ancs: None,
+            ams_commands: None,
+            listing_types: BTreeMap::new(),
+            mns_events: BTreeMap::new(),
+            vcard_fields: BTreeMap::new(),
+            pbap: None,
+            pbap_attempted_at: None,
+            last_report: None,
+        }
+    }
+
+    /// Everything here describes one phone: forget it all (the tallies, the PBAP probe result and
+    /// its once-per-run mark, vCard counts, the last report) when tug forgets the phone or adopts
+    /// another.
+    fn reset_device(&mut self) {
+        *self = State::new();
+    }
+}
+
+static STATE: Mutex<State> = Mutex::new(State::new());
 
 /// The shared state; a poisoned lock is recovered (it only ever holds plain data).
 pub fn state() -> MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// tug forgot the phone or adopted a different one: drop what the inventory knew about the old one.
+pub fn reset_device_state() {
+    state().reset_device();
 }
 
 /// Hook: one ANCS Notification Source packet.
@@ -508,6 +569,7 @@ pub fn pbap_report() -> Option<PbapReport> {
     }
     let mut r = s.pbap.clone().unwrap_or_default();
     r.field_counts = s.vcard_fields.clone();
+    r.field_counts_scope = FIELD_COUNTS_SCOPE.to_string();
     Some(r)
 }
 
@@ -653,6 +715,73 @@ mod tests {
             "a failure isn't retried at once"
         );
         assert!(probe_due(false, Some(900), 1_000, 100));
+    }
+
+    #[test]
+    fn a_link_loss_skips_the_rest_but_keeps_what_was_found() {
+        let mut r = sample();
+        r.skip_after_link_loss("skipped: the link stopped answering");
+        assert_eq!(r.link, Probe::Unavailable("skipped: the link stopped answering".into()));
+        assert_eq!(
+            r.audio_playback,
+            Probe::Unavailable("skipped: the link stopped answering".into())
+        );
+        assert_eq!(
+            r.classic_sdp,
+            Probe::Unavailable("skipped: the link stopped answering".into())
+        );
+        assert_eq!(r.pbap, Probe::Unavailable("skipped: the link stopped answering".into()));
+        assert_eq!(r.map, Probe::Unavailable("skipped: the link stopped answering".into()));
+        assert_eq!(r.gatt, sample().gatt, "the GATT pass's findings stay");
+        assert_eq!(r.battery, sample().battery);
+        assert_eq!(r.ancs, sample().ancs);
+    }
+
+    #[test]
+    fn the_phonebook_loop_stops_after_two_failures() {
+        assert!(keep_asking_phonebooks(0));
+        assert!(keep_asking_phonebooks(1), "one failure: reconnect and go on");
+        assert!(!keep_asking_phonebooks(2), "two failures: stop asking");
+        assert!(!keep_asking_phonebooks(5));
+    }
+
+    #[test]
+    fn the_pbap_probe_needs_shared_contacts_and_runs_once() {
+        assert!(
+            pbap_probe_skip(Trigger::FollowUp, false, true).is_some_and(|w| w.contains("aren't shared")),
+            "Sync Contacts off: never asked, whatever the trigger"
+        );
+        assert!(pbap_probe_skip(Trigger::OnDemand, false, true).is_some());
+        assert!(
+            pbap_probe_skip(Trigger::Connect, true, true).is_some(),
+            "not with the connect report"
+        );
+        assert!(
+            pbap_probe_skip(Trigger::FollowUp, true, false).is_some(),
+            "already done this run"
+        );
+        assert_eq!(pbap_probe_skip(Trigger::FollowUp, true, true), None);
+        assert_eq!(pbap_probe_skip(Trigger::OnDemand, true, true), None);
+    }
+
+    #[test]
+    fn forgetting_the_phone_clears_everything_the_inventory_knew() {
+        let mut s = State::new();
+        s.ancs = Some(AncsTally::with_all_categories());
+        s.ams_commands = Some(vec![0, 1]);
+        s.listing_types.insert("SMS_GSM".into(), 3);
+        s.mns_events.insert("NewMessage".into(), 1);
+        s.vcard_fields.insert("contacts".into(), VcardFieldCounts::default());
+        s.pbap = Some(PbapReport::default());
+        s.pbap_attempted_at = Some(5);
+        s.last_report = Some(sample());
+        assert!(!probe_due(s.pbap.is_some(), s.pbap_attempted_at, 10, 100));
+        s.reset_device();
+        assert_eq!(s, State::new());
+        assert!(
+            probe_due(s.pbap.is_some(), s.pbap_attempted_at, 10, 100),
+            "a new phone gets its own PBAP probe"
+        );
     }
 
     #[test]

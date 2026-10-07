@@ -127,12 +127,105 @@ pub struct VcardFieldCounts {
     pub tel_types: BTreeMap<String, u32>,
 }
 
+/// What an unlisted property name or TEL type is reported as: a vCard can carry names an app or
+/// the user made up (a custom label typed into TYPE), and those could say something personal.
+const CUSTOM: &str = "custom";
+
+/// vCard property names the counts may show by name: RFC 6350's, plus the vCard 2.1/3.0 ones
+/// PBAP's property selector defines (LABEL, MAILER, AGENT, CLASS, SORT-STRING). `X-` extension
+/// names (fixed vendor tokens such as X-ABRELATEDNAMES) are shown too; anything else is "custom".
+const KNOWN_PROPERTIES: [&str; 40] = [
+    "SOURCE",
+    "KIND",
+    "XML",
+    "FN",
+    "N",
+    "NICKNAME",
+    "PHOTO",
+    "BDAY",
+    "ANNIVERSARY",
+    "GENDER",
+    "ADR",
+    "TEL",
+    "EMAIL",
+    "IMPP",
+    "LANG",
+    "TZ",
+    "GEO",
+    "TITLE",
+    "ROLE",
+    "LOGO",
+    "ORG",
+    "MEMBER",
+    "RELATED",
+    "CATEGORIES",
+    "NOTE",
+    "PRODID",
+    "REV",
+    "SOUND",
+    "UID",
+    "CLIENTPIDMAP",
+    "URL",
+    "KEY",
+    "FBURL",
+    "CALADRURI",
+    "CALURI",
+    "LABEL",
+    "MAILER",
+    "AGENT",
+    "CLASS",
+    "SORT-STRING",
+];
+
+/// TEL types the counts may show by name: RFC 6350's (with the general HOME/WORK), the vCard
+/// 2.1/3.0 ones, and Apple's fixed labels (IPHONE, MAIN, OTHER). Anything else — a label the user
+/// typed, which iOS can put in TYPE — is "custom".
+const KNOWN_TEL_TYPES: [&str; 19] = [
+    "TEXT",
+    "VOICE",
+    "FAX",
+    "CELL",
+    "VIDEO",
+    "PAGER",
+    "TEXTPHONE",
+    "HOME",
+    "WORK",
+    "PREF",
+    "MSG",
+    "BBS",
+    "MODEM",
+    "CAR",
+    "ISDN",
+    "PCS",
+    "IPHONE",
+    "MAIN",
+    "OTHER",
+];
+
 /// A property or type name made safe: upper-case letters, digits and dashes only, capped.
 fn clean_name(raw: &str) -> Option<String> {
     let name: String = raw.trim().to_ascii_uppercase().chars().take(40).collect();
     let ok = name.starts_with(|c: char| c.is_ascii_alphabetic())
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
     ok.then_some(name)
+}
+
+/// How a (clean) property name is counted: by name if it's standard or an `X-` extension,
+/// otherwise as "custom".
+fn property_label(name: String) -> String {
+    if KNOWN_PROPERTIES.contains(&name.as_str()) || name.starts_with("X-") {
+        name
+    } else {
+        CUSTOM.to_string()
+    }
+}
+
+/// How a TEL type is counted: by name if it's a standard (or Apple's fixed) type, else "custom".
+fn tel_type_label(raw: &str) -> String {
+    match clean_name(raw.trim_matches('"')) {
+        Some(t) if KNOWN_TEL_TYPES.contains(&t.as_str()) => t,
+        _ => CUSTOM.to_string(),
+    }
 }
 
 /// Count property names per contact in a PBAP phonebook object.
@@ -180,14 +273,12 @@ pub fn count_vcard_fields(raw: &str) -> VcardFieldCounts {
                             // vCard 2.1 writes bare types: `TEL;CELL;VOICE:`.
                             None => p,
                         };
-                        for t in types.split(',') {
-                            if let Some(t) = clean_name(t.trim_matches('"')) {
-                                tel_types.insert(t);
-                            }
+                        for t in types.split(',').filter(|t| !t.trim().is_empty()) {
+                            tel_types.insert(tel_type_label(t));
                         }
                     }
                 }
-                fields.insert(key);
+                fields.insert(property_label(key));
             }
             _ => {}
         }
@@ -347,11 +438,50 @@ mod tests {
     }
 
     #[test]
-    fn junk_property_names_are_dropped() {
+    fn junk_and_unlisted_property_names_never_show() {
+        // `http://…` looks like a property named HTTP: not a vCard name, so only "custom" shows.
         let c = count_vcard_fields("BEGIN:VCARD\nFN:A\nhttp://x.y/z:1\n1BAD:x\nEND:VCARD\n");
         assert_eq!(c.contacts, 1);
-        assert_eq!(c.fields.keys().cloned().collect::<Vec<_>>(), vec!["FN", "HTTP"]);
+        assert_eq!(c.fields.keys().cloned().collect::<Vec<_>>(), vec!["FN", "custom"]);
         assert_eq!(count_vcard_fields("").contacts, 0);
+    }
+
+    #[test]
+    fn only_standard_and_extension_property_names_are_shown() {
+        let raw = "BEGIN:VCARD\nVERSION:3.0\nFN:A\nNOTE:x\nLABEL:x\nX-ABLABEL:Mobile\n\
+            JANEDOEBIRTHDAY:x\nSECRETCLUB:x\nEND:VCARD\n";
+        let c = count_vcard_fields(raw);
+        assert_eq!(
+            c.fields.keys().cloned().collect::<Vec<_>>(),
+            vec!["FN", "LABEL", "NOTE", "X-ABLABEL", "custom"]
+        );
+        assert_eq!(c.fields["custom"], 1, "made-up names count once per contact, as custom");
+        let json = serde_json::to_string(&c).unwrap();
+        for secret in ["JANEDOE", "SECRETCLUB", "Mobile"] {
+            assert!(!json.contains(secret), "{secret} leaked: {json}");
+        }
+    }
+
+    #[test]
+    fn only_standard_tel_types_are_shown() {
+        assert_eq!(tel_type_label("cell"), "CELL");
+        assert_eq!(tel_type_label("\"voice\""), "VOICE");
+        assert_eq!(tel_type_label("iPhone"), "IPHONE", "Apple's fixed label");
+        assert_eq!(tel_type_label("pref"), "PREF");
+        assert_eq!(tel_type_label("Grandma"), "custom", "a label the user typed");
+        assert_eq!(tel_type_label("X-WORKMOBILE"), "custom");
+        assert_eq!(tel_type_label("Dave's work"), "custom");
+        let raw = "BEGIN:VCARD\nTEL;TYPE=CELL,Grandma:1\nTEL;type=HOME;type=\"Mum's\":2\n\
+            TEL;CELL;BESTFRIEND:3\nTEL;TYPE=:4\nEND:VCARD\n";
+        let c = count_vcard_fields(raw);
+        assert_eq!(
+            c.tel_types.keys().cloned().collect::<Vec<_>>(),
+            vec!["CELL", "HOME", "custom"]
+        );
+        let json = serde_json::to_string(&c).unwrap();
+        for secret in ["GRANDMA", "Grandma", "Mum", "BESTFRIEND"] {
+            assert!(!json.contains(secret), "{secret} leaked: {json}");
+        }
     }
 
     #[test]

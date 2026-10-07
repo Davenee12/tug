@@ -501,15 +501,21 @@ export interface BtAncsTally {
 
 export interface BtVcardFieldCounts {
   contacts: number;
+  /** Standard vCard property names and `X-` names; anything else is counted as "custom". */
   fields: Record<string, number>;
+  /** Standard TEL types (and Apple's IPHONE/MAIN/OTHER); anything else is "custom". */
   telTypes: Record<string, number>;
 }
 
 export interface BtPbapReport {
   phonebooks: Record<string, { response: string; size: number | null }>;
+  /** Why the phonebook size check didn't run (or failed) in this report. */
+  phonebooksNote: string | null;
+  /** From tug's own contacts pulls only ("contacts", "contacts+photos"). */
   fieldCounts: Record<string, BtVcardFieldCounts>;
+  /** What fieldCounts covers: only the fields tug's own pulls ask for. */
+  fieldCountsScope: string;
   probedAt: number | null;
-  fieldPullError: string | null;
 }
 
 export interface BtMapReport {

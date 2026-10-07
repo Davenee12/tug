@@ -4,6 +4,8 @@ use super::*;
 
 impl Actor {
     pub(super) fn drop_link(&mut self) {
+        // Nothing more may be asked of this link, and the reconnect's AMS reads need the turn.
+        self.cancel_inventory();
         self.link_down_at = None;
         if let Some(link) = self.link.take() {
             let _ = link.device.Close();
@@ -82,7 +84,8 @@ impl Actor {
                 if let Some(l) = self.link.as_mut() {
                     l.connected = true;
                 }
-                // Bluetooth inventory: one report per connection, a little later, off this path.
+                // Bluetooth inventory: the first connection this run gets a report a little later,
+                // off this path, once ANCS has settled.
                 self.schedule_inventory();
                 self.shared.update_status(|s| {
                     s.connection = ConnectionState::Connected;
@@ -282,6 +285,7 @@ impl Actor {
             return;
         }
         log::info!("iPhone link down");
+        self.cancel_inventory();
         if let Some(l) = self.link.as_mut() {
             l.ancs = None;
             l.media = None;

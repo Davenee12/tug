@@ -87,13 +87,14 @@ ships a `tug` CLI.
 
 ## v0.5.13 — use more of Bluetooth (planned, Dave 2026-10-06)
 1. **Bluetooth inventory probe** (PR `feat/bt-inventory`; ships whenever it's ready): logs one
-   privacy-safe `bt-inventory:` line per connection (and 15 min later) so we learn what the phone
-   really exposes before building on it.
+   privacy-safe `bt-inventory:` line once per app run (and 15 min later) so we learn what the
+   phone really exposes before building on it.
 2. **Small wins, if the inventory confirms them:** ANCS categories (a coming-up card from Schedule
    alerts, a voicemail card, Important pinned, the phone's own action labels); deeper AMS (a real
    phone volume bar, "Song 4 of 12", playback speed, Apple Music shuffle/repeat state);
    travel-aware time from the Current Time Service; connection quality from Windows 11 link info;
-   richer contact cards and birthdays if PBAP sends the fields.
+   richer contact cards and birthdays if PBAP sends the fields (the inventory only counts the
+   fields tug already asks for, so this needs its own check).
 3. **Spike:** "Play iPhone audio on this PC" via `AudioPlaybackConnection` (A2DP sink).
 - **iOS limits:** signal bars/carrier need HFP (held by Windows; parked with calling); no charging
   state, AirPods/Watch battery or Focus over Bluetooth; we won't parse Apple Continuity adverts.
@@ -127,6 +128,16 @@ recognition (e.g. whisper.cpp via whisper-rs), no account.
   phone→PC only); options are text-to-self (unverified) or the companion app.
 
 ## Future — companion apps (planned, see docs/COMPANION-PLAN.md)
+**Priority (Dave, 2026-10-06): tug must support both iPhone and Android.** The Android companion app
+(Phase 2: all-app notifications, clipboard, files, full SMS/RCS) is the step that makes Android
+first-class; Tugboat (v0.5.11, browser-based) needs no app, so it works from Android Chrome too.
+- **Android trial (no app) — when an Android test phone is available:** pair an Android phone and
+  see what tug's existing MAP (texts, live texts via MNS) and PBAP (contacts, photos, call history)
+  code gets with no app installed; note OEM quirks (some makers disable MAP or need "Allow access
+  to messages"). Notifications, media and battery aren't available over Bluetooth on Android
+  without an app. The outcome decides how Android appears in setup: a phone picker that accepts
+  Android, with an honest "texts, contacts and calls" capability list.
+
 tug stays zero-setup on the phone by default. A tug phone app is the step that unlocks files,
 clipboard and Wi-Fi speed. Order: **Phase 0** reliability and polish (now) → **Phase 1** the tug
 protocol in Rust (device keys, pairing over Bluetooth, encrypted local Wi-Fi link, events with

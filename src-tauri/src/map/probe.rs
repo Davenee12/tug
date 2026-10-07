@@ -1,7 +1,8 @@
 //! The Classic half of the Bluetooth inventory (`crate::bt_inventory`): the iPhone's SDP records,
-//! which PBAP phonebooks answer (asked with MaxListCount = 0, so only sizes come back), the vCard
-//! property NAMES it sends, and the MAP folder names. Thin WinRT/OBEX I/O; the decoding and every
-//! privacy rule live in the pure `bt_inventory` module.
+//! which PBAP phonebooks answer (asked with MaxListCount = 0, so only sizes come back — no vCards
+//! are pulled here; the vCard field names come from tug's own contacts pulls), and the MAP folder
+//! names. Thin WinRT/OBEX I/O; the decoding and every privacy rule live in the pure
+//! `bt_inventory` module.
 
 use std::time::Duration;
 
@@ -9,30 +10,31 @@ use windows::core::HSTRING;
 use windows::Devices::Bluetooth::{BluetoothCacheMode, BluetoothDevice};
 
 use super::obex::{self, Header};
-use super::session::{MapError, MapSession, ObexLink, PBAP_TARGET, PSE_UUID};
+use super::session::{MapError, MapSession, ObexLink, PBAP_TARGET, PBAP_TURN, PSE_UUID};
 use crate::ble::winrt::{bounded_for, from_buffer};
 use crate::bt_inventory::{self as inv, sdp, PbapReport, PhonebookAnswer, SdpRecord};
 
 const SDP_TIMEOUT: Duration = Duration::from_secs(20);
 /// Each phonebook size question. fav/spd are PBAP 1.2 extras an iPhone may not answer at all.
 const PHONEBOOK_TIMEOUT: Duration = Duration::from_secs(5);
-/// The one all-fields pull (no photos), like the regular contacts pull's limit.
-const FIELDS_PULL_TIMEOUT: Duration = Duration::from_secs(90);
 const FOLDERS_TIMEOUT: Duration = Duration::from_secs(15);
 
 const PHONEBOOKS: [&str; 7] = ["pb", "ich", "och", "mch", "cch", "fav", "spd"];
 
 // PBAP application parameters.
 const PB_MAX_LIST_COUNT: u8 = 0x04;
-const PB_PROPERTY_SELECTOR: u8 = 0x06;
-const PB_FORMAT: u8 = 0x07;
 const PB_PHONEBOOK_SIZE: u8 = 0x08;
-const PB_FORMAT_VCARD30: u8 = 0x01;
-/// Every vCard property bit 0–31 except the binary ones (PHOTO 3, LOGO 14, SOUND 19, KEY 22), so
-/// the pull shows which text fields iOS shares without the slow photo payload.
-const PB_ALL_TEXT_FIELDS: u64 = 0xFFFF_FFFF & !((1 << 3) | (1 << 14) | (1 << 19) | (1 << 22));
 /// A size answer that keeps streaming is the phone ignoring MaxListCount = 0; stop listening.
 const MAX_SIZE_PACKETS: usize = 4;
+
+/// Why the inventory's phonebook check didn't produce a report.
+#[derive(Debug)]
+pub enum PbapProbeError {
+    /// tug's own contacts, calls or photo pull holds the phone's one PBAP connection: skipped, so
+    /// the check never opens a second one (and never makes tug's pulls wait).
+    Busy,
+    Failed(String),
+}
 
 /// The iPhone's Classic SDP records, described. An uncached RFCOMM query first makes Windows
 /// run SDP again; records come from `BluetoothDevice.SdpRecords`, or (if Windows lists none) from
@@ -106,17 +108,34 @@ fn s(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
-/// Ask each phonebook for its size, then pull `pb` once with every text field to count property
-/// names. Nothing personal is kept: sizes, response codes and names only.
-pub async fn pbap_probe(device_id: &str, now_ms: i64) -> Result<PbapReport, String> {
+/// Ask each phonebook for its size (MaxListCount = 0: no vCards are transferred). Holds
+/// [`PBAP_TURN`] throughout, and skips at once if tug's own PBAP pull has it. Stops after
+/// [`inv::MAX_FAILED_PHONEBOOKS`] failures. Nothing personal is kept: sizes and response codes.
+pub async fn pbap_probe(device_id: &str, now_ms: i64) -> Result<PbapReport, PbapProbeError> {
+    let Ok(_turn) = PBAP_TURN.try_lock() else {
+        return Err(PbapProbeError::Busy);
+    };
     let connect = || ObexLink::connect(device_id, PSE_UUID, &PBAP_TARGET, MapError::ContactsConsent);
-    let mut link = connect().await.map_err(s)?;
+    let mut link = Some(connect().await.map_err(|e| PbapProbeError::Failed(e.to_string()))?);
     let mut report = PbapReport {
         probed_at: Some(now_ms),
         ..Default::default()
     };
+    let mut failed = 0;
+    let mut stopped: Option<String> = None;
     for book in PHONEBOOKS {
-        let (answer, link_ok) = match tokio::time::timeout(PHONEBOOK_TIMEOUT, phonebook_size(&mut link, book)).await {
+        let Some(l) = link.as_mut().filter(|_| stopped.is_none()) else {
+            let why = stopped.as_deref().unwrap_or("the connection closed");
+            report.phonebooks.insert(
+                book.to_string(),
+                PhonebookAnswer {
+                    response: format!("not asked: {why}"),
+                    size: None,
+                },
+            );
+            continue;
+        };
+        let (answer, link_ok) = match tokio::time::timeout(PHONEBOOK_TIMEOUT, phonebook_size(l, book)).await {
             Ok(r) => r,
             Err(_) => (
                 PhonebookAnswer {
@@ -127,28 +146,26 @@ pub async fn pbap_probe(device_id: &str, now_ms: i64) -> Result<PbapReport, Stri
             ),
         };
         report.phonebooks.insert(book.to_string(), answer);
-        if !link_ok {
-            // A timed-out or streaming answer may still be arriving: start a clean session.
-            link.disconnect().await;
-            link = connect().await.map_err(s)?;
+        if link_ok {
+            continue;
+        }
+        failed += 1;
+        // A timed-out or streaming answer may still be arriving: this session is out of step.
+        if let Some(l) = link.take() {
+            l.disconnect().await;
+        }
+        if !inv::keep_asking_phonebooks(failed) {
+            stopped = Some(format!("{failed} phonebooks failed"));
+            continue;
+        }
+        match connect().await {
+            Ok(l) => link = Some(l),
+            Err(e) => stopped = Some(format!("couldn't reconnect: {}", inv::safe_text(&e.to_string(), 80))),
         }
     }
-    let headers = vec![
-        link.conn(),
-        Header::type_("x-bt/phonebook"),
-        Header::Name(Some("telecom/pb.vcf".into())),
-        obex::app_params(&[
-            (PB_FORMAT, &[PB_FORMAT_VCARD30]),
-            (PB_PROPERTY_SELECTOR, &PB_ALL_TEXT_FIELDS.to_be_bytes()),
-            (PB_MAX_LIST_COUNT, &u16::MAX.to_be_bytes()),
-        ]),
-    ];
-    match tokio::time::timeout(FIELDS_PULL_TIMEOUT, link.get("PullPhoneBook", headers)).await {
-        Ok(Ok(raw)) => inv::record_vcard_fields("all text fields", &String::from_utf8_lossy(&raw)),
-        Ok(Err(e)) => report.field_pull_error = Some(inv::safe_text(&e.to_string(), 120)),
-        Err(_) => report.field_pull_error = Some("timeout".into()),
+    if let Some(l) = link {
+        l.disconnect().await;
     }
-    link.disconnect().await;
     Ok(report)
 }
 
