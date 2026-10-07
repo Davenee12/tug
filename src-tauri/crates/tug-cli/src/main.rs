@@ -5,6 +5,7 @@
 
 mod args;
 mod format;
+mod lookup;
 mod mcp;
 
 use std::io::Write;
@@ -101,10 +102,10 @@ async fn run(command: Command) -> i32 {
                         eprintln!("{f} is a folder. Name the files inside it instead.");
                         return format::USAGE;
                     }
-                    _ => {
-                        eprintln!("There's no file called {f}.");
-                        return format::USAGE;
-                    }
+                    _ => match resolve_loosely(f) {
+                        Ok(path) => paths.push(path),
+                        Err(code) => return code,
+                    },
                 }
             }
             match call_as::<OfferResult>(&c, Call::OfferFiles { paths }).await {
@@ -148,6 +149,43 @@ async fn run(command: Command) -> i32 {
             }
         }
         Command::Mcp | Command::Help | Command::Version => format::OK,
+    }
+}
+
+/// `tug boat <name>` for a name that isn't a file as given: the one file it most likely means, in
+/// this folder or Pictures\Tugboat (same name in any case, any extension if none was typed).
+/// Says which file it picked; lists the choices when there are several.
+fn resolve_loosely(name: &str) -> Result<String, i32> {
+    let mut dirs = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        dirs.push(cwd);
+    }
+    if let Some(boat) = lookup::tugboat_dir() {
+        dirs.push(boat);
+    }
+    match lookup::find(name, &dirs) {
+        lookup::Found::One(path) => {
+            let path = path.to_string_lossy().into_owned();
+            eprintln!("Using {path}");
+            Ok(path)
+        }
+        lookup::Found::Many(paths) => {
+            eprintln!("More than one file could be {name}:");
+            for p in paths.iter().take(lookup::LIST_AT_MOST) {
+                eprintln!("  {}", p.display());
+            }
+            if paths.len() > lookup::LIST_AT_MOST {
+                eprintln!("  …and {} more", paths.len() - lookup::LIST_AT_MOST);
+            }
+            eprintln!("Give the full name or path of the one you mean.");
+            Err(format::USAGE)
+        }
+        lookup::Found::None => {
+            eprintln!(
+                "There's no file called {name} here or in Pictures\\Tugboat. Give the full path, e.g. tug boat \"C:\\path\\to\\file.jpg\""
+            );
+            Err(format::USAGE)
+        }
     }
 }
 

@@ -6,38 +6,40 @@ use super::*;
 const CALL_LOG_SETTLE: Duration = Duration::from_secs(3);
 
 impl Actor {
-    /// For a phone with no ANCS: does it plainly not look like an Apple device? Reads the Device
-    /// Information manufacturer and looks for Apple-only services; any failure along the way
-    /// counts as "can't tell", which keeps the usual "unlock your iPhone".
+    /// For a phone with no ANCS: is there positive evidence it isn't an Apple device? Reads the
+    /// Device Information manufacturer and model and looks for Apple-only services. Anything
+    /// missing or failing is "can't tell", which keeps the usual "unlock your iPhone".
     async fn probe_not_an_iphone(&self, device: &BluetoothLEDevice) -> bool {
-        let known_model = self.shared.status().device.and_then(|d| d.model);
+        use crate::device_info::{
+            APPLE_ONLY_SERVICES, DEVICE_INFORMATION_SERVICE, MANUFACTURER_NAME_STRING, MODEL_NUMBER_STRING,
+        };
         let mut apple_service = false;
-        for uuid in crate::device_info::APPLE_ONLY_SERVICES {
-            match winrt::service(device, guid(*uuid)).await {
-                Ok(Some(_)) => apple_service = true,
-                Ok(None) => {}
-                Err(_) => return false,
+        for uuid in APPLE_ONLY_SERVICES {
+            if let Ok(Some(_)) = winrt::service(device, guid(*uuid)).await {
+                apple_service = true;
             }
         }
-        let manufacturer = async {
-            let svc = winrt::service(device, winrt::sig_uuid(crate::device_info::DEVICE_INFORMATION_SERVICE)).await?;
-            let Some(svc) = svc else { return Ok(None) };
-            let ch = winrt::characteristic(
-                &svc,
-                winrt::sig_uuid(crate::device_info::MANUFACTURER_NAME_STRING),
-                "manufacturer name",
-            )
-            .await?;
-            let raw = winrt::read(&ch).await?;
-            Ok::<_, BleError>(Some(String::from_utf8_lossy(&raw).trim_matches('\0').to_string()))
+        if apple_service {
+            return false;
+        }
+        let Ok(Some(dis)) = winrt::service(device, winrt::sig_uuid(DEVICE_INFORMATION_SERVICE)).await else {
+            return false;
         };
-        let manufacturer = match manufacturer.await {
-            Ok(m) => m,
-            // No manufacturer characteristic is an answer; a failed read isn't.
-            Err(BleError::NotFound(_)) => None,
-            Err(_) => return false,
+        let read_text = |uuid: u16, name: &'static str| {
+            let dis = dis.clone();
+            async move {
+                let ch = winrt::characteristic(&dis, winrt::sig_uuid(uuid), name).await.ok()?;
+                let raw = winrt::read(&ch).await.ok()?;
+                Some(String::from_utf8_lossy(&raw).trim_matches('\0').to_string())
+            }
         };
-        crate::device_info::not_an_iphone(known_model.as_deref(), manufacturer.as_deref(), apple_service)
+        let manufacturer = read_text(MANUFACTURER_NAME_STRING, "manufacturer name").await;
+        // The model read now, else the last one this phone reported (an iPhone's, if ever).
+        let model = match read_text(MODEL_NUMBER_STRING, "model number").await {
+            Some(m) => Some(m),
+            None => self.shared.status().device.and_then(|d| d.model),
+        };
+        crate::device_info::not_an_iphone(model.as_deref(), manufacturer.as_deref(), apple_service)
     }
 
     pub(super) async fn setup_ancs(&mut self, device: &BluetoothLEDevice, gen: u64) -> Result<Ancs, BleError> {

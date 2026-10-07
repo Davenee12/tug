@@ -378,6 +378,8 @@ impl Actor {
             s.last_error = None;
             s.pairing_stale = false;
             s.away = false;
+            // A different phone: what tug concluded about the last one doesn't carry over.
+            s.not_iphone = false;
         });
         Ok(())
     }
@@ -409,6 +411,7 @@ impl Actor {
             s.pairing_stale = false;
             s.awaiting_phone_allow = false;
             s.awaiting_unlock = false;
+            s.not_iphone = false;
             s.reconnecting = false;
             s.texts_pairing = crate::map::health::TextsPairing::Unknown;
             s.texts_device = None;
