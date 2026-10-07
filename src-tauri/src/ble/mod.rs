@@ -26,6 +26,9 @@ pub enum Command {
     },
     Media {
         command: RemoteCommand,
+        /// When the press happened, so presses queued behind a stalled write can be told
+        /// apart from deliberate ones (see `ams::CommandGate`).
+        requested_at: std::time::Instant,
         reply: Reply,
     },
     StartDiscovery,

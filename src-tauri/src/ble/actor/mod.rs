@@ -266,6 +266,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         wedge: WedgeWatch::default(),
         wedge_relink_at: None,
         inventory: inventory::InventoryState::default(),
+        media_gate: ams::CommandGate::default(),
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -317,6 +318,8 @@ struct Actor {
     wedge_relink_at: Option<Instant>,
     /// When the next Bluetooth inventory report is due, and the one running now.
     inventory: inventory::InventoryState,
+    /// One press, one media command (drops presses that queued up behind a stalled write).
+    media_gate: ams::CommandGate,
 }
 
 fn now_ms() -> i64 {
@@ -416,8 +419,12 @@ impl Actor {
                 }
                 let _ = reply.send(result);
             }
-            Command::Media { command, reply } => {
-                let res = self.send_media_command(command).await;
+            Command::Media {
+                command,
+                requested_at,
+                reply,
+            } => {
+                let res = self.send_media_command(command, requested_at).await;
                 let _ = reply.send(res);
             }
             Command::StartDiscovery => {

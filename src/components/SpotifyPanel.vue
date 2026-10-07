@@ -20,13 +20,13 @@ import { useTugStore, type SpotifyTab } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
 import { idFromUri, playlistDetail } from "../lib/spotify";
 import { api, errorMessage } from "../lib/ipc";
+import type { PickerRow } from "../lib/playback";
 import type {
   SpotifyAlbum,
   SpotifyArtist,
   SpotifyPlaylist,
   SpotifySearch,
   SpotifyTrack,
-  SpotifyDevice,
 } from "../types/protocol";
 import SpotifyArt from "./SpotifyArt.vue";
 import SpotifyTrackRow from "./SpotifyTrackRow.vue";
@@ -239,27 +239,26 @@ onMounted(async () => {
 });
 
 // --- Device picker ("Play on") ------------------------------------------------------------
+// The list, its "Current" marker and the button's label all come from the store's one idea of
+// where music is playing (Spotify's API first; see lib/playback), refreshed each time it opens.
 const devicesOpen = ref(false);
-const devices = ref<SpotifyDevice[]>([]);
 async function toggleDevices() {
   devicesOpen.value = !devicesOpen.value;
-  if (devicesOpen.value) {
-    try {
-      devices.value = await api.spotifyDevices();
-    } catch (e) {
-      tug.notify("error", errorMessage(e));
-    }
-  }
+  if (devicesOpen.value) await tug.refreshSpotifyDevices();
 }
+const currentKind = computed(() => tug.spotifyPickerRows.find((r) => r.current)?.kind ?? "Smartphone");
 function deviceIcon(kind: string) {
   const k = kind.toLowerCase();
   if (k === "computer") return Monitor;
   if (k === "smartphone") return Smartphone;
   return Speaker;
 }
-async function pickDevice(d: SpotifyDevice | null) {
+async function pickDevice(row: PickerRow) {
   devicesOpen.value = false;
-  await tug.chooseDevice(d);
+  if (row.current) return;
+  if (row.phone) return void tug.chooseDevice(null);
+  const d = tug.spotifyDevices.find((x) => x.id === row.id);
+  if (d) await tug.chooseDevice(d);
 }
 
 const TAB_BTN = "flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-medium";
@@ -285,7 +284,7 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
             aria-label="Choose where to play"
             @click="toggleDevices"
           >
-            <Smartphone :size="13" />
+            <component :is="deviceIcon(currentKind)" :size="13" />
             <span class="max-w-[140px] truncate">{{ tug.spotifyTargetName }}</span>
             <ChevronDown :size="13" />
           </button>
@@ -294,23 +293,17 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
             <div class="absolute right-0 top-9 z-20 w-60 overflow-hidden rounded-lg border border-hairline bg-canvas py-1 shadow-lg">
               <p class="caption-upper px-3 py-1.5 text-muted-soft">Play on</p>
               <button
+                v-for="row in tug.spotifyPickerRows"
+                :key="row.id ?? row.name"
                 class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-body active:bg-surface-card"
-                @click="pickDevice(null)"
+                :aria-current="row.current ? 'true' : undefined"
+                @click="pickDevice(row)"
               >
-                <Smartphone :size="15" /> <span class="flex-1 truncate">iPhone</span>
-                <span v-if="!tug.spotifyDevice" class="text-[11px] text-accent-teal">Current</span>
+                <component :is="deviceIcon(row.kind)" :size="15" />
+                <span class="flex-1 truncate">{{ row.name }}</span>
+                <span v-if="row.current" class="text-[11px] text-accent-teal">Current</span>
               </button>
-              <button
-                v-for="d in devices.filter((x) => x.kind.toLowerCase() !== 'smartphone')"
-                :key="d.id"
-                class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-body active:bg-surface-card"
-                @click="pickDevice(d)"
-              >
-                <component :is="deviceIcon(d.kind)" :size="15" />
-                <span class="flex-1 truncate">{{ d.name }}</span>
-                <span v-if="tug.spotifyDevice?.id === d.id" class="text-[11px] text-accent-teal">Current</span>
-              </button>
-              <p v-if="devices.filter((x) => x.kind.toLowerCase() !== 'smartphone').length === 0" class="px-3 py-2 text-[12px] text-muted-soft">
+              <p v-if="tug.spotifyPickerRows.length === 1" class="px-3 py-2 text-[12px] text-muted-soft">
                 No other Spotify devices are active.
               </p>
             </div>
