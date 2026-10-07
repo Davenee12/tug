@@ -271,6 +271,23 @@ mod worker {
         (MAP_RETRY_BASE * (1u32 << doublings)).min(MAP_RETRY_CAP)
     }
 
+    /// The first retry after the phone closes a working message-access session. Seen live: iOS
+    /// closed MAP and tug waited out the full 30 s backoff, so texts looked broken for half a
+    /// minute; a quick first try usually finds it back.
+    const MAP_QUICK_RETRY: Duration = Duration::from_secs(2);
+
+    /// After a failed attempt: the failure count to keep and how long to wait. The first failure
+    /// right after a working session (`session_was_up`, nothing failed before it) retries in
+    /// `MAP_QUICK_RETRY` and doesn't count, so if that misses the usual backoff starts from its
+    /// beginning. Pure, so the schedule is unit-tested.
+    fn after_failure(failures_before: u32, session_was_up: bool) -> (u32, Duration) {
+        if session_was_up && failures_before == 0 {
+            return (0, MAP_QUICK_RETRY);
+        }
+        let failures = failures_before.saturating_add(1);
+        (failures, map_retry_delay(failures))
+    }
+
     fn now_ms() -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -327,6 +344,9 @@ mod worker {
         /// night; reset on success and bypassed on a real change (see the poll loop and `map.refresh`).
         connect_failures: u32,
         next_retry: Option<Instant>,
+        /// A quick retry after the phone closed a working session, which wakes the loop sooner than
+        /// the ordinary poll would (taken once by the loop).
+        quick_retry: Option<Instant>,
         /// Messages read in tug while the phone couldn't be reached, to mark read on the phone
         /// after the next successful sync instead of dropping the request.
         queued_reads: Vec<i64>,
@@ -367,6 +387,7 @@ mod worker {
             last_type_counts: None,
             connect_failures: 0,
             next_retry: None,
+            quick_retry: None,
             queued_reads: Vec::new(),
             fetch_tries: FetchTries::default(),
             text_sync_saved: None,
@@ -428,6 +449,10 @@ mod worker {
                     next = next.max(retry);
                 }
             }
+            // The phone just closed a working session: try again soon, ahead of the usual poll.
+            if let Some(quick) = w.quick_retry.take() {
+                next = next.min(quick);
+            }
         }
         // Sender dropped (app exiting): deregister on the phone and stop advertising cleanly.
         w.shutdown().await;
@@ -466,6 +491,9 @@ mod worker {
             self.shared.update_status(|s| {
                 s.services.messages = connected;
                 s.messages_error = error;
+                if connected {
+                    s.texts_were_connected = true;
+                }
             });
         }
 
@@ -638,6 +666,10 @@ mod worker {
         fn fail(&mut self, e: &MapError) {
             if self.session.take().is_some() {
                 log::info!("message access dropped: {e}");
+                // A working session closed (here or mid-send): reconnect soon, not after a poll.
+                if self.connect_failures == 0 {
+                    self.quick_retry.get_or_insert(Instant::now() + MAP_QUICK_RETRY);
+                }
             }
             // What the phone shares is per connection; ask again on the next one, and treat its
             // first phonebook as new (saved, and the photo pass started) rather than "unchanged".
@@ -1032,6 +1064,7 @@ mod worker {
                     self.device_id = None;
                     self.set_state(false, None);
                 }
+                self.shared.update_status(|s| s.texts_were_connected = false);
                 // Forgotten (or never chosen): nothing about Sync Contacts carries over.
                 if self.contacts != ContactsWatch::default() {
                     self.contacts.forget();
@@ -1082,13 +1115,21 @@ mod worker {
         /// back off progressively and log the first few, then a periodic summary, instead of a line
         /// every poll all night.
         fn note_sync_failure(&mut self, e: &MapError) {
-            self.connect_failures = self.connect_failures.saturating_add(1);
-            if self.connect_failures <= 3 || self.connect_failures.is_multiple_of(10) {
-                log::info!("message access retry failed ({} in a row): {e}", self.connect_failures);
+            // Called before `fail` drops the session, so a session here was working until now.
+            let (failures, wait) = after_failure(self.connect_failures, self.session.is_some());
+            self.connect_failures = failures;
+            if failures == 0 {
+                log::info!(
+                    "message access closed by the iPhone ({e}); retrying in {}s",
+                    wait.as_secs()
+                );
+                self.quick_retry = Some(Instant::now() + wait);
+            } else if failures <= 3 || failures.is_multiple_of(10) {
+                log::info!("message access retry failed ({failures} in a row): {e}");
             } else {
-                log::debug!("message sync failed ({} in a row): {e}", self.connect_failures);
+                log::debug!("message sync failed ({failures} in a row): {e}");
             }
-            self.next_retry = Some(Instant::now() + map_retry_delay(self.connect_failures));
+            self.next_retry = Some(Instant::now() + wait);
         }
 
         /// If registration went out but the phone still hasn't connected to the MNS, say so once
@@ -1536,8 +1577,8 @@ mod worker {
     #[cfg(test)]
     mod tests {
         use super::{
-            after_push_failure, map_retry_delay, may_have_missed, photo_sync_due, queue_reads, FetchTries, PushOutcome,
-            MAP_RETRY_CAP, QUEUED_READS_MAX,
+            after_failure, after_push_failure, map_retry_delay, may_have_missed, photo_sync_due, queue_reads,
+            FetchTries, PushOutcome, MAP_RETRY_CAP, QUEUED_READS_MAX,
         };
         use crate::map::session::MapError;
         use std::time::Duration;
@@ -1553,6 +1594,24 @@ mod worker {
                 "never over the cap"
             );
             assert_eq!(map_retry_delay(0), Duration::from_secs(30), "no underflow at zero");
+        }
+
+        #[test]
+        fn a_working_session_the_phone_closes_is_retried_quickly_then_backs_off_as_usual() {
+            // Seen live: iOS closed MAP and tug waited the full 30 s. Now: 2 s, then 30, 60, ...
+            let mut failures = 0;
+            let mut session_up = true;
+            let mut waits = Vec::new();
+            for _ in 0..4 {
+                let (f, wait) = after_failure(failures, session_up);
+                failures = f;
+                session_up = false; // the session is gone after the first failure
+                waits.push(wait.as_secs());
+            }
+            assert_eq!(waits, vec![2, 30, 60, 120]);
+            // A phone that was never connected (or already failing) gets no quick retry.
+            assert_eq!(after_failure(0, false), (1, Duration::from_secs(30)));
+            assert_eq!(after_failure(3, true), (4, Duration::from_secs(240)));
         }
 
         #[test]

@@ -131,6 +131,10 @@ pub struct DeviceStatus {
     /// all (an Android phone, say), so "unlock your iPhone" would be wrong forever. Set by the
     /// ANCS setup that finds no ANCS, cleared by one that finds it.
     pub not_iphone: bool,
+    /// Message access has worked with this phone since it was set up (or tug started), so a drop
+    /// is a reconnect ("Reconnecting to your texts…"), not a setup problem. Cleared on Forget and
+    /// when another phone is adopted.
+    pub texts_were_connected: bool,
     /// tug is rebuilding the link on its own (Bluetooth stopped responding, the PC woke, Windows
     /// closed tug's Bluetooth objects): the phone doesn't need the user, so the UI says
     /// "Reconnecting…" rather than "Waiting for iPhone". Cleared once connected, or after a few

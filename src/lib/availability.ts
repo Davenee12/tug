@@ -5,6 +5,9 @@
 import type { DeviceStatus } from "../types/protocol";
 import { phoneSwitches, type SwitchContext } from "./phoneSwitches";
 
+/** Texts dropped after working with this phone; tug is getting them back. */
+export const TEXTS_RECONNECTING = "Reconnecting to your texts…";
+
 /** Why a reply can't be sent from tug right now, or null when it can. */
 export function replyUnavailable(s: DeviceStatus, ctx?: SwitchContext): string | null {
   if (s.services.messages) return null;
@@ -13,6 +16,9 @@ export function replyUnavailable(s: DeviceStatus, ctx?: SwitchContext): string |
   if (!s.device) return "Set up your iPhone in Settings › iPhone to reply from here.";
   if (s.textsPairing === "missing") return "Replying from tug needs texts set up on this PC. See Settings › iPhone.";
   if (s.textsPairing === "broken") return "Texts stopped connecting. Settings › iPhone says how to fix it.";
+  // Texts worked with this phone and dropped while it's still connected (the iPhone closes
+  // message access now and then): a reconnect, not a setup problem.
+  if (s.textsWereConnected && s.connection === "connected") return TEXTS_RECONNECTING;
   const texts = phoneSwitches(s, ctx).find((x) => x.key === "messages")!;
   if (texts.state === "checking") return "Connecting to your iPhone's messages…";
   if (s.connection !== "connected") return "You can reply once your iPhone reconnects.";

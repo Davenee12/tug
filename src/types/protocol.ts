@@ -44,6 +44,12 @@ export interface DeviceStatus {
    * so the store's initial status needn't name it.
    */
   notIphone?: boolean;
+  /**
+   * Message access has worked with this phone since it was set up (or tug started), so texts
+   * being down now is a reconnect, not a setup problem. Optional only so the store's initial
+   * status needn't name it.
+   */
+  textsWereConnected?: boolean;
   /** tug is rebuilding the link on its own (Bluetooth stalled, the PC woke): say "Reconnecting…", not "Waiting". */
   reconnecting: boolean;
   /** The iPhone is away (out of range): steady until it connects again, not flipping with each retry. */
