@@ -5,7 +5,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { Check, Copy, Download, FileUp, Image as ImageIcon, LoaderCircle, Send, WifiOff, X } from "lucide-vue-next";
 import TugMark from "../components/TugMark.vue";
 import { TugboatError, type TugboatApi, type PageOffer, type PageState } from "./client";
-import { MAX_DOWNLOAD, MAX_UPLOAD, formatSize, isFatal, messageFor } from "./chunks";
+import { MAX_DOWNLOAD, MAX_UPLOAD, canRetryUpload, formatSize, isFatal, messageFor } from "./chunks";
 import { copyText } from "./copy";
 
 const props = defineProps<{ api: TugboatApi | null }>();
@@ -72,6 +72,8 @@ interface Upload {
   state: "waiting" | "sending" | "saved" | "failed";
   savedAs?: string;
   error?: string;
+  /** A failed upload that "Try again" can send again. */
+  retry?: boolean;
   ctrl: AbortController;
 }
 const uploads = ref<Upload[]>([]);
@@ -109,12 +111,19 @@ async function pump() {
         const code = e instanceof TugboatError ? e.code : "error";
         u.state = "failed";
         u.error = messageFor(code);
+        u.retry = canRetryUpload(code);
         if (["closed", "unauthorized", "in-use"].includes(code)) fatal.value = code;
       }
     }
   } finally {
     pumping = false;
   }
+}
+
+/** Send a failed file again: back in the queue, from the start (the PC resumes what it has). */
+function retry(u: Upload) {
+  Object.assign(u, { state: "waiting", sent: 0, error: undefined, retry: false, ctrl: new AbortController() });
+  void pump();
 }
 
 function cancel(u: Upload) {
@@ -262,10 +271,11 @@ const fatalMessage = computed(() =>
               </div>
             </div>
             <Check v-if="u.state === 'saved'" :size="20" class="shrink-0 text-success" aria-label="Saved" />
+            <button v-if="u.state === 'failed' && u.retry" class="btn-secondary btn-sm shrink-0" @click="retry(u)">Try again</button>
             <button
-              v-else-if="u.state !== 'failed'"
+              v-if="u.state !== 'saved'"
               class="-mr-1 shrink-0 rounded-lg p-2 text-muted active:bg-card-strong"
-              aria-label="Stop sending"
+              :aria-label="u.state === 'failed' ? 'Dismiss' : 'Stop sending'"
               @click="cancel(u)"
             >
               <X :size="18" />
@@ -279,7 +289,7 @@ const fatalMessage = computed(() =>
       <section class="mt-8" aria-labelledby="text-title">
         <h2 id="text-title" class="headline text-[22px]">Text</h2>
         <div v-if="pcText" class="card mt-3">
-          <p class="text-[13px] font-medium text-muted">From your PC</p>
+          <p class="text-[13px] font-medium text-muted">Text from your PC</p>
           <p class="mt-1 max-h-48 overflow-y-auto break-words whitespace-pre-wrap text-[16px] text-ink select-text">{{ pcText.text }}</p>
           <div class="mt-3 flex items-center gap-3">
             <button class="btn-secondary btn-sm" @click="copyPcText">

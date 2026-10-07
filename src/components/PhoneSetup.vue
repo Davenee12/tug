@@ -98,7 +98,7 @@ const advertisingLabel = computed(
         here, then pair again.
       </p>
       <div class="flex gap-2">
-        <button class="btn-primary btn-sm" @click="startOver">{{ confirmStartOver ? "Tap again to start over" : "Start over" }}</button>
+        <button class="btn-primary btn-sm" @click="startOver">{{ confirmStartOver ? "Click again to start over" : "Start over" }}</button>
         <button class="btn-secondary btn-sm" @click="api.openWindowsSettings('bluetooth')">Open Bluetooth settings</button>
       </div>
     </div>
@@ -119,7 +119,7 @@ const advertisingLabel = computed(
         Start over clears the pairings tug made and begins again. Also tap <em>Forget This Device</em> for this PC under Settings › Bluetooth on the iPhone.
       </p>
       <button class="btn-secondary btn-sm self-start" @click="startOver">
-        {{ confirmStartOver ? "Tap again to start over" : "Start over" }}
+        {{ confirmStartOver ? "Click again to start over" : "Start over" }}
       </button>
     </div>
 
@@ -139,7 +139,7 @@ const advertisingLabel = computed(
         {{ connectionSentence(s) }}
       </p>
       <button class="btn-secondary btn-sm mt-4" @click="forget">
-        {{ confirmForget ? "Tap again to forget" : "Forget this iPhone" }}
+        {{ confirmForget ? "Click again to forget" : "Forget this iPhone" }}
       </button>
       <p class="mt-2 text-[12px] text-muted-soft">
         Also tap <em>Forget This Device</em> under Settings › Bluetooth on the iPhone before pairing again.

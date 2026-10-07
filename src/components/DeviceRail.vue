@@ -124,7 +124,8 @@ const dnd = computed({
         >
           <QrCode :size="13" class="text-primary" />
           Tugboat
-          <span v-if="tugboat.status.phase !== 'off'" class="size-1.5 rounded-full bg-accent-teal" aria-label="on" />
+          <span v-if="tugboat.status.phase !== 'off'" class="size-1.5 rounded-full bg-accent-teal" aria-hidden="true" />
+          <span v-if="tugboat.status.phase !== 'off'" class="sr-only">(on)</span>
         </button>
       </div>
     </section>
@@ -132,7 +133,7 @@ const dnd = computed({
     <section :class="compact ? 'mt-5' : 'mt-6'">
       <div class="caption-upper mb-1 px-2 text-on-dark-soft">Quick toggles</div>
       <ToggleRow v-model="advertise" label="Visible to iPhone" :description="compact ? undefined : 'Lets your phone find and reconnect to this PC'" />
-      <ToggleRow v-model="toasts" label="Windows alerts" :description="compact ? undefined : 'Pop up new notifications on this PC'" />
+      <ToggleRow v-model="toasts" label="Windows pop-ups" :description="compact ? undefined : 'Pop up new notifications on this PC'" />
       <ToggleRow v-model="dnd" label="Do not disturb" :description="compact ? undefined : 'Keep collecting, stop popping up'" :disabled="!tug.settings.toasts" />
     </section>
 

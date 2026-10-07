@@ -158,6 +158,7 @@ interface EventPayloads {
   message: SmsMessage;
   contacts: Contact[];
   "open-latest-conversation": null;
+  "open-settings": null;
   calls: CallRecord[];
   "toast-pressed": ToastPressed;
   "tugboat-status": TugboatStatus;

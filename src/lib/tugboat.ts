@@ -38,6 +38,21 @@ export function transferring(s: Pick<TugboatStatus, "sending" | "receiving">): b
   return s.sending || s.receiving;
 }
 
+/** Why closing Tugboat would lose something, or null when it can just close: files still moving
+ * either way, or files offered to the phone that it hasn't saved yet (they're gone once it closes). */
+export type CloseWarning = "moving" | "unsaved";
+export function closeWarning(s: Pick<TugboatStatus, "incoming" | "sending" | "outgoing">): CloseWarning | null {
+  if (transferring(s)) return "moving";
+  if (s.outgoing.some((o) => o.downloads === 0)) return "unsaved";
+  return null;
+}
+
+/** "phone" → "Phone": a phone name at the start of a sentence. Leaves names like "iPhone" alone. */
+export function capitalised(name: string): string {
+  if (/^[a-z][A-Z]/.test(name)) return name;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 /** One plain sentence for files that couldn't be offered to the phone, or null if all were. */
 export function skippedMessage(skipped: TugboatSkipped[]): string | null {
   if (!skipped.length) return null;

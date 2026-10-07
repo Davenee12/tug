@@ -59,7 +59,7 @@ describe("inQuietHours", () => {
 });
 
 describe("shouldPopUp", () => {
-  it("never pops up when Windows alerts are off", () => {
+  it("never pops up when Windows pop-ups are off", () => {
     expect(shouldPopUp(event(), settings({ toasts: false }), at("2026-10-05T12:00"))).toBe(false);
     expect(shouldPopUp(event({ isCall: true, isVip: true }), settings({ toasts: false }), at("2026-10-05T12:00"))).toBe(false);
   });
