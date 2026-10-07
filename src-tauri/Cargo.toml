@@ -77,6 +77,8 @@ windows = { version = "0.62", features = [
   "Web_Http",
   "Web_Http_Headers",
   "Win32_Foundation",
+  # The PC's region (GetUserDefaultGeoName): whether a bare 10-digit number is a +1 number.
+  "Win32_Globalization",
   "Win32_NetworkManagement_IpHelper",
   "Win32_NetworkManagement_Ndis",
   "Win32_Networking_WinSock",

@@ -588,10 +588,23 @@ pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<()> {
     use tauri_plugin_autostart::ManagerExt;
     let manager = app.autolaunch();
     if enabled {
-        manager.enable().map_err(|e| e.to_string())
+        manager.enable().map_err(|e| e.to_string())?;
+        // The plugin writes the exe path unquoted; quote it so a path with spaces (a user
+        // folder like "C:\Users\Sam Lee\...") always launches tug and nothing else.
+        if let Err(e) = crate::autostart::quote_run_value() {
+            log::warn!("autostart: couldn't quote the Run entry: {e}");
+        }
+        Ok(())
     } else {
         manager.disable().map_err(|e| e.to_string())
     }
+}
+
+/// The PC's region from Windows' Region setting (e.g. "US", "AU"), so the UI reads numbers typed
+/// without a country code the same way the Rust side does. None when Windows doesn't say.
+#[tauri::command]
+pub fn pc_region() -> Option<String> {
+    crate::map::address::pc_region().map(str::to_string)
 }
 
 // ---- Spotify connector (see src-tauri/src/spotify) ----

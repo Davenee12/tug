@@ -2,6 +2,7 @@ mod ams;
 mod ancs;
 mod ancs_queue;
 mod app_icons;
+mod autostart;
 mod ble;
 mod bt_inventory;
 mod cache_trim;
@@ -23,6 +24,7 @@ mod messages;
 #[cfg(test)]
 mod perf;
 mod spotify;
+mod startup;
 mod state;
 mod store;
 mod text;
@@ -50,9 +52,35 @@ fn launched_minimized() -> bool {
     std::env::args().any(|a| a == MINIMIZED_ARG)
 }
 
+/// Open tug.db. When it won't open (corrupt, locked by a sync app, read-only, a failed upgrade),
+/// say so on screen and offer to set it aside and start fresh, or quit — never just vanish.
+fn open_store(dir: &std::path::Path, log_dir: Option<&std::path::Path>) -> Store {
+    let path = dir.join("tug.db");
+    loop {
+        let err = match Store::open(&path) {
+            Ok(store) => return store,
+            Err(e) => e.to_string(),
+        };
+        log::error!("couldn't open {}: {err}", path.display());
+        if !startup::ask_start_fresh(&path, &err, log_dir) {
+            log::logger().flush();
+            std::process::exit(1);
+        }
+        match startup::set_aside(&path) {
+            Ok(to) => log::warn!("set the database aside as {}; starting fresh", to.display()),
+            // Shown again with the open error on the next try (the file is still there).
+            Err(e) => log::error!("couldn't set the database aside: {e}"),
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let context = tauri::generate_context!();
+    let log_dir = startup::log_dir(&context.config().identifier);
+    startup::install_panic_hook(log_dir.clone());
+    let setup_log_dir = log_dir.clone();
+    let built = tauri::Builder::default()
         // Must be first: a second launch focuses the running window instead of
         // starting a rival that can't advertise (Windows allows one provider per service).
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show(app)))
@@ -77,10 +105,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         // Tugboat's "Choose files" picker (opened from Rust; the page never sees it).
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            let store = Arc::new(Store::open(&dir.join("tug.db"))?);
+            let store = Arc::new(open_store(&dir, setup_log_dir.as_deref()));
             let shared = Arc::new(Shared::new(app.handle().clone(), store.clone()));
             let ble = ble::start(shared.clone());
             let _ = shared.map.set(map::service::start(shared.clone()));
@@ -123,6 +151,11 @@ pub fn run() {
             // The window is created hidden (see tauri.conf.json). Start in the tray only when
             // asked to (autostart adds `--minimized`) AND there's a tray to come back from;
             // otherwise show normally, so a `--minimized` launch with no tray isn't stranded.
+            // Fit the window on screens smaller than its default size (a 1366×768 laptop, or a
+            // small screen at 150%) before it's first shown.
+            if let Some(window) = app.get_webview_window("main") {
+                startup::fit_window(&window);
+            }
             if !(launched_minimized() && tray::installed()) {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
@@ -196,6 +229,7 @@ pub fn run() {
             commands::set_setting,
             commands::get_autostart,
             commands::set_autostart,
+            commands::pc_region,
             commands::list_messages,
             commands::get_contacts,
             commands::send_message,
@@ -262,16 +296,26 @@ pub fn run() {
             commands::devtools_confirm,
             commands::devtools_set_on_path,
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
-            if let tauri::RunEvent::Exit = event {
-                toast::withdraw_all(app);
-                // Tugboat never outlives tug: stop listening and remove unfinished uploads.
-                if let Some(state) = app.try_state::<AppState>() {
-                    state.tugboat.shutdown_now();
-                }
+        .build(context);
+    // A setup or WebView failure: say what failed and where the log is, instead of exiting
+    // with no window.
+    let app = match built {
+        Ok(app) => app,
+        Err(e) => {
+            log::error!("tug couldn't start: {e}");
+            log::logger().flush();
+            startup::show_fatal(&e.to_string(), log_dir.as_deref());
+            std::process::exit(1);
+        }
+    };
+    app.run(|app, event| {
+        // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
+        if let tauri::RunEvent::Exit = event {
+            toast::withdraw_all(app);
+            // Tugboat never outlives tug: stop listening and remove unfinished uploads.
+            if let Some(state) = app.try_state::<AppState>() {
+                state.tugboat.shutdown_now();
             }
-        });
+        }
+    });
 }

@@ -43,7 +43,8 @@
     "shortDescription": "iPhone notifications and media controls on Windows, over Bluetooth LE",
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "./windows/hooks.nsh"
       }
     }
   }
