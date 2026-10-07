@@ -1058,6 +1058,9 @@ export const useTugStore = defineStore("tug", () => {
     await attempt(loadSettings);
     // Settings are in (so lastSeenVersion is known): decide whether to greet with "What's new".
     void checkWhatsNew();
+    // A phone that's already low when tug starts gets its alert now, not one step later:
+    // device-status only checks when the level changes, and the first status set it silently.
+    void checkBattery(status.value.battery);
     void loadSpotify();
   }
 
