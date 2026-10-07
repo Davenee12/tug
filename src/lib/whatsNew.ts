@@ -21,6 +21,17 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.11",
+    title: "Meet Tugboat",
+    highlights: [
+      "Tugboat: scan a code with your phone and send photos, files and text to your PC, and back. No app needed.",
+      "Your exact iPhone now shows in the sidebar.",
+      "One conversation per person, even when an app hides a mark in their name.",
+      "Spotify's back and forward 15 seconds jump to the right spot.",
+      "Weather keeps itself up to date.",
+    ],
+  },
+  {
     version: "0.5.10",
     title: "Steadier connection and a round of fixes",
     highlights: [

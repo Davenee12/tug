@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.5.11 — 2026-10-07
+
+Tugboat: send photos, files and text between your phone and PC over Wi-Fi, with no app on the
+phone. Plus your exact iPhone in the sidebar and a round of fixes. Merged as #83–#90. Tugboat was tried both ways on a real iPhone over home Wi-Fi.
+
+### New
+- **Tugboat** (button under your phone in the sidebar, or Ctrl+K "tugboat"): scan the QR code with
+  your phone's camera and a tug page opens in Safari or Chrome. Send photos, videos, files and
+  pasted text to the PC (files land in Pictures\Tugboat, text on the clipboard), and drag files onto
+  tug to send them to the phone. Works on your Wi-Fi only, every transfer is encrypted, and it turns
+  off when you close it or after 10 idle minutes. Received files carry Windows' "downloaded"
+  mark, so a disguised program triggers the usual warning before it runs.
+- **Your exact iPhone** in the sidebar and Settings › iPhone: tug reads the model over Bluetooth
+  and shows its name ("iPhone 15 Pro Max") with tug's own drawing of that design.
+
+### Fixed
+- **One conversation per person:** WhatsApp and Snapchat sometimes hide an invisible mark in the
+  sender's name, which split one person into two conversations (one without their photo).
+- **Spotify back/forward 15 s** jump to the exact time instead of restarting the song.
+- **Weather updates on its own** every 15 minutes, when you come back to tug, and "now" follows
+  the clock between updates.
+- **A stalled Bluetooth adapter** no longer looks like the PC waking from sleep: tug pauses,
+  reconnects cleanly, says "Reconnecting…", and keeps the iPhone able to find the PC.
+
+### Known issues
+- A reply typed in the Windows pop-up is sent, but doesn't appear in the conversation until a later
+  release.
+
+### Developer
+- `tugboat/` (axum on the LAN IPv4 only, HKDF + XChaCha20-Poly1305 per chunk, MAC-authenticated
+  requests, first phone binds the session, resumable uploads, own hyper accept loop with header
+  timeout and a 32-connection cap), phone page in `src/tugboat-page/` (bundled @noble/ciphers);
+  independent security review: no blocks, all should-fixes applied.
+- Bluetooth inventory (`bt_inventory/`): one privacy-safe `bt-inventory:` log line per app run
+  and 15 minutes later; findings feed v0.5.13.
+- Wake detection compares sleep-inclusive and awake-only clocks on its own thread; GATT
+  operations run on bounded helper threads; wedge detector relinks a stalled adapter.
+- Personal data removed from fixtures, docs and comments; release builds use
+  `npm run build:release`, which strips local paths from the exe.
+
 ## v0.5.10 — 2026-10-06
 
 Bug fixing only (every fifth release is a stabilization release). Merged as #77, #79–#81, after an

@@ -5,7 +5,7 @@ controls, over Bluetooth. No app on the phone, no Mac, no cloud.
 
 tug is a Windows desktop app (Tauri 2 + Rust + Vue 3) that pairs with an iPhone the way a
 smartwatch or car kit does, using the Bluetooth services Apple publishes for accessories.
-**Current release: v0.5.10** — see [CHANGELOG.md](CHANGELOG.md).
+**Current release: v0.5.11** — see [CHANGELOG.md](CHANGELOG.md).
 
 | Feature | How | Status |
 |---|---|---|
