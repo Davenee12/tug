@@ -12,6 +12,7 @@ const baseSettings: UiSettings = {
   closeToTray: true,
   appIcons: true,
   lowBattery: true,
+  popupSound: true,
   dialing: false,
   filterUnknown: true,
   knownSenders: [],

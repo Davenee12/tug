@@ -11,7 +11,8 @@ use windows::core::{IInspectable, Interface, HSTRING};
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::Foundation::{DateTime, IReference, PropertyValue, TypedEventHandler};
 use windows::UI::Notifications::{
-    ToastActivatedEventArgs, ToastFailedEventArgs, ToastNotification, ToastNotificationManager,
+    NotificationSetting, ToastActivatedEventArgs, ToastFailedEventArgs, ToastNotification,
+    ToastNotificationManager,
 };
 
 /// PowerShell's AppUserModelID: always registered, so an uninstalled (dev) build can show
@@ -95,6 +96,19 @@ fn expiry(after: Duration) -> windows::core::Result<IReference<DateTime>> {
 }
 
 /// Take one toast back (on screen and in Action Center).
+/// Whether Windows has turned pop-ups off for `aumid`: for that app, for every app, or by
+/// policy. A synchronous read of the notifier's setting, so it can't hang.
+pub fn blocked(aumid: &str) -> windows::core::Result<bool> {
+    let setting = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(aumid))?.Setting()?;
+    Ok(blocks(setting))
+}
+
+fn blocks(setting: NotificationSetting) -> bool {
+    setting == NotificationSetting::DisabledForApplication
+        || setting == NotificationSetting::DisabledForUser
+        || setting == NotificationSetting::DisabledByGroupPolicy
+}
+
 pub fn remove(aumid: &str, tag: &str, group: &str) -> windows::core::Result<()> {
     ToastNotificationManager::History()?.RemoveGroupedTagWithId(
         &HSTRING::from(tag),
@@ -110,6 +124,16 @@ pub fn remove_group(aumid: &str, group: &str) -> windows::core::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_turned_off_setting_counts_as_blocked() {
+        use super::{blocks, NotificationSetting};
+        assert!(!blocks(NotificationSetting::Enabled));
+        assert!(blocks(NotificationSetting::DisabledForApplication));
+        assert!(blocks(NotificationSetting::DisabledForUser));
+        assert!(blocks(NotificationSetting::DisabledByGroupPolicy));
+        assert!(!blocks(NotificationSetting::DisabledByManifest));
+    }
+
     use super::*;
     use crate::toast::xml::{note_toast, notification_toast, ToastSpec};
 
@@ -129,8 +153,8 @@ mod tests {
             clear: true,
         };
         for xml in [
-            notification_toast(&busy),
-            notification_toast(&ToastSpec::default()),
+            notification_toast(&busy, false),
+            notification_toast(&ToastSpec::default(), true),
             note_toast(1, "Sent to Zoe", "on my way & <b>", true),
         ] {
             let doc = XmlDocument::new().unwrap();
