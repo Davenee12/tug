@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff } from "lucide-vue-next";
+import { connectionBusy, connectionLabel as connectionLabelFor } from "../lib/connectionStatus";
 import { useTugStore } from "../stores/tug";
 import { phoneModel } from "../lib/phoneModel";
 import NowPlayingCard from "./NowPlayingCard.vue";
@@ -27,28 +28,11 @@ const compact = computed(() => vh.value < 800);
 // The model line only shows for a model tug knows; otherwise the picture is a generic iPhone.
 const model = computed(() => phoneModel(s.value.device?.model));
 
-const connectionLabel = computed(() => {
-  switch (s.value.connection) {
-    case "connected":
-      return "Connected";
-    case "connecting":
-      return "Connecting…";
-    case "disconnected":
-      return s.value.awaitingUnlock ? "Unlock your iPhone" : "Waiting for iPhone";
-    default:
-      return "Not set up";
-  }
-});
+const connectionLabel = computed(() => connectionLabelFor(s.value));
 
 const dotClass = computed(() => {
-  switch (s.value.connection) {
-    case "connected":
-      return "bg-accent-teal";
-    case "connecting":
-      return "bg-accent-amber animate-pulse";
-    default:
-      return "bg-on-dark-soft/50";
-  }
+  if (s.value.connection === "connected") return "bg-accent-teal";
+  return connectionBusy(s.value) ? "bg-accent-amber animate-pulse" : "bg-on-dark-soft/50";
 });
 
 const batteryIcon = computed(() => {

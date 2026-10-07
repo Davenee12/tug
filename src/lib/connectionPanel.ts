@@ -21,6 +21,8 @@ export interface PanelInputs {
   hasDevice: boolean;
   /** The phone refused the bond twice in a row: it needs pairing again. */
   pairingStale: boolean;
+  /** tug is rebuilding the link on its own (Bluetooth stalled, the PC woke): nothing for the user to do. */
+  reconnecting: boolean;
   /** When the phone was last seen going away (null while connected). */
   downSince: number | null;
   now: number;
@@ -31,6 +33,9 @@ export function showConnectionPanel(p: PanelInputs, graceMs = RECONNECT_GRACE_MS
   if (!p.wide || p.inSettings || !p.statusKnown || p.connection === "connected") return false;
   // Nothing paired, or the pairing is dead: the user has to act, so show it straight away.
   if (!p.hasDevice || p.pairingStale) return true;
+  // tug is rebuilding the link on its own (the rail says "Reconnecting…"): the setup pane has
+  // nothing to offer. Once that gives up after a few attempts, the usual grace applies.
+  if (p.reconnecting) return false;
   // Paired and (re)connecting: only once it's clearly not a quick relink.
   return p.downSince != null && p.now - p.downSince >= graceMs;
 }

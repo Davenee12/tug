@@ -3,6 +3,7 @@
 // Wording is kept in step with the inline iPhone checks in SettingsPage.vue and PhoneSetup.vue.
 
 import type { DeviceStatus } from "../types/protocol";
+import { showsReconnecting } from "./connectionStatus";
 
 /** How a single link is doing. "waiting" = can't tell yet (not connected); "off" = a switch to flip. */
 export type LinkState = "ok" | "off" | "error" | "waiting";
@@ -38,9 +39,11 @@ export function connectionHealth(s: DeviceStatus, counts: HealthCounts): HealthL
           // A stale awaitingUnlock flag must never claim a forgotten phone is "connected".
           detail: s.device && s.awaitingUnlock
             ?"Your iPhone is connected but locked. Unlock it to reconnect."
-            : s.device
-              ? "Waiting for your iPhone to reconnect."
-              : "Pair your iPhone to set this up.",
+            : s.device && showsReconnecting(s)
+              ? "Reconnecting to your iPhone. No need to do anything."
+              : s.device
+                ? "Waiting for your iPhone to reconnect."
+                : "Pair your iPhone to set this up.",
         };
 
   return [
