@@ -69,9 +69,9 @@ image cache caps, crash diagnostics, code pop-up dedupe, contact names. See CHAN
   planned for v0.5.14).
 - **Spotify for everyone** needs Spotify's Extended Quota (registered business, 250k users).
 
-## v0.5.11 — tug Drop (next feature release, after v0.5.10)
+## v0.5.11 — Tugboat (formerly tug Drop) (next feature release, after v0.5.10)
 Move photos, files and text between the phone and PC over home Wi-Fi with no app and no fees:
-scan a QR in tug, a tug page opens in Safari, send or receive. See docs/COMPANION-PLAN.md
+scan a QR in tug, a tug page opens in the phone's browser (iPhone or Android), send or receive. See docs/COMPANION-PLAN.md
 "Phase 0.5" for the design and safety notes.
 - Your exact iPhone in the sidebar and Settings › iPhone: tug reads the model over Bluetooth (Device
   Information Service) and shows its name ("iPhone 15 Pro Max") with tug's own drawing of that
@@ -131,6 +131,38 @@ recognition (e.g. whisper.cpp via whisper-rs), no account.
 - "You walked away" away-mode from Bluetooth range.
 - Pushing agent alerts *to* the iPhone isn't possible over Bluetooth without an app (ANCS is
   phone→PC only); options are text-to-self (unverified) or the companion app.
+
+**Landed (PR `feat/tug-drop`, not yet released):**
+- **Entry points:** a Tugboat button in the sidebar under the iPhone, `tugboat` (or `drop`, `send
+  files`, `send to phone`) in Ctrl+K, and files dragged onto tug's window (opens Tugboat with them
+  offered). Works with Bluetooth down. Future CLI verb: `tug boat <file>`.
+- **Panel:** QR code + "Type the link instead"; "Can't connect?" help after 30 s (same Wi-Fi, allow
+  tug on Private networks, guest Wi-Fi/VPN/Private Relay); then the connected phone, files and
+  text in both directions with progress, Show in folder and Copy.
+- **Phone page** (bundled into tug, no CDN): Photos & videos / Files buttons, chunked resumable
+  uploads, a paste box that lands on the PC clipboard, Get → Save for PC files (1 GB cap), text to
+  copy, light/dark.
+- **Safety:** plain HTTP on the gateway adapter's private address only, random port, new 128-bit
+  secret per open (in the `#`, never sent); XChaCha20-Poly1305 per chunk with direction/file/chunk
+  bound in; every request MAC'd, first phone binds (after a network change the next scan binds),
+  replays refused. Header timeout, body timeout and a 32-connection cap; every connection ends
+  with the session. Stops passive sniffing, not an active attacker on the first page load. Stops
+  on close, quit, hiding tug to the tray (after any transfer), or 10 idle minutes; never touches
+  the firewall. "Copy link" stays out of clipboard history; text from the phone shows a toast.
+- **Files:** saved to Pictures › Tugboat (Pictures known folder) with the Mark-of-the-Web (so
+  SmartScreen checks programs and Office opens documents in Protected View), sanitized names
+  (always-hidden extensions like .lnk get `.download`), " (2)" on collisions, 8 GB per file,
+  free-space check; half-received files live in app data, never in (possibly OneDrive-synced)
+  Pictures; cross-drive saves go through a hidden temp file. HEIC kept as-is.
+- **Tested on Jordan's iPhone (2026-10-06, test build):** connected in ~10 s, two photos arrived, a
+  PC → phone file downloaded and opened.
+- **Verify on Dave's phones before release:** iPhone (Safari): Photos picker upload incl. Live
+  Photos and a large video with the phone locking mid-way (resume), Save of a PC file (Files ›
+  Downloads), Copy on the page, light/dark. Galaxy S20 (Chrome and Samsung Internet): the Photos &
+  videos / Files pickers, a large video with the screen off mid-way, Save to Downloads, Copy,
+  light/dark. Both: the Windows firewall prompt, real Wi-Fi speed.
+- **Not in v1:** zip of several files, HEIC→JPEG, Save to Photos (needs the share sheet, which
+  wants HTTPS), mDNS.
 
 ## Future — companion apps (planned, see docs/COMPANION-PLAN.md)
 **Priority (Dave, 2026-10-06): tug must support both iPhone and Android.** The Android companion app

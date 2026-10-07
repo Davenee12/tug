@@ -401,6 +401,81 @@ export interface SpotifyPlayer {
   deviceName: string | null;
 }
 
+// --- Tugboat (src-tauri/src/tugboat/mod.rs, session.rs, qr.rs) ---
+
+/** Off; showing the QR code; a phone has connected; or no network a phone could use. */
+export type TugboatPhase = "off" | "waiting" | "connected" | "noNetwork";
+
+/** The QR code as one SVG path in module units (the panel adds the quiet zone). */
+export interface TugboatQr {
+  size: number;
+  path: string;
+}
+
+/** A file coming from the phone (in progress, or saved this session). */
+export interface TugboatIncoming {
+  id: string;
+  name: string;
+  size: number;
+  received: number;
+  done: boolean;
+  /** Full path once saved, for "Show in folder". */
+  path: string | null;
+  at: number;
+}
+
+/** A file offered to the phone. */
+export interface TugboatOffer {
+  id: string;
+  name: string;
+  size: number;
+  /** Times the phone fetched the whole file. */
+  downloads: number;
+}
+
+/** Text the phone sent (it also went on the clipboard). */
+export interface TugboatText {
+  id: number;
+  text: string;
+  at: number;
+}
+
+/** Everything the Tugboat panel shows; also the "tugboat-status" event. */
+export interface TugboatStatus {
+  phase: TugboatPhase;
+  /** The QR link (with the secret), also shown as the manual fallback. */
+  url: string | null;
+  /** "192.168.1.20:53211". */
+  address: string | null;
+  qr: TugboatQr | null;
+  /** "iPhone", once one has connected. */
+  phone: string | null;
+  /** The phone's page is open and checking in. */
+  phoneActive: boolean;
+  /** Where received files go (Pictures\Tugboat). */
+  folder: string | null;
+  incoming: TugboatIncoming[];
+  outgoing: TugboatOffer[];
+  texts: TugboatText[];
+  /** Text currently offered to the phone. */
+  sentText: string | null;
+  /** The phone is downloading a file from the PC right now. */
+  sending: boolean;
+  /** Why Tugboat turned itself off. */
+  ended: "idle" | "hidden" | null;
+}
+
+/** "tugboat-text": text from the phone went (or failed to go) onto the PC clipboard. */
+export interface TugboatTextArrived {
+  ok: boolean;
+}
+
+/** A file that couldn't be offered to the phone, and why. */
+export interface TugboatSkipped {
+  name: string;
+  reason: "tooBig" | "folder" | "unreadable" | "tooMany";
+}
+
 // --- Bluetooth inventory (src-tauri/src/bt_inventory) ---
 // A diagnostic of what the iPhone exposes to tug. Privacy-safe by construction: UUIDs, property
 // flags, field names, counts, enums, lengths and harmless values only.
