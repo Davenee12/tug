@@ -8,6 +8,9 @@ export type ConnectionState = "noDevice" | "disconnected" | "connecting" | "conn
 export interface PairedDevice {
   id: string;
   name: string;
+  /** Apple's model identifier ("iPhone16,2") read over Bluetooth; null until the phone reports it.
+   *  `lib/phoneModel` turns it into a name and picture. */
+  model: string | null;
 }
 
 export interface Services {

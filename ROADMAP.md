@@ -72,6 +72,9 @@ image cache caps, crash diagnostics, code pop-up dedupe, contact names. See CHAN
 Move photos, files and text between the phone and PC over home Wi-Fi with no app and no fees:
 scan a QR in tug, a tug page opens in Safari, send or receive. See docs/COMPANION-PLAN.md
 "Phase 0.5" for the design and safety notes.
+- Your exact iPhone in the sidebar and Settings › iPhone: tug reads the model over Bluetooth (Device
+  Information Service) and shows its name ("iPhone 15 Pro Max") with tug's own drawing of that
+  design (home button, notch or Dynamic Island; mini/regular/Plus·Max). Shown on Jordan's iPhone 15 Pro Max.
 - Fixed: false "resumed from sleep" when the Bluetooth adapter stalls; recover a wedged adapter by
   reconnecting.
 
