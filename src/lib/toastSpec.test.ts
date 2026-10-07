@@ -38,6 +38,7 @@ function sms(address: string, contactName: string | null, direction: "in" | "out
     receivedAt: T0 - 60_000,
     status: direction === "in" ? "received" : "accepted",
     msgType: null,
+    gapBefore: false,
   };
 }
 

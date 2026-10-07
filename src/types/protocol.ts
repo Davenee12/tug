@@ -185,6 +185,11 @@ export interface SmsMessage {
    * iMessage (IM) from a plain text. Null for history from before tug stored it, and for sends.
    */
   msgType: string | null;
+  /**
+   * Texts from before this one may be missing: it came in a catch-up where every text the phone
+   * listed was new, so older ones from while tug was away may only be on the iPhone.
+   */
+  gapBefore: boolean;
 }
 
 export interface Contact {

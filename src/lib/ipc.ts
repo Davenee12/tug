@@ -64,7 +64,10 @@ export const api = {
   setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
   listMessages: (limit: number) => invoke<SmsMessage[]>("list_messages", { limit }),
   getContacts: () => invoke<Contact[]>("get_contacts"),
+  /** Resolves with the stored message even when the phone didn't take it (status "failed"); throws only when nothing was recorded. */
   sendMessage: (address: string, text: string) => invoke<SmsMessage>("send_message", { address, text }),
+  /** Send a failed message again: the same message, to the same number. */
+  retryMessage: (id: number) => invoke<SmsMessage>("retry_message", { id }),
   refreshMessages: () => invoke<void>("refresh_messages"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
   /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */

@@ -9,6 +9,7 @@ import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import ConversationRow from "./ConversationRow.vue";
 import { findCode } from "../lib/codes";
+import type { SmsMessage } from "../types/protocol";
 
 const tug = useTugStore();
 const convs = computed(() => {
@@ -224,11 +225,24 @@ async function send(text = draft.value) {
   // Keyed by the conversation it was typed in, even if another is opened while it sends.
   const key = conv.key;
   if (text === draftFor(key)) setDraftFor(key, "");
-  const ok = await tug.sendMessage(to, text);
-  if (!ok && !draftFor(key)) setDraftFor(key, text);
+  const result = await tug.sendMessage(to, text);
+  // Only when nothing was recorded: a failed send already shows as "Not sent" with Retry, and
+  // putting the text back too invited sending it twice.
+  if (result === "error" && !draftFor(key)) setDraftFor(key, text);
   // You've answered, so their notifications on the phone are done with.
-  if (ok) void tug.clearItems(conv.notifications);
+  if (result === "sent") void tug.clearItems(conv.notifications);
   sending.value = false;
+}
+
+// Retry resends that same message to the number it was meant for (not a new copy to whichever
+// number the conversation shows now); on success the "Not sent" state goes away.
+const retrying = ref<number | null>(null);
+async function retry(m: SmsMessage) {
+  if (retrying.value !== null) return;
+  retrying.value = m.id;
+  const conv = selected.value;
+  if ((await tug.retryMessage(m.id)) && conv) void tug.clearItems(conv.notifications);
+  retrying.value = null;
 }
 
 function onKey(e: KeyboardEvent) {
@@ -312,6 +326,12 @@ function onKey(e: KeyboardEvent) {
       <div ref="scroller" class="flex-1 overflow-y-auto px-8 py-6">
         <template v-for="(item, i) in selected.items" :key="item.id">
           <div v-if="showDay(i)" class="caption-upper my-4 text-center text-muted-soft">{{ dayLabel(item.at) }}</div>
+          <p
+            v-if="item.kind === 'message' && item.m.gapBefore"
+            class="mx-auto my-3 flex max-w-md items-center justify-center gap-1.5 text-center text-[12px] text-muted"
+          >
+            <Info :size="12" class="shrink-0" /> Earlier texts from while tug was away may only be on your iPhone.
+          </p>
           <div
             :data-item="item.id"
             :class="[
@@ -340,7 +360,8 @@ function onKey(e: KeyboardEvent) {
               <button
                 v-if="item.kind === 'message' && item.m.status === 'failed'"
                 class="flex items-center gap-1 rounded px-1 text-ink active:bg-surface-card"
-                @click="send(item.body)"
+                :disabled="retrying !== null"
+                @click="retry(item.m)"
               >
                 <RotateCcw :size="11" /> Retry
               </button>
