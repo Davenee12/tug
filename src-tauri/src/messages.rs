@@ -22,6 +22,11 @@ const LEARN_WINDOW_MS: i64 = 10 * 60 * 1000;
 /// handle. A row stored this recently is a different message, not a re-listing.
 const RELIST_GUARD_MS: i64 = 60 * 1000;
 
+/// A `SendingSuccess`/`SendingFailure` report arrives within seconds of the send it's about. Only
+/// sends this recent are candidates, so an old send that never got a report (stuck at `accepted`)
+/// can't absorb a stray report meant for a newer one.
+pub const CONFIRM_WINDOW_MS: i64 = 10 * 60 * 1000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Direction {
@@ -91,6 +96,10 @@ pub struct StoredMessage {
     /// The MAP message type the phone reported (SMS_GSM, SMS_CDMA, MMS, EMAIL, IM); `None` for
     /// history from before tug stored it, and for messages tug sent.
     pub msg_type: Option<String>,
+    /// Texts from before this one may be missing: it arrived in a catch-up where every text the
+    /// phone listed was new, so the phone's short list (iOS lists about 10) may have cut off older
+    /// ones from while tug was away. The UI says so above it.
+    pub gap_before: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -115,7 +124,7 @@ pub struct IncomingMessage<'a> {
 }
 
 // A name the phone sent with the message stands in until the number is a known contact.
-const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address, COALESCE(c.name, m.sender_name), m.body, m.sent_at, m.received_at, m.status, m.msg_type
+const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address, COALESCE(c.name, m.sender_name), m.body, m.sent_at, m.received_at, m.status, m.msg_type, m.gap_before
      FROM messages m LEFT JOIN contacts c ON c.address = m.address";
 
 fn map_row(r: &Row) -> Result<StoredMessage> {
@@ -136,6 +145,7 @@ fn map_row(r: &Row) -> Result<StoredMessage> {
         received_at: r.get(7)?,
         status: Status::parse(&status),
         msg_type: r.get(9)?,
+        gap_before: r.get(10)?,
     })
 }
 
@@ -259,17 +269,54 @@ impl Store {
         conn.query_row(&format!("{SELECT} WHERE m.id = ?1"), [id], map_row)
     }
 
-    /// Outgoing messages not yet confirmed sent (still `pending` or `accepted`), for matching a
-    /// MAP `Sending{Success,Failure}` event to the send it reports (see `map::mns::choose_outgoing`).
-    /// Returns `(id, handle, received_at)`.
-    pub fn outgoing_unconfirmed(&self, source: &str) -> Result<Vec<(i64, Option<String>, i64)>> {
+    /// Outgoing messages not yet confirmed sent (still `pending` or `accepted`) and sent within
+    /// `CONFIRM_WINDOW_MS` of `now`, for matching a MAP `Sending{Success,Failure}` event to the send
+    /// it reports (see `map::mns::choose_outgoing`). Returns `(id, handle, received_at)`.
+    pub fn outgoing_unconfirmed(&self, source: &str, now: i64) -> Result<Vec<(i64, Option<String>, i64)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, handle, received_at FROM messages
-             WHERE source = ?1 AND direction = 'out' AND status IN ('pending', 'accepted')",
+             WHERE source = ?1 AND direction = 'out' AND status IN ('pending', 'accepted')
+               AND received_at > ?2",
         )?;
-        let rows = stmt.query_map(params![source], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let rows = stmt.query_map(params![source, now - CONFIRM_WINDOW_MS], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
         rows.collect()
+    }
+
+    /// At startup nothing is sending, so a send still `pending` was cut off by a crash or quit
+    /// before the phone answered. Mark it failed (with Retry) instead of "Sending..." forever.
+    /// Returns how many were marked.
+    pub fn fail_interrupted_sends(&self) -> Result<usize> {
+        self.conn().execute(
+            "UPDATE messages SET status = 'failed' WHERE direction = 'out' AND status = 'pending'",
+            [],
+        )
+    }
+
+    /// Put a failed send back to `pending` for another try of the *same* message (same row, same
+    /// number), dated `at` so a send report for it falls inside `CONFIRM_WINDOW_MS`. `None` if the
+    /// row isn't a failed outgoing message (already retried, or not one of ours).
+    pub fn retry_outgoing(&self, id: i64, at: i64) -> Result<Option<StoredMessage>> {
+        let conn = self.conn();
+        let n = conn.execute(
+            "UPDATE messages SET status = 'pending', handle = NULL, received_at = ?2
+             WHERE id = ?1 AND direction = 'out' AND status = 'failed'",
+            params![id, at],
+        )?;
+        if n == 0 {
+            return Ok(None);
+        }
+        conn.query_row(&format!("{SELECT} WHERE m.id = ?1"), [id], map_row)
+            .map(Some)
+    }
+
+    /// Flag a message as the first one after a possible gap (see `StoredMessage::gap_before`).
+    pub fn mark_gap_before(&self, id: i64) -> Result<StoredMessage> {
+        let conn = self.conn();
+        conn.execute("UPDATE messages SET gap_before = 1 WHERE id = ?1", [id])?;
+        conn.query_row(&format!("{SELECT} WHERE m.id = ?1"), [id], map_row)
     }
 
     /// Most recent messages, oldest first within the window.
@@ -905,12 +952,84 @@ mod tests {
             .unwrap();
         s.set_outgoing_status(failed.id, Status::Failed, None).unwrap();
 
-        let mut got = s.outgoing_unconfirmed(SOURCE_IPHONE_MAP).unwrap();
+        let mut got = s.outgoing_unconfirmed(SOURCE_IPHONE_MAP, 5_000).unwrap();
         got.sort_by_key(|(id, ..)| *id);
         assert_eq!(
             got,
             vec![(pending.id, None, 1_000), (accepted.id, Some("A1".into()), 2_000)]
         );
+    }
+
+    #[test]
+    fn outgoing_unconfirmed_ignores_old_sends() {
+        let s = Store::in_memory().unwrap();
+        let now = 100 * 60 * 1000;
+        let old = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "old", now - CONFIRM_WINDOW_MS - 1)
+            .unwrap();
+        s.set_outgoing_status(old.id, Status::Accepted, Some("A1")).unwrap();
+        let recent = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "new", now - 5_000)
+            .unwrap();
+        let got = s.outgoing_unconfirmed(SOURCE_IPHONE_MAP, now).unwrap();
+        assert_eq!(got, vec![(recent.id, None, now - 5_000)]);
+    }
+
+    #[test]
+    fn interrupted_sends_are_failed_at_startup() {
+        let s = Store::in_memory().unwrap();
+        let stuck = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "a", 1_000)
+            .unwrap();
+        let accepted = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "b", 2_000)
+            .unwrap();
+        s.set_outgoing_status(accepted.id, Status::Accepted, Some("A1"))
+            .unwrap();
+        s.insert_incoming(&incoming("H1", "+13025550100", "hi")).unwrap();
+        assert_eq!(s.fail_interrupted_sends().unwrap(), 1);
+        let all = s.recent_messages(10).unwrap();
+        let status = |id| all.iter().find(|m| m.id == id).unwrap().status;
+        assert_eq!(status(stuck.id), Status::Failed);
+        assert_eq!(status(accepted.id), Status::Accepted, "accepted sends left alone");
+        assert!(all
+            .iter()
+            .any(|m| m.direction == Direction::In && m.status == Status::Received));
+    }
+
+    #[test]
+    fn retry_reuses_the_same_row_and_number() {
+        let s = Store::in_memory().unwrap();
+        let m = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "hi", 1_000)
+            .unwrap();
+        assert!(
+            s.retry_outgoing(m.id, 2_000).unwrap().is_none(),
+            "only failed sends retry"
+        );
+        s.set_outgoing_status(m.id, Status::Failed, None).unwrap();
+        let again = s.retry_outgoing(m.id, 9_000).unwrap().expect("retried");
+        assert_eq!(again.id, m.id);
+        assert_eq!(again.address, "+13025550100");
+        assert_eq!(again.body, "hi");
+        assert_eq!(again.status, Status::Pending);
+        assert_eq!(again.received_at, 9_000);
+        assert_eq!(s.recent_messages(10).unwrap().len(), 1, "no duplicate row");
+        assert!(
+            s.retry_outgoing(m.id, 9_500).unwrap().is_none(),
+            "a pending retry can't double up"
+        );
+    }
+
+    #[test]
+    fn gap_marker_round_trips() {
+        let s = Store::in_memory().unwrap();
+        let m = s
+            .insert_incoming(&incoming("H1", "+13025550100", "hi"))
+            .unwrap()
+            .unwrap();
+        assert!(!m.gap_before);
+        assert!(s.mark_gap_before(m.id).unwrap().gap_before);
     }
 
     #[test]

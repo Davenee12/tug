@@ -146,6 +146,11 @@ const MIGRATIONS: &[&str] = &[
     UPDATE OR IGNORE contact_aliases SET alias = strip_invisible(alias) WHERE alias <> strip_invisible(alias);
     DELETE FROM contact_aliases WHERE alias <> strip_invisible(alias);
     "#,
+    // v9: texts from before this one may be missing (a catch-up after time away where the phone's
+    // short list was all new), so the conversation can say so instead of looking complete.
+    r#"
+    ALTER TABLE messages ADD COLUMN gap_before INTEGER NOT NULL DEFAULT 0;
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
@@ -707,6 +712,9 @@ mod tests {
             )
             .unwrap();
             let id = conn.last_insert_rowid();
+            // Back to a real v7 database: undo what later migrations added, so they apply again.
+            conn.execute_batch("ALTER TABLE messages DROP COLUMN gap_before")
+                .unwrap();
             conn.pragma_update(None, "user_version", 7).unwrap();
             id
         };

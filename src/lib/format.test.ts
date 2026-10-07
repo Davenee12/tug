@@ -12,6 +12,7 @@ import {
   groupFeed,
   highlight,
   initials,
+  messageTime,
   missedCallFor,
   newestUnreadThread,
   snippet,
@@ -56,6 +57,7 @@ function sms(address: string, body: string, atMin: number, direction: "in" | "ou
     receivedAt: T0 + atMin * min,
     status: direction === "in" ? "received" : "accepted",
     msgType: null,
+    gapBefore: false,
   };
 }
 
@@ -313,5 +315,32 @@ describe("missedCallFor", () => {
     expect(missedCallFor([missed("zoe 💜", 0, { live: false })], { name: "zoe 💜", address: null })).toBeNull();
     expect(missedCallFor([missed("Priya", 0)], { name: "zoe 💜", address: "+13025550173" })).toBeNull();
     expect(missedCallFor([note("zoe 💜", "hey", 0)], { name: "zoe 💜", address: null })).toBeNull();
+  });
+});
+
+describe("message order", () => {
+  // The phone's clock ran ~3 s ahead of the PC's, and its time has no zone.
+  const local = (ms: number) => {
+    const d = new Date(ms);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  };
+
+  it("keeps a quick reply below the text it answers", () => {
+    const mine = sms("+13025550100", "dinner at 7?", 0, "out");
+    const reply = { ...sms("+13025550100", "yes!", 0), receivedAt: T0 + 2_000, sentAt: local(T0 + 4_000) };
+    expect(messageTime(reply).getTime()).toBe(T0 + 2_000);
+    const [c] = groupConversations([], [reply, mine], []);
+    expect(c.items.map((i) => i.body)).toEqual(["dinner at 7?", "yes!"]);
+  });
+
+  it("uses the phone's time for older texts caught up later", () => {
+    const old = { ...sms("+13025550100", "earlier", 60), sentAt: local(T0) };
+    expect(messageTime(old).getTime()).toBe(T0);
+  });
+
+  it("falls back to when tug got it without a usable phone time", () => {
+    expect(messageTime({ sentAt: null, receivedAt: T0 }).getTime()).toBe(T0);
+    expect(messageTime({ sentAt: "not a date", receivedAt: T0 }).getTime()).toBe(T0);
   });
 });
