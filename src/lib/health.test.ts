@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { connectionHealth, errorAge, type HealthLink } from "./health";
+import { phoneSwitches } from "./phoneSwitches";
 import type { DeviceStatus } from "../types/protocol";
 
 // A fully connected, healthy phone; tests override only what they exercise.
@@ -19,7 +20,8 @@ const CONNECTED: DeviceStatus = {
   reconnecting: false,
   messagesError: null,
   contactsError: null,
-  contactsShared: false,
+  contactsShared: true,
+  contactsOff: false,
   textsPairing: "ok",
   textsDevice: "iPhone",
   liveTexts: "off",
@@ -148,10 +150,59 @@ describe("connectionHealth", () => {
     expect(m.get("calls")!.detail).toContain("1 recent call loaded");
   });
 
-  it("asks to sync contacts when none have arrived", () => {
-    const l = health({}, { contacts: 0, calls: 0 }).get("contacts")!;
+  it("asks to sync contacts once the phone says it's off", () => {
+    const l = health({ contactsShared: false, contactsOff: true }, { contacts: 0, calls: 0 }).get("contacts")!;
     expect(l.state).toBe("off");
-    expect(l.detail).toMatch(/Sync Contacts/);
+    expect(l.detail).toMatch(/names instead of numbers/);
+  });
+
+  it("never says contacts are synced while Sync Contacts is off (names saved before a re-pair)", () => {
+    const s = { ...CONNECTED, contactsShared: false, contactsOff: true };
+    const ctx = { now: 0, connectedSince: 0, messagesSince: 0, savedContacts: 214 };
+    const m = new Map(connectionHealth(s, { contacts: 214, calls: 12 }, ctx).map((l) => [l.key, l] as const));
+    expect(m.get("contacts")!.state).toBe("off");
+    expect(m.get("contacts")!.detail).toMatch(/saved earlier/);
+    expect(m.get("calls")!.state).toBe("off");
+    expect(m.get("calls")!.detail).toMatch(/loaded earlier/);
+  });
+
+  it("agrees with the switches card for every Sync Contacts state", () => {
+    const ctx = { now: 0, connectedSince: 0, messagesSince: 0, savedContacts: 3 };
+    const cases: [Partial<DeviceStatus>, string, string][] = [
+      [{ contactsShared: true }, "on", "ok"],
+      [{ contactsShared: false, contactsOff: true }, "off", "off"],
+      [{ contactsShared: false, contactsError: "the iPhone refused contact access" }, "off", "off"],
+      [{ contactsShared: false }, "checking", "waiting"],
+    ];
+    for (const [o, sw, row] of cases) {
+      const s = { ...CONNECTED, ...o };
+      expect(phoneSwitches(s, ctx)[2].state).toBe(sw);
+      expect(connectionHealth(s, { contacts: 3, calls: 0 }, ctx).find((l) => l.key === "contacts")!.state).toBe(row);
+    }
+  });
+
+  it("texts row and Show Notifications switch agree; neither waits forever", () => {
+    const ctx = { now: 10 * 60_000, connectedSince: 0, messagesSince: null, savedContacts: 0 };
+    const s = { ...CONNECTED, services: { notifications: true, media: true, battery: true, messages: false }, contactsShared: false };
+    expect(phoneSwitches(s, ctx)[1].state).toBe("waiting");
+    expect(connectionHealth(s, { contacts: 0, calls: 0 }, ctx).find((l) => l.key === "texts")!.state).toBe("unavailable");
+    const missing = { ...s, textsPairing: "missing" as const };
+    expect(phoneSwitches(missing, ctx)[1].note).toMatch(/Set up texts/);
+    expect(connectionHealth(missing, { contacts: 0, calls: 0 }, ctx).find((l) => l.key === "texts")!.state).toBe("off");
+  });
+
+  it("media and battery stop 'waiting' a minute after connecting", () => {
+    const s = { ...CONNECTED, services: { notifications: true, media: false, battery: false, messages: true } };
+    const at = (now: number) => connectionHealth(s, { contacts: 3, calls: 4 }, { now, connectedSince: 0, messagesSince: 0, savedContacts: 3 });
+    expect(at(5_000).find((l) => l.key === "media")!.state).toBe("waiting");
+    expect(at(60_000).find((l) => l.key === "media")!.state).toBe("unavailable");
+    expect(at(60_000).find((l) => l.key === "battery")!.state).toBe("unavailable");
+  });
+
+  it("the not-connected line uses the sidebar's words", () => {
+    const off = health({ connection: "connecting", radio: "off", reconnecting: false });
+    expect(off.get("notifications")!.detail).toMatch(/Bluetooth is off/);
+    expect(off.get("notifications")!.detail).not.toMatch(/Connecting/);
   });
 });
 

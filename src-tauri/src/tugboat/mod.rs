@@ -96,6 +96,9 @@ pub struct TugboatStatus {
     pub sent_text: Option<String>,
     /// The phone is downloading a file from the PC right now.
     pub sending: bool,
+    /// A file from the phone is arriving right now (not merely unfinished: the phone may have
+    /// given up on it).
+    pub receiving: bool,
     pub ended: Option<Ended>,
 }
 
@@ -311,6 +314,7 @@ impl TugboatService {
                 texts: Vec::new(),
                 sent_text: None,
                 sending: false,
+                receiving: false,
                 ended,
             };
         };
@@ -337,6 +341,7 @@ impl TugboatService {
             texts: snap.texts,
             sent_text: snap.sent_text,
             sending: snap.sending,
+            receiving: snap.receiving,
             ended: None,
         }
     }
@@ -442,6 +447,7 @@ impl TugboatService {
         let mut ticks = 0u32;
         let mut was_active = false;
         let mut was_sending = false;
+        let mut was_receiving = false;
         loop {
             tokio::time::sleep(TICK).await;
             let (session, ip, port, stop_when_quiet) = {
@@ -466,9 +472,11 @@ impl TugboatService {
             }
             let active = session.phone_active();
             let sending = session.sending();
-            if active != was_active || sending != was_sending {
+            let receiving = session.receiving();
+            if active != was_active || sending != was_sending || receiving != was_receiving {
                 was_active = active;
                 was_sending = sending;
+                was_receiving = receiving;
                 self.emit();
             }
             ticks += 1;

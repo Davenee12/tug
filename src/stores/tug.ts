@@ -52,6 +52,7 @@ import type {
 } from "../types/protocol";
 import { bestTrack, nextRepeat, sameSong } from "../lib/spotify";
 import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
+import { CHECKING_MAX_MS, phoneSwitches, switchesPending as anySwitchPending, type SwitchContext } from "../lib/phoneSwitches";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 import { useTugboatStore } from "./tugboat";
 
@@ -100,6 +101,7 @@ const EMPTY_STATUS: DeviceStatus = {
   messagesError: null,
   contactsError: null,
   contactsShared: false,
+  contactsOff: false,
   textsPairing: "unknown",
   textsDevice: null,
   liveTexts: "off",
@@ -340,7 +342,10 @@ export const useTugStore = defineStore("tug", () => {
   let watchRenew: number | undefined;
   const pageVisible = ref(document.visibilityState === "visible");
   // Registered in init() and removed in dispose(), so it's torn down with the rest (see teardown).
-  const onVisibilityChange = () => (pageVisible.value = document.visibilityState === "visible");
+  const onVisibilityChange = () => {
+    pageVisible.value = document.visibilityState === "visible";
+    if (pageVisible.value) checkSwitches();
+  };
   // The switches get flipped on the phone, with tug on any screen or in the tray. So for the
   // first minutes after launch or pairing, check fast whenever one is still off, too.
   const FRESH_MS = 5 * 60 * 1000;
@@ -357,10 +362,35 @@ export const useTugStore = defineStore("tug", () => {
       freshTimer = window.setTimeout(() => (fresh.value = false), FRESH_MS);
     },
   );
-  const switchesPending = computed(() => {
-    const s = status.value;
-    return !!s.device && (!s.services.notifications || !s.services.messages || contacts.value.length === 0);
-  });
+  // When answers about the switches became possible, so "Checking…" is bounded (CHECKING_MAX_MS)
+  // and never shows forever. `switchNow` ticks once more at the bound to flip it.
+  const connectedSince = ref<number | null>(null);
+  const messagesSince = ref<number | null>(null);
+  const switchNow = ref(Date.now());
+  let switchTimer: number | undefined;
+  function markSince(target: typeof connectedSince, up: boolean) {
+    if (up === (target.value != null)) return;
+    target.value = up ? Date.now() : null;
+    switchNow.value = Date.now();
+    window.clearTimeout(switchTimer);
+    switchTimer = window.setTimeout(() => (switchNow.value = Date.now()), CHECKING_MAX_MS + 250);
+  }
+  watch(() => status.value.connection === "connected", (up) => markSince(connectedSince, up), { immediate: true });
+  watch(() => status.value.services.messages, (up) => markSince(messagesSince, up), { immediate: true });
+  const switchContext = computed<SwitchContext>(() => ({
+    now: switchNow.value,
+    connectedSince: connectedSince.value,
+    messagesSince: messagesSince.value,
+    savedContacts: contacts.value.length,
+  }));
+  /** The iPhone's three switches: the one source every surface reads (card, health, nudge, copy). */
+  const switches = computed(() => phoneSwitches(status.value, switchContext.value));
+  // Not "no contacts saved": names kept from before a re-pair hid a Sync Contacts that was off.
+  const switchesPending = computed(() => !!status.value.device && anySwitchPending(switches.value));
+  /** Ask the phone about its switches now (window to the front, "Check again"). */
+  function checkSwitches() {
+    if (status.value.device) void api.checkSwitches().catch(() => undefined);
+  }
   /**
    * The Connect panel is on screen and tug is visible: the Feed stand-in (showConnect) outside
    * Settings, or Settings › iPhone. The same component shows in both places; watching keys off its
@@ -971,6 +1001,9 @@ export const useTugStore = defineStore("tug", () => {
     started = true;
     document.addEventListener("visibilitychange", onVisibilityChange);
     teardown.push(() => document.removeEventListener("visibilitychange", onVisibilityChange));
+    // tug's window coming to the front is when a switch flipped on the phone should show: check now.
+    window.addEventListener("focus", checkSwitches);
+    teardown.push(() => window.removeEventListener("focus", checkSwitches));
     teardown.push(
       installZoomShortcuts(
         () => zoom.value,
@@ -1074,6 +1107,7 @@ export const useTugStore = defineStore("tug", () => {
     window.clearTimeout(flashTimer);
     window.clearInterval(watchRenew);
     window.clearInterval(clockTimer);
+    window.clearTimeout(switchTimer);
     toastSummary = undefined;
     watchRenew = undefined;
     clockTimer = undefined;
@@ -1454,6 +1488,9 @@ export const useTugStore = defineStore("tug", () => {
   return {
     status,
     statusKnown,
+    switches,
+    switchContext,
+    checkSwitches,
     nowPlaying,
     // Spotify connector
     spotify,

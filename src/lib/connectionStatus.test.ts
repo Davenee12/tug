@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectionBusy, connectionLabel } from "./connectionStatus";
+import { connectionBusy, connectionLabel, connectionSentence } from "./connectionStatus";
 
 const base = { connection: "connected" as const, awaitingUnlock: false, reconnecting: false, radio: "on" as const };
 
@@ -23,12 +23,17 @@ describe("connectionLabel", () => {
     );
   });
 
-  it("never claims Reconnecting with Bluetooth off or missing", () => {
+  it("never claims Reconnecting or Connecting with Bluetooth off or missing", () => {
     for (const radio of ["off", "unavailable"] as const) {
-      expect(connectionLabel({ ...base, connection: "disconnected", reconnecting: true, radio })).toBe("Waiting for iPhone");
-      expect(connectionLabel({ ...base, connection: "connecting", reconnecting: true, radio })).toBe("Connecting…");
-      expect(connectionBusy({ ...base, connection: "disconnected", reconnecting: true, radio })).toBe(false);
+      for (const connection of ["disconnected", "connecting"] as const) {
+        const label = connectionLabel({ ...base, connection, reconnecting: true, radio });
+        expect(label).not.toMatch(/onnecting/);
+        expect(label).toMatch(/Bluetooth/);
+        // A relink caught by the radio going off must not pulse until it comes back.
+        expect(connectionBusy({ ...base, connection, reconnecting: true, radio })).toBe(false);
+      }
     }
+    expect(connectionLabel({ ...base, connection: "connecting", radio: "off" })).toBe("Bluetooth is off");
   });
 
   it("never claims Reconnecting once connected", () => {
@@ -43,5 +48,28 @@ describe("connectionBusy", () => {
     expect(connectionBusy({ ...base, connection: "disconnected" })).toBe(false);
     expect(connectionBusy({ ...base, connection: "disconnected", reconnecting: true, awaitingUnlock: true })).toBe(false);
     expect(connectionBusy(base)).toBe(false);
+  });
+});
+
+describe("connectionSentence agrees with the sidebar label", () => {
+  const device = { id: "x", name: "iPhone", model: null };
+  const cases = [
+    { connection: "connected" as const, label: "Connected", sentence: /^Connected/ },
+    { connection: "connecting" as const, label: "Connecting…", sentence: /^Connecting/ },
+    { connection: "disconnected" as const, label: "Waiting for iPhone", sentence: /^Waiting/ },
+    { connection: "disconnected" as const, awaitingUnlock: true, label: "Unlock your iPhone", sentence: /Unlock it/ },
+    { connection: "disconnected" as const, reconnecting: true, label: "Reconnecting…", sentence: /^Reconnecting/ },
+    { connection: "connecting" as const, reconnecting: true, label: "Reconnecting…", sentence: /^Reconnecting/ },
+    { connection: "connecting" as const, radio: "off" as const, label: "Bluetooth is off", sentence: /Bluetooth is off/ },
+    { connection: "disconnected" as const, radio: "off" as const, label: "Bluetooth is off", sentence: /Bluetooth is off/ },
+  ];
+  it.each(cases)("$label", (c) => {
+    const s = { ...base, ...c, device };
+    expect(connectionLabel(s)).toBe(c.label);
+    expect(connectionSentence(s)).toMatch(c.sentence);
+  });
+
+  it("asks to pair when nothing is set up", () => {
+    expect(connectionSentence({ ...base, connection: "noDevice", device: null })).toMatch(/Pair your iPhone/);
   });
 });

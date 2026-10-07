@@ -46,6 +46,8 @@ export interface DeviceStatus {
   contactsError: string | null;
   /** The phone shared contacts on the current connection (Sync Contacts on). */
   contactsShared: boolean;
+  /** The phone keeps sharing an empty phonebook (or refused): Sync Contacts is off. Never true with contactsShared. */
+  contactsOff: boolean;
   /** Whether the texts (Classic) pairing works, is missing, or needs making again. */
   textsPairing: TextsPairing;
   /** The phone Windows has paired for texts (what to remove when it needs re-pairing). */
@@ -461,6 +463,8 @@ export interface TugboatStatus {
   sentText: string | null;
   /** The phone is downloading a file from the PC right now. */
   sending: boolean;
+  /** A file from the phone is arriving right now (an unfinished one may have been abandoned). */
+  receiving: boolean;
   /** Why Tugboat turned itself off. */
   ended: "idle" | "hidden" | null;
 }

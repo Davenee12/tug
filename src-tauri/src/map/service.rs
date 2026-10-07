@@ -18,6 +18,9 @@ use crate::state::Shared;
 
 pub enum MapCommand {
     Refresh,
+    /// Pull the phone's contacts now (the switches came on screen, tug's window came to the front,
+    /// or "Check again"), so a Sync Contacts flip shows up at once instead of at the next due pull.
+    CheckContacts,
     /// Pull recent calls once `after` has passed (a call that just ended needs a moment to
     /// reach the phone's log).
     RefreshCalls(Duration),
@@ -48,6 +51,11 @@ pub struct MapHandle {
 impl MapHandle {
     pub fn refresh(&self) {
         let _ = self.tx.send(MapCommand::Refresh);
+    }
+
+    /// Check Sync Contacts right away (see `MapCommand::CheckContacts`).
+    pub fn check_contacts(&self) {
+        let _ = self.tx.send(MapCommand::CheckContacts);
     }
 
     pub fn refresh_calls(&self, after: Duration) {
@@ -132,6 +140,7 @@ mod worker {
 
     use super::MapCommand;
     use crate::map::address::normalize;
+    use crate::map::contacts_watch::{ContactsWatch, Pull, Transition};
     use crate::map::health::{Attempt, Health, LiveTexts, TextsPairing};
     use crate::map::listing;
     use crate::map::mns::{self, Outgoing};
@@ -144,21 +153,16 @@ mod worker {
     use crate::state::{events, keys, ConnectionState, Shared};
 
     const FIRST_SYNC_DELAY: Duration = Duration::from_secs(3);
-    /// Contacts (a full PBAP pull) are retried no faster than this while watching.
-    const CONTACTS_WATCHING: Duration = Duration::from_secs(10);
     /// How many of the newest inbox messages to look at each poll.
     const LIST_MAX: u16 = 20;
     /// Once per launch, page further back than that: a fresh install otherwise only sees the
     /// last few texts, often all from one person, and other recent chats never show up.
     const BACKFILL_MAX: u16 = 100;
-    /// The phone sends nothing when a contact is added or renamed, so look again this often
-    /// (a pull of a few hundred contacts takes about a second).
-    const CONTACTS_RESYNC: Duration = Duration::from_secs(15 * 60);
-    const CONTACTS_RETRY: Duration = Duration::from_secs(10 * 60);
-    /// An empty phonebook or a refusal means Sync Contacts is still off: it's often switched
-    /// on moments after messages connect, so look again soon, then back off.
-    const CONTACTS_UNSHARED_RETRY: Duration = Duration::from_secs(20);
-    const CONTACTS_UNSHARED_QUICK_TRIES: u32 = 15;
+    // How often contacts are pulled (and when an empty phonebook means Sync Contacts is off) lives
+    // in `contacts_watch`, pure and unit-tested.
+    /// A "check now" this soon after the last contacts pull waits out the gap instead: each pull is
+    /// a whole PBAP connection, and focus + watching + "Check again" can all ask at once.
+    const CONTACTS_CHECK_GAP: Duration = Duration::from_secs(3);
     const CONTACTS_PULL_TIMEOUT: Duration = Duration::from_secs(90);
     /// The slow WITH-PHOTO phonebook pull runs off this worker, so give it well over the ~60 s it
     /// took on a test phone for 27 photos — nothing is waiting on it, and a timeout only ends the
@@ -176,7 +180,8 @@ mod worker {
     /// While someone else holds the phone's one PBAP connection (`PBAP_TURN`: the photo pass, or
     /// the Bluetooth inventory's phonebook check), look again this much later rather than waiting.
     const CALLS_BUSY_RETRY: Duration = Duration::from_secs(5);
-    const CONTACTS_BUSY_RETRY: Duration = Duration::from_secs(30);
+    /// Only a try-lock on `PBAP_TURN` per look, so looking again soon is cheap.
+    const CONTACTS_BUSY_RETRY: Duration = Duration::from_secs(10);
     const PHOTOS_BUSY_RETRY: Duration = Duration::from_secs(30);
     /// Connect, hands-free setup, dial and a moment to hear the call start, end to end. Kept
     /// short: texts (send, sync, mark read) wait on this worker while a call is being placed.
@@ -220,10 +225,10 @@ mod worker {
         /// Classic device the MAP session is on; contacts come from the same phone.
         device_id: Option<String>,
         next_contacts_sync: Instant,
-        unshared_contact_pulls: u32,
-        /// The last contacts pull came back with people in it, so Sync Contacts is on: an empty
-        /// call list then really means the history was cleared.
-        contacts_shared: bool,
+        /// Whether the phone is sharing contacts (Sync Contacts), judged from its answers; also
+        /// decides when to ask again. Shared means an empty call list really is a cleared history.
+        contacts: ContactsWatch,
+        last_contacts_pull: Option<Instant>,
         backfilled: bool,
         health: Health,
         /// The phone Windows has paired for texts, found even when connecting to it fails.
@@ -272,8 +277,8 @@ mod worker {
             session: None,
             device_id: None,
             next_contacts_sync: Instant::now(),
-            unshared_contact_pulls: 0,
-            contacts_shared: false,
+            contacts: ContactsWatch::default(),
+            last_contacts_pull: None,
             backfilled: false,
             health: Health::default(),
             texts_device: None,
@@ -310,6 +315,10 @@ mod worker {
                 cmd = commands.recv() => match cmd {
                     None => break,
                     Some(MapCommand::Refresh) => w.refresh().await,
+                    Some(MapCommand::CheckContacts) => {
+                        w.contacts_due_now();
+                        w.refresh().await;
+                    }
                     // Wake for it: the next refresh pulls the calls once they're due.
                     Some(MapCommand::RefreshCalls(after)) => next = next.min(w.calls_soon(after)),
                     Some(MapCommand::MarkRead(ids)) => w.mark_read(&ids).await,
@@ -421,6 +430,14 @@ mod worker {
                 self.texts_device = Some(device.name.clone());
                 let session = MapSession::connect(&device.id).await?;
                 log::info!("message access connected to {}", device.name);
+                // A different phone: nothing it shared (or didn't) carries over.
+                if self.device_id.as_deref().is_some_and(|id| id != device.id) {
+                    self.contacts.forget();
+                    self.publish_contacts();
+                }
+                // A fresh texts connection: check Sync Contacts straight away, not at the next due
+                // pull (a re-pair resets the switch, and it may have been flipped meanwhile).
+                self.next_contacts_sync = Instant::now();
                 // Only once connecting worked: a device that won't connect isn't "the phone".
                 self.remember_texts_device(&device.id);
                 // The LE side often reports the bare "iPhone"; the Classic side carries the real
@@ -515,9 +532,22 @@ mod worker {
             self.stop_live_texts();
         }
 
-        fn set_contacts_shared(&mut self, shared: bool) {
-            self.contacts_shared = shared;
-            self.shared.update_status(|s| s.contacts_shared = shared);
+        /// Mirror the Sync Contacts judgement into the status (emitted at once if it changed).
+        fn publish_contacts(&self) {
+            let (on, off) = (self.contacts.shared(), self.contacts.off());
+            self.shared.update_status(|s| {
+                s.contacts_shared = on;
+                s.contacts_off = off;
+            });
+        }
+
+        /// Pull contacts as soon as possible (no sooner than `CONTACTS_CHECK_GAP` after the last).
+        fn contacts_due_now(&mut self) {
+            let mut at = Instant::now();
+            if let Some(last) = self.last_contacts_pull {
+                at = at.max(last + CONTACTS_CHECK_GAP);
+            }
+            self.next_contacts_sync = self.next_contacts_sync.min(at);
         }
 
         fn fail(&mut self, e: &MapError) {
@@ -525,7 +555,8 @@ mod worker {
                 log::info!("message access dropped: {e}");
             }
             // What the phone shares is per connection; ask again on the next one.
-            self.set_contacts_shared(false);
+            self.contacts.connection_dropped();
+            self.publish_contacts();
             self.reset_photo_pass();
             self.stop_live_texts();
             let shown = match e {
@@ -637,21 +668,6 @@ mod worker {
             }
         }
 
-        /// When to ask again while contacts aren't shared yet: soon at first, then the usual retry.
-        fn soon(&mut self) -> Duration {
-            // While the switches are on screen, still not every 2 s: each try is a whole PBAP
-            // connection to the phone.
-            if self.shared.watching() {
-                return CONTACTS_WATCHING;
-            }
-            self.unshared_contact_pulls += 1;
-            if self.unshared_contact_pulls <= CONTACTS_UNSHARED_QUICK_TRIES {
-                CONTACTS_UNSHARED_RETRY
-            } else {
-                CONTACTS_RETRY
-            }
-        }
-
         /// Pull the phone's contacts (PBAP) now and then, for names and new chats.
         async fn sync_contacts_if_due(&mut self) {
             let Some(device_id) = self.device_id.clone() else {
@@ -675,17 +691,37 @@ mod worker {
                 .unwrap_or(Err(MapError::Timeout));
             // Released before the photo pass below takes its own turn.
             drop(turn);
+            self.last_contacts_pull = Some(Instant::now());
+            let watching = self.shared.watching();
+            let pull = match &pulled {
+                Ok(entries) if entries.is_empty() => Pull::Empty,
+                Ok(_) => Pull::Shared,
+                Err(MapError::ContactsConsent) => Pull::Refused,
+                Err(_) => Pull::Failed,
+            };
+            let outcome = self.contacts.record(pull, watching);
+            self.next_contacts_sync = Instant::now() + outcome.next;
+            // The toggle follows at once: the status event goes out before the slower save below.
+            self.publish_contacts();
+            match outcome.transition {
+                Some(Transition::Off) => log::info!(
+                    "Sync Contacts looks off on the iPhone (it shared no contacts); checking every {}s",
+                    outcome.next.as_secs()
+                ),
+                Some(Transition::On) => log::info!("Sync Contacts is on again: the iPhone is sharing contacts"),
+                None => {}
+            }
             match pulled {
                 // The iPhone answers with an empty list, not a refusal, while Sync Contacts is
-                // off. Keep any names already saved and ask again rather than in 6 hours.
+                // off. Keep any names already saved and keep asking (`contacts_watch`).
                 Ok(entries) if entries.is_empty() => {
-                    self.set_contacts_shared(false);
-                    log::debug!("the iPhone shared no contacts (Sync Contacts off?), asking again soon");
-                    self.next_contacts_sync = Instant::now() + self.soon();
+                    // It answered, so it isn't refusing any more (the switch is just off).
+                    self.shared.update_status(|s| s.contacts_error = None);
+                    if outcome.log_empty {
+                        log::debug!("the iPhone shared no contacts (Sync Contacts off?), asking again soon");
+                    }
                 }
                 Ok(entries) => {
-                    self.unshared_contact_pulls = 0;
-                    self.set_contacts_shared(true);
                     // Names and numbers only. save_phonebook never touches the photo column, so the
                     // references the background photo pass set are preserved across every fast sync.
                     let mut rows: Vec<(String, String)> = Vec::new();
@@ -708,7 +744,6 @@ mod worker {
                         Err(e) => log::warn!("saving contacts failed: {e}"),
                     }
                     self.shared.update_status(|s| s.contacts_error = None);
-                    self.next_contacts_sync = Instant::now() + CONTACTS_RESYNC;
                     // Recent calls sit behind the same switch: if it just came on, they're there too.
                     self.next_calls_sync = Instant::now();
                     // Faces come from a slower WITH-PHOTO pull on its own PBAP link, off this worker
@@ -716,16 +751,14 @@ mod worker {
                     self.maybe_sync_photos();
                 }
                 Err(e) => {
-                    log::info!("contacts sync failed: {e}");
-                    let consent = matches!(e, MapError::ContactsConsent);
-                    if consent {
-                        self.set_contacts_shared(false);
+                    let consent = pull == Pull::Refused;
+                    // A refusal repeats every check while the switch is off: it's logged with the
+                    // transition, not every 30 s.
+                    if !consent {
+                        log::info!("contacts sync failed: {e}");
                     }
                     let shown = consent.then(|| e.to_string());
                     self.shared.update_status(|s| s.contacts_error = shown);
-                    // A refusal is the switch still being off, like an empty list: during setup
-                    // it's usually flipped seconds later, so ask again soon.
-                    self.next_contacts_sync = Instant::now() + if consent { self.soon() } else { CONTACTS_RETRY };
                 }
             }
         }
@@ -838,7 +871,7 @@ mod worker {
                 // An empty answer is also how Sync Contacts being off looks, so it only wipes the
                 // list when contacts are coming through (then the history really was cleared).
                 // (A refusal shows as the contacts error.)
-                Ok(calls) if calls.is_empty() && !self.contacts_shared && !self.shared.calls().is_empty() => {
+                Ok(calls) if calls.is_empty() && !self.contacts.shared() && !self.shared.calls().is_empty() => {
                     log::info!("the iPhone shared no recent calls; keeping the ones tug has");
                 }
                 Ok(calls) => {
@@ -891,6 +924,11 @@ mod worker {
                     log::info!("message access paused: setup hasn't adopted an iPhone yet");
                     self.device_id = None;
                     self.set_state(false, None);
+                }
+                // Forgotten (or never chosen): nothing about Sync Contacts carries over.
+                if self.contacts != ContactsWatch::default() {
+                    self.contacts.forget();
+                    self.publish_contacts();
                 }
                 return;
             }

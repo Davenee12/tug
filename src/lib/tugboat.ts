@@ -21,6 +21,7 @@ export const TUGBOAT_OFF: TugboatStatus = {
   texts: [],
   sentText: null,
   sending: false,
+  receiving: false,
   ended: null,
 };
 
@@ -29,9 +30,12 @@ export function showConnectHelp(s: Pick<TugboatStatus, "phase">, shownAt: number
   return s.phase === "waiting" && shownAt !== null && now - shownAt >= HELP_AFTER_MS;
 }
 
-/** Files are still moving either way (closing would cut them off). */
-export function transferring(s: Pick<TugboatStatus, "incoming" | "sending">): boolean {
-  return s.sending || s.incoming.some((i) => !i.done);
+/**
+ * Files are moving either way right now (closing would cut them off). From the backend's live
+ * flags, not "an upload is unfinished": one the phone abandoned stays unfinished forever.
+ */
+export function transferring(s: Pick<TugboatStatus, "sending" | "receiving">): boolean {
+  return s.sending || s.receiving;
 }
 
 /** One plain sentence for files that couldn't be offered to the phone, or null if all were. */

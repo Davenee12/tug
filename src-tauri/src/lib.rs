@@ -204,6 +204,7 @@ pub fn run() {
             commands::contact_photo,
             commands::mark_read,
             commands::set_watching,
+            commands::check_switches,
             commands::get_calls,
             commands::refresh_calls,
             commands::dial,

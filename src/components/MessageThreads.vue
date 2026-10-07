@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ChevronRight, Info, Phone, Plus, RotateCcw, SendHorizontal, ShieldQuestionMark } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { replyUnavailable } from "../lib/availability";
 import { clockTime, dayLabel, formatAddress, groupConversations, threadKey, type Conversation, type ConversationItem } from "../lib/format";
 import { shouldStickToBottom } from "../lib/scroll";
 import { bubbleKind, distinguishesIMessage } from "../lib/messageType";
@@ -210,8 +211,8 @@ const canReply = computed(
 const replyHint = computed(() => {
   if (!selected.value) return "";
   if (selected.value.appId !== "com.apple.MobileSMS") return `Reply to ${selected.value.appLabel} messages on your phone.`;
-  if (tug.status.messagesError) return tug.status.messagesError;
-  if (!tug.status.services.messages) return "Connecting to your iPhone's messages…";
+  const unavailable = replyUnavailable(tug.status, tug.switchContext);
+  if (unavailable) return unavailable;
   if (!selected.value.addresses.length) return "tug will learn this number when their next text arrives.";
   return "";
 });
