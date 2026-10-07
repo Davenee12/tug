@@ -359,6 +359,10 @@ impl Actor {
         store.set_setting(keys::DEVICE_ID, &le_id).map_err(|e| e.to_string())?;
         store.set_setting(keys::DEVICE_NAME, &name).map_err(|e| e.to_string())?;
         self.drop_link();
+        // A different phone: what the Bluetooth inventory knew (and its schedule) was the old one's.
+        if self.device_id.as_deref() != Some(le_id.as_str()) {
+            self.reset_inventory();
+        }
         self.device_id = Some(le_id.clone());
         self.retry_in = 0;
         self.connect_failures = 0;
@@ -380,6 +384,7 @@ impl Actor {
         // Read the texts device id before deleting the setting, so we can unpair it too.
         let texts_id = self.shared.store.setting(keys::TEXTS_DEVICE_ID).ok().flatten();
         self.drop_link();
+        self.reset_inventory();
         let store = &self.shared.store;
         let _ = store.delete_setting(keys::DEVICE_ID);
         let _ = store.delete_setting(keys::DEVICE_NAME);

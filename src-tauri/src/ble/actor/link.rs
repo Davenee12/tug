@@ -4,6 +4,8 @@ use super::*;
 
 impl Actor {
     pub(super) fn drop_link(&mut self) {
+        // Nothing more may be asked of this link, and the reconnect's AMS reads need the turn.
+        self.cancel_inventory();
         self.link_down_at = None;
         // Whatever stall was being recovered from, the link it was on is gone.
         self.wedge_relink_at = None;
@@ -98,6 +100,9 @@ impl Actor {
                 if let Some(l) = self.link.as_mut() {
                     l.connected = true;
                 }
+                // Bluetooth inventory: the first connection this run gets a report a little later,
+                // off this path, once ANCS has settled.
+                self.schedule_inventory();
                 self.shared.update_status(|s| {
                     s.connection = ConnectionState::Connected;
                     s.last_error = None;
@@ -303,6 +308,7 @@ impl Actor {
         log::info!("iPhone link down");
         // Timeouts from before a real outage say nothing about the link that comes back.
         self.wedge.new_link();
+        self.cancel_inventory();
         if let Some(l) = self.link.as_mut() {
             l.ancs = None;
             l.media = None;
