@@ -146,9 +146,52 @@ pub fn suggests_pair_again(connected_since_adopt: bool, timeouts_since_adopt: u3
     !connected_since_adopt && timeouts_since_adopt >= ADOPT_TIMEOUTS_BEFORE_REPAIR
 }
 
+/// What reading the ANCS subscription back after a wake found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakeCheck {
+    /// The phone answered (on or off): the link works.
+    Answered,
+    /// Windows closed tug's objects for it.
+    Closed,
+    /// No answer within the bound.
+    TimedOut,
+    /// Some other error: the read failed but the link may be fine.
+    Failed,
+}
+
+/// Whether a wake keeps the link instead of rebuilding it. Every wake used to relink even a healthy
+/// link; now only one that isn't up and subscribed, or whose check came back closed or unanswered,
+/// is rebuilt.
+pub fn keep_link_after_wake(linked: bool, subscribed: bool, check: WakeCheck) -> bool {
+    linked && subscribed && matches!(check, WakeCheck::Answered | WakeCheck::Failed)
+}
+
+/// How long a wake waits for that check before rebuilding the link anyway.
+pub const WAKE_CHECK: Duration = Duration::from_secs(10);
+
+/// How often the radio is read again while it isn't On: a stale "off" (a missed StateChanged) used
+/// to block every connect until tug restarted.
+pub const RADIO_RECHECK_SECS: u32 = 45;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wake_keeps_a_healthy_link_and_rebuilds_a_dead_one() {
+        assert!(keep_link_after_wake(true, true, WakeCheck::Answered));
+        assert!(
+            keep_link_after_wake(true, true, WakeCheck::Failed),
+            "a read error alone isn't a dead link"
+        );
+        assert!(!keep_link_after_wake(true, true, WakeCheck::Closed));
+        assert!(!keep_link_after_wake(true, true, WakeCheck::TimedOut));
+        assert!(!keep_link_after_wake(false, true, WakeCheck::Answered), "down: rebuild");
+        assert!(
+            !keep_link_after_wake(true, false, WakeCheck::Answered),
+            "not subscribed: rebuild"
+        );
+    }
 
     fn before() -> Before {
         Before {
