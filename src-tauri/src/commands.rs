@@ -182,17 +182,18 @@ pub fn get_contacts(state: State<'_, AppState>) -> Result<Vec<Contact>> {
     state.shared.store.contacts().map_err(|e| e.to_string())
 }
 
+/// Send a reply through the iPhone. Resolves with the stored message even when the phone didn't
+/// take it (status failed, shown with Retry); an error means nothing was saved, so the composer
+/// keeps the text.
 #[tauri::command]
 pub async fn send_message(state: State<'_, AppState>, address: String, text: String) -> Result<StoredMessage> {
-    let map = state.shared.map.get().cloned().ok_or("Message service isn't running")?;
-    map.send(address, text).await
+    crate::map::service::send_text(&state.shared, &address, &text).await
 }
 
-/// Send a failed message again (the same message, to the same number).
+/// Send a failed message again: the same message, to the same number.
 #[tauri::command]
 pub async fn retry_message(state: State<'_, AppState>, id: i64) -> Result<StoredMessage> {
-    let map = state.shared.map.get().cloned().ok_or("Message service isn't running")?;
-    map.retry(id).await
+    crate::map::service::retry_text(&state.shared, id).await
 }
 
 /// The phone's recent calls (PBAP call history), newest first.

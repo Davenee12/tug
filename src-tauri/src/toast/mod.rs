@@ -249,9 +249,13 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 return;
             }
             withdraw(&app, id);
-            let sent = match shared.map.get().cloned() {
-                Some(map) => map.send(to, text.clone()).await.map(|_| ()),
-                None => Err("Message service isn't running".to_string()),
+            // A send the phone didn't take is saved as "Not sent" (Retry is in the conversation).
+            let sent = match crate::map::service::send_text(&shared, &to, &text).await {
+                Ok(m) if m.status == crate::messages::Status::Failed => {
+                    Err("Your iPhone didn't send it. Retry it from the conversation in tug.".to_string())
+                }
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
             };
             match sent {
                 Ok(()) => {

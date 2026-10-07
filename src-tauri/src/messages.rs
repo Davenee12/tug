@@ -312,6 +312,17 @@ impl Store {
             .map(Some)
     }
 
+    /// One outgoing message by id; `None` if there's no such outgoing row.
+    pub fn outgoing(&self, id: i64) -> Result<Option<StoredMessage>> {
+        self.conn()
+            .query_row(
+                &format!("{SELECT} WHERE m.id = ?1 AND m.direction = 'out'"),
+                [id],
+                map_row,
+            )
+            .optional()
+    }
+
     /// Flag a message as the first one after a possible gap (see `StoredMessage::gap_before`).
     pub fn mark_gap_before(&self, id: i64) -> Result<StoredMessage> {
         let conn = self.conn();
@@ -1019,6 +1030,21 @@ mod tests {
             s.retry_outgoing(m.id, 9_500).unwrap().is_none(),
             "a pending retry can't double up"
         );
+    }
+
+    #[test]
+    fn outgoing_by_id_is_only_sends() {
+        let s = Store::in_memory().unwrap();
+        let out = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "hi", 1_000)
+            .unwrap();
+        let inc = s
+            .insert_incoming(&incoming("H1", "+13025550100", "yo"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.outgoing(out.id).unwrap(), Some(out));
+        assert_eq!(s.outgoing(inc.id).unwrap(), None);
+        assert_eq!(s.outgoing(9_999).unwrap(), None);
     }
 
     #[test]

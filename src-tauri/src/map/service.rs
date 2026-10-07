@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::messages::StoredMessage;
-use crate::state::Shared;
+use crate::messages::{Status, StoredMessage, SOURCE_IPHONE_MAP};
+use crate::state::{events, Shared};
 
 pub enum MapCommand {
     Refresh,
@@ -23,13 +23,8 @@ pub enum MapCommand {
     RefreshCalls(Duration),
     /// Mark these stored messages read on the phone (those it still lists as unread).
     MarkRead(Vec<i64>),
-    Send {
-        address: String,
-        text: String,
-        reply: oneshot::Sender<Result<StoredMessage, String>>,
-    },
-    /// Try a failed send again: the same stored message, to the same number.
-    Retry {
+    /// Push this stored outgoing message (already saved as pending and on screen) to the phone.
+    Deliver {
         id: i64,
         reply: oneshot::Sender<Result<StoredMessage, String>>,
     },
@@ -63,18 +58,12 @@ impl MapHandle {
         let _ = self.tx.send(MapCommand::MarkRead(ids));
     }
 
-    pub async fn send(&self, address: String, text: String) -> Result<StoredMessage, String> {
+    /// Send a pending outgoing message the caller already stored and showed. The worker may be
+    /// busy (a sync or contacts pull) for a while, which is why the row is saved before queuing.
+    pub async fn deliver(&self, id: i64) -> Result<StoredMessage, String> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(MapCommand::Send { address, text, reply })
-            .map_err(|_| "Message service stopped".to_string())?;
-        rx.await.map_err(|_| "Message service stopped".to_string())?
-    }
-
-    pub async fn retry(&self, id: i64) -> Result<StoredMessage, String> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(MapCommand::Retry { id, reply })
+            .send(MapCommand::Deliver { id, reply })
             .map_err(|_| "Message service stopped".to_string())?;
         rx.await.map_err(|_| "Message service stopped".to_string())?
     }
@@ -95,6 +84,55 @@ impl MapHandle {
         }
         rx.await
             .unwrap_or_else(|_| crate::bt_inventory::Probe::Unavailable("message service unavailable".into()))
+    }
+}
+
+/// Save and show a reply as "Sending…" right away, then queue it for the worker: the worker can be
+/// busy with a sync or a contacts pull for a while, and the text mustn't vanish meanwhile. Resolves
+/// with the stored message even when the phone didn't take it (status failed, shown with Retry); an
+/// error means nothing was saved, so the caller keeps the text.
+pub async fn send_text(shared: &Shared, address: &str, text: &str) -> Result<StoredMessage, String> {
+    let map = shared.map.get().cloned().ok_or("Message service isn't running")?;
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Type a message first".into());
+    }
+    let address = crate::map::address::normalize(address);
+    let pending = shared
+        .store
+        .insert_outgoing(SOURCE_IPHONE_MAP, &address, text, crate::state::now_ms())
+        .map_err(|e| e.to_string())?;
+    shared.emit(events::MESSAGE, pending.clone());
+    deliver_or_fail(shared, &map, pending.id).await
+}
+
+/// Send a failed message again: the same row, to the number it was meant for, so a retry never
+/// duplicates it or goes to whichever number the conversation shows now.
+pub async fn retry_text(shared: &Shared, id: i64) -> Result<StoredMessage, String> {
+    let map = shared.map.get().cloned().ok_or("Message service isn't running")?;
+    let pending = shared
+        .store
+        .retry_outgoing(id, crate::state::now_ms())
+        .map_err(|e| e.to_string())?
+        .ok_or("That message is already being sent")?;
+    shared.emit(events::MESSAGE, pending.clone());
+    deliver_or_fail(shared, &map, pending.id).await
+}
+
+/// Hand a stored pending message to the worker. If the worker is gone, the message is marked failed
+/// (with Retry) rather than left on "Sending…".
+async fn deliver_or_fail(shared: &Shared, map: &MapHandle, id: i64) -> Result<StoredMessage, String> {
+    match map.deliver(id).await {
+        Ok(m) => Ok(m),
+        Err(e) => {
+            log::warn!("send not delivered: {e}");
+            let failed = shared
+                .store
+                .set_outgoing_status(id, Status::Failed, None)
+                .map_err(|e| e.to_string())?;
+            shared.emit(events::MESSAGE, failed.clone());
+            Ok(failed)
+        }
     }
 }
 
@@ -121,7 +159,7 @@ pub fn start(shared: Arc<Shared>) -> MapHandle {
         tauri::async_runtime::spawn(async move {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
-                    MapCommand::Send { reply, .. } | MapCommand::Retry { reply, .. } => {
+                    MapCommand::Deliver { reply, .. } => {
                         let _ = reply.send(Err("Messaging is only supported on Windows".into()));
                     }
                     MapCommand::Dial { reply, .. } => {
@@ -332,11 +370,8 @@ mod worker {
                     // Wake for it: the next refresh pulls the calls once they're due.
                     Some(MapCommand::RefreshCalls(after)) => next = next.min(w.calls_soon(after)),
                     Some(MapCommand::MarkRead(ids)) => w.mark_read(&ids).await,
-                    Some(MapCommand::Retry { id, reply }) => {
-                        let _ = reply.send(w.retry(id).await);
-                    }
-                    Some(MapCommand::Send { address, text, reply }) => {
-                        let _ = reply.send(w.send(&address, &text).await);
+                    Some(MapCommand::Deliver { id, reply }) => {
+                        let _ = reply.send(w.deliver(id).await);
                     }
                     Some(MapCommand::Dial { number, reply }) => {
                         let _ = reply.send(w.dial(number.as_deref()).await);
@@ -1150,38 +1185,19 @@ mod worker {
             log::info!("marked {} message(s) read on the iPhone", handles.len());
         }
 
-        async fn send(&mut self, address: &str, text: &str) -> Result<StoredMessage, String> {
-            let text = text.trim();
-            if text.is_empty() {
-                return Err("Type a message first".into());
-            }
-            let address = normalize(address);
-            let pending = self
-                .shared
-                .store
-                .insert_outgoing(SOURCE_IPHONE_MAP, &address, text, now_ms())
-                .map_err(|e| e.to_string())?;
-            self.deliver(pending).await
-        }
-
-        /// Send a failed message again: the same row, to the number it was meant for, so a retry
-        /// never duplicates it or goes to whichever number the conversation shows now.
-        async fn retry(&mut self, id: i64) -> Result<StoredMessage, String> {
-            let pending = self
-                .shared
-                .store
-                .retry_outgoing(id, now_ms())
-                .map_err(|e| e.to_string())?
-                .ok_or("That message is already being sent")?;
-            self.deliver(pending).await
-        }
-
-        /// Push a pending outgoing message to the phone and record how it went. A failure is
-        /// recorded on the message (shown as "Not sent" with Retry) and returned as `Ok`: the
-        /// error is only for when nothing was recorded, so the composer knows to keep the text.
-        async fn deliver(&mut self, pending: StoredMessage) -> Result<StoredMessage, String> {
+        /// Push a pending outgoing message (stored and shown by the command that queued it; see
+        /// `commands::send_message`) to the phone, to the number on that row, and record how it
+        /// went. A failure is recorded on the message (shown as "Not sent" with Retry).
+        async fn deliver(&mut self, id: i64) -> Result<StoredMessage, String> {
             let store = self.shared.store.clone();
-            self.shared.emit(events::MESSAGE, pending.clone());
+            let pending = store
+                .outgoing(id)
+                .map_err(|e| e.to_string())?
+                .ok_or("That message no longer exists")?;
+            // Only a pending row is sent: never a second push of one already taken or failed.
+            if pending.status != Status::Pending {
+                return Ok(pending);
+            }
             let result = match self.ensure().await {
                 Ok(session) => session.push_message(&pending.address, &pending.body).await,
                 Err(e) => Err(e),
