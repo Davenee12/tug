@@ -664,3 +664,55 @@ export interface BtInventory {
   link: Probe<BtLinkReport>;
   audioPlayback: Probe<{ candidates: number; iphoneListed: boolean }>;
 }
+
+// ---- Developer tools (src-tauri/src/devtools) ----
+
+export type DevToolsPermissionKey =
+  | "codes"
+  | "search"
+  | "dev_notifications"
+  | "tugboat_files"
+  | "phone_status"
+  | "media"
+  | "send_text"
+  | "tugboat_send";
+
+/** One switch in Settings › Developer tools (`PermissionState`). */
+export interface DevToolsPermission {
+  key: DevToolsPermissionKey;
+  label: string;
+  on: boolean;
+}
+
+/** A tool that has used tug (`ClientRecord`). `name` is what it called itself. */
+export interface DevToolsClient {
+  name: string;
+  kind: "mcp" | "cli";
+  /** Unix ms. */
+  lastUsed: number;
+}
+
+/** The "send this text?" card (`ConfirmRequest`). */
+export interface DevToolsConfirm {
+  id: number;
+  /** Who's asking, as it named itself. */
+  tool: string;
+  toName: string;
+  toAddress: string;
+  message: string;
+  /** Unix ms after which it counts as not sent. */
+  expiresAt: number;
+}
+
+/** Everything Settings › Developer tools shows (`DevToolsStatus`). */
+export interface DevToolsStatus {
+  enabled: boolean;
+  permissions: DevToolsPermission[];
+  clients: DevToolsClient[];
+  /** Full path of the tug command (`...\bin\tug.exe`), or null if it isn't installed. */
+  cliPath: string | null;
+  cliDir: string | null;
+  onPath: boolean;
+  bridgeRunning: boolean;
+  pending: DevToolsConfirm | null;
+}

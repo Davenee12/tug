@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { CircleAlert, Upload } from "lucide-vue-next";
 import { useTugStore } from "./stores/tug";
 import { useTugboatStore } from "./stores/tugboat";
+import { useDevToolsStore } from "./stores/devtools";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import ConnectPanel from "./components/ConnectPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
@@ -15,12 +16,14 @@ import SettingsPage from "./components/SettingsPage.vue";
 import SpotifyPanel from "./components/SpotifyPanel.vue";
 import WhatsNew from "./components/WhatsNew.vue";
 import PairingDialog from "./components/PairingDialog.vue";
+import ToolConfirmCard from "./components/ToolConfirmCard.vue";
 import { nextDownSince, RECONNECT_GRACE_MS, showConnectionPanel } from "./lib/connectionPanel";
 import { showsReconnecting } from "./lib/connectionStatus";
 import { skippedMessage } from "./lib/tugboat";
 
 const tug = useTugStore();
 const tugboat = useTugboatStore();
+const devtools = useDevToolsStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
 // show the Connection panel beside the feed; everything else (and narrow windows) uses
@@ -114,6 +117,8 @@ onMounted(async () => {
         ? tug.notify("info", "Text from your phone is on your clipboard")
         : tug.notify("error", "Text from your phone arrived, but couldn't go on the clipboard"),
   });
+  // Developer tools: only listens for the confirmation card (a text an AI tool wants to send).
+  void devtools.init();
   try {
     await tug.init();
   } catch (e) {
@@ -126,6 +131,7 @@ onUnmounted(() => {
   window.clearTimeout(graceTimer);
   tug.dispose();
   tugboat.dispose();
+  devtools.dispose();
 });
 </script>
 
@@ -150,6 +156,8 @@ onUnmounted(() => {
     <SpotifyPanel v-if="tug.spotifyPanelOpen" />
     <WhatsNew v-if="tug.whatsNewOpen" />
     <TugboatPanel v-if="tugboat.open" />
+    <!-- A text an AI tool (or `tug text`) wants to send: nothing goes without Send here. -->
+    <ToolConfirmCard v-if="devtools.confirm" :key="devtools.confirm.id" :request="devtools.confirm" />
     <!-- Files dragged over tug: they'll go to the phone through Tugboat. The panel's own drop zone
          lights up instead while it's open. -->
     <div

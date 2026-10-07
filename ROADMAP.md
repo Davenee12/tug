@@ -79,16 +79,33 @@ scan a QR in tug, a tug page opens in the phone's browser (iPhone or Android), s
 - Fixed: false "resumed from sleep" when the Bluetooth adapter stalls; recover a wedged adapter by
   reconnecting.
 
-## v0.5.12 — tug for developers: MCP server + `tug` CLI (planned, Dave 2026-10-06)
-tug runs a local MCP server (Claude Code, Codex, Cursor, VS Code agent mode, ChatGPT desktop) and
-ships a `tug` CLI.
-- **Tools:** newest verification code, search texts/notifications, recent dev notifications
-  (GitHub/CI/deploys), files from tug Drop (e.g. a phone screenshot into the agent), now
-  playing/play, phone battery/status, send a text (always confirmed with a click in tug).
-- **Safety:** off by default, local-only (stdio / localhost), read-only unless enabled per tool,
-  clear consent copy that AI tools will read messages.
-- **CLI:** `tug code`, `tug drop <file>`, `tug text <name> "<msg>"`.
-- Docs page with copy-paste setup per tool; "Works with" badges.
+## v0.5.12 — tug for developers: MCP server + `tug` CLI (built, PR `feat/dev-tools`, 2026-10-07)
+tug runs a local MCP server (Claude Code, Codex, Cursor, VS Code) and ships a `tug` command. See
+docs/DEVELOPERS.md.
+- **Tools:** `get_latest_code`, `search_messages`, `recent_dev_notifications` (GitHub/Actions,
+  Slack, Linear, Jira, Sentry, PagerDuty, Vercel, Netlify; list in `devtools/dev_apps.rs`),
+  `list_tugboat_files` / `get_tugboat_file` (small images as MCP image content), `phone_status`,
+  `media_control`, `send_text` (only after a click on tug's card; 2-minute expiry).
+- **CLI:** `tug code [--copy]`, **`tug boat <file...>`** (the Tugboat verb; was "tug drop" in
+  the plan), `tug text <name> "<msg>"`, `tug status`, `tug mcp`. Exit codes 0/1/2/3.
+- **How:** a named pipe only the user can open (no port), per-install token proved by HMAC (never
+  sent), versioned JSON; `bin\tug.exe` is a separate console program (`crates/tug-cli`), the
+  bridge is `crates/tug-bridge`. PATH only via Settings › Developer tools › Add tug to PATH.
+- **Safety:** off by default (and idle when off); per-tool switches (reads on; codes, music and
+  texts off); rate limits; Revoke access rotates the token; tool calls logged without content.
+  After a security review: clients refuse a pipe not owned by the user at medium+ integrity and
+  never show pre-auth text; the token file is low-integrity-proof; results with other people's
+  words are framed as untrusted data; Send on the card arms after 1.5 s and only with focus.
+- **ChatGPT desktop:** can't start local (stdio) MCP servers yet, only remote connectors; the
+  setup page says so. "Works with" badges not done.
+- **Verified on the PC (isolated test build, no phone):** off → "turned off" answer; on →
+  initialize, tools/list and every read tool over stdio; path-traversal and unknown-tool refusals;
+  a Tugboat image as image content; rate limit after 60 calls/min; `tug status/code/text/boat`
+  messages and exit codes; "tug isn't running".
+- **Needs Dave's phone/PC:** a real code via `tug code --copy`; search/dev notifications on real
+  history; `send_text` card → Send and Don't send with texts connected; `media_control` on a
+  playing phone; Add tug to PATH then `tug` in a new terminal; the installer placing
+  `bin\tug.exe`; Claude Code/Cursor connecting for real.
 
 ## v0.5.13 — use more of Bluetooth (planned, Dave 2026-10-06)
 1. **Bluetooth inventory probe** (shipped in v0.5.11). First run on an iPhone 15 Pro Max found:

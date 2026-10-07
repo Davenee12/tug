@@ -24,6 +24,7 @@ pub struct AppState {
     pub ble: BleHandle,
     pub spotify: Arc<Spotify>,
     pub tugboat: TugboatService,
+    pub devtools: Arc<crate::devtools::DevTools>,
 }
 
 type Result<T> = std::result::Result<T, String>;
@@ -908,6 +909,44 @@ pub fn tugboat_send_text(state: State<'_, AppState>, text: String) -> Result<()>
 #[tauri::command]
 pub fn tugboat_open_folder(state: State<'_, AppState>, path: Option<String>) -> Result<()> {
     state.tugboat.open_folder(path.as_deref())
+}
+
+// --- Developer tools (the bridge for AI tools and the `tug` command; see devtools/mod.rs) ---
+
+use crate::devtools::DevToolsStatus;
+
+#[tauri::command]
+pub fn devtools_status(state: State<'_, AppState>) -> DevToolsStatus {
+    state.devtools.status()
+}
+
+/// Settings › Developer tools › "Let AI tools use tug".
+#[tauri::command]
+pub fn devtools_set_enabled(state: State<'_, AppState>, enabled: bool) -> Result<DevToolsStatus> {
+    state.devtools.set_enabled(enabled)
+}
+
+#[tauri::command]
+pub fn devtools_set_permission(state: State<'_, AppState>, key: String, on: bool) -> Result<DevToolsStatus> {
+    state.devtools.set_permission(&key, on)
+}
+
+/// "Revoke access": a new token; connected AI tools must be restarted.
+#[tauri::command]
+pub fn devtools_revoke(state: State<'_, AppState>) -> Result<DevToolsStatus> {
+    state.devtools.revoke()
+}
+
+/// The confirmation card's Send (`send: true`) or Don't send.
+#[tauri::command]
+pub fn devtools_confirm(state: State<'_, AppState>, id: u64, send: bool) {
+    state.devtools.confirm(id, send);
+}
+
+/// "Add tug to PATH" / "Remove from PATH" (the user's own PATH only).
+#[tauri::command]
+pub fn devtools_set_on_path(state: State<'_, AppState>, on: bool) -> Result<DevToolsStatus> {
+    state.devtools.add_to_path(on)
 }
 
 #[cfg(test)]

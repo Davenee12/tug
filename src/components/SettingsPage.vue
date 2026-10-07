@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, X } from "lucide-vue-next";
+import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
 import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
@@ -12,6 +12,7 @@ import { formatAddress } from "../lib/format";
 import { normalizeAddress } from "../lib/address";
 import AppAvatar from "./AppAvatar.vue";
 import ConnectPanel from "./ConnectPanel.vue";
+import DeveloperSettings from "./DeveloperSettings.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsSwitch from "./SettingsSwitch.vue";
 
@@ -24,6 +25,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string; icon: Component }> =
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "connectors", label: "Connectors", icon: Plug },
   { id: "weather", label: "Weather", icon: CloudSun },
+  { id: "developer", label: "Developer tools", icon: SquareTerminal },
   { id: "privacy", label: "Data & privacy", icon: ShieldCheck },
   { id: "about", label: "About", icon: Info },
 ];
@@ -579,6 +581,11 @@ async function clearHistory() {
               </div>
             </SettingsRow>
           </div>
+        </template>
+
+        <!-- Developer tools: AI tools (MCP) and the tug command -->
+        <template v-else-if="current.id === 'developer'">
+          <DeveloperSettings />
         </template>
 
         <!-- Data & privacy -->

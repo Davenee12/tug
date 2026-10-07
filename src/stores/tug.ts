@@ -70,6 +70,7 @@ import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
 import { CHECKING_MAX_MS, phoneSwitches, switchesPending as anySwitchPending, type SwitchContext } from "../lib/phoneSwitches";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 import { useTugboatStore } from "./tugboat";
+import { useDevToolsStore } from "./devtools";
 
 /** The Spotify panel's tabs. */
 export type SpotifyTab = "search" | "playlists" | "recent" | "top" | "queue";
@@ -86,7 +87,7 @@ const SPOTIFY_WAIT_MS = 60_000;
 /** How long Spotify takes to report a transfer before tug re-reads where it is playing. */
 const SPOTIFY_TRANSFER_SETTLE_MS = 1_500;
 
-export type SettingsSection = "general" | "iphone" | "notifications" | "connectors" | "weather" | "privacy" | "about";
+export type SettingsSection = "general" | "iphone" | "notifications" | "connectors" | "weather" | "developer" | "privacy" | "about";
 const SEEN_KEEP = 300;
 /** How many cleared-code message ids to remember (they expire from the Feed in minutes anyway). */
 const CLEARED_CODES_KEEP = 200;
@@ -355,6 +356,7 @@ export const useTugStore = defineStore("tug", () => {
       spotifyPanelOpen.value ||
       whatsNewOpen.value ||
       useTugboatStore().open ||
+      !!useDevToolsStore().confirm ||
       !!pairingRequest.value ||
       !!ringing.value,
   );

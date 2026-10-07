@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { findCode } from "./codes";
+import shared from "./codes.cases.json";
 
 const code = (t: string | null) => findCode(t)?.code ?? null;
 
@@ -35,5 +36,14 @@ describe("findCode", () => {
   it("won't guess between two different numbers", () => {
     expect(code("Your code is 482913, or use backup code 771204")).toBeNull();
     expect(code("Code 482913. Again: 482913")).toBe("482913");
+  });
+
+  // The same cases run against the Rust port (src-tauri/src/codes.rs), which the bridge uses.
+  it("agrees with the shared cases", () => {
+    for (const c of shared.cases) {
+      const found = findCode(c.text);
+      expect(found?.code ?? null, c.text).toBe(c.code);
+      if ("shown" in c && c.shown) expect(found?.shown, c.text).toBe(c.shown);
+    }
   });
 });
