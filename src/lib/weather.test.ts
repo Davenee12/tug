@@ -197,4 +197,23 @@ group("now follows the clock between downloads", () => {
   it("keeps the last download when the clock runs past the hourly data", () => {
     expect(withCurrentHour(forecast, at("2026-10-07T09:00:00"))).toBe(forecast);
   });
+
+  const day = (date: string) => ({ date, code: 3, high: 20, low: 10, rain: 0 });
+  const withDays: Forecast = { ...forecast, days: [day("2026-10-06"), day("2026-10-07"), day("2026-10-08")] };
+
+  it("drops yesterday from the daily list once the place's date turns", () => {
+    const f = withCurrentHour(withDays, at("2026-10-07T09:00:00"));
+    expect(f.days.map((d) => d.date)).toEqual(["2026-10-07", "2026-10-08"]);
+  });
+
+  it("keeps the daily list on the day it was fetched", () => {
+    expect(withCurrentHour(withDays, at("2026-10-06T15:05:00")).days).toHaveLength(3);
+    expect(withCurrentHour(withDays, at("2026-10-06T14:45:00"))).toBe(withDays);
+  });
+
+  it("uses the place's own date, not this PC's", () => {
+    // 02:00 UTC on the 7th is still the evening of the 6th in New York.
+    const ny: Forecast = { ...withDays, timezone: "America/New_York" };
+    expect(withCurrentHour(ny, at("2026-10-07T02:00:00")).days).toHaveLength(3);
+  });
 });

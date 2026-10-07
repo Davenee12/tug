@@ -334,6 +334,12 @@ pub fn set_hidden(
         .map_err(|e| e.to_string())
 }
 
+/// Whether Windows is blocking tug's pop-ups, for the warning in Settings.
+#[tauri::command]
+pub fn popups_blocked(app: tauri::AppHandle) -> bool {
+    crate::toast::blocked(&app)
+}
+
 /// Open a page of Windows Settings (setup's "Open Bluetooth settings" and friends). Only
 /// known pages: the webview never gets to launch arbitrary URIs.
 #[tauri::command]

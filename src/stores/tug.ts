@@ -160,6 +160,7 @@ export const useTugStore = defineStore("tug", () => {
     closeToTray: true,
     appIcons: true,
     lowBattery: true,
+    popupSound: true,
     dialing: false,
     filterUnknown: true,
     knownSenders: [],
@@ -941,6 +942,7 @@ export const useTugStore = defineStore("tug", () => {
       muteCalls: raw["ui.muteCalls"] === "true",
       closeToTray: raw["ui.closeToTray"] !== "false",
       lowBattery: raw["ui.lowBattery"] !== "false",
+      popupSound: raw["ui.popupSound"] !== "false",
       appIcons: raw["ui.appIcons"] !== "false",
       dialing: raw["ui.dialing"] === "true",
       filterUnknown: raw["ui.filterUnknown"] !== "false",
@@ -1109,6 +1111,9 @@ export const useTugStore = defineStore("tug", () => {
     await attempt(loadSettings);
     // Settings are in (so lastSeenVersion is known): decide whether to greet with "What's new".
     void checkWhatsNew();
+    // A phone that's already low when tug starts gets its alert now, not one step later:
+    // device-status only checks when the level changes, and the first status set it silently.
+    void checkBattery(status.value.battery);
     void loadSpotify();
   }
 

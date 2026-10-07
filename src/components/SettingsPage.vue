@@ -40,13 +40,22 @@ const version = ref<string | null>(null);
 // A slow clock so the last-error "3m ago" stays roughly current while Settings is open.
 const now = ref(Date.now());
 let clock: number | undefined;
+// Windows can turn tug's pop-ups off on its own side; checked on open and on coming back
+// (from Windows Settings, say) so the warning goes once they're on again.
+const popupsBlocked = ref(false);
+const checkPopups = async () => {
+  popupsBlocked.value = await api.popupsBlocked().catch(() => false);
+};
 onMounted(async () => {
   window.addEventListener("keydown", onKey);
+  window.addEventListener("focus", checkPopups);
   clock = window.setInterval(() => (now.value = Date.now()), 30_000);
+  void checkPopups();
   version.value = await getVersion().catch(() => null);
 });
 onUnmounted(() => {
   window.removeEventListener("keydown", onKey);
+  window.removeEventListener("focus", checkPopups);
   window.clearInterval(clock);
 });
 
@@ -87,6 +96,7 @@ async function openLogs() {
 // ---- General ----
 const toasts = computed({ get: () => tug.settings.toasts, set: (v) => void tug.setSetting("toasts", v) });
 const lowBattery = computed({ get: () => tug.settings.lowBattery, set: (v) => void tug.setSetting("lowBattery", v) });
+const popupSound = computed({ get: () => tug.settings.popupSound, set: (v) => void tug.setSetting("popupSound", v) });
 const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tug.setSetting("doNotDisturb", v) });
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
 const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) => void tug.setAutostart(v) });
@@ -235,9 +245,23 @@ async function clearHistory() {
 
         <!-- General: two columns of rows on wide windows so the whole section fits without scrolling. -->
         <template v-if="current.id === 'general'">
+          <div
+            v-if="popupsBlocked"
+            class="mb-4 flex items-start gap-2.5 rounded-xl border border-error/30 bg-canvas px-4 py-3 text-[13px] text-body-strong"
+          >
+            <CircleAlert :size="16" class="mt-0.5 shrink-0 text-error" />
+            <div class="min-w-0 flex-1">
+              <p class="font-medium">Windows is blocking tug's pop-ups</p>
+              <p class="mt-0.5 text-muted">Notifications still collect in the Feed. Turn on notifications for tug in Windows to see pop-ups.</p>
+            </div>
+            <button class="btn-secondary btn-sm shrink-0" @click="api.openWindowsSettings('notifications')">Open notification settings</button>
+          </div>
           <div class="grid grid-cols-1 gap-px overflow-hidden rounded-xl bg-hairline-soft lg:grid-cols-2">
             <SettingsRow class="bg-surface-card" label="Windows pop-ups" description="Pop up new notifications on this PC.">
               <SettingsSwitch v-model="toasts" label="Windows pop-ups" />
+            </SettingsRow>
+            <SettingsRow class="bg-surface-card" label="Pop-up sound" description="Play the Windows sound with tug's pop-ups. Your iPhone already chimes.">
+              <SettingsSwitch v-model="popupSound" label="Pop-up sound" :disabled="!tug.settings.toasts" />
             </SettingsRow>
             <SettingsRow class="bg-surface-card" label="Do not disturb" description="Keep collecting, stop popping up.">
               <SettingsSwitch v-model="dnd" label="Do not disturb" :disabled="!tug.settings.toasts" />
