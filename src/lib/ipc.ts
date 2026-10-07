@@ -10,6 +10,9 @@ import type {
   SearchResults,
   SmsMessage,
   DeviceStatus,
+  TugboatSkipped,
+  TugboatStatus,
+  TugboatTextArrived,
   DiscoveredDevice,
   MediaCommand,
   NowPlaying,
@@ -125,6 +128,20 @@ export const api = {
   spotifyPlaylistItems: (id: string) => invoke<SpotifyTrack[]>("spotify_playlist_items", { id }),
   spotifyAddToPlaylist: (playlistId: string, trackUri: string) =>
     invoke<void>("spotify_add_to_playlist", { playlistId, trackUri }),
+  // --- Tugboat ---
+  /** Open Tugboat (a fresh code), or get the session already open. */
+  tugboatStart: () => invoke<TugboatStatus>("tugboat_start"),
+  tugboatStop: () => invoke<void>("tugboat_stop"),
+  tugboatStatus: () => invoke<TugboatStatus>("tugboat_status"),
+  /** The QR link on the clipboard, kept out of clipboard history and sync (it carries the secret). */
+  tugboatCopyLink: () => invoke<void>("tugboat_copy_link"),
+  /** Windows' file picker, then offer what was picked. */
+  tugboatPickFiles: () => invoke<TugboatSkipped[]>("tugboat_pick_files"),
+  tugboatRemoveOffer: (id: string) => invoke<void>("tugboat_remove_offer", { id }),
+  /** Text for the phone to copy (empty clears it). */
+  tugboatSendText: (text: string) => invoke<void>("tugboat_send_text", { text }),
+  /** Open the Tugboat folder, or select a file Tugboat saved. */
+  tugboatOpenFolder: (path: string | null) => invoke<void>("tugboat_open_folder", { path }),
 };
 
 interface EventPayloads {
@@ -141,6 +158,10 @@ interface EventPayloads {
   "open-latest-conversation": null;
   calls: CallRecord[];
   "toast-pressed": ToastPressed;
+  "tugboat-status": TugboatStatus;
+  "tugboat-text": TugboatTextArrived;
+  /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */
+  "tugboat-dropped": TugboatSkipped[];
 }
 
 export function on<E extends keyof EventPayloads>(
