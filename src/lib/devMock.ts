@@ -42,6 +42,8 @@
 //   http://localhost:1420/?tugboatnonet  the Tugboat panel with no network a phone could use
 //   http://localhost:1420/?devtools   Settings › Developer tools, switched on, with two connected tools
 //   http://localhost:1420/?devconfirm the "wants to text" confirmation card an AI tool's send_text shows
+//   http://localhost:1420/?heavy      a long history for performance work: ~2,000 texts in ~60 conversations,
+//                                     ~500 notifications, 120 calls, Spotify playing, the weather card on
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
@@ -466,6 +468,87 @@ const spotifyDevices: SpotifyDevice[] = [
   { id: "pc", name: "Spotify on this PC", kind: "Computer", isActive: false },
   { id: "spk", name: "Kitchen speaker", kind: "Speaker", isActive: onSpeaker },
 ];
+
+// ?heavy: a phone with a long history, for performance work — ~2,000 texts across ~60
+// conversations (33 of them saved contacts), ~500 notifications over the last week (a good share
+// still on the phone), a long call list, Spotify playing and the weather card on. Made-up people
+// and 555-01xx numbers only; the same data every load (a seeded generator), so runs compare.
+if (params.has("heavy") && !noPhone) {
+  let seed = 12345;
+  const rand = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+  const pick = <T,>(list: readonly T[]) => list[Math.floor(rand() * list.length)];
+  const FIRST = ["Alex", "Bea", "Cal", "Dana", "Eli", "Fay", "Gus", "Hana", "Ivo", "Jo", "Kai", "Lena", "Max", "Nia", "Oli", "Pia", "Quin", "Rae", "Sol", "Tess", "Uma", "Vic", "Wren", "Xan", "Yara", "Zed", "Ana", "Ben", "Cleo", "Dev", "Ezra", "Finn", "Gia"];
+  const LINES = [
+    "are you around later?",
+    "haha yes",
+    "can you send me that link again",
+    "running 10 late, sorry!",
+    "did you see the game last night",
+    "👍",
+    "ok sounds good",
+    "what time works for you tomorrow?",
+    "I'll bring snacks",
+    "thanks so much, really appreciate it",
+    "lol",
+    "call me when you get a sec",
+    "on my way",
+    "Can you pick up milk on the way home? And maybe some bread if they have the good kind.",
+    "Happy birthday!! 🎉",
+    "where did we park",
+  ];
+  const people = Array.from({ length: 60 }, (_, i) => ({
+    // Area codes vary so every number stays in the 555-01xx range.
+    address: `+1${["302", "214", "972", "469", "817", "512"][i % 6]}55501${String(10 + Math.floor(i / 6)).padStart(2, "0")}`,
+    name: i < FIRST.length ? `${FIRST[i]} ${String.fromCharCode(65 + (i % 26))}.` : null,
+  }));
+  contacts.splice(0, contacts.length, ...people.flatMap((p) => (p.name ? [{ address: p.address, name: p.name }] : [])));
+  // Texts: a few busy conversations and a long tail, spread over ~10 days, oldest first.
+  const texts: SmsMessage[] = [];
+  for (let i = 0; i < 2000; i++) {
+    const p = people[Math.floor(rand() ** 2.2 * people.length)];
+    texts.push(sms(rand() < 0.4 ? "out" : "in", pick(LINES), rand() * 60 * 24 * 10, p.address, p.name, "IM"));
+  }
+  texts.sort((a, b) => a.receivedAt - b.receivedAt);
+  texts.forEach((m, i) => (m.id = 1000 + i));
+  messages.splice(0, messages.length, ...texts);
+  // Notifications: texts from the same people, plus the usual app noise. Ids rise with time.
+  const APPS: Array<[string, string, string[]]> = [
+    ["net.whatsapp.WhatsApp", "WhatsApp", ["Sent a photo", "voice message", "see you there"]],
+    ["com.google.Gmail", "Gmail", ["Your receipt from Example Store", "Weekly digest", "Invitation: Planning sync"]],
+    ["com.tinyspeck.chatlyio", "Slack", ["#general: standup in 5", "#dev: build is green", "DM: got a minute?"]],
+    ["com.apple.mobilecal", "Calendar", ["In 15 minutes · Room 4", "Tomorrow · Dentist"]],
+    ["com.burbn.instagram", "Instagram", ["liked your photo", "started following you"]],
+    ["com.apple.news", "News", ["Top stories this morning", "Weather alert for your area"]],
+  ];
+  const notes: PhoneNotification[] = [];
+  for (let i = 0; i < 500; i++) {
+    const ago = rand() * 60 * 24 * 7;
+    const isText = rand() < 0.45;
+    const person = people[Math.floor(rand() ** 2 * people.length)];
+    const [appId, appName, bodies] = isText ? ["com.apple.MobileSMS", "Messages", LINES] : pick(APPS);
+    const title = isText ? (person.name ?? formatMockNumber(person.address)) : appId === "net.whatsapp.WhatsApp" ? pick(FIRST) : appName;
+    const live = ago < 60 * 24 * 2 && rand() < 0.7;
+    notes.push(n(appId, appName, title, pick(bodies), ago, { live, removedAt: live ? null : now - ago * min + min }));
+  }
+  notes.sort((a, b) => b.receivedAt - a.receivedAt);
+  notes.forEach((x, i) => (x.id = 20000 - i));
+  history.splice(0, history.length, ...notes);
+  calls.splice(
+    0,
+    calls.length,
+    ...Array.from({ length: 120 }, (_, i): CallRecord => {
+      const p = pick(people);
+      return { direction: pick(["incoming", "outgoing", "missed"] as const), name: p.name, number: p.address, at: localIso(i * 47 + 3) };
+    }),
+  );
+  // The weather card on (Open-Meteo, fetched from the browser like the app does).
+  settings["ui.weather"] = JSON.stringify({ name: "Dallas, Texas", latitude: 32.78, longitude: -96.8 });
+}
+/** "+13025550142" → "(302) 555-0142", the way iOS titles a sender it has no name for. */
+function formatMockNumber(address: string): string {
+  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(address);
+  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : address;
+}
 
 // ?setup: a scripted first run, so onboarding can be walked end to end in a browser.
 // Pair → PIN → connected → the iPhone's three switches come on one by one → a first
