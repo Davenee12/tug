@@ -15,6 +15,30 @@ export const SKIP_SECONDS = 15;
 
 export const supportsSkipBack = (np: { available: readonly string[] }): boolean => lists(np, "skipBackward");
 export const supportsSkipForward = (np: { available: readonly string[] }): boolean => lists(np, "skipForward");
+
+/**
+ * How skip ±15 s is done for the current player: "ams" sends the phone's skip command, "seek" jumps
+ * through the Spotify connection, "none" hides the button. Spotify on the iPhone lists
+ * skipBackward/skipForward but treats them as track controls for music (Back 15 restarted the song
+ * from 0:00 on Jordan's iPhone, 2026-10-06), so for Spotify tug seeks instead, and only when it can.
+ */
+export type SkipMode = "ams" | "seek" | "none";
+export function skipMode(
+  np: { available: readonly string[]; player: string | null },
+  direction: "back" | "forward",
+  spotifySeekable: boolean,
+): SkipMode {
+  if (np.player === "Spotify") return spotifySeekable ? "seek" : "none";
+  const listed = direction === "back" ? supportsSkipBack(np) : supportsSkipForward(np);
+  return listed ? "ams" : "none";
+}
+
+/** Where a ±seconds jump lands, in ms, kept inside the song (short of its very end). */
+export function skipTargetMs(elapsedSec: number, deltaSec: number, durationSec: number | null): number {
+  let target = elapsedSec + deltaSec;
+  if (durationSec != null && durationSec > 0) target = Math.min(target, Math.max(0, durationSec - 1));
+  return Math.round(Math.max(0, target) * 1000);
+}
 export const supportsLike = (np: { available: readonly string[] }): boolean => lists(np, "likeTrack");
 export const supportsDislike = (np: { available: readonly string[] }): boolean => lists(np, "dislikeTrack");
 
