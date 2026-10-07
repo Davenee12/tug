@@ -428,6 +428,7 @@ mod tests {
             device: Some(crate::state::PairedDevice {
                 id: "BluetoothLE#BluetoothLEc8:8a:9a:f1:10:ac-6d:d3:61:db:5d:eb".into(),
                 name: "Dave James's iPhone".into(),
+                model: Some("iPhone16,2".into()),
             }),
             texts_device: Some("Dave James's iPhone".into()),
             ..Default::default()
