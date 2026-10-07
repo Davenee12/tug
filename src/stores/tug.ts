@@ -135,6 +135,9 @@ const EMPTY_NOW_PLAYING: NowPlaying = {
   available: [],
 };
 
+/** A send the iPhone didn't take; the message stays in the conversation with Retry. */
+const NOT_SENT = "Your iPhone didn't send that text. Use Retry when it's nearby.";
+
 export const useTugStore = defineStore("tug", () => {
   const status = ref<DeviceStatus>(EMPTY_STATUS);
   /** The backend's status has arrived; until then `status` is a placeholder that says "noDevice". */
@@ -1663,15 +1666,32 @@ export const useTugStore = defineStore("tug", () => {
     clearCode,
     deleteConversation,
     appNameFor,
-    /** Send through the iPhone. The pending message appears via the `message` event. */
-    async sendMessage(address: string, text: string): Promise<boolean> {
+    /**
+     * Send through the iPhone. The pending message appears via the `message` event. "failed" means
+     * it's shown as "Not sent" with Retry (so the composer shouldn't keep the text too); "error"
+     * means nothing was recorded, so the composer keeps the text.
+     */
+    async sendMessage(address: string, text: string): Promise<"sent" | "failed" | "error"> {
       try {
-        await api.sendMessage(address, text);
-        return true;
+        const m = await api.sendMessage(address, text);
+        if (m.status !== "failed") return "sent";
+        notify("error", NOT_SENT);
+        return "failed";
       } catch (e) {
         notify("error", errorMessage(e));
-        return false;
+        return "error";
       }
+    },
+    /** Try a failed send again: the same message, to the number it was meant for. */
+    async retryMessage(id: number): Promise<boolean> {
+      try {
+        const m = await api.retryMessage(id);
+        if (m.status !== "failed") return true;
+        notify("error", NOT_SENT);
+      } catch (e) {
+        notify("error", errorMessage(e));
+      }
+      return false;
     },
     performAction: (id: number, positive: boolean) => attempt(() => api.performAction(id, positive)),
     /** Open a notification's web link in the default browser. Never clears the notification. */

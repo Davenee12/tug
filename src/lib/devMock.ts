@@ -328,6 +328,7 @@ const sms = (
   receivedAt: now - agoMin * min,
   status: direction === "in" ? "received" : "accepted",
   msgType,
+  gapBefore: false,
 });
 const messages: SmsMessage[] = noPhone
   ? []
@@ -656,6 +657,14 @@ mockIPC(
         setTimeout(() => void emit("message", m), 0);
         setTimeout(() => void emit("message", { ...m, status: "accepted" }), 700);
         return m;
+      }
+      case "retry_message": {
+        const m = messages.find((x) => x.id === Number(a.id));
+        if (!m || m.status !== "failed") return Promise.reject("That message is already being sent");
+        Object.assign(m, { status: "pending", receivedAt: Date.now() });
+        setTimeout(() => void emit("message", { ...m }), 0);
+        setTimeout(() => void emit("message", Object.assign(m, { status: "accepted" })), 700);
+        return { ...m };
       }
       // A stand-in report so Settings › Copy diagnostics works in the browser. The real one is
       // built and redacted in Rust (src-tauri/src/diagnostics.rs).

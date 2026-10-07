@@ -49,6 +49,9 @@ pub mod keys {
     /// Unix ms of the last successful contact-photo pull (the slow WITH-PHOTO PBAP pass). Persisted
     /// so the photo pass runs at most once a day instead of on every connect and 15-min resync.
     pub const LAST_PHOTO_SYNC: &str = "last_photo_sync";
+    /// Unix ms of the last successful text sync, so a catch-up after time away can tell it may
+    /// have missed texts (see `map::service`), and the very first sync doesn't claim a gap.
+    pub const LAST_TEXT_SYNC: &str = "last_text_sync";
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]

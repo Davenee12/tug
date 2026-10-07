@@ -196,6 +196,13 @@ pub async fn send_message(state: State<'_, AppState>, address: String, text: Str
     map.send(address, text).await
 }
 
+/// Send a failed message again (the same message, to the same number).
+#[tauri::command]
+pub async fn retry_message(state: State<'_, AppState>, id: i64) -> Result<StoredMessage> {
+    let map = state.shared.map.get().cloned().ok_or("Message service isn't running")?;
+    map.retry(id).await
+}
+
 /// The phone's recent calls (PBAP call history), newest first.
 #[tauri::command]
 pub fn get_calls(state: State<'_, AppState>) -> Vec<CallRecord> {

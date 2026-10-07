@@ -31,6 +31,11 @@ pub enum MapCommand {
         text: String,
         reply: oneshot::Sender<Result<StoredMessage, String>>,
     },
+    /// Try a failed send again: the same stored message, to the same number.
+    Retry {
+        id: i64,
+        reply: oneshot::Sender<Result<StoredMessage, String>>,
+    },
     /// Experimental: open the iPhone's hands-free link and, given a number, dial it.
     /// Without one it's the check Settings runs before turning Call buttons on.
     Dial {
@@ -70,6 +75,14 @@ impl MapHandle {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(MapCommand::Send { address, text, reply })
+            .map_err(|_| "Message service stopped".to_string())?;
+        rx.await.map_err(|_| "Message service stopped".to_string())?
+    }
+
+    pub async fn retry(&self, id: i64) -> Result<StoredMessage, String> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(MapCommand::Retry { id, reply })
             .map_err(|_| "Message service stopped".to_string())?;
         rx.await.map_err(|_| "Message service stopped".to_string())?
     }
@@ -116,7 +129,7 @@ pub fn start(shared: Arc<Shared>) -> MapHandle {
         tauri::async_runtime::spawn(async move {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
-                    MapCommand::Send { reply, .. } => {
+                    MapCommand::Send { reply, .. } | MapCommand::Retry { reply, .. } => {
                         let _ = reply.send(Err("Messaging is only supported on Windows".into()));
                     }
                     MapCommand::Dial { reply, .. } => {
@@ -298,6 +311,12 @@ mod worker {
             connect_failures: 0,
             next_retry: None,
         };
+        // Nothing is sending yet, so a send still pending was cut off by a crash or quit.
+        match w.shared.store.fail_interrupted_sends() {
+            Ok(0) => {}
+            Ok(n) => log::info!("{n} interrupted send(s) marked not sent"),
+            Err(e) => log::warn!("checking interrupted sends failed: {e}"),
+        }
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
             Ok(0) => {}
@@ -322,6 +341,9 @@ mod worker {
                     // Wake for it: the next refresh pulls the calls once they're due.
                     Some(MapCommand::RefreshCalls(after)) => next = next.min(w.calls_soon(after)),
                     Some(MapCommand::MarkRead(ids)) => w.mark_read(&ids).await,
+                    Some(MapCommand::Retry { id, reply }) => {
+                        let _ = reply.send(w.retry(id).await);
+                    }
                     Some(MapCommand::Send { address, text, reply }) => {
                         let _ = reply.send(w.send(&address, &text).await);
                     }
@@ -636,7 +658,7 @@ mod worker {
         /// match is handle-first then newest-unconfirmed; see `mns::choose_outgoing`.
         async fn confirm_send(&mut self, handle: Option<&str>, status: Status) {
             let store = self.shared.store.clone();
-            let candidates = match store.outgoing_unconfirmed(SOURCE_IPHONE_MAP) {
+            let candidates = match store.outgoing_unconfirmed(SOURCE_IPHONE_MAP, now_ms()) {
                 Ok(c) => c,
                 Err(e) => return log::warn!("reading unconfirmed sends failed: {e}"),
             };
@@ -1036,6 +1058,25 @@ mod worker {
                 }
                 type_counts = Some((sms_gsm, im, other));
             }
+            // iOS lists only about the 10 newest texts, and paging further back finds nothing. When
+            // tug has synced before and every listed text is new, older texts from while tug was
+            // away may have fallen off that list: mark the oldest new one so the conversation says
+            // so rather than looking complete. (The first sync ever has no "before" to miss.)
+            let synced_before = shared.store.setting(keys::LAST_TEXT_SYNC)?.is_some();
+            let mut all_new = true;
+            for m in &listed {
+                if shared.store.has_message(SOURCE_IPHONE_MAP, &m.handle)? {
+                    all_new = false;
+                    break;
+                }
+            }
+            let mut mark_gap = may_have_missed(synced_before, listed.len(), all_new);
+            if mark_gap {
+                log::info!(
+                    "all {} listed texts are new; older ones may only be on the iPhone",
+                    listed.len()
+                );
+            }
             let mut added = 0;
             // Oldest first so arrival order matches the phone.
             for item in listed.iter().rev() {
@@ -1079,7 +1120,11 @@ mod worker {
                     unread_on_phone: !item.read,
                     msg_type: Some(item.msg_type.as_str()).filter(|t| !t.is_empty()),
                 })?;
-                if let Some(m) = stored {
+                if let Some(mut m) = stored {
+                    if mark_gap {
+                        m = shared.store.mark_gap_before(m.id)?;
+                        mark_gap = false;
+                    }
                     shared.emit(events::MESSAGE, m);
                     added += 1;
                 }
@@ -1093,6 +1138,7 @@ mod worker {
             }
             // Only once it all went through: a sync that failed partway looks back again.
             self.backfilled = true;
+            shared.store.set_setting(keys::LAST_TEXT_SYNC, &now_ms().to_string())?;
             // Once per change, not every poll (logged here, after the session borrow ends).
             if let Some(counts @ (sms_gsm, im, other)) = type_counts {
                 if self.last_type_counts != Some(counts) {
@@ -1148,34 +1194,60 @@ mod worker {
                 return Err("Type a message first".into());
             }
             let address = normalize(address);
-            let store = self.shared.store.clone();
-            let pending = store
+            let pending = self
+                .shared
+                .store
                 .insert_outgoing(SOURCE_IPHONE_MAP, &address, text, now_ms())
                 .map_err(|e| e.to_string())?;
-            self.shared.emit(events::MESSAGE, pending.clone());
+            self.deliver(pending).await
+        }
 
+        /// Send a failed message again: the same row, to the number it was meant for, so a retry
+        /// never duplicates it or goes to whichever number the conversation shows now.
+        async fn retry(&mut self, id: i64) -> Result<StoredMessage, String> {
+            let pending = self
+                .shared
+                .store
+                .retry_outgoing(id, now_ms())
+                .map_err(|e| e.to_string())?
+                .ok_or("That message is already being sent")?;
+            self.deliver(pending).await
+        }
+
+        /// Push a pending outgoing message to the phone and record how it went. A failure is
+        /// recorded on the message (shown as "Not sent" with Retry) and returned as `Ok`: the
+        /// error is only for when nothing was recorded, so the composer knows to keep the text.
+        async fn deliver(&mut self, pending: StoredMessage) -> Result<StoredMessage, String> {
+            let store = self.shared.store.clone();
+            self.shared.emit(events::MESSAGE, pending.clone());
             let result = match self.ensure().await {
-                Ok(session) => session.push_message(&address, text).await,
+                Ok(session) => session.push_message(&pending.address, &pending.body).await,
                 Err(e) => Err(e),
             };
-            let (status, handle, error) = match result {
-                Ok(handle) => (Status::Accepted, handle, None),
+            let (status, handle) = match result {
+                Ok(handle) => (Status::Accepted, handle),
                 Err(e) => {
                     log::warn!("send failed: {e}");
-                    let message = e.to_string();
                     self.fail(&e);
-                    (Status::Failed, None, Some(message))
+                    (Status::Failed, None)
                 }
             };
             let updated = store
                 .set_outgoing_status(pending.id, status, handle.as_deref())
                 .map_err(|e| e.to_string())?;
             self.shared.emit(events::MESSAGE, updated.clone());
-            match error {
-                Some(e) => Err(e),
-                None => Ok(updated),
-            }
+            Ok(updated)
         }
+    }
+
+    /// iOS lists about this many of the newest inbox texts, however many are asked for.
+    const PHONE_LIST_CAP: usize = 10;
+
+    /// Whether a sync may have missed texts: tug has synced before, the phone's list was full, and
+    /// every text on it was new, so older ones from while tug was away may have fallen off it.
+    /// Pure, so it's unit-tested.
+    fn may_have_missed(synced_before: bool, listed: usize, all_new: bool) -> bool {
+        synced_before && all_new && listed >= PHONE_LIST_CAP
     }
 
     /// Whether the contact-photo pass is due: never pulled before, or the last successful pull was
@@ -1245,7 +1317,7 @@ mod worker {
 
     #[cfg(test)]
     mod tests {
-        use super::{map_retry_delay, photo_sync_due, MAP_RETRY_CAP};
+        use super::{map_retry_delay, may_have_missed, photo_sync_due, MAP_RETRY_CAP};
         use std::time::Duration;
 
         #[test]
@@ -1259,6 +1331,21 @@ mod worker {
                 "never over the cap"
             );
             assert_eq!(map_retry_delay(0), Duration::from_secs(30), "no underflow at zero");
+        }
+
+        #[test]
+        fn a_full_list_of_new_texts_after_a_previous_sync_may_have_missed_some() {
+            assert!(may_have_missed(true, 10, true));
+            assert!(may_have_missed(true, 20, true));
+            assert!(
+                !may_have_missed(false, 10, true),
+                "first sync ever: nothing before to miss"
+            );
+            assert!(
+                !may_have_missed(true, 10, false),
+                "an already-known text means the list overlaps"
+            );
+            assert!(!may_have_missed(true, 4, true), "a short list is the whole inbox");
         }
 
         #[test]

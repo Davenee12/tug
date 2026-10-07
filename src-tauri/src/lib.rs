@@ -191,6 +191,7 @@ pub fn run() {
             commands::list_messages,
             commands::get_contacts,
             commands::send_message,
+            commands::retry_message,
             commands::refresh_messages,
             commands::copy_text,
             commands::set_hidden,
