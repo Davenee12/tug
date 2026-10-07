@@ -152,37 +152,31 @@ async fn run(command: Command) -> i32 {
     }
 }
 
-/// `tug boat <name>` for a name that isn't a file as given: the one file it most likely means, in
-/// this folder or Pictures\Tugboat (same name in any case, any extension if none was typed).
-/// Says which file it picked; lists the choices when there are several.
+/// `tug boat <name>` for a name that isn't a file as given: the one file it most likely means,
+/// in this folder, then anywhere Windows Search has indexed, then the usual folders (same name in
+/// any case, any extension if none was typed). Says which file it picked; lists the choices
+/// (newest first) when there are several. Nothing leaves the PC.
 fn resolve_loosely(name: &str) -> Result<String, i32> {
-    let mut dirs = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        dirs.push(cwd);
-    }
-    if let Some(boat) = lookup::tugboat_dir() {
-        dirs.push(boat);
-    }
-    match lookup::find(name, &dirs) {
+    let cwd = std::env::current_dir().ok();
+    match lookup::find(name, cwd.as_deref()) {
         lookup::Found::One(path) => {
             let path = path.to_string_lossy().into_owned();
             eprintln!("Using {path}");
             Ok(path)
         }
         lookup::Found::Many(paths) => {
-            eprintln!("More than one file could be {name}:");
+            eprintln!("Several files match; give the full path or a more exact name.");
             for p in paths.iter().take(lookup::LIST_AT_MOST) {
                 eprintln!("  {}", p.display());
             }
             if paths.len() > lookup::LIST_AT_MOST {
                 eprintln!("  …and {} more", paths.len() - lookup::LIST_AT_MOST);
             }
-            eprintln!("Give the full name or path of the one you mean.");
             Err(format::USAGE)
         }
         lookup::Found::None => {
             eprintln!(
-                "There's no file called {name} here or in Pictures\\Tugboat. Give the full path, e.g. tug boat \"C:\\path\\to\\file.jpg\""
+                "There's no file called {name} on this PC that tug could find. Give the full path, e.g. tug boat \"C:\\path\\to\\file.jpg\""
             );
             Err(format::USAGE)
         }
