@@ -10,9 +10,16 @@ const RESERVED: &[&str] = &[
     "LPT³", "CONIN$", "CONOUT$",
 ];
 
+/// Extensions Explorer hides even with "File name extensions" on, so a shortcut named like a
+/// photo would pass for one. These get `.download` added and won't run on a double-click.
+const ALWAYS_HIDDEN: &[&str] = &["lnk", "url", "pif", "scf", "library-ms", "searchconnector-ms"];
+const DOWNLOAD_SUFFIX: &str = ".download";
+
 /// The phone's name for a file → a plain file name that's safe to create in the Tugboat folder.
 /// Drops any folder parts, characters Windows forbids, control characters, trailing dots and
-/// spaces, and reserved device names (`CON`, `COM1`…), and keeps it a sensible length.
+/// spaces, and reserved device names (`CON`, `COM1`…); collapses runs of spaces (padding could
+/// push the real extension out of view); defuses always-hidden extensions; keeps it a sensible
+/// length.
 pub fn sanitize(name: &str) -> String {
     // Only the last path component, whichever separator the browser used.
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
@@ -26,19 +33,36 @@ pub fn sanitize(name: &str) -> String {
             c => c,
         })
         .collect();
-    let trimmed = cleaned.trim_start().trim_end_matches(['.', ' ']);
-    let mut out = if trimmed.trim_matches(['.', '_', ' ']).is_empty() {
-        "file".to_string()
+    let mut collapsed = String::with_capacity(cleaned.len());
+    for c in cleaned.chars() {
+        if c.is_whitespace() {
+            if !collapsed.ends_with(' ') {
+                collapsed.push(' ');
+            }
+        } else {
+            collapsed.push(c);
+        }
+    }
+    let trimmed = collapsed.trim_start().trim_end_matches(['.', ' ']);
+    let whole = if trimmed.trim_matches(['.', '_', ' ']).is_empty() {
+        "file"
     } else {
-        trimmed.to_string()
+        trimmed
     };
+    // Shorten first (leaving room for "_" and ".download"), then check what's left: shortening
+    // can itself produce a device name ("CON....x.txt" → "CON.txt").
+    let mut out = truncate(whole, MAX_LEN - 1 - DOWNLOAD_SUFFIX.len());
     // Windows treats "NUL.tar.gz" as the device too: check everything before the first dot.
     let stem = out.split('.').next().unwrap_or("");
     let device = stem.trim_end_matches(' ').to_ascii_uppercase();
     if RESERVED.iter().any(|r| r.to_uppercase() == device) {
         out.insert(0, '_');
     }
-    truncate(&out, MAX_LEN)
+    let lower = out.to_lowercase();
+    if ALWAYS_HIDDEN.iter().any(|ext| lower.ends_with(&format!(".{ext}"))) {
+        out.push_str(DOWNLOAD_SUFFIX);
+    }
+    out
 }
 
 /// `"IMG_1.HEIC"` → `("IMG_1", ".HEIC")`. A leading dot alone isn't an extension.
@@ -120,6 +144,33 @@ mod tests {
         assert_eq!(sanitize("CONSOLE.txt"), "CONSOLE.txt");
         assert_eq!(sanitize("aux .txt"), "_aux .txt");
         assert_eq!(sanitize("NUL.tar.gz"), "_NUL.tar.gz");
+    }
+
+    #[test]
+    fn collapses_padding_that_could_hide_an_extension() {
+        let padded = format!("IMG_0042.JPG{}.lnk", " ".repeat(60));
+        assert_eq!(sanitize(&padded), "IMG_0042.JPG .lnk.download");
+        assert_eq!(sanitize("a\u{00A0}\u{3000}  b.jpg"), "a b.jpg");
+    }
+
+    #[test]
+    fn defuses_extensions_explorer_always_hides() {
+        assert_eq!(sanitize("Holiday.url"), "Holiday.url.download");
+        assert_eq!(sanitize("Report.LNK"), "Report.LNK.download");
+        assert_eq!(sanitize("x.pif"), "x.pif.download");
+        assert_eq!(sanitize("x.scf"), "x.scf.download");
+        assert_eq!(sanitize("x.library-ms"), "x.library-ms.download");
+        assert_eq!(sanitize("x.searchconnector-ms"), "x.searchconnector-ms.download");
+        // Ordinary files are left alone, including look-alikes.
+        assert_eq!(sanitize("photo.jpg"), "photo.jpg");
+        assert_eq!(sanitize("lnk"), "lnk");
+        assert_eq!(sanitize("notes.lnkx"), "notes.lnkx");
+    }
+
+    #[test]
+    fn shortening_never_produces_a_device_name() {
+        let tricky = format!("CON{}x.txt", ".".repeat(300));
+        assert_eq!(sanitize(&tricky), "_CON.txt");
     }
 
     #[test]

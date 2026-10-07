@@ -242,6 +242,12 @@ async fn phone_session_over_a_socket() {
     assert_eq!(status, 200);
     assert_eq!(done.unwrap().saved_as, "IMG_0001.HEIC");
     assert_eq!(std::fs::read(folder.join("IMG_0001.HEIC")).unwrap(), data);
+    // Marked as downloaded from the internet, like a browser download (SmartScreen, Protected View).
+    #[cfg(windows)]
+    {
+        let zone = std::fs::read_to_string(format!("{}:Zone.Identifier", folder.join("IMG_0001.HEIC").display()));
+        assert!(zone.unwrap().contains("ZoneId=3"));
+    }
     assert!(session.snapshot().incoming[0].done);
     // A finish whose reply was lost is answered the same way; asking again reports it saved.
     let (_, again) = phone
@@ -266,7 +272,7 @@ async fn phone_session_over_a_socket() {
         .await;
     assert_eq!(done.unwrap().saved_as, "IMG_0001 (2).HEIC");
     assert_eq!(std::fs::read(folder.join("IMG_0001.HEIC")).unwrap(), data);
-    assert_eq!(session.sending(), 0);
+    assert_eq!(session.uploads_in_progress(), 0);
 
     // Too big for one file: refused up front.
     let huge = json!({ "name": "big.mov", "size": 9u64 << 30, "chunkSize": MIN_CHUNK });
@@ -335,18 +341,109 @@ async fn phone_session_over_a_socket() {
 }
 
 #[test]
-fn the_link_carries_the_bound_phone_after_a_network_change() {
+fn the_link_never_carries_a_client_id() {
     use std::net::Ipv4Addr;
     let secret = [0u8; 16];
     let ip = Ipv4Addr::new(192, 168, 1, 20);
     assert_eq!(
-        super::link(ip, 53211, &secret, None),
+        super::link(ip, 53211, &secret),
         "http://192.168.1.20:53211/#AAAAAAAAAAAAAAAAAAAAAA"
     );
-    assert_eq!(
-        super::link(ip, 53211, &secret, Some("phoneAAAAAAAAAAAAAAAAA")),
-        "http://192.168.1.20:53211/#AAAAAAAAAAAAAAAAAAAAAA.phoneAAAAAAAAAAAAAAAAA"
+}
+
+#[tokio::test]
+async fn after_unbind_a_new_phone_binds_and_the_old_one_is_refused() {
+    let root = temp_dir();
+    let secret = crypto::new_secret();
+    let session = Arc::new(Session::new(
+        &secret,
+        root.join("Tugboat"),
+        root.join("incoming"),
+        Arc::new(TestSink::default()),
+    ));
+    let (addr, stop, server) = start_server(session.clone(), server::Limits::default()).await;
+    let mut first = Phone::new(addr, &secret, "firstAAAAAAAAAAAAAAAAA");
+    assert_eq!(first.raw("GET", "/api/state", Vec::new()).await.status, 200);
+    let old_seq = first.seq;
+    // The address changed (a new browser origin): the next phone to scan binds.
+    session.unbind();
+    assert!(session.snapshot().phone.is_none(), "the panel goes back to waiting");
+    let mut second = Phone::new(addr, &secret, "secondAAAAAAAAAAAAAAAA");
+    second.seq = first.seq + 1000;
+    assert_eq!(second.raw("GET", "/api/state", Vec::new()).await.status, 200);
+    assert_eq!(first.raw("GET", "/api/state", Vec::new()).await.status, 403);
+    // A sequence number from before the unbind is still a replay.
+    let header = auth::header(&second.keys, &second.client, old_seq, "GET", "/api/state");
+    assert_eq!(send(addr, "GET", "/api/state", Some(header), Vec::new()).await.0, 409);
+    let _ = stop.send(());
+    server.await.unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[tokio::test]
+async fn slow_or_excess_connections_are_closed() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let root = temp_dir();
+    let session = Arc::new(Session::new(
+        &crypto::new_secret(),
+        root.join("Tugboat"),
+        root.join("incoming"),
+        Arc::new(TestSink::default()),
+    ));
+    let limits = server::Limits {
+        header_timeout: std::time::Duration::from_millis(300),
+        body_timeout: std::time::Duration::from_millis(300),
+        max_connections: 2,
+    };
+    let (addr, stop, server) = start_server(session, limits).await;
+    let closed_within = |mut s: TcpStream, secs: u64| async move {
+        let mut buf = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(secs), s.read_to_end(&mut buf))
+            .await
+            .is_ok()
+    };
+    // Half a request head, then nothing (slowloris): closed once the header timeout passes.
+    let mut slow = TcpStream::connect(addr).await.unwrap();
+    slow.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n").await.unwrap();
+    // Fill the other slot, then a third connection is turned away at once.
+    let mut second = TcpStream::connect(addr).await.unwrap();
+    second.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let third = TcpStream::connect(addr).await.unwrap();
+    assert!(closed_within(third, 1).await, "over the cap: closed straight away");
+    assert!(
+        closed_within(slow, 3).await,
+        "a stalled head is closed by the header timeout"
     );
+    assert!(closed_within(second, 3).await);
+    // The server still answers afterwards.
+    assert_eq!(send(addr, "GET", "/", None, Vec::new()).await.0, 200);
+    let _ = stop.send(());
+    server.await.unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Start a server on 127.0.0.1 with the given limits; returns its address, a stop switch and the task.
+async fn start_server(
+    session: Arc<Session>,
+    limits: server::Limits,
+) -> (
+    SocketAddr,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(server::serve_with(
+        listener,
+        session,
+        async {
+            let _ = rx.await;
+        },
+        limits,
+    ));
+    (addr, tx, task)
 }
 
 /// Not a test: serves the real built page (`npm run build:tugboat` first) on 127.0.0.1 for a few

@@ -53,9 +53,11 @@ impl Auth {
         self.bound.is_some()
     }
 
-    /// The client id the session is bound to, if a phone has connected.
-    pub fn bound_client(&self) -> Option<String> {
-        self.bound.clone()
+    /// Forget which phone the session belongs to, so the next one to scan the code binds it. Used
+    /// when the advertised address changes: that's a new browser origin, so even the same phone
+    /// comes back with a new client id. Replay state is kept, so nothing seen before works again.
+    pub fn unbind(&mut self) {
+        self.bound = None;
     }
 
     pub fn check(
@@ -197,5 +199,26 @@ mod tests {
         assert_eq!(req(&mut a, base + 25), Err(Rejected::Replayed));
         // The seen set doesn't grow without bound.
         assert!(a.seen.len() <= 2);
+    }
+
+    #[test]
+    fn after_an_origin_change_the_next_phone_binds_and_replays_stay_refused() {
+        let k = keys();
+        let mut a = Auth::new();
+        let base = 1_800_000_000_000 * 1024;
+        let req = |a: &mut Auth, client: &str, seq: u64| {
+            let h = header(&k, client, seq, "GET", "/api/state");
+            a.check(&k, Some(&h), "GET", "/api/state")
+        };
+        assert!(req(&mut a, PHONE, base + 1).unwrap().first);
+        // The address changed: whoever scans the new code next is the phone (a new origin means a
+        // new client id, even for the same phone).
+        a.unbind();
+        assert!(!a.bound());
+        assert!(req(&mut a, OTHER, base + 100).unwrap().first);
+        // The old client is now the other device.
+        assert_eq!(req(&mut a, PHONE, base + 200), Err(Rejected::OtherDevice));
+        // Replay protection survived the unbind: a sequence number already used is still refused.
+        assert_eq!(req(&mut a, OTHER, base + 1), Err(Rejected::Replayed));
     }
 }

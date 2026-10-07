@@ -2,6 +2,7 @@
 //! HTTP handlers (`server.rs`) and the Tauri glue (`mod.rs`) both work through this; nothing here
 //! knows about Tauri, so the integration test can run a whole session over a socket.
 
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -29,6 +30,11 @@ const MAX_TEXTS: usize = 20;
 const DISK_MARGIN: u64 = 256 * 1024 * 1024;
 /// The page polls every ~2 s while it's on screen; quieter than this and it's in the background.
 const ACTIVE: Duration = Duration::from_secs(8);
+/// A transfer counts as moving while its chunks keep coming at least this often.
+const MOVING: Duration = Duration::from_secs(15);
+/// Mark-of-the-Web: files from the phone are treated like downloads from the internet, so
+/// SmartScreen checks programs and Office opens documents in Protected View.
+const ZONE_IDENTIFIER: &str = "[ZoneTransfer]\r\nZoneId=3\r\n";
 
 /// What the session tells the outside world.
 pub trait Sink: Send + Sync {
@@ -203,6 +209,8 @@ pub struct Snapshot {
     pub outgoing: Vec<TugboatOffer>,
     pub texts: Vec<TugboatText>,
     pub sent_text: Option<String>,
+    /// The phone is downloading a file from the PC right now.
+    pub sending: bool,
 }
 
 /// A file offered to the phone that couldn't be added, and why (for the panel's message).
@@ -251,6 +259,10 @@ struct State {
     phone: Option<String>,
     last_seen: Option<Instant>,
     last_activity: Instant,
+    /// When the last chunk from the phone was written.
+    last_upload: Option<Instant>,
+    /// Files the phone is part-way through downloading, and when it last fetched a chunk.
+    downloading: HashMap<String, Instant>,
     uploads: Vec<Upload>,
     offers: Vec<Offer>,
     texts: Vec<TugboatText>,
@@ -290,6 +302,8 @@ impl Session {
                 phone: None,
                 last_seen: None,
                 last_activity: Instant::now(),
+                last_upload: None,
+                downloading: HashMap::new(),
                 uploads: Vec::new(),
                 offers: Vec::new(),
                 texts: Vec::new(),
@@ -327,9 +341,27 @@ impl Session {
         self.state().last_activity.elapsed()
     }
 
-    /// The client id of the phone bound to this session, if one has connected.
-    pub fn bound_client(&self) -> Option<String> {
-        self.state().auth.bound_client()
+    /// The advertised address changed: the next phone to scan the new code becomes the phone (it
+    /// arrives as a new browser origin, so even the same phone has a new client id). The panel goes
+    /// back to waiting; replay protection carries on.
+    pub fn unbind(&self) {
+        let mut st = self.state();
+        st.auth.unbind();
+        st.phone = None;
+        st.last_seen = None;
+        drop(st);
+        self.sink.changed(true);
+    }
+
+    /// The phone is downloading a file from the PC right now.
+    pub fn sending(&self) -> bool {
+        self.state().downloading.values().any(|t| t.elapsed() < MOVING)
+    }
+
+    /// Files are moving either way right now (chunks arriving or being fetched).
+    pub fn transferring(&self) -> bool {
+        let st = self.state();
+        st.last_upload.is_some_and(|t| t.elapsed() < MOVING) || st.downloading.values().any(|t| t.elapsed() < MOVING)
     }
 
     pub fn phone_active(&self) -> bool {
@@ -469,6 +501,13 @@ impl Session {
             .map_err(|e| io_err("create a partial file", e))?;
         // Reserve the space up front, so a full disk shows now rather than at 90%.
         part.set_len(req.size).map_err(|e| io_err("size a partial file", e))?;
+        // Tugboat closed while this was being set up: close() runs before the folder is cleaned,
+        // so checking now can't miss it. Don't leave a pre-sized partial behind.
+        if self.is_closed() {
+            drop(part);
+            let _ = fs::remove_file(self.part_path(id));
+            return Err(ApiError::Closed);
+        }
         let chunks = plan.chunks();
         let mut st = self.state();
         // Lost a race with the same request? Keep the first.
@@ -526,6 +565,7 @@ impl Session {
         if u.received.mark(index) {
             u.bytes += expected as u64;
         }
+        st.last_upload = Some(Instant::now());
         drop(st);
         self.sink.changed(false);
         Ok(())
@@ -556,13 +596,14 @@ impl Session {
         // Replaces the empty placeholder `reserve_name` created, which is what makes the name ours.
         // Across drives a rename can't work (ERROR_NOT_SAME_DEVICE), so copy instead.
         let moved = match fs::rename(&part, &final_path) {
-            Err(e) if e.raw_os_error() == Some(17) => fs::copy(&part, &final_path).and_then(|_| fs::remove_file(&part)),
+            Err(e) if e.raw_os_error() == Some(17) => self.copy_across_drives(id, &part, &final_path),
             other => other,
         };
         if let Err(e) = moved {
             let _ = fs::remove_file(&final_path);
             return Err(io_err("save a received file", e));
         }
+        mark_from_internet(&final_path);
         log::info!("tugboat: saved a file from the phone ({size} bytes)");
         let mut st = self.state();
         if let Some(u) = st.uploads.iter_mut().find(|u| u.id == id) {
@@ -574,6 +615,30 @@ impl Session {
         drop(st);
         self.sink.changed(true);
         Ok(FinishReply { saved_as: final_name })
+    }
+
+    /// Pictures is on another drive: copy into a hidden temp file next to the destination, then
+    /// rename that over the reserved name, so the real name never holds a half-copied file (and a
+    /// crash mid-copy leaves only a temp file, swept on the next start).
+    fn copy_across_drives(&self, id: &str, part: &Path, final_path: &Path) -> std::io::Result<()> {
+        let tmp = self.folder.join(format!("{TEMP_PREFIX}{id}{TEMP_SUFFIX}"));
+        let copied = fs::copy(part, &tmp).and_then(|_| {
+            set_hidden(&tmp, true);
+            fs::rename(&tmp, final_path)
+        });
+        if let Err(e) = copied {
+            let _ = fs::remove_file(&tmp);
+            return Err(e);
+        }
+        set_hidden(final_path, false);
+        // The file is saved; a partial that won't delete is cleaned up when Tugboat closes.
+        if let Err(e) = fs::remove_file(part) {
+            log::warn!(
+                "tugboat: couldn't remove a partial file after copying it: {:?}",
+                e.kind()
+            );
+        }
+        Ok(())
     }
 
     /// Claim a free name in the Tugboat folder by creating it empty (`create_new` fails if another
@@ -625,12 +690,22 @@ impl Session {
             .and_then(|_| f.read_exact(&mut buf))
             .map_err(|_| ApiError::Changed)?;
         let sealed = self.keys.seal(&ad::down(id, index), &buf);
-        if index + 1 == plan.chunks() {
-            let mut st = self.state();
+        let mut st = self.state();
+        let urgent = if index + 1 == plan.chunks() {
+            st.downloading.remove(id);
             if let Some(o) = st.offers.iter_mut().find(|o| o.id == id) {
                 o.downloads += 1;
             }
-            drop(st);
+            log::info!("tugboat: phone downloaded a file ({size} bytes)");
+            true
+        } else {
+            // The first chunk (or the first after a pause) tells the panel a download is on.
+            let was_moving = st.downloading.get(id).is_some_and(|t| t.elapsed() < MOVING);
+            st.downloading.insert(id.to_string(), Instant::now());
+            !was_moving
+        };
+        drop(st);
+        if urgent {
             self.sink.changed(true);
         }
         Ok(sealed)
@@ -657,6 +732,7 @@ impl Session {
         );
         st.texts.truncate(MAX_TEXTS);
         drop(st);
+        log::info!("tugboat: text from the phone ({} chars)", text.chars().count());
         self.sink.text(&text);
         self.sink.changed(true);
         Ok(())
@@ -801,12 +877,13 @@ impl Session {
                 .collect(),
             texts: st.texts.clone(),
             sent_text: st.pc_text.as_ref().map(|t| t.text.clone()),
+            sending: st.downloading.values().any(|t| t.elapsed() < MOVING),
         }
     }
 
     /// Files still arriving (the panel asks before closing over them).
     #[cfg(test)]
-    pub fn sending(&self) -> usize {
+    pub fn uploads_in_progress(&self) -> usize {
         self.state()
             .uploads
             .iter()
@@ -822,6 +899,57 @@ fn offer_plan(size: u64) -> Plan {
         chunk_size: OFFER_CHUNK,
     }
 }
+
+/// Temp files from a cross-drive save are `~$<id>.tugboat.tmp` in the Tugboat folder.
+const TEMP_PREFIX: &str = "~$";
+const TEMP_SUFFIX: &str = ".tugboat.tmp";
+
+/// Remove temp files a crash left mid-copy in the Tugboat folder (cross-drive saves).
+pub fn sweep_temp(folder: &Path) {
+    let Ok(entries) = fs::read_dir(folder) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(TEMP_PREFIX) && name.ends_with(TEMP_SUFFIX) {
+            if let Err(e) = fs::remove_file(entry.path()) {
+                log::warn!("tugboat: couldn't remove a leftover temp file: {:?}", e.kind());
+            }
+        }
+    }
+}
+
+/// Write the Mark-of-the-Web next to a received file (see `ZONE_IDENTIFIER`). FAT and exFAT
+/// drives can't hold it; that's logged, not fatal.
+#[cfg(windows)]
+fn mark_from_internet(path: &Path) {
+    let stream = format!("{}:Zone.Identifier", path.display());
+    if let Err(e) = fs::write(stream, ZONE_IDENTIFIER) {
+        log::warn!("tugboat: couldn't mark a received file as downloaded: {:?}", e.kind());
+    }
+}
+
+#[cfg(not(windows))]
+fn mark_from_internet(_path: &Path) {
+    let _ = ZONE_IDENTIFIER;
+}
+
+/// Set or clear the hidden attribute (the cross-drive temp file is hidden while it exists).
+#[cfg(windows)]
+fn set_hidden(path: &Path, hidden: bool) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_NORMAL};
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let attrs = if hidden {
+        FILE_ATTRIBUTE_HIDDEN
+    } else {
+        FILE_ATTRIBUTE_NORMAL
+    };
+    // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the call.
+    let _ = unsafe { SetFileAttributesW(PCWSTR(wide.as_ptr()), attrs) };
+}
+
+#[cfg(not(windows))]
+fn set_hidden(_path: &Path, _hidden: bool) {}
 
 /// Remove unfinished uploads (an abandoned or crashed session's `.part` files).
 pub fn clean_incoming(dir: &Path) {
@@ -925,5 +1053,22 @@ mod tests {
         assert_eq!(ApiError::Closed.status(), 410);
         assert_eq!(ApiError::InUse.status(), 403);
         assert_eq!(ApiError::NoSpace.code(), "no-space");
+    }
+
+    #[test]
+    fn sweeps_only_leftover_cross_drive_temp_files() {
+        let dir = std::env::temp_dir().join(format!("tugboat-sweep-{}", crypto::new_id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("~$fileAAAAAAAAAAAAAAAAAA.tugboat.tmp"), b"half a copy").unwrap();
+        fs::write(dir.join("~$report.docx"), b"office lock file").unwrap();
+        fs::write(dir.join("IMG_0001.HEIC"), b"a photo").unwrap();
+        sweep_temp(&dir);
+        let mut left: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, vec!["IMG_0001.HEIC".to_string(), "~$report.docx".to_string()]);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

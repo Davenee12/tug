@@ -815,14 +815,12 @@ pub fn tugboat_status(state: State<'_, AppState>) -> TugboatStatus {
     state.tugboat.status()
 }
 
-/// Offer files to the phone (dragged onto tug), opening Tugboat first if needed. Returns the ones
-/// that couldn't be offered (folders, over 1 GB, unreadable).
+/// "Copy link" in the Tugboat panel: the QR link, kept out of clipboard history and sync. Sync on
+/// purpose, like `copy_text`: the WinRT clipboard needs the main (STA) thread. (Files dropped onto
+/// tug are offered from Rust, in lib.rs; no command takes a path from the page.)
 #[tauri::command]
-pub async fn tugboat_offer_files(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec<Skipped>> {
-    state
-        .tugboat
-        .offer(paths.into_iter().map(std::path::PathBuf::from).collect())
-        .await
+pub fn tugboat_copy_link(state: State<'_, AppState>) -> Result<()> {
+    state.tugboat.copy_link()
 }
 
 /// "Choose files" in the Tugboat panel: Windows' file picker, then offer what was picked.
