@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { askerName, countdown, lastUsedLabel, PERMISSION_HELP, secondsLeft, setupSnippets } from "./devtools";
+import { askerName, countdown, lastUsedLabel, PERMISSION_HELP, secondsLeft, sendArmed, setupSnippets, tomlString } from "./devtools";
 
 const CLI = "C:\\Users\\Pat\\AppData\\Local\\tug\\bin\\tug.exe";
 
@@ -20,6 +20,21 @@ describe("setupSnippets", () => {
   it("uses a TOML literal string for Codex so backslashes survive", () => {
     expect(byId.codex.code).toContain(`command = '${CLI}'`);
     expect(byId.codex.code).toContain('args = ["mcp"]');
+  });
+
+  it("keeps a path with an apostrophe intact for Codex", () => {
+    const odd = "C:\\Users\\O'Brien\\AppData\\Local\\tug\\bin\\tug.exe";
+    expect(tomlString(odd)).toBe('"C:\\\\Users\\\\O\'Brien\\\\AppData\\\\Local\\\\tug\\\\bin\\\\tug.exe"');
+    // TOML basic strings unescape like JSON for these characters.
+    expect(JSON.parse(tomlString(odd))).toBe(odd);
+  });
+});
+
+describe("the send button", () => {
+  it("waits a moment and needs tug's window in front", () => {
+    expect(sendArmed(0, 1000, true)).toBe(false);
+    expect(sendArmed(0, 1500, true)).toBe(true);
+    expect(sendArmed(0, 60_000, false)).toBe(false);
   });
 });
 

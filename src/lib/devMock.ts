@@ -551,7 +551,7 @@ if (dropOn || dropWait || dropNoNet) {
 
 // --- Developer tools (?devtools, ?devconfirm) ---
 const DEV_LABELS: Array<[DevToolsStatus["permissions"][number]["key"], string, boolean]> = [
-  ["codes", "Verification codes", true],
+  ["codes", "Verification codes", false],
   ["search", "Search texts and notifications", true],
   ["dev_notifications", "Developer notifications", true],
   ["tugboat_files", "Files from Tugboat", true],

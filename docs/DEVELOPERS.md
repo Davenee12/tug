@@ -24,7 +24,7 @@ Settings › Developer tools shows these with your real path filled in and a Cop
 
 | Tool | What it does | Switch (default once on) |
 |---|---|---|
-| `get_latest_code` | Newest verification code from the last 10 minutes, with sender, app and age | Verification codes (on) |
+| `get_latest_code` | Newest verification code from the last 10 minutes, with sender, app and age | Verification codes (**off**: a code is a key to an account, so it's opt-in) |
 | `search_messages` | Search texts and notifications (`query`, `limit` ≤ 50, `since`) | Search (on) |
 | `recent_dev_notifications` | Notifications from GitHub (incl. Actions), Slack, Linear, Jira, Sentry, PagerDuty, Vercel, Netlify (`since`, default 24 h) | Developer notifications (on) |
 | `list_tugboat_files` | Files received with Tugboat (`Pictures\Tugboat`), newest first | Files from Tugboat (on) |
@@ -58,18 +58,31 @@ The `bin` folder keeps the command named `tug.exe` without clashing with the app
 
 ## Safety
 
-- **Local only.** A Windows named pipe (`\\.\pipe\tug-bridge-<hash>`) whose ACL lets only your
-  Windows user in; remote clients are refused. No network port.
+- **Local only.** A Windows named pipe (`\\.\pipe\tug-bridge-<hash>`) owned by your Windows user,
+  whose ACL lets only that user in; remote clients are refused. No network port.
 - **A token, never sent.** tug keeps a random per-install token in
-  `%LOCALAPPDATA%\dev.davejames.tug\bridge.token` (readable by your user only). Each call, tug
-  and the client prove they both hold it (HMAC over fresh nonces); the token itself never crosses
-  the pipe, so something squatting the pipe name while tug is closed learns nothing. Anything
-  running as you can read the file, so the master switch is the real off switch.
+  `%LOCALAPPDATA%\dev.davejames.tug\bridge.token`: readable by your user only, and labelled
+  medium integrity with no-read-up, so sandboxed (low-integrity) programs running as you can't
+  read it either. Each call, tug and the client prove they both hold it (HMAC over fresh
+  nonces); the token itself never crosses the pipe.
+- **Impostors are refused.** Before saying anything, the client checks the pipe it opened is
+  owned by your user and was made at normal (medium) integrity or above, as tug's is; a pipe made
+  by another user or a sandboxed program while tug is closed is refused. Until tug has proved it
+  holds the token, nothing it sends is shown: an early "off" or "wrong version" picks one of the
+  client's own sentences, and anything else counts as an impostor. Programs running as you at
+  normal integrity can read the token like any of your files, so the master switch is the real
+  off switch.
+- **Other people's words are data.** Texts, notifications, sender and file names are written by
+  others. The MCP server's instructions and tool descriptions say so, and results that carry them
+  come wrapped as `{"note": "Untrusted content…", "results": [...]}`, so a message saying
+  "ignore your instructions" is reported, not obeyed. Reading tools that return such content are
+  marked open-world; `send_text` is marked destructive.
 - **Revoke access** writes a new token: AI tools already running get "access was revoked" until
   they're restarted, and the Connected tools list starts over.
 - **Texts are always confirmed.** `send_text` and `tug text` only ever show the card; one at a
-  time; focus starts on Don't send and Esc means Don't send; a click after the 2 minutes never
-  sends.
+  time; focus starts on Don't send and Esc means Don't send; Send stays disabled for 1.5 s after
+  the card appears and whenever tug's window isn't in front; an answer only counts for the card
+  it was given on; a click after the 2 minutes never sends; a message longer than the box says so.
 - **Rate limits** per tool (e.g. 60/min for reads, 5 texts per 10 minutes).
 - **Logged without content:** tug.log gets the tool name, who asked, outcome and a count.
 - **Off means off:** while the switch is off the pipe only waits and answers "off" — no
