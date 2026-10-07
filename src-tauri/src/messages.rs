@@ -656,7 +656,7 @@ mod tests {
         s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
         notify(&s, 1, "zoe 💜", "omw", 1_000);
         notify(&s, 2, "zoe 💜 replied to you", "Yes", 2_000);
-        // Dave takes the heart off her name on the phone; the next contacts sync brings it over.
+        // The contact is renamed on the phone (heart dropped); the next contacts sync brings it over.
         s.save_phonebook(&[("+13025550173".into(), "zoe".into())]).unwrap();
         notify(&s, 3, "zoe", "hi again", 3_000);
         assert_eq!(
@@ -941,13 +941,13 @@ mod tests {
         s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
         let n = s
             .save_phonebook(&[
-                ("+13025550173".into(), "Zoe Jones".into()),
+                ("+13025550173".into(), "Zoe Park".into()),
                 ("+12145550186".into(), "Priya".into()),
             ])
             .unwrap();
         assert_eq!(n, 2);
         let names: Vec<String> = s.contacts().unwrap().into_iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["Priya", "Zoe Jones"]);
+        assert_eq!(names, vec!["Priya", "Zoe Park"]);
     }
 
     #[test]

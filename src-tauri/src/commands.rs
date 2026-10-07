@@ -367,7 +367,7 @@ pub fn open_url(url: String) -> Result<()> {
 }
 
 /// Hand a web address to Windows to open in the default browser. Not `explorer.exe <url>`:
-/// on Dave's PC that opened File Explorer for addresses with a query (`?q=…`).
+/// on the test PC that opened File Explorer for addresses with a query (`?q=…`).
 #[cfg(windows)]
 pub(crate) fn open_in_browser(url: &str) -> Result<()> {
     use windows::core::{w, HSTRING, PCWSTR};
@@ -435,7 +435,7 @@ pub fn copy_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
     use tauri::Manager;
 
     let status = state.shared.status();
-    // The phone's name often names a person ("My iPhone"): keep it out of the report.
+    // The phone's name often names a person ("Jordan's iPhone"): keep it out of the report.
     let phone_names: Vec<String> = status
         .device
         .iter()

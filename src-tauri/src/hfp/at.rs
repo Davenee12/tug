@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(dial("*67 72975#").unwrap(), "ATD*6772975#;\r");
         assert_eq!(dial("  "), Err(NumberError::Empty));
         assert_eq!(dial("+"), Err(NumberError::Empty));
-        assert_eq!(dial("zoe@example.com"), Err(NumberError::BadChar('t')));
+        assert_eq!(dial("zoe@example.com"), Err(NumberError::BadChar('z')));
         assert_eq!(dial("555;ATH"), Err(NumberError::BadChar(';')), "no command injection");
         assert_eq!(dial("1+2"), Err(NumberError::BadChar('+')));
         assert_eq!(dial(&"1".repeat(40)), Err(NumberError::TooLong));

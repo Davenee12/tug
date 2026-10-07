@@ -3,8 +3,8 @@
 ## v0.5.10 — 2026-10-06
 
 Bug fixing only (every fifth release is a stabilization release). Merged as #77, #79–#81, after an
-independent code review whose five blocks were all fixed before merge. Built and checked; Dave's
-hands-on testing on the iPhone follows.
+independent code review whose five blocks were all fixed before merge. Built and checked; hands-on
+testing on the iPhone follows.
 
 ### Fixed
 - **No more all-night reconnect loops.** When the iPhone is locked after a restart, tug shows
@@ -46,7 +46,7 @@ hands-on testing on the iPhone follows.
 ## v0.5.9 — 2026-10-05
 
 Easier connecting, a full Spotify panel, quiet hours, and contact photos. Merged as #63–#75.
-Tried on Jordan's iPhone where noted; Spotify search was built and reviewed but Spotify's rate limit
+Tried on a real iPhone where noted; Spotify search was built and reviewed but Spotify's rate limit
 blocked a live test tonight.
 
 ### New
@@ -61,8 +61,8 @@ blocked a live test tonight.
 - **Quiet hours, app mute and VIPs** in Settings › Notifications: hold pop-ups on a schedule, mute
   pop-ups per app, and let chosen people always get through. Calls still ring unless you turn on
   Mute calls.
-- **Contact photos** from your iPhone in Messages, Calls, the Feed and Ctrl+K. *(27 photos came
-  through on Jordan's iPhone.)*
+- **Contact photos** from your iPhone in Messages, Calls, the Feed and Ctrl+K. *(Tried on a real
+  iPhone.)*
 - **More music controls:** skip back/forward 15 seconds, and Like/Dislike in Apple Music, shown only
   when the player supports them.
 - **What's new** card once after each update, and in Settings › About.
@@ -87,7 +87,7 @@ blocked a live test tonight.
 
 ## v0.5.8 — 2026-10-05
 
-Smoother setup, texts that arrive instantly, and Spotify. Merged as #48–#61; tried on Dave's
+Smoother setup, texts that arrive instantly, and Spotify. Merged as #48–#61; tried on a real
 iPhone where noted.
 
 ### New
@@ -95,19 +95,19 @@ iPhone where noted.
   tug lists it by name; click Pair, the code shows in tug, and that one pairing brings
   notifications, music, battery and texts. No LightBlue needed. Tapping the PC on the iPhone (or
   Windows' "Add a device" pop-up) still works: tug says Windows will show the code, then offers
-  your iPhone. *(Both paths proven on Jordan's iPhone, including two setups from a clean install.)*
+  your iPhone. *(Both paths proven on a real iPhone, including two setups from a clean install.)*
 - **Setup tells you what to do:** "Look at your iPhone and tap Allow" while the phone waits on
   you, a checklist of the iPhone's three switches naming the one that's off, a confirmed
   **Start over** for old or duplicate pairings, and your phone's real name instead of "iPhone".
 - **Texts arrive the moment your phone gets them** (live texts), with **Sending… → Sent** on
   texts you send. If the phone drops the link, tug reconnects by itself; checking every few
-  seconds stays as a backstop. *(Connected and held on Jordan's iPhone.)*
+  seconds stays as a backstop. *(Connected and held on a real iPhone.)*
 - **Codes that arrive as texts show in the Feed** with a **Copy code** button, even when the
   iPhone showed no banner, and pop up in Windows.
 - **Settings › Connectors**, starting with **Spotify**: click Connect and sign in. Then your
   playlists (with covers) play on your iPhone, repeat and shuffle work, Like the current song,
   album art on Now Playing, and Ctrl+K "play <playlist>". If Spotify is closed on the iPhone, tug
-  asks you to open it and starts the playlist as soon as it's open. *(Tried on Dave's account.)*
+  asks you to open it and starts the playlist as soon as it's open. *(Tried on a real account.)*
 
 ### Fixed
 - The Feed keeps your place when notifications come and go; Messages opens on the newest text
@@ -130,8 +130,8 @@ iPhone where noted.
 
 ## v0.5.7 — 2026-10-05
 
-tug feels built into Windows, plus a full stabilization pass. Media keys verified on Jordan's iPhone;
-the rest is built and checked, with Dave's hands-on testing continuing.
+tug feels built into Windows, plus a full stabilization pass. Media keys verified on a real iPhone;
+the rest is built and checked, with hands-on testing continuing.
 
 ### New
 - **Act from the Windows pop-up:** reply to a text right in the notification, Mark read, Copy code,
@@ -169,7 +169,7 @@ the rest is built and checked, with Dave's hands-on testing continuing.
 
 ## v0.5.6 — 2026-10-05
 
-Calls, real app icons and a steadier connection. Tested on Jordan's iPhone.
+Calls, real app icons and a steadier connection. Tested on a real iPhone.
 
 ### New
 - **Incoming calls ring as a card over tug:** the caller's name large, rings rippling out, how long

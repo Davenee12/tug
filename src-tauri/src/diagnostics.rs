@@ -59,7 +59,7 @@ pub fn redact(text: &str) -> String {
     redact_emails(&redact_number_runs(&redact_bluetooth_addresses(text)))
 }
 
-/// Mask the phone's own name(s) (e.g. "My iPhone" names a person) wherever they appear.
+/// Mask the phone's own name(s) (e.g. "Jordan's iPhone" names a person) wherever they appear.
 pub fn redact_names(text: &str, names: &[String]) -> String {
     let mut out = text.to_string();
     for name in names.iter().map(|n| n.trim()).filter(|n| n.len() >= 3) {
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn masks_email_addresses_but_keeps_punctuation() {
-        assert_eq!(redact("to dave.james@example.com please"), "to [email] please");
+        assert_eq!(redact("to jordan.lee@example.com please"), "to [email] please");
         assert_eq!(redact("<someone@example.com>"), "<[email]>");
         assert_eq!(redact("ping a@b.co, thanks"), "ping [email], thanks");
     }
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn redacts_a_realistic_log_line() {
-        let line = "2026-10-05T10:11:12 [INFO] message from +13025550142 to dave@example.com saved";
+        let line = "2026-10-05T10:11:12 [INFO] message from +13025550142 to jordan@example.com saved";
         assert_eq!(
             redact(line),
             "2026-10-05T10:11:12 [INFO] message from [number] to [email] saved"

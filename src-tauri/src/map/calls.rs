@@ -142,7 +142,7 @@ mod tests {
     fn parses_a_combined_list_in_either_vcard_version() {
         let raw = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Zoe\r\nN:;Zoe;;;\r\nTEL;TYPE=CELL:+1 (302) 555-0142\r\n\
                    X-IRMC-CALL-DATETIME;TYPE=MISSED:20261005T093012\r\nEND:VCARD\r\n\
-                   BEGIN:VCARD\r\nVERSION:2.1\r\nN:Smith;Dave\r\nTEL:2145550199\r\n\
+                   BEGIN:VCARD\r\nVERSION:2.1\r\nN:Smith;Chris\r\nTEL:2145550199\r\n\
                    X-IRMC-CALL-DATETIME;DIALED:20261004T181500Z\r\nEND:VCARD\r\n\
                    BEGIN:VCARD\r\nVERSION:3.0\r\nFN:\r\nN:;;;;\r\nTEL:+44 20 7946 0958\r\n\
                    X-IRMC-CALL-DATETIME;TYPE=RECEIVED:20261003T080000+0100\r\nEND:VCARD\r\n";
@@ -157,7 +157,7 @@ mod tests {
                 },
                 CallRecord {
                     direction: CallDirection::Outgoing,
-                    name: Some("Dave Smith".into()),
+                    name: Some("Chris Smith".into()),
                     number: Some("+12145550199".into()),
                     at: Some("2026-10-04T18:15:00Z".into()),
                 },

@@ -66,11 +66,11 @@ describe("names and keys", () => {
   });
 
   it("ignores the invisible marks apps hide in names (WhatsApp's U+200E split sam ❤️ in two)", () => {
-    expect(cleanName("‎sam ❤️")).toBe("sam ❤️");
-    expect(threadKey({ appId: "net.whatsapp.WhatsApp", title: "‎sam ❤️" })).toBe(
+    expect(cleanName("\u200esam ❤️")).toBe("sam ❤️");
+    expect(threadKey({ appId: "net.whatsapp.WhatsApp", title: "\u200esam ❤️" })).toBe(
       threadKey({ appId: "net.whatsapp.WhatsApp", title: "sam ❤️" }),
     );
-    expect(cleanName("‪Zoe‬‏﻿")).toBe("Zoe");
+    expect(cleanName("\u202aZoe\u202c\u200f\ufeff")).toBe("Zoe");
     // Emoji variants (❤ vs ❤️) are one person; zero-width joiners inside emoji are kept.
     expect(nameKey("sam ❤")).toBe(nameKey("Sam ❤️"));
     expect(cleanName("👨‍👩‍👧 fam")).toBe("👨‍👩‍👧 fam");
@@ -240,7 +240,7 @@ describe("recent calls", () => {
   it("names a call by the contact first, then the phone's name, then the number", () => {
     const nameFor = new Map([["+13025550142", "Zoe 💜 "]]);
     expect(callName(call("+13025550142", "Zoey", null), nameFor)).toBe("Zoe 💜");
-    expect(callName(call("+12145550199", "Dave Smith", null), nameFor)).toBe("Dave Smith");
+    expect(callName(call("+12145550199", "Chris Smith", null), nameFor)).toBe("Chris Smith");
     expect(callName(call("+12145550199", null, null), nameFor)).toBe("(214) 555-0199");
     expect(callName(call(null, null, null), nameFor)).toBe("No caller ID");
   });

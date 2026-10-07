@@ -739,7 +739,7 @@ mod tests {
         let json = r#"{
             "next": "https://api.spotify.com/v1/me/playlists?offset=50&limit=50",
             "items": [
-                {"uri":"spotify:playlist:1","name":"Focus","owner":{"display_name":"Dave"},
+                {"uri":"spotify:playlist:1","name":"Focus","owner":{"display_name":"Jordan"},
                  "tracks":{"total":42},"images":[{"url":"https://i.scdn.co/a","width":640},{"url":"https://i.scdn.co/b","width":300}]},
                 null,
                 {"uri":"spotify:playlist:2","name":"Runs","owner":{"display_name":""},"items":{"total":10},"images":[]},
@@ -750,7 +750,7 @@ mod tests {
         let (items, next) = parse_playlists_owned(json, None);
         assert_eq!(items.len(), 3, "null and non-playlist uris are skipped");
         assert_eq!(items[0].name, "Focus");
-        assert_eq!(items[0].owner.as_deref(), Some("Dave"));
+        assert_eq!(items[0].owner.as_deref(), Some("Jordan"));
         assert_eq!(items[0].track_count, Some(42), "pre-2026 `tracks`");
         assert_eq!(
             items[0].image_url.as_deref(),
@@ -777,7 +777,7 @@ mod tests {
     #[test]
     fn marks_owned_and_collaborative_playlists() {
         let json = r#"{"items":[
-            {"uri":"spotify:playlist:a","id":"a","name":"Mine","owner":{"id":"jl","display_name":"Dave"}},
+            {"uri":"spotify:playlist:a","id":"a","name":"Mine","owner":{"id":"jl","display_name":"Jordan"}},
             {"uri":"spotify:playlist:b","id":"b","name":"Theirs","owner":{"id":"someone","display_name":"X"}},
             {"uri":"spotify:playlist:c","id":"c","name":"Shared","collaborative":true,"owner":{"id":"someone"}}
         ]}"#;
@@ -804,7 +804,7 @@ mod tests {
             {"uri":"spotify:artist:ma","id":"ma","name":"Massive Attack","images":[{"url":"https://i.scdn.co/ma","width":300}]}
           ]},
           "playlists":{"total":30,"limit":10,"offset":0,"items":[
-            {"uri":"spotify:playlist:p","id":"p","name":"Trip Hop","owner":{"id":"jl","display_name":"Dave"}}
+            {"uri":"spotify:playlist:p","id":"p","name":"Trip Hop","owner":{"id":"jl","display_name":"Jordan"}}
           ]}
         }"#;
         let r = parse_search(json, Some("jl"));
@@ -886,7 +886,7 @@ mod tests {
     fn parses_devices_for_the_picker() {
         let json = r#"{"devices":[
           {"id":"ph","name":"Jordan's iPhone","type":"Smartphone","is_active":true},
-          {"id":"pc","name":"Dave's PC","type":"Computer","is_active":false},
+          {"id":"pc","name":"Jordan's PC","type":"Computer","is_active":false},
           {"id":"","name":"No id","type":"Speaker"}
         ]}"#;
         let d = parse_devices(json);
@@ -945,7 +945,7 @@ mod tests {
     #[test]
     fn chooses_the_iphone_preferring_name_then_active() {
         let json = r#"{"devices":[
-            {"id":"pc","name":"Dave's PC","type":"Computer","is_active":true},
+            {"id":"pc","name":"Jordan's PC","type":"Computer","is_active":true},
             {"id":"ph2","name":"Spare iPhone","type":"Smartphone","is_active":true},
             {"id":"ph1","name":"Jordan's iPhone","type":"Smartphone","is_active":false}
         ]}"#;

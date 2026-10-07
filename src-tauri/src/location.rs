@@ -98,13 +98,4 @@ mod tests {
             Err(e) => panic!("locate failed: {e}"),
         }
     }
-
-    /// Network check: `cargo test --lib location -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn place_lookup_names_portland() {
-        let body = super::place_lookup(45.52, -122.68).expect("lookup failed");
-        let j: serde_json::Value = serde_json::from_str(&body).expect("not JSON");
-        assert_eq!(j["city"], "Portland", "unexpected answer: {body}");
-    }
 }

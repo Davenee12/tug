@@ -45,7 +45,7 @@ const ACCESSORY_WORDS: &[&str] = &[
 ];
 
 /// Whether a name from a Bluetooth NameChanged event is worth adopting. iOS briefly reports
-/// junk mid-rename (Dave's phone flashed up as "4" once), and a one- or two-character name is
+/// junk mid-rename (a test phone flashed up as "4" once), and a one- or two-character name is
 /// never a real iPhone name; keep the last good one instead of following it.
 pub fn plausible_device_name(name: &str) -> bool {
     name.trim().chars().count() >= 3
@@ -144,6 +144,6 @@ mod tests {
     fn nothing_known_stays_unknown() {
         // A just-connected iPhone often has no name or appearance yet.
         assert_eq!(classify("Unnamed device", None, None), DeviceKind::Unknown);
-        assert_eq!(classify("Dave's phone", Some(0), Some(0x1F)), DeviceKind::Unknown);
+        assert_eq!(classify("Jordan's phone", Some(0), Some(0x1F)), DeviceKind::Unknown);
     }
 }

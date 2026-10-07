@@ -82,7 +82,7 @@ describe("connectDone", () => {
 });
 
 describe("waiting for all three switches", () => {
-  // Dave: the panel rushed to the Feed before he'd turned the switches on.
+  // Hands-on feedback: the panel rushed to the Feed before the switches were on.
   const contactsOff = { ...CONNECTED, contactsShared: false };
   const textsOff = { ...CONNECTED, services: { ...CONNECTED.services, messages: false }, messagesError: "the iPhone refused message access" };
 

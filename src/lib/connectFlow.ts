@@ -14,7 +14,7 @@ import { phoneSwitches, switchesOff, type PhoneSwitch } from "./phoneSwitches";
  * - "allow": paired, and iOS is holding the connection open until Allow is tapped on the phone.
  * - "switches": paired and connecting, with the three switches ticking green as they come on.
  * - "done": all three switches are on (or the user chose "Skip for now") — the panel gives way to
- *   the Feed. Dave: it mustn't rush off while he's still turning switches on.
+ *   the Feed. It mustn't rush off while the user is still turning switches on.
  */
 export type ConnectStep = "find" | "pairing" | "allow" | "switches" | "done";
 

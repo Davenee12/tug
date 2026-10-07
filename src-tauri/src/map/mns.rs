@@ -438,7 +438,7 @@ mod server {
     /// Read exactly one OBEX packet, using its 3-byte length prefix (mirrors the client link).
     /// Waiting for a packet to *start* has no limit: the phone keeps the MNS link open and
     /// silent until a text arrives, and timing that out dropped live texts 7 s after the iPhone
-    /// connected (Dave's PC, 2026-10-05). Once a packet has begun, the rest is bounded.
+    /// connected (seen in testing, 2026-10-05). Once a packet has begun, the rest is bounded.
     async fn read_packet(reader: &DataReader, stopped: &AtomicBool) -> Result<Vec<u8>, MapError> {
         let mut buf = Vec::new();
         // The first bytes: keep the same pending read across checks of `stopped` (WinRT allows

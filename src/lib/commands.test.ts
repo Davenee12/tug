@@ -202,7 +202,7 @@ describe("call", () => {
   it("plays a Spotify playlist by fuzzy name, and 'play' alone is still media", () => {
     const playlists = [
       { uri: "spotify:playlist:1", id: "1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: null, owned: false },
-      { uri: "spotify:playlist:2", id: "2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: null, owned: true },
+      { uri: "spotify:playlist:2", id: "2", name: "Morning Run", owner: "Jordan", trackCount: 42, imageUrl: null, owned: true },
     ];
     // Not connected: a fuzzy playlist match plays the playlist; no song-search row.
     expect(parseActions("play deep", people, { playlists })).toEqual([

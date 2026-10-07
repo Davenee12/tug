@@ -111,7 +111,7 @@ const IOS_REPLY_SUFFIX = /\s+replied to (you|your message)$/i;
  * embeddings and isolates, zero-width space, word joiner and friends, BOM, soft hyphen. Zero-width
  * joiner/non-joiner stay (emoji sequences need them). Mirrors text.rs `is_invisible`.
  */
-const INVISIBLE = /[­​‎‏‪-‮⁠-⁤⁦-⁩﻿]/g;
+const INVISIBLE = /[\u00AD\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
 
 /** Names as people see them: iOS pads some titles ("marco ") and rewrites replies; apps hide marks. */
 export function cleanName(name: string): string {
@@ -459,7 +459,7 @@ export function snippet(text: string, query: string, width = 90): string {
 
 /**
  * Whether a notification's "negative" action is a plain dismiss. For most it's "Clear", but a
- * call's is "Decline" or "End Call": the ✕ on a WhatsApp "Active Call" row hung up Dave's call.
+ * call's is "Decline" or "End Call": the ✕ on a WhatsApp "Active Call" row hung up the user's call.
  */
 export function isDismissLabel(label: string): boolean {
   return /^(|clear|dismiss|close|delete)$/i.test(label.trim());
@@ -484,7 +484,7 @@ const lastDigits = (s: string | null | undefined) => (s ?? "").replace(/\D/g, ""
 /**
  * The phone's missed-call notification from this person that's still on the iPhone. iOS puts
  * a "Dial" action on it, so tug can have the phone call them back without a hands-free link
- * (confirmed on Jordan's iPhone). Matched on the name the phone shows, or the number; newest wins.
+ * (confirmed on a real iPhone). Matched on the name the phone shows, or the number; newest wins.
  */
 export function missedCallFor(
   notifications: PhoneNotification[],

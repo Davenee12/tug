@@ -108,7 +108,7 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE messages ADD COLUMN unread_on_phone INTEGER NOT NULL DEFAULT 0;
     CREATE INDEX notifications_open ON notifications (session) WHERE removed_at IS NULL;
     "#,
-    // v4: names a contact used to have ("zoe 💜" before Dave renamed her "zoe"), so
+    // v4: names a contact used to have (before a rename on the phone), so
     // notifications that arrived under an old name stay in the same conversation.
     r#"
     CREATE TABLE contact_aliases (
