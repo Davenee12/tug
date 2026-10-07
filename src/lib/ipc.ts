@@ -10,6 +10,8 @@ import type {
   SearchResults,
   SmsMessage,
   DeviceStatus,
+  DevToolsConfirm,
+  DevToolsStatus,
   TugboatSkipped,
   TugboatStatus,
   TugboatTextArrived,
@@ -142,6 +144,17 @@ export const api = {
   tugboatSendText: (text: string) => invoke<void>("tugboat_send_text", { text }),
   /** Open the Tugboat folder, or select a file Tugboat saved. */
   tugboatOpenFolder: (path: string | null) => invoke<void>("tugboat_open_folder", { path }),
+  // --- Developer tools ---
+  devtoolsStatus: () => invoke<DevToolsStatus>("devtools_status"),
+  /** "Let AI tools use tug". */
+  devtoolsSetEnabled: (enabled: boolean) => invoke<DevToolsStatus>("devtools_set_enabled", { enabled }),
+  devtoolsSetPermission: (key: string, on: boolean) => invoke<DevToolsStatus>("devtools_set_permission", { key, on }),
+  /** A new token: connected AI tools must be restarted. */
+  devtoolsRevoke: () => invoke<DevToolsStatus>("devtools_revoke"),
+  /** The confirmation card's Send (true) or Don't send. */
+  devtoolsConfirm: (id: number, send: boolean) => invoke<void>("devtools_confirm", { id, send }),
+  /** Add tug's command folder to (or remove it from) the user's PATH. */
+  devtoolsSetOnPath: (on: boolean) => invoke<DevToolsStatus>("devtools_set_on_path", { on }),
 };
 
 interface EventPayloads {
@@ -162,6 +175,9 @@ interface EventPayloads {
   "tugboat-text": TugboatTextArrived;
   /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */
   "tugboat-dropped": TugboatSkipped[];
+  "devtools-status": DevToolsStatus;
+  /** A text an AI tool (or `tug text`) wants to send; null once it's answered or gone. */
+  "devtools-confirm": DevToolsConfirm | null;
 }
 
 export function on<E extends keyof EventPayloads>(
