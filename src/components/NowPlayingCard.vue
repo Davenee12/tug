@@ -121,8 +121,10 @@ const skipForward = computed(() => forwardMode.value !== "none");
 function skip(direction: "back" | "forward") {
   const mode = direction === "back" ? backMode.value : forwardMode.value;
   if (mode === "seek") {
+    // No position from the phone yet: don't guess (Forward would land at 0:15).
+    if (elapsed.value == null) return;
     const delta = direction === "back" ? -SKIP_SECONDS : SKIP_SECONDS;
-    void tug.spotifySeek(skipTargetMs(elapsed.value ?? 0, delta, np.value.duration ?? null));
+    void tug.spotifySeek(skipTargetMs(elapsed.value, delta, np.value.duration ?? null));
   } else if (mode === "ams") {
     void tug.media(direction === "back" ? "skipBackward" : "skipForward");
   }
