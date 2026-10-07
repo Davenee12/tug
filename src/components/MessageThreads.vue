@@ -180,7 +180,16 @@ const statusLabel = (i: ConversationItem) => {
   if (i.kind !== "message" || i.m.direction !== "out") return "";
   // "accepted" (the iPhone took it) and "sent" (a MAP SendingSuccess event confirmed it, when
   // live texts are working) both read as "Sent" — a send the user can trust either way.
-  return { pending: "Sending…", accepted: "Sent", sent: "Sent", failed: "Not sent", received: "" }[i.m.status];
+  // "unconfirmed": the whole text went out but the phone never answered. No Retry: it may have
+  // sent, and a second try could text them twice.
+  return {
+    pending: "Sending…",
+    accepted: "Sent",
+    sent: "Sent",
+    failed: "Not sent",
+    unconfirmed: "May have sent — check your iPhone",
+    received: "",
+  }[i.m.status];
 };
 
 // Composer: replies go through the iPhone over message access (MAP).

@@ -46,7 +46,9 @@ impl Direction {
 /// `received` for incoming; outgoing goes `pending` → `accepted` (taken by the iPhone for
 /// sending; not proof of delivery) → `sent` (the phone's MAP `SendingSuccess` event confirmed
 /// it left), or `failed` (the push failed, or a `SendingFailure` event came back). Without live
-/// texts (`map::mns`) a send stops at `accepted`; the UI shows both as "Sent".
+/// texts (`map::mns`) a send stops at `accepted`; the UI shows both as "Sent". `unconfirmed`: the
+/// whole text went out but the phone's answer never came, so it may have sent ("check your
+/// iPhone"); never retried automatically, and a later send report still settles it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Status {
@@ -55,6 +57,7 @@ pub enum Status {
     Accepted,
     Sent,
     Failed,
+    Unconfirmed,
 }
 
 impl Status {
@@ -65,6 +68,7 @@ impl Status {
             Status::Accepted => "accepted",
             Status::Sent => "sent",
             Status::Failed => "failed",
+            Status::Unconfirmed => "unconfirmed",
         }
     }
 
@@ -74,6 +78,7 @@ impl Status {
             "accepted" => Status::Accepted,
             "sent" => Status::Sent,
             "failed" => Status::Failed,
+            "unconfirmed" => Status::Unconfirmed,
             _ => Status::Received,
         }
     }
@@ -276,7 +281,7 @@ impl Store {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, handle, received_at FROM messages
-             WHERE source = ?1 AND direction = 'out' AND status IN ('pending', 'accepted')
+             WHERE source = ?1 AND direction = 'out' AND status IN ('pending', 'accepted', 'unconfirmed')
                AND received_at > ?2",
         )?;
         let rows = stmt.query_map(params![source, now - CONFIRM_WINDOW_MS], |r| {
@@ -1030,6 +1035,22 @@ mod tests {
             s.retry_outgoing(m.id, 9_500).unwrap().is_none(),
             "a pending retry can't double up"
         );
+    }
+
+    #[test]
+    fn an_unconfirmed_send_round_trips_and_can_still_be_settled() {
+        let s = Store::in_memory().unwrap();
+        let m = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "hi", 1_000)
+            .unwrap();
+        let m = s.set_outgoing_status(m.id, Status::Unconfirmed, None).unwrap();
+        assert_eq!(m.status, Status::Unconfirmed);
+        assert_eq!(s.outgoing_unconfirmed(SOURCE_IPHONE_MAP, 2_000).unwrap().len(), 1);
+        assert!(
+            s.retry_outgoing(m.id, 2_000).unwrap().is_none(),
+            "never retried: it may have sent"
+        );
+        assert_eq!(s.fail_interrupted_sends().unwrap(), 0, "not swept as interrupted");
     }
 
     #[test]
