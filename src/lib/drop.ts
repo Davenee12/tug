@@ -1,0 +1,65 @@
+// tug Drop on the desktop side: the small decisions the Drop panel makes, kept pure for tests.
+
+import type { DropSkipped, DropStatus } from "../types/protocol";
+
+export { formatSize } from "../drop-page/chunks";
+
+/** How long the QR code shows with no phone before the panel offers connection help. */
+export const HELP_AFTER_MS = 30_000;
+
+/** Drop as it is before it's opened (and after it closes). */
+export const DROP_OFF: DropStatus = {
+  phase: "off",
+  url: null,
+  address: null,
+  qr: null,
+  phone: null,
+  phoneActive: false,
+  folder: null,
+  incoming: [],
+  outgoing: [],
+  texts: [],
+  sentText: null,
+  ended: null,
+};
+
+/** No phone has turned up ~30 s after the code appeared: time for "Can't connect?" help. */
+export function showConnectHelp(s: Pick<DropStatus, "phase">, shownAt: number | null, now: number): boolean {
+  return s.phase === "waiting" && shownAt !== null && now - shownAt >= HELP_AFTER_MS;
+}
+
+/** Files are still arriving from the phone (closing would cut them off). */
+export function transferring(s: Pick<DropStatus, "incoming">): boolean {
+  return s.incoming.some((i) => !i.done);
+}
+
+/** One plain sentence for files that couldn't be offered to the phone, or null if all were. */
+export function skippedMessage(skipped: DropSkipped[]): string | null {
+  if (!skipped.length) return null;
+  if (skipped.length === 1) {
+    const { name, reason } = skipped[0];
+    switch (reason) {
+      case "tooBig":
+        return `“${name}” is over 1 GB, too big to send to a phone's browser.`;
+      case "folder":
+        return `“${name}” is a folder. Drop the files inside it instead.`;
+      case "tooMany":
+        return `“${name}” wasn't added: that's as many files as Drop can offer at once.`;
+      default:
+        return `Couldn't read “${name}”.`;
+    }
+  }
+  const reasons = new Set(skipped.map((s) => s.reason));
+  const why =
+    reasons.size === 1 && reasons.has("tooBig")
+      ? "they're over 1 GB"
+      : reasons.size === 1 && reasons.has("folder")
+        ? "folders can't be sent"
+        : "folders, files over 1 GB, or too many at once";
+  return `${skipped.length} items weren't added: ${why}.`;
+}
+
+/** Percent of a file received, for its progress bar. */
+export function percent(received: number, size: number): number {
+  return size > 0 ? Math.min(100, Math.round((received / size) * 100)) : 100;
+}

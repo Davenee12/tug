@@ -9,6 +9,8 @@ import type {
   SearchResults,
   SmsMessage,
   DeviceStatus,
+  DropSkipped,
+  DropStatus,
   DiscoveredDevice,
   MediaCommand,
   NowPlaying,
@@ -122,6 +124,20 @@ export const api = {
   spotifyPlaylistItems: (id: string) => invoke<SpotifyTrack[]>("spotify_playlist_items", { id }),
   spotifyAddToPlaylist: (playlistId: string, trackUri: string) =>
     invoke<void>("spotify_add_to_playlist", { playlistId, trackUri }),
+  // --- tug Drop ---
+  /** Open Drop (a fresh code), or get the session already open. */
+  dropStart: () => invoke<DropStatus>("drop_start"),
+  dropStop: () => invoke<void>("drop_stop"),
+  dropStatus: () => invoke<DropStatus>("drop_status"),
+  /** Offer files (paths) to the phone, opening Drop if needed; returns the ones skipped. */
+  dropOfferFiles: (paths: string[]) => invoke<DropSkipped[]>("drop_offer_files", { paths }),
+  /** Windows' file picker, then offer what was picked. */
+  dropPickFiles: () => invoke<DropSkipped[]>("drop_pick_files"),
+  dropRemoveOffer: (id: string) => invoke<void>("drop_remove_offer", { id }),
+  /** Text for the phone to copy (empty clears it). */
+  dropSendText: (text: string) => invoke<void>("drop_send_text", { text }),
+  /** Open the tug Drop folder, or select a file Drop saved. */
+  dropOpenFolder: (path: string | null) => invoke<void>("drop_open_folder", { path }),
 };
 
 interface EventPayloads {
@@ -138,6 +154,7 @@ interface EventPayloads {
   "open-latest-conversation": null;
   calls: CallRecord[];
   "toast-pressed": ToastPressed;
+  "drop-status": DropStatus;
 }
 
 export function on<E extends keyof EventPayloads>(

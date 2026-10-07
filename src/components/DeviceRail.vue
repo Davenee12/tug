@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, Smartphone } from "lucide-vue-next";
+import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, QrCode, Smartphone } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { useDropStore } from "../stores/drop";
 import NowPlayingCard from "./NowPlayingCard.vue";
 import ToggleRow from "./ToggleRow.vue";
 import TugMark from "./TugMark.vue";
 
 const tug = useTugStore();
+const drop = useDropStore();
 const s = computed(() => tug.status);
 
 // The sidebar never scrolls. On a short window, tighten the section gaps, drop the Quick toggles'
@@ -105,7 +107,7 @@ const dnd = computed({
         {{ s.radio === "off" ? "Bluetooth is off in Windows" : "No Bluetooth adapter found" }}
       </div>
 
-      <div class="mt-3 flex flex-wrap gap-1.5">
+      <div class="mt-3 flex flex-wrap items-center gap-1.5">
         <span
           v-for="svc in services"
           :key="svc.label"
@@ -114,6 +116,18 @@ const dnd = computed({
           <span :class="['size-1.5 rounded-full', svc.on ? 'bg-accent-teal' : 'bg-on-dark-soft/30']" />
           {{ svc.label }}
         </span>
+        <!-- tug Drop: files and text over Wi-Fi, so it works even while the Bluetooth link is down.
+             It sits at the end of this row (which wraps anyway) so the sidebar, which never
+             scrolls, doesn't grow. -->
+        <button
+          class="ml-auto inline-flex items-center gap-1.5 rounded-full border border-on-dark-soft/30 px-2.5 py-0.5 text-[12px] font-medium text-on-dark transition-colors active:bg-surface-dark-elevated"
+          title="Drop: send photos, files and text between your phone and this PC"
+          @click="drop.show()"
+        >
+          <QrCode :size="13" class="text-primary" />
+          Drop
+          <span v-if="drop.status.phase !== 'off'" class="size-1.5 rounded-full bg-accent-teal" aria-label="on" />
+        </button>
       </div>
     </section>
 

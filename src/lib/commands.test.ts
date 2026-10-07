@@ -70,6 +70,13 @@ describe("parseActions", () => {
     expect(parseActions("new message", people)[0]).toMatchObject({ kind: "open", target: "new-message" });
   });
 
+  it("opens Drop by name, with or without a phone connected", () => {
+    expect(parseActions("drop", people)).toEqual([{ kind: "open", target: "drop", label: "Open Drop" }]);
+    expect(parseActions("Send files", people)[0]).toMatchObject({ kind: "open", target: "drop" });
+    // Only the exact words: a search that merely contains "drop" stays a search.
+    expect(parseActions("dropbox invoice", people)).toEqual([]);
+  });
+
   it("stays out of the way of ordinary searches", () => {
     expect(parseActions("dinner", people)).toEqual([]);
     expect(parseActions("text", people)).toEqual([]);
