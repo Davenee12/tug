@@ -181,6 +181,37 @@ fn timeline(np: &NowPlaying, playing: bool, rate: f64, now_ms: i64) -> Option<Ti
     })
 }
 
+/// How long a showing tile waits before closing. Between songs the iPhone briefly reports an
+/// empty title, which closed the tile and reopened it a moment later (a visible blink, seen in
+/// the log on 2026-10-06 and 2026-10-07); a track that returns within this keeps it open.
+pub const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// What to do with a new desired state: apply it now, or keep the tile open until `at`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    Apply,
+    WaitUntil(std::time::Instant),
+}
+
+/// Closing a showing tile waits out [`CLOSE_GRACE`] (started at the first close request and not
+/// restarted by later ones); everything else, including a track coming back, applies at once.
+pub fn step(
+    showing: bool,
+    want_enabled: bool,
+    pending_close: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> Step {
+    if want_enabled || !showing {
+        return Step::Apply;
+    }
+    let at = pending_close.unwrap_or(now + CLOSE_GRACE);
+    if now >= at {
+        Step::Apply
+    } else {
+        Step::WaitUntil(at)
+    }
+}
+
 /// Register with SMTC and keep it in step with Now Playing. Never a reason not to start:
 /// if Windows refuses, media keys are logged as unavailable and everything else carries on.
 pub fn start(shared: Arc<Shared>, ble: BleHandle) {
@@ -194,7 +225,7 @@ pub fn start(shared: Arc<Shared>, ble: BleHandle) {
 mod smtc {
     use std::sync::mpsc;
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     use windows::core::{Result, HSTRING};
     use windows::Foundation::{TimeSpan, TypedEventHandler};
@@ -204,7 +235,7 @@ mod smtc {
         SystemMediaTransportControlsButtonPressedEventArgs, SystemMediaTransportControlsTimelineProperties,
     };
 
-    use super::{command_for, desired, Button, SmtcState, Status};
+    use super::{command_for, desired, step, Button, SmtcState, Status, Step};
     use crate::ble::{BleHandle, Command};
     use crate::state::Shared;
 
@@ -232,10 +263,17 @@ mod smtc {
                 };
                 log::info!("Windows media keys ready");
                 let mut last = None;
-                session.sync(&shared, &mut last);
-                while rx.recv().is_ok() {
+                let mut close_at = session.sync(&shared, &mut last, None);
+                loop {
+                    let woke = match close_at {
+                        Some(at) => rx.recv_timeout(at.saturating_duration_since(Instant::now())),
+                        None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+                    };
+                    if woke == Err(mpsc::RecvTimeoutError::Disconnected) {
+                        break;
+                    }
                     while rx.try_recv().is_ok() {}
-                    session.sync(&shared, &mut last);
+                    close_at = session.sync(&shared, &mut last, close_at);
                 }
             });
         if let Err(e) = spawned {
@@ -290,11 +328,16 @@ mod smtc {
             Ok(Self { _player: player, smtc })
         }
 
-        /// Bring SMTC in line with the current Now Playing, skipping a no-op update.
-        fn sync(&self, shared: &Shared, last: &mut Option<SmtcState>) {
+        /// Bring SMTC in line with the current Now Playing, skipping a no-op update. Returns when
+        /// to look again if a close is being held off (see `step`).
+        fn sync(&self, shared: &Shared, last: &mut Option<SmtcState>, close_at: Option<Instant>) -> Option<Instant> {
             let want = desired(&shared.now_playing(), now_ms());
             if last.as_ref() == Some(&want) {
-                return;
+                return None;
+            }
+            let showing = last.as_ref().is_some_and(|l| l.enabled);
+            if let Step::WaitUntil(at) = step(showing, want.enabled, close_at, Instant::now()) {
+                return Some(at);
             }
             match apply(&self.smtc, &want) {
                 Ok(()) => {
@@ -311,6 +354,7 @@ mod smtc {
                     *last = None;
                 }
             }
+            None
         }
     }
 
@@ -438,6 +482,28 @@ mod tests {
         np.rate = Some(2.0);
         let s = desired(&np, 0);
         assert_eq!((s.status, s.rate), (Status::Playing, 2.0));
+    }
+
+    #[test]
+    fn a_gap_between_songs_does_not_blink_the_tile() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        // Showing, then the phone reports an empty title: hold the tile open.
+        let first = step(true, false, None, t0);
+        assert_eq!(first, Step::WaitUntil(t0 + CLOSE_GRACE));
+        // More empty updates don't restart the grace period.
+        let Step::WaitUntil(at) = first else { unreachable!() };
+        assert_eq!(
+            step(true, false, Some(at), t0 + Duration::from_millis(700)),
+            Step::WaitUntil(at)
+        );
+        // The next song arrives in time: shown at once (and the pending close is dropped by the caller).
+        assert_eq!(step(true, true, Some(at), t0 + Duration::from_millis(900)), Step::Apply);
+        // Nothing came back: close once the grace is over.
+        assert_eq!(step(true, false, Some(at), at), Step::Apply);
+        // Nothing to hold open when the tile isn't showing.
+        assert_eq!(step(false, false, None, t0), Step::Apply);
+        assert_eq!(step(false, true, None, t0), Step::Apply);
     }
 
     #[test]
