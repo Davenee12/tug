@@ -151,6 +151,12 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE messages ADD COLUMN gap_before INTEGER NOT NULL DEFAULT 0;
     "#,
+    // v10: aliases learned from group-text notifications ("Sam & Alex", "Sam, Alex & 2 others")
+    // could retitle every notification from that group as one contact. The learners skip those
+    // now; drop any already learned.
+    r#"
+    DELETE FROM contact_aliases WHERE group_like(alias);
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
@@ -170,6 +176,14 @@ pub(crate) fn clean_name(name: &str) -> String {
     name
 }
 
+/// Whether a notification title names several people, as iOS titles a group text ("Sam & Alex",
+/// "Sam, Alex & Jo", "Sam & 2 others"). Such a title is never one contact's name. Also callable from
+/// SQL as `group_like`.
+pub(crate) fn looks_like_group(title: &str) -> bool {
+    let t = clean_name(title).to_lowercase();
+    t.contains('&') || t.contains(',') || t.contains(" others")
+}
+
 /// How two names are compared (matching the UI's `nameKey`, format.ts): the cleaned name,
 /// lower-cased, without emoji variation selectors, so "sam ❤" and "sam ❤️" are one person.
 pub(crate) fn name_key(name: &str) -> String {
@@ -186,6 +200,9 @@ fn register_functions(conn: &Connection) -> Result<()> {
     conn.create_scalar_function("clean_name", 1, flags, |ctx| Ok(clean_name(&ctx.get::<String>(0)?)))?;
     conn.create_scalar_function("name_key", 1, flags, |ctx| {
         Ok(ctx.get::<Option<String>>(0)?.map(|s| name_key(&s)))
+    })?;
+    conn.create_scalar_function("group_like", 1, flags, |ctx| {
+        Ok(ctx.get::<Option<String>>(0)?.is_some_and(|s| looks_like_group(&s)))
     })?;
     conn.create_scalar_function("strip_invisible", 1, flags, |ctx| {
         Ok(ctx.get::<Option<String>>(0)?.map(|s| crate::text::strip_invisible(&s)))
@@ -695,6 +712,45 @@ mod tests {
         assert_eq!(clean_name("\u{200E}sam \u{2764}\u{FE0F}"), "sam \u{2764}\u{FE0F}");
         assert_eq!(name_key("\u{200E}sam \u{2764}\u{FE0F}"), name_key("Sam \u{2764}"));
         assert_ne!(name_key("sam \u{2764}"), name_key("sam"));
+    }
+
+    #[test]
+    fn group_titles_are_recognised() {
+        for t in [
+            "Sam & Alex",
+            "Sam, Alex",
+            "Sam & 2 others",
+            "Sam, Alex & 1 other",
+            "\u{200E}Sam & Jo",
+        ] {
+            assert!(looks_like_group(t), "{t}");
+        }
+        for t in ["Sam", "zoe \u{1F49C}", "Dr Other", "Mothers Day"] {
+            assert!(!looks_like_group(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn upgrading_drops_aliases_learned_from_group_titles() {
+        let s = Store::in_memory().unwrap();
+        {
+            let conn = s.conn();
+            conn.execute_batch(
+                "INSERT INTO contact_aliases (address, alias) VALUES
+                     ('+13025550100', 'Sam & Alex'), ('+13025550100', 'Sam, Alex & 2 others'),
+                     ('+13025550100', 'Sammy');",
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 9).unwrap();
+        }
+        migrate(&mut s.conn()).unwrap();
+        let left: Vec<String> = {
+            let conn = s.conn();
+            let mut stmt = conn.prepare("SELECT alias FROM contact_aliases").unwrap();
+            let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+            rows.collect::<Result<_>>().unwrap()
+        };
+        assert_eq!(left, vec!["Sammy".to_string()]);
     }
 
     #[test]
