@@ -1,9 +1,8 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { api, errorMessage } from "../lib/ipc";
-import { defaultUnit, fetchForecast, nameFor, type Forecast, type Place, type Unit } from "../lib/weather";
+import { defaultUnit, fetchForecast, isStale, nameFor, REFRESH_MS, type Forecast, type Place, type Unit } from "../lib/weather";
 
-const STALE_MS = 30 * 60 * 1000;
 const CACHE_KEY = "tug.weather.v1";
 /** Shown only until the place's real name comes back ("Portland, Oregon"). */
 const UNNAMED = "Your location";
@@ -44,13 +43,12 @@ export const useWeatherStore = defineStore("weather", () => {
    * Called each time the Feed mounts, which is every trip back from Settings. The saved
    * choice is read once: re-reading it each time could land before a change just made in
    * Settings was saved (Weather › Change place snapping back to the old place) and repainted
-   * the card from the cache for nothing. Later calls only restart the refresh clock.
+   * the card from the cache for nothing. Later calls refresh a stale forecast; the clock runs once.
    */
   async function init() {
     if (ready.value) {
       void refresh();
-      window.clearInterval(timer);
-      timer = window.setInterval(() => void refresh(), STALE_MS);
+      startClock();
       return;
     }
     try {
@@ -64,8 +62,24 @@ export const useWeatherStore = defineStore("weather", () => {
     ready.value = true;
     if (place.value && place.value !== "off") readCache(place.value);
     void refresh();
-    window.clearInterval(timer);
-    timer = window.setInterval(() => void refresh(), STALE_MS);
+    startClock();
+  }
+
+  // Coming back to tug (from the tray or another window) refreshes a forecast that's gone stale:
+  // a hidden window's timers can be throttled, so the clock alone isn't enough.
+  const onShow = () => {
+    if (document.visibilityState === "visible") void refresh();
+  };
+
+  /**
+   * The refresh clock runs once for the life of the app. Restarting it on every Feed visit (each
+   * trip back from Settings) kept pushing the next refresh out, so the numbers rarely changed.
+   */
+  function startClock() {
+    if (timer !== undefined) return;
+    timer = window.setInterval(() => void refresh(), REFRESH_MS);
+    document.addEventListener("visibilitychange", onShow);
+    window.addEventListener("focus", onShow);
   }
 
   /** A failed name lookup at setup must not stick: try again until the place has a name. */
@@ -82,7 +96,7 @@ export const useWeatherStore = defineStore("weather", () => {
     void nameIfNeeded();
     const p = place.value;
     if (!p || p === "off" || loading.value) return;
-    if (!force && forecast.value && Date.now() - forecast.value.fetchedAt < STALE_MS) return;
+    if (!force && forecast.value && !isStale(forecast.value.fetchedAt, Date.now())) return;
     loading.value = true;
     try {
       const f = await fetchForecast(p);
@@ -141,6 +155,9 @@ export const useWeatherStore = defineStore("weather", () => {
 
   function dispose() {
     window.clearInterval(timer);
+    timer = undefined;
+    document.removeEventListener("visibilitychange", onShow);
+    window.removeEventListener("focus", onShow);
   }
 
   return { place, unit, forecast, loading, error, ready, init, refresh, setPlace, findMyPlace, useMyLocation, hide, reset, toggleUnit, dispose };
