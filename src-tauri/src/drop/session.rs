@@ -55,6 +55,9 @@ pub enum ApiError {
     NoSpace,
     /// Finish asked for before every chunk arrived.
     Incomplete,
+    /// The request's sequence number was already used or is too old: the page retries with a
+    /// fresh one (never "expired", which ends the page).
+    Stale,
     /// A file on offer changed or vanished on the PC.
     Changed,
     Io,
@@ -70,7 +73,7 @@ impl ApiError {
             ApiError::BadRequest | ApiError::BadChunk => 400,
             ApiError::TooBig => 413,
             ApiError::NoSpace => 507,
-            ApiError::Incomplete | ApiError::Changed => 409,
+            ApiError::Incomplete | ApiError::Changed | ApiError::Stale => 409,
             ApiError::Io => 500,
         }
     }
@@ -86,6 +89,7 @@ impl ApiError {
             ApiError::TooBig => "too-big",
             ApiError::NoSpace => "no-space",
             ApiError::Incomplete => "incomplete",
+            ApiError::Stale => "stale",
             ApiError::Changed => "changed",
             ApiError::Io => "io",
         }
@@ -323,8 +327,9 @@ impl Session {
         self.state().last_activity.elapsed()
     }
 
-    pub fn touch(&self) {
-        self.state().last_activity = Instant::now();
+    /// The client id of the phone bound to this session, if one has connected.
+    pub fn bound_client(&self) -> Option<String> {
+        self.state().auth.bound_client()
     }
 
     pub fn phone_active(&self) -> bool {
@@ -366,7 +371,8 @@ impl Session {
                 log::debug!("drop: request refused ({why:?})");
                 Err(match why {
                     Rejected::OtherDevice => ApiError::InUse,
-                    _ => ApiError::Unauthorized,
+                    Rejected::Replayed => ApiError::Stale,
+                    Rejected::Malformed | Rejected::BadMac => ApiError::Unauthorized,
                 })
             }
         }
@@ -444,24 +450,23 @@ impl Session {
         })?;
         fs::create_dir_all(&self.incoming).map_err(|e| io_err("create the incoming folder", e))?;
         fs::create_dir_all(&self.folder).map_err(|e| io_err("create the Drop folder", e))?;
-        // Enough room for this file and whatever else is still arriving, with a margin.
-        let pending: u64 = {
-            let st = self.state();
-            st.uploads
-                .iter()
-                .filter(|u| matches!(u.phase, Phase::Sending))
-                .map(|u| u.plan.size - u.bytes)
-                .sum()
-        };
+        // Enough room for this file, with a margin. Files already arriving reserved theirs when
+        // they started (set_len below), so the free figure already allows for them.
         // Both where it's written and where it ends up (they differ if Pictures is on another drive).
         for dir in [&self.incoming, &self.folder] {
             if let Some(free) = free_space(dir) {
-                if free < req.size + pending + DISK_MARGIN {
+                if free < req.size + DISK_MARGIN {
                     return Err(ApiError::NoSpace);
                 }
             }
         }
-        let part = File::create(self.part_path(id)).map_err(|e| io_err("create a partial file", e))?;
+        // Never truncate: a second begin racing the first mustn't zero chunks already written.
+        let part = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.part_path(id))
+            .map_err(|e| io_err("create a partial file", e))?;
         // Reserve the space up front, so a full disk shows now rather than at 90%.
         part.set_len(req.size).map_err(|e| io_err("size a partial file", e))?;
         let chunks = plan.chunks();
@@ -588,6 +593,8 @@ impl Session {
 
     /// The page gave up on a file (the user cancelled it).
     pub fn cancel_upload(&self, id: &str) -> Result<(), ApiError> {
+        // Not while it's being finished: the saved file would vanish from the panel.
+        let _not_mid_finish = self.finishing.lock().unwrap_or_else(|p| p.into_inner());
         let mut st = self.state();
         let i = st.uploads.iter().position(|u| u.id == id).ok_or(ApiError::NotFound)?;
         if let Phase::Saved { .. } = st.uploads[i].phase {

@@ -87,7 +87,7 @@ fn cgnat(ip: Ipv4Addr) -> bool {
     a == 100 && (64..128).contains(&b)
 }
 
-/// A score for using `ip` on `a`, or `None` if the phone can't reach it.
+/// A score for using `ip` on `a`, or `None` if the phone can't (or mustn't) reach it.
 fn score(a: &Adapter, ip: Ipv4Addr) -> Option<i64> {
     if !a.up || matches!(a.kind, Kind::Loopback | Kind::Tunnel) || is_virtual(a) {
         return None;
@@ -95,15 +95,14 @@ fn score(a: &Adapter, ip: Ipv4Addr) -> Option<i64> {
     if ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || ip.is_multicast() {
         return None;
     }
-    if cgnat(ip) {
+    // Only home-network (private) addresses: Drop must never be reachable from the internet,
+    // e.g. on a network that hands out public addresses. 100.64/10 is nearly always Tailscale.
+    if cgnat(ip) || !private(ip) {
         return None;
     }
     let mut s = 0i64;
     if a.has_gateway {
         s += 10_000;
-    }
-    if private(ip) {
-        s += 1_000;
     }
     if matches!(a.kind, Kind::Wifi | Kind::Ethernet) {
         s += 500;
@@ -112,9 +111,9 @@ fn score(a: &Adapter, ip: Ipv4Addr) -> Option<i64> {
     Some(s)
 }
 
-/// The best address to serve Drop on, if any adapter qualifies. Prefers the adapter with the
-/// default gateway, then private (home) ranges, then real Wi-Fi/Ethernet, then the lower metric;
-/// ties go to the first listed.
+/// The best address to serve Drop on, if any adapter qualifies. Only private (home) ranges;
+/// prefers the adapter with the default gateway, then real Wi-Fi/Ethernet, then the lower
+/// metric; ties go to the first listed.
 pub fn best(adapters: &[Adapter]) -> Option<Ipv4Addr> {
     let mut best: Option<(i64, Ipv4Addr)> = None;
     for a in adapters {
@@ -335,6 +334,13 @@ mod tests {
         assert_eq!(best(&[wifi(), eth]), Some(Ipv4Addr::new(192, 168, 1, 21)));
         // With no gateway anywhere (a direct link), a private address still works.
         assert_eq!(best(&[eth_no_gw]), Some(Ipv4Addr::new(10, 0, 0, 5)));
+    }
+
+    #[test]
+    fn never_uses_a_public_address() {
+        let public = adapter("Ethernet", "Intel(R) Ethernet", Kind::Ethernet, [128, 3, 4, 5], true, 5);
+        assert_eq!(best(std::slice::from_ref(&public)), None);
+        assert_eq!(best(&[public, wifi()]), Some(Ipv4Addr::new(192, 168, 1, 20)));
     }
 
     #[test]

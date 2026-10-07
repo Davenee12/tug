@@ -53,6 +53,11 @@ impl Auth {
         self.bound.is_some()
     }
 
+    /// The client id the session is bound to, if a phone has connected.
+    pub fn bound_client(&self) -> Option<String> {
+        self.bound.clone()
+    }
+
     pub fn check(
         &mut self,
         keys: &Keys,

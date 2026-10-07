@@ -185,7 +185,7 @@ async fn phone_session_over_a_socket() {
             .0,
         200
     );
-    assert_eq!(send(addr, "GET", "/api/state", Some(header), Vec::new()).await.0, 401);
+    assert_eq!(send(addr, "GET", "/api/state", Some(header), Vec::new()).await.0, 409);
 
     // --- Upload a multi-chunk file, interrupted and resumed ---
     let chunk = MIN_CHUNK as usize;
@@ -332,6 +332,21 @@ async fn phone_session_over_a_socket() {
     session::clean_incoming(&incoming);
     assert!(!incoming.exists());
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn the_link_carries_the_bound_phone_after_a_network_change() {
+    use std::net::Ipv4Addr;
+    let secret = [0u8; 16];
+    let ip = Ipv4Addr::new(192, 168, 1, 20);
+    assert_eq!(
+        super::link(ip, 53211, &secret, None),
+        "http://192.168.1.20:53211/#AAAAAAAAAAAAAAAAAAAAAA"
+    );
+    assert_eq!(
+        super::link(ip, 53211, &secret, Some("phoneAAAAAAAAAAAAAAAAA")),
+        "http://192.168.1.20:53211/#AAAAAAAAAAAAAAAAAAAAAA.phoneAAAAAAAAAAAAAAAAA"
+    );
 }
 
 /// Not a test: serves the real built page (`npm run build:drop` first) on 127.0.0.1 for a few

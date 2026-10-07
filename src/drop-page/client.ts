@@ -143,6 +143,9 @@ export class DropClient implements DropApi {
   async upload(file: File, onProgress: (sent: number) => void, signal: AbortSignal): Promise<string> {
     const id = this.idFor(file);
     let attempt = 0;
+    // Failures that aren't the connection dropping (the PC couldn't write the file, say) get a
+    // few tries, then the file is marked failed instead of retrying silently forever.
+    let otherFailures = 0;
     for (;;) {
       if (signal.aborted) throw new DropError("cancelled");
       try {
@@ -165,6 +168,7 @@ export class DropClient implements DropApi {
       } catch (e) {
         const code = e instanceof DropError ? e.code : "error";
         if (signal.aborted || isFatal(code)) throw e instanceof DropError ? e : new DropError(code);
+        if (code !== "network" && code !== "stale" && ++otherFailures > 5) throw new DropError(code);
         // A dropped connection (the phone locked, Safari paused us): wait, then resume.
         await whenVisible();
         await sleep(retryDelay(attempt++));
@@ -182,7 +186,9 @@ export class DropClient implements DropApi {
 
   async download(offer: PageOffer, onProgress: (got: number) => void): Promise<Blob> {
     if (offer.size > MAX_DOWNLOAD) throw new DropError("too-big");
-    const parts: Uint8Array[] = [];
+    // One small Blob per chunk, so each decrypted chunk can be let go as soon as it's wrapped
+    // (and the final Blob just stitches them) instead of holding every chunk plus a full copy.
+    const parts: Blob[] = [];
     let got = 0;
     for (let i = 0; i < offer.chunks; i++) {
       let attempt = 0;
@@ -190,7 +196,7 @@ export class DropClient implements DropApi {
         try {
           const sealed = await this.request("GET", `/api/down/${offer.id}/${i}`);
           const plain = open(this.keys, ad.down(offer.id, i), sealed);
-          parts.push(plain);
+          parts.push(new Blob([plain as BlobPart]));
           got += plain.length;
           onProgress(got);
           break;
@@ -202,7 +208,7 @@ export class DropClient implements DropApi {
         }
       }
     }
-    return new Blob(parts as BlobPart[], { type: offer.type || "application/octet-stream" });
+    return new Blob(parts, { type: offer.type || "application/octet-stream" });
   }
 }
 
@@ -225,11 +231,18 @@ async function pool<T>(items: T[], limit: number, signal: AbortSignal, work: (it
   if (failed !== null) throw failed;
 }
 
+const CLIENT_ID = /^[A-Za-z0-9_-]{16,43}$/;
+
 /** The client id this browser uses for Drop on this PC address (shared by tabs, so a re-scan works). */
 export function clientId(make: () => string): string {
   const stored = load("tugdrop.client");
-  if (stored && /^[A-Za-z0-9_-]{16,43}$/.test(stored)) return stored;
+  if (stored && CLIENT_ID.test(stored)) return stored;
   const id = make();
   save("tugdrop.client", id);
   return id;
+}
+
+/** Use the client id the PC put in the link (this phone's, carried across a network change). */
+export function adoptClientId(id: string) {
+  if (CLIENT_ID.test(id)) save("tugdrop.client", id);
 }

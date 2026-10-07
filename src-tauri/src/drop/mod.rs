@@ -120,6 +120,9 @@ struct Running {
     session: Arc<Session>,
     /// `None` while there's no network to listen on.
     endpoint: Option<Endpoint>,
+    /// The last port listened on, reused after a network blip so the link changes as little as
+    /// possible.
+    port: u16,
 }
 
 struct Inner {
@@ -186,6 +189,16 @@ fn drop_folder(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "Couldn't find your Pictures folder.".to_string())
 }
 
+/// The link in the QR code. Once a phone is bound, its client id rides along after the secret, so
+/// after a network change (a new address is a new browser origin, with fresh storage) the same
+/// phone re-scans as itself instead of being turned away as "another device".
+fn link(ip: Ipv4Addr, port: u16, secret: &[u8], bound: Option<&str>) -> String {
+    match bound {
+        Some(client) => format!("http://{ip}:{port}/#{}.{client}", crypto::b64(secret)),
+        None => format!("http://{ip}:{port}/#{}", crypto::b64(secret)),
+    }
+}
+
 async fn open_endpoint(
     ip: Ipv4Addr,
     port_hint: u16,
@@ -199,7 +212,7 @@ async fn open_endpoint(
         Err(e) => return Err(e),
     };
     let port = listener.local_addr()?.port();
-    let url = format!("http://{ip}:{port}/#{}", crypto::b64(secret));
+    let url = link(ip, port, secret, session.bound_client().as_deref());
     let qr = qr::encode(&url);
     let (tx, rx) = oneshot::channel::<()>();
     let task = tauri::async_runtime::spawn(server::serve(listener, session, async {
@@ -335,11 +348,13 @@ impl DropService {
                 drop(run);
                 return Ok(self.status());
             }
+            let port = endpoint.as_ref().map_or(0, |e| e.port);
             *run = Some(Running {
                 generation,
                 secret,
                 session,
                 endpoint,
+                port,
             });
         }
         *lock(&self.inner.ended) = None;
@@ -388,11 +403,9 @@ impl DropService {
             let (session, ip, port) = {
                 let run = lock(&self.inner.running);
                 match run.as_ref() {
-                    Some(r) if r.generation == generation => (
-                        r.session.clone(),
-                        r.endpoint.as_ref().map(|e| e.ip),
-                        r.endpoint.as_ref().map_or(0, |e| e.port),
-                    ),
+                    Some(r) if r.generation == generation => {
+                        (r.session.clone(), r.endpoint.as_ref().map(|e| e.ip), r.port)
+                    }
                     _ => return,
                 }
             };
@@ -435,7 +448,12 @@ impl DropService {
         {
             let mut run = lock(&self.inner.running);
             match run.as_mut() {
-                Some(r) if r.generation == generation => r.endpoint = endpoint,
+                Some(r) if r.generation == generation => {
+                    if let Some(e) = &endpoint {
+                        r.port = e.port;
+                    }
+                    r.endpoint = endpoint;
+                }
                 _ => {
                     if let Some(e) = endpoint {
                         e.close();
