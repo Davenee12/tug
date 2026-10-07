@@ -293,7 +293,8 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 // returned as an error: say so, and still hand the row to the window.
                 Ok(stored) if stored.status == crate::messages::Status::Failed => {
                     log::info!("reply from a pop-up not sent (row {id}, message {})", stored.id);
-                    let body = format!("Use Retry in the conversation when your iPhone is nearby.\n\u{201c}{text}\u{201d}");
+                    let body =
+                        format!("Use Retry in the conversation when your iPhone is nearby.\n\u{201c}{text}\u{201d}");
                     note(&app, id, &format!("Couldn't send to {who}"), &body, false);
                     pressed_with(PressKind::Replied, Some(stored));
                 }
