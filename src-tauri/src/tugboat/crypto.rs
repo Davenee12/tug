@@ -1,4 +1,4 @@
-//! tug Drop's crypto, shared byte-for-byte with the phone page (`src/drop-page/crypto.ts`).
+//! Tugboat's crypto, shared byte-for-byte with the phone page (`src/tugboat-page/crypto.ts`).
 //!
 //! The QR carries a 128-bit secret after the `#`, which browsers never send over the network.
 //! Both sides derive two keys from it with HKDF-SHA256: one seals content with XChaCha20-Poly1305
@@ -20,7 +20,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 /// Protocol label: the HKDF salt and the prefix of every associated-data and MAC string.
-pub const VERSION: &str = "tug-drop/1";
+pub const VERSION: &str = "tugboat/1";
 pub const SECRET_LEN: usize = 16;
 pub const NONCE_LEN: usize = 24;
 pub const TAG_LEN: usize = 16;
@@ -29,7 +29,7 @@ pub const OVERHEAD: usize = NONCE_LEN + TAG_LEN;
 /// Request MACs are HMAC-SHA256 truncated to 128 bits.
 pub const MAC_LEN: usize = 16;
 
-/// The two keys derived from one Drop session's secret.
+/// The two keys derived from one Tugboat session's secret.
 pub struct Keys {
     enc: [u8; 32],
     auth: [u8; 32],
@@ -177,9 +177,9 @@ mod tests {
     use super::*;
     use serde::Deserialize;
 
-    /// The same file is asserted by vitest (`src/drop-page/crypto.test.ts`), which is what proves
+    /// The same file is asserted by vitest (`src/tugboat-page/crypto.test.ts`), which is what proves
     /// the page's @noble/ciphers and this RustCrypto code interoperate.
-    const VECTOR: &str = include_str!("../../../src/drop-page/testVector.json");
+    const VECTOR: &str = include_str!("../../../src/tugboat-page/testVector.json");
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]

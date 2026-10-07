@@ -1,4 +1,4 @@
-//! End-to-end: a Drop server on 127.0.0.1 and a test that plays the phone over a real socket,
+//! End-to-end: a Tugboat server on 127.0.0.1 and a test that plays the phone over a real socket,
 //! sealing and signing exactly as the page does.
 
 use std::net::SocketAddr;
@@ -122,7 +122,7 @@ impl Phone {
 }
 
 fn temp_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("tug-drop-test-{}", crypto::new_id()));
+    let dir = std::env::temp_dir().join(format!("tugboat-test-{}", crypto::new_id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -136,7 +136,7 @@ fn pattern(len: usize, seed: u8) -> Vec<u8> {
 #[tokio::test]
 async fn phone_session_over_a_socket() {
     let root = temp_dir();
-    let folder = root.join("tug Drop");
+    let folder = root.join("Tugboat");
     let secret = crypto::new_secret();
     let sink = Arc::new(TestSink::default());
     let incoming = root.join("incoming");
@@ -349,15 +349,15 @@ fn the_link_carries_the_bound_phone_after_a_network_change() {
     );
 }
 
-/// Not a test: serves the real built page (`npm run build:drop` first) on 127.0.0.1 for a few
+/// Not a test: serves the real built page (`npm run build:tugboat` first) on 127.0.0.1 for a few
 /// minutes, so it can be driven from a desktop browser against this server. Prints the link.
 ///   cargo test --manifest-path src-tauri/Cargo.toml manual_page -- --ignored --nocapture
-/// Received files land in a temp folder (printed); one file is on offer; TUG_DROP_SECS sets how long.
+/// Received files land in a temp folder (printed); one file is on offer; TUGBOAT_SECS sets how long.
 #[tokio::test]
 #[ignore]
 async fn manual_page() {
     let root = temp_dir();
-    let folder = root.join("tug Drop");
+    let folder = root.join("Tugboat");
     let secret = crypto::new_secret();
     let session = Arc::new(Session::new(
         &secret,
@@ -371,9 +371,9 @@ async fn manual_page() {
     session.set_pc_text("Text from the PC").unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    println!("drop page: http://{addr}/#{}", crypto::b64(&secret));
+    println!("Tugboat page: http://{addr}/#{}", crypto::b64(&secret));
     println!("received files: {}", folder.display());
-    let secs = std::env::var("TUG_DROP_SECS")
+    let secs = std::env::var("TUGBOAT_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(300);

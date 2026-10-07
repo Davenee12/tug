@@ -26,7 +26,7 @@ rusqlite = { version = "0.40", features = ["bundled", "functions"] }
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
 log = "0.4"
 thiserror = "2"
-# tug Drop (phone <-> PC over the local Wi-Fi): a small HTTP server while Drop is open, the
+# Tugboat (phone <-> PC over the local Wi-Fi): a small HTTP server while Drop is open, the
 # phone page's chunks sealed with XChaCha20-Poly1305 under keys derived from the QR's secret.
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 chacha20poly1305 = "0.10"
@@ -73,7 +73,7 @@ windows-collections = "0.3"
 webview2-com = "0.39"
 
 [dev-dependencies]
-# The tug Drop integration test plays the phone over a real socket.
+# The Tugboat integration test plays the phone over a real socket.
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"

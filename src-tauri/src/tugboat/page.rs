@@ -1,8 +1,8 @@
-//! The phone page, embedded in the binary. `npm run build` builds it (Vite, `vite.drop.config.ts`)
-//! into `src-tauri/drop-page/dist`, and `build.rs` turns that folder into the `ASSETS` table below.
+//! The phone page, embedded in the binary. `npm run build` builds it (Vite, `vite.tugboat.config.ts`)
+//! into `src-tauri/tugboat-page/dist`, and `build.rs` turns that folder into the `ASSETS` table below.
 //! Without a build (a bare `cargo test`), the table holds a one-line placeholder page instead.
 
-include!(concat!(env!("OUT_DIR"), "/drop_page.rs"));
+include!(concat!(env!("OUT_DIR"), "/tugboat_page.rs"));
 
 /// The embedded file at `path` ("/index.html", "/assets/…") and its content type.
 pub fn asset(path: &str) -> Option<(&'static [u8], &'static str)> {

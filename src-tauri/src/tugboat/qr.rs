@@ -1,9 +1,9 @@
-//! The QR code the Drop panel shows, as one SVG path the UI draws (no image, no v-html).
+//! The QR code the Tugboat panel shows, as one SVG path the UI draws (no image, no v-html).
 
 use qrcode::{Color, EcLevel, QrCode};
 use serde::Serialize;
 
-/// Mirrored in `src/types/protocol.ts` (`DropQr`).
+/// Mirrored in `src/types/protocol.ts` (`TugboatQr`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Qr {

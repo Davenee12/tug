@@ -1,9 +1,9 @@
-//! tug Drop: move photos, files and text between the phone and this PC over the local Wi-Fi,
-//! with nothing installed on the phone. Drop's panel shows a QR code for
+//! Tugboat: move photos, files and text between the phone and this PC over the local Wi-Fi,
+//! with nothing installed on the phone. Tugboat's panel shows a QR code for
 //! `http://<LAN address>:<port>/#<secret>`; the phone's camera opens tug's small page in Safari,
 //! which seals everything with keys derived from the secret (see `crypto.rs`).
 //!
-//! Lifetime: the server runs only while Drop is open, on the one address the phone can reach
+//! Lifetime: the server runs only while Tugboat is open, on the one address the phone can reach
 //! (`net.rs`). It stops when the panel closes, when tug quits, or after 10 minutes without a
 //! request; the secret is useless after that. Unfinished uploads are removed on start and stop.
 //! tug never touches Windows Firewall: Windows asks the user the first time on its own.
@@ -35,11 +35,11 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use qr::Qr;
-use session::{DropIncoming, DropOffer, DropText, Session, Sink, Skipped};
+use session::{Session, Sink, Skipped, TugboatIncoming, TugboatOffer, TugboatText};
 
-/// Event carrying a fresh `DropStatus` whenever anything in the panel changes.
-pub const EVENT: &str = "drop-status";
-/// Drop turns itself off after this long without a request from the phone (or a panel action).
+/// Event carrying a fresh `TugboatStatus` whenever anything in the panel changes.
+pub const EVENT: &str = "tugboat-status";
+/// Tugboat turns itself off after this long without a request from the phone (or a panel action).
 pub const IDLE_LIMIT: Duration = Duration::from_secs(10 * 60);
 const TICK: Duration = Duration::from_secs(2);
 /// Look for a network change every this many ticks.
@@ -59,17 +59,17 @@ pub enum Phase {
     NoNetwork,
 }
 
-/// Why Drop stopped by itself.
+/// Why Tugboat stopped by itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Ended {
     Idle,
 }
 
-/// Everything the Drop panel shows. Mirrored in `src/types/protocol.ts`.
+/// Everything the Tugboat panel shows. Mirrored in `src/types/protocol.ts`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DropStatus {
+pub struct TugboatStatus {
     pub phase: Phase,
     /// The full link in the QR code (with the secret), also shown as the manual fallback.
     pub url: Option<String>,
@@ -80,11 +80,11 @@ pub struct DropStatus {
     pub phone: Option<String>,
     /// The phone's page is open and checking in.
     pub phone_active: bool,
-    /// Where received files go (`Pictures\tug Drop`).
+    /// Where received files go (`Pictures\Tugboat`).
     pub folder: Option<String>,
-    pub incoming: Vec<DropIncoming>,
-    pub outgoing: Vec<DropOffer>,
-    pub texts: Vec<DropText>,
+    pub incoming: Vec<TugboatIncoming>,
+    pub outgoing: Vec<TugboatOffer>,
+    pub texts: Vec<TugboatText>,
     /// Text currently offered to the phone.
     pub sent_text: Option<String>,
     pub ended: Option<Ended>,
@@ -137,9 +137,9 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// Owns the one Drop session there can be at a time.
+/// Owns the one Tugboat session there can be at a time.
 #[derive(Clone)]
-pub struct DropService {
+pub struct TugboatService {
     inner: Arc<Inner>,
 }
 
@@ -149,7 +149,7 @@ struct PanelSink(Weak<Inner>);
 impl Sink for PanelSink {
     fn changed(&self, urgent: bool) {
         let Some(inner) = self.0.upgrade() else { return };
-        let svc = DropService { inner };
+        let svc = TugboatService { inner };
         if urgent {
             svc.emit();
         } else if !svc.inner.emit_pending.swap(true, Ordering::SeqCst) {
@@ -167,7 +167,7 @@ impl Sink for PanelSink {
         // The WinRT clipboard needs the main (STA) thread.
         let _ = inner.app.run_on_main_thread(move || {
             if let Err(e) = crate::clipboard::set_text(&text) {
-                log::warn!("drop: couldn't put the phone's text on the clipboard: {e}");
+                log::warn!("tugboat: couldn't put the phone's text on the clipboard: {e}");
             }
         });
     }
@@ -177,15 +177,15 @@ impl Sink for PanelSink {
 fn incoming_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_local_data_dir()
-        .map(|p| p.join("drop-incoming"))
+        .map(|p| p.join("tugboat-incoming"))
         .map_err(|_| "Couldn't find tug's data folder.".to_string())
 }
 
-/// `Pictures\tug Drop`, from Windows' Pictures known folder (wherever it's been moved to).
-fn drop_folder(app: &AppHandle) -> Result<PathBuf, String> {
+/// `Pictures\Tugboat`, from Windows' Pictures known folder (wherever it's been moved to).
+fn tugboat_folder(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .picture_dir()
-        .map(|p| p.join("tug Drop"))
+        .map(|p| p.join("Tugboat"))
         .map_err(|_| "Couldn't find your Pictures folder.".to_string())
 }
 
@@ -218,7 +218,7 @@ async fn open_endpoint(
     let task = tauri::async_runtime::spawn(server::serve(listener, session, async {
         let _ = rx.await;
     }));
-    log::info!("drop: listening on port {port}");
+    log::info!("tugboat: listening on port {port}");
     Ok(Endpoint {
         ip,
         port,
@@ -229,9 +229,9 @@ async fn open_endpoint(
     })
 }
 
-impl DropService {
-    pub fn new(app: AppHandle) -> DropService {
-        DropService {
+impl TugboatService {
+    pub fn new(app: AppHandle) -> TugboatService {
+        TugboatService {
             inner: Arc::new(Inner {
                 app,
                 running: Mutex::new(None),
@@ -252,8 +252,8 @@ impl DropService {
         lock(&self.inner.running).as_ref().map(|r| r.session.clone())
     }
 
-    pub fn status(&self) -> DropStatus {
-        let folder = drop_folder(&self.inner.app)
+    pub fn status(&self) -> TugboatStatus {
+        let folder = tugboat_folder(&self.inner.app)
             .ok()
             .map(|p| p.to_string_lossy().into_owned());
         let ended = *lock(&self.inner.ended);
@@ -270,7 +270,7 @@ impl DropService {
             }
         };
         let Some(session) = session else {
-            return DropStatus {
+            return TugboatStatus {
                 phase: Phase::Off,
                 url: None,
                 address: None,
@@ -295,7 +295,7 @@ impl DropService {
             Some((u, a, q)) => (Some(u), Some(a), q),
             None => (None, None, None),
         };
-        DropStatus {
+        TugboatStatus {
             phase,
             url,
             address,
@@ -311,12 +311,12 @@ impl DropService {
         }
     }
 
-    /// Open Drop (or return the session already open): a new secret, a fresh port.
-    pub async fn start(&self) -> Result<DropStatus, String> {
+    /// Open Tugboat (or return the session already open): a new secret, a fresh port.
+    pub async fn start(&self) -> Result<TugboatStatus, String> {
         if self.session().is_some() {
             return Ok(self.status());
         }
-        let folder = drop_folder(&self.inner.app)?;
+        let folder = tugboat_folder(&self.inner.app)?;
         let incoming = incoming_dir(&self.inner.app)?;
         {
             let incoming = incoming.clone();
@@ -330,8 +330,8 @@ impl DropService {
             Some(ip) => match open_endpoint(ip, 0, &secret, session.clone()).await {
                 Ok(e) => Some(e),
                 Err(e) => {
-                    log::warn!("drop: couldn't listen: {e}");
-                    return Err("Couldn't start Drop on this network.".into());
+                    log::warn!("tugboat: couldn't listen: {e}");
+                    return Err("Couldn't start Tugboat on this network.".into());
                 }
             },
             None => None,
@@ -364,7 +364,7 @@ impl DropService {
         Ok(self.status())
     }
 
-    /// Close Drop: stop listening, invalidate the secret, remove unfinished uploads.
+    /// Close Tugboat: stop listening, invalidate the secret, remove unfinished uploads.
     pub async fn stop(&self, ended: Option<Ended>) {
         let running = lock(&self.inner.running).take();
         if let Some(r) = running {
@@ -374,7 +374,7 @@ impl DropService {
             }
             let incoming = r.session.incoming.clone();
             let _ = tokio::task::spawn_blocking(move || session::clean_incoming(&incoming)).await;
-            log::info!("drop: closed{}", if ended.is_some() { " (idle)" } else { "" });
+            log::info!("tugboat: closed{}", if ended.is_some() { " (idle)" } else { "" });
         }
         *lock(&self.inner.ended) = ended;
         self.emit();
@@ -422,7 +422,7 @@ impl DropService {
             if ticks.is_multiple_of(NET_EVERY) || ip.is_none() {
                 let now = tokio::task::spawn_blocking(net::current).await.ok().flatten();
                 if now != ip {
-                    log::info!("drop: network changed");
+                    log::info!("tugboat: network changed");
                     self.rebind(generation, now, port).await;
                 }
             }
@@ -465,12 +465,12 @@ impl DropService {
         self.emit();
     }
 
-    /// Offer files to the phone, opening Drop first if it's closed (files dragged onto tug).
+    /// Offer files to the phone, opening Tugboat first if it's closed (files dragged onto tug).
     pub async fn offer(&self, paths: Vec<PathBuf>) -> Result<Vec<Skipped>, String> {
         if self.session().is_none() {
             self.start().await?;
         }
-        let session = self.session().ok_or("Drop isn't open.")?;
+        let session = self.session().ok_or("Tugboat isn't open.")?;
         Ok(tokio::task::spawn_blocking(move || session.offer(&paths))
             .await
             .unwrap_or_default())
@@ -483,13 +483,13 @@ impl DropService {
     }
 
     pub fn send_text(&self, text: &str) -> Result<(), String> {
-        self.session().ok_or("Drop isn't open.")?.set_pc_text(text)
+        self.session().ok_or("Tugboat isn't open.")?.set_pc_text(text)
     }
 
-    /// Open the Drop folder in Explorer, or select one file this session saved.
+    /// Open the Tugboat folder in Explorer, or select one file this session saved.
     pub fn open_folder(&self, file: Option<&str>) -> Result<(), String> {
-        let folder = drop_folder(&self.inner.app)?;
-        std::fs::create_dir_all(&folder).map_err(|_| "Couldn't open the tug Drop folder.".to_string())?;
+        let folder = tugboat_folder(&self.inner.app)?;
+        std::fs::create_dir_all(&folder).map_err(|_| "Couldn't open the Tugboat folder.".to_string())?;
         let mut cmd = std::process::Command::new("explorer.exe");
         match file.map(Path::new) {
             Some(p) if self.session().is_some_and(|s| s.saved_path(p)) && p.exists() => {

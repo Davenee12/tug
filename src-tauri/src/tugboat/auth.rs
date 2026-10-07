@@ -1,6 +1,6 @@
-//! Who may drive a Drop session: the request-authentication state machine.
+//! Who may drive a Tugboat session: the request-authentication state machine.
 //!
-//! Every API request carries `Authorization: TugDrop <client>.<seq>.<mac>`: a client id the page
+//! Every API request carries `Authorization: Tugboat <client>.<seq>.<mac>`: a client id the page
 //! made up, a sequence number that only goes up (the page starts it from the clock), and a MAC of
 //! both plus the method and path under the session's auth key. The first request that passes
 //! binds the session to that client; any other client gets "in use" even with the secret (a
@@ -104,9 +104,9 @@ impl Auth {
     }
 }
 
-/// `TugDrop <client>.<seq>.<mac>` → its parts, with the client id and MAC validated.
+/// `Tugboat <client>.<seq>.<mac>` → its parts, with the client id and MAC validated.
 fn parse(header: &str) -> Option<(&str, u64, Vec<u8>)> {
-    let rest = header.strip_prefix("TugDrop ")?;
+    let rest = header.strip_prefix("Tugboat ")?;
     let mut parts = rest.split('.');
     let client = parts.next()?;
     let seq = parts.next()?.parse::<u64>().ok()?;
@@ -121,7 +121,7 @@ fn parse(header: &str) -> Option<(&str, u64, Vec<u8>)> {
 #[cfg(test)]
 pub fn header(keys: &Keys, client: &str, seq: u64, method: &str, path: &str) -> String {
     let mac = keys.request_mac(client, seq, method, path);
-    format!("TugDrop {client}.{seq}.{}", crypto::b64(&mac))
+    format!("Tugboat {client}.{seq}.{}", crypto::b64(&mac))
 }
 
 #[cfg(test)]
@@ -161,7 +161,7 @@ mod tests {
             Err(Rejected::Malformed)
         );
         assert_eq!(
-            a.check(&k, Some("TugDrop a.b.c"), "GET", "/api/state"),
+            a.check(&k, Some("Tugboat a.b.c"), "GET", "/api/state"),
             Err(Rejected::Malformed)
         );
         // Signed with another secret.
