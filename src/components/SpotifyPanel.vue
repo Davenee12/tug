@@ -18,7 +18,15 @@ import {
 } from "lucide-vue-next";
 import { useTugStore, type SpotifyTab } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
-import { idFromUri, playlistDetail, uniqueAlbums, uniqueSongs } from "../lib/spotify";
+import {
+  idFromUri,
+  playlistDetail,
+  SPOTIFY_BETA_LABEL,
+  SPOTIFY_BETA_NOTE,
+  SPOTIFY_RECONNECT,
+  uniqueAlbums,
+  uniqueSongs,
+} from "../lib/spotify";
 import { api, errorMessage } from "../lib/ipc";
 import type { PickerRow } from "../lib/playback";
 import type {
@@ -216,6 +224,12 @@ async function loadTop() {
     await load((v: SpotifyArtist[]) => (topArtists.value = v), () => api.spotifyTopArtists(topRange.value));
   }
 }
+/** Reconnect for the newer scopes, then load the tab that needed them. */
+async function reconnect() {
+  if (!(await tug.connectSpotify())) return;
+  if (tab.value === "recent") void loadRecent();
+  else if (tab.value === "top") void loadTop();
+}
 async function loadQueue() {
   await load((v) => (queue.value = v), () => api.spotifyQueue());
 }
@@ -225,6 +239,8 @@ watch(
   [tab, topMode, topRange],
   ([t]) => {
     detail.value = null;
+    // Connected before tug asked for these scopes: the tab shows how to fix it, not an error.
+    if ((t === "recent" || t === "top") && tug.spotify.needsReconnect) return;
     if (t === "recent") void loadRecent();
     else if (t === "top") {
       topTracks.value = null;
@@ -281,6 +297,7 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
       <header class="flex items-center gap-3 border-b border-hairline-soft px-5 py-3">
         <ListMusic :size="18" class="shrink-0 text-accent-teal" />
         <span class="headline text-[18px] text-ink">Spotify</span>
+        <span class="pill bg-surface-card px-2 py-0 text-[11px] text-muted" :title="SPOTIFY_BETA_NOTE">{{ SPOTIFY_BETA_LABEL }}</span>
         <div class="relative ml-auto">
           <button
             class="flex items-center gap-1.5 rounded-full border border-hairline px-2.5 py-1 text-[12px] text-body active:bg-surface-card"
@@ -505,6 +522,15 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
         </section>
 
         <!-- Recent tab -->
+        <section v-else-if="(tab === 'recent' || tab === 'top') && tug.spotify.needsReconnect" class="p-2">
+          <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
+            <p class="text-[13px] text-body">{{ SPOTIFY_RECONNECT }}</p>
+            <button class="btn-primary btn-sm" :disabled="tug.spotifyConnecting" @click="reconnect">
+              {{ tug.spotifyConnecting ? "Connecting…" : "Reconnect" }}
+            </button>
+          </div>
+        </section>
+
         <section v-else-if="tab === 'recent'" class="p-2">
           <div v-if="tabLoading && !recent" class="flex items-center justify-center gap-2 py-12 text-[13px] text-muted">
             <Loader2 :size="16" class="animate-spin" /> Loading…

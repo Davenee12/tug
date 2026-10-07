@@ -306,6 +306,11 @@ export interface SpotifyStatus {
   connected: boolean;
   /** The connected account's display name, when connected. */
   account: string | null;
+  /**
+   * Connected before tug asked for a scope it now needs (Your top, Recent, Add to playlist), so
+   * those need a reconnect. Optional only so the store's initial value needn't name it.
+   */
+  needsReconnect?: boolean;
 }
 
 /** One of the user's own or followed playlists. */

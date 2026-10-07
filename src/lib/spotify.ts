@@ -3,6 +3,18 @@
 
 import type { RepeatMode, SpotifyAlbum, SpotifyPlaylist, SpotifyTrack } from "../types/protocol";
 
+/**
+ * tug's Spotify app is in Spotify's Development Mode: only accounts added to its allow-list can
+ * connect. The label and line shown wherever Connect is offered, and (mirroring `NOT_INVITED` in
+ * `src-tauri/src/spotify/model.rs`) the message a listener who isn't on the list sees.
+ */
+export const SPOTIFY_BETA_LABEL = "Beta — invite only";
+export const SPOTIFY_BETA_NOTE = "Spotify only lets invited accounts connect for now.";
+export const SPOTIFY_INVITE_ONLY =
+  "This Spotify connection is in an invite-only beta. Ask to be added, or use your iPhone's Spotify app.";
+/** A connection made before tug asked for these features' scopes. Mirrors `RECONNECT_FOR_SCOPES` in model.rs. */
+export const SPOTIFY_RECONNECT = "Reconnect Spotify to use Your top, Recent and Add to playlist.";
+
 /** Lowercase, drop punctuation/emoji, collapse spaces: "Deep Focus 🎧" → "deep focus". */
 export function normalize(s: string): string {
   return s

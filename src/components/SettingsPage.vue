@@ -10,6 +10,7 @@ import { stepZoom } from "../lib/zoom";
 import { escClosesSettings } from "../lib/escape";
 import { formatAddress } from "../lib/format";
 import { normalizeAddress } from "../lib/address";
+import { SPOTIFY_BETA_LABEL, SPOTIFY_BETA_NOTE, SPOTIFY_RECONNECT } from "../lib/spotify";
 import AppAvatar from "./AppAvatar.vue";
 import ConnectPanel from "./ConnectPanel.vue";
 import DeveloperSettings from "./DeveloperSettings.vue";
@@ -524,7 +525,10 @@ async function clearHistory() {
                 <Music :size="20" />
               </span>
               <div class="min-w-0 flex-1">
-                <p class="text-[14px] font-medium text-ink">Spotify</p>
+                <p class="flex flex-wrap items-center gap-2 text-[14px] font-medium text-ink">
+                  Spotify
+                  <span class="pill bg-surface-cream-strong px-2 py-0 text-[11px] text-body">{{ SPOTIFY_BETA_LABEL }}</span>
+                </p>
                 <p class="mt-0.5 text-[13px] text-muted">
                   {{
                     tug.spotify.connected
@@ -534,7 +538,17 @@ async function clearHistory() {
                       : "Your playlists, likes, repeat, shuffle and album art."
                   }}
                 </p>
+                <p v-if="!tug.spotify.connected" class="mt-0.5 text-[12px] text-muted-soft">{{ SPOTIFY_BETA_NOTE }}</p>
+                <p v-else-if="tug.spotify.needsReconnect" class="mt-0.5 text-[12px] text-body">{{ SPOTIFY_RECONNECT }}</p>
               </div>
+              <button
+                v-if="tug.spotify.connected && tug.spotify.needsReconnect"
+                class="btn-primary btn-sm"
+                :disabled="tug.spotifyConnecting"
+                @click="tug.connectSpotify()"
+              >
+                {{ tug.spotifyConnecting ? "Connecting…" : "Reconnect" }}
+              </button>
               <button v-if="tug.spotify.connected" class="btn-secondary btn-sm" @click="disconnectSpotify">Disconnect</button>
               <button v-else class="btn-primary btn-sm" :disabled="tug.spotifyConnecting" @click="tug.connectSpotify()">
                 {{ tug.spotifyConnecting ? "Connecting…" : "Connect" }}

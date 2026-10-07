@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { bestTrack, idFromUri, matchPlaylists, matchScore, nextRepeat, normalize, playlistDetail, sameSong, seekFraction, trackLength, uniqueAlbums, uniqueSongs } from "./spotify";
 import type { SpotifyPlaylist, SpotifyTrack } from "../types/protocol";
+import { SPOTIFY_INVITE_ONLY, SPOTIFY_RECONNECT } from "./spotify";
+import modelRs from "../../src-tauri/src/spotify/model.rs?raw";
 
 const pl = (name: string): SpotifyPlaylist => ({ uri: `spotify:playlist:${name}`, id: name, name, owner: "Jordan", trackCount: 10, imageUrl: null, owned: true });
 const lists = [pl("Deep Focus"), pl("Morning Run"), pl("Discover Weekly"), pl("Coding Flow"), pl("Rainy Day Jazz")];
@@ -163,5 +165,14 @@ describe("uniqueSongs / uniqueAlbums", () => {
       { name: "Big Album (Deluxe)", artists: "Test Artist" },
     ];
     expect(uniqueAlbums(albums)).toHaveLength(2);
+  });
+});
+
+describe("Spotify messages shared with the Rust side", () => {
+  it("match src-tauri/src/spotify/model.rs word for word", () => {
+    // Rust wraps long string constants onto their own line; compare the text either way.
+    const rust = modelRs.replace(/\s+/g, " ");
+    expect(rust).toContain(`NOT_INVITED: &str = "${SPOTIFY_INVITE_ONLY}"`);
+    expect(rust).toContain(`RECONNECT_FOR_SCOPES: &str = "${SPOTIFY_RECONNECT}"`);
   });
 });

@@ -391,6 +391,8 @@ let autostart = false;
 const spotifyState: SpotifyStatus = {
   connected: !noPhone && !params.has("spotifyoff"),
   account: !noPhone && !params.has("spotifyoff") ? "Jordan Lee" : null,
+  // ?spotifyreconnect: connected before tug asked for the Your top / Recent / Add to playlist scopes.
+  needsReconnect: params.has("spotifyreconnect"),
 };
 const artSvg =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="6" fill="#1db954"/><circle cx="24" cy="44" r="7" fill="#0b2e18"/><rect x="29" y="18" width="6" height="26" fill="#0b2e18"/><path d="M35 18 L52 14 V22 L35 26 Z" fill="#0b2e18"/></svg>';
