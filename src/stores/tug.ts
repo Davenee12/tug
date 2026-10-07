@@ -54,6 +54,7 @@ import { bestTrack, nextRepeat, sameSong } from "../lib/spotify";
 import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 import { useTugboatStore } from "./tugboat";
+import { useDevToolsStore } from "./devtools";
 
 /** The Spotify panel's tabs. */
 export type SpotifyTab = "search" | "playlists" | "recent" | "top" | "queue";
@@ -68,7 +69,7 @@ const SPOTIFY_NO_PHONE = "Open Spotify on your iPhone.";
 /** How long to wait for Spotify to open on the iPhone before giving up. */
 const SPOTIFY_WAIT_MS = 60_000;
 
-export type SettingsSection = "general" | "iphone" | "notifications" | "connectors" | "weather" | "privacy" | "about";
+export type SettingsSection = "general" | "iphone" | "notifications" | "connectors" | "weather" | "developer" | "privacy" | "about";
 const SEEN_KEEP = 300;
 /** How many cleared-code message ids to remember (they expire from the Feed in minutes anyway). */
 const CLEARED_CODES_KEEP = 200;
@@ -324,6 +325,7 @@ export const useTugStore = defineStore("tug", () => {
       spotifyPanelOpen.value ||
       whatsNewOpen.value ||
       useTugboatStore().open ||
+      !!useDevToolsStore().confirm ||
       !!pairingRequest.value ||
       !!ringing.value,
   );

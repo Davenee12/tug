@@ -35,10 +35,12 @@
 //   http://localhost:1420/?tugboatwait   the Tugboat panel showing its QR code, no phone yet ("Can't
 //                                     connect?" help appears after 30 s)
 //   http://localhost:1420/?tugboatnonet  the Tugboat panel with no network a phone could use
+//   http://localhost:1420/?devtools   Settings › Developer tools, switched on, with two connected tools
+//   http://localhost:1420/?devconfirm the "wants to text" confirmation card an AI tool's send_text shows
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
+import type { CallRecord, Contact, DevToolsStatus, DeviceStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -547,6 +549,57 @@ if (dropOn || dropWait || dropNoNet) {
   }, 400);
 }
 
+// --- Developer tools (?devtools, ?devconfirm) ---
+const DEV_LABELS: Array<[DevToolsStatus["permissions"][number]["key"], string, boolean]> = [
+  ["codes", "Verification codes", true],
+  ["search", "Search texts and notifications", true],
+  ["dev_notifications", "Developer notifications", true],
+  ["tugboat_files", "Files from Tugboat", true],
+  ["phone_status", "Phone status", true],
+  ["media", "Music controls", false],
+  ["send_text", "Send texts", false],
+  ["tugboat_send", "Send files to your phone", true],
+];
+const devState: DevToolsStatus = {
+  enabled: params.has("devtools") || params.has("devconfirm"),
+  permissions: DEV_LABELS.map(([key, label, on]) => ({ key, label, on })),
+  clients: params.has("devtools")
+    ? [
+        { name: "claude-code", kind: "mcp", lastUsed: Date.now() - 4 * 60_000 },
+        { name: "tug command", kind: "cli", lastUsed: Date.now() - 3 * 3_600_000 },
+      ]
+    : [],
+  cliPath: "C:\\Users\\Jordan\\AppData\\Local\\tug\\bin\\tug.exe",
+  cliDir: "C:\\Users\\Jordan\\AppData\\Local\\tug\\bin",
+  onPath: false,
+  bridgeRunning: true,
+  pending: null,
+};
+const sendDev = () => {
+  const copy = structuredClone(devState);
+  void emit("devtools-status", copy);
+  return copy;
+};
+if (params.has("devtools")) {
+  setTimeout(async () => {
+    const { useTugStore } = await import("../stores/tug");
+    useTugStore().openSettings("developer");
+  }, 400);
+}
+if (params.has("devconfirm")) {
+  setTimeout(() => {
+    devState.pending = {
+      id: 1,
+      tool: "claude-code",
+      toName: "Zoe",
+      toAddress: ZOE,
+      message: "Running 10 minutes late, start without me!",
+      expiresAt: Date.now() + 120_000,
+    };
+    void emit("devtools-confirm", structuredClone(devState.pending));
+  }, 900);
+}
+
 mockIPC(
   (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
@@ -659,6 +712,27 @@ mockIPC(
         return null;
       case "tugboat_open_folder":
         console.log("[devMock] open Tugboat folder", a.path ?? dropFolder);
+        return null;
+      case "devtools_status":
+        return structuredClone(devState);
+      case "devtools_set_enabled":
+        devState.enabled = Boolean(a.enabled);
+        return sendDev();
+      case "devtools_set_permission": {
+        const p = devState.permissions.find((x) => x.key === a.key);
+        if (p) p.on = Boolean(a.on);
+        return sendDev();
+      }
+      case "devtools_revoke":
+        devState.clients = [];
+        return sendDev();
+      case "devtools_set_on_path":
+        devState.onPath = Boolean(a.on);
+        return sendDev();
+      case "devtools_confirm":
+        console.log("[devMock] confirmation answered:", a.send ? "Send" : "Don't send");
+        devState.pending = null;
+        void emit("devtools-confirm", null);
         return null;
       case "get_settings":
         return settings;
