@@ -395,3 +395,71 @@ export interface SpotifyPlayer {
   trackName: string | null;
   deviceName: string | null;
 }
+
+// --- tug Drop (src-tauri/src/drop/mod.rs, session.rs, qr.rs) ---
+
+/** Off; showing the QR code; a phone has connected; or no network a phone could use. */
+export type DropPhase = "off" | "waiting" | "connected" | "noNetwork";
+
+/** The QR code as one SVG path in module units (the panel adds the quiet zone). */
+export interface DropQr {
+  size: number;
+  path: string;
+}
+
+/** A file coming from the phone (in progress, or saved this session). */
+export interface DropIncoming {
+  id: string;
+  name: string;
+  size: number;
+  received: number;
+  done: boolean;
+  /** Full path once saved, for "Show in folder". */
+  path: string | null;
+  at: number;
+}
+
+/** A file offered to the phone. */
+export interface DropOffer {
+  id: string;
+  name: string;
+  size: number;
+  /** Times the phone fetched the whole file. */
+  downloads: number;
+}
+
+/** Text the phone sent (it also went on the clipboard). */
+export interface DropText {
+  id: number;
+  text: string;
+  at: number;
+}
+
+/** Everything the Drop panel shows; also the "drop-status" event. */
+export interface DropStatus {
+  phase: DropPhase;
+  /** The QR link (with the secret), also shown as the manual fallback. */
+  url: string | null;
+  /** "192.168.1.20:53211". */
+  address: string | null;
+  qr: DropQr | null;
+  /** "iPhone", once one has connected. */
+  phone: string | null;
+  /** The phone's page is open and checking in. */
+  phoneActive: boolean;
+  /** Where received files go (Pictures\tug Drop). */
+  folder: string | null;
+  incoming: DropIncoming[];
+  outgoing: DropOffer[];
+  texts: DropText[];
+  /** Text currently offered to the phone. */
+  sentText: string | null;
+  /** Why Drop turned itself off. */
+  ended: "idle" | null;
+}
+
+/** A file that couldn't be offered to the phone, and why. */
+export interface DropSkipped {
+  name: string;
+  reason: "tooBig" | "folder" | "unreadable" | "tooMany";
+}

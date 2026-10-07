@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Bell, CheckCheck, Copy, FastForward, ListMusic, ListPlus, MessageSquare, Moon, Music2, Phone, Plus, Repeat, Rewind, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, ThumbsDown, ThumbsUp, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
+import { Bell, CheckCheck, Copy, FastForward, ListMusic, ListPlus, MessageSquare, Moon, Music2, Phone, Plus, QrCode, Repeat, Rewind, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, ThumbsDown, ThumbsUp, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { useDropStore } from "../stores/drop";
 import { useFocusTrap } from "../lib/focusTrap";
 import { parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
 import {
@@ -22,6 +23,7 @@ import type { Contact, PhoneNotification, SearchResults, SmsMessage } from "../t
 import AppAvatar from "./AppAvatar.vue";
 
 const tug = useTugStore();
+const drop = useDropStore();
 const root = ref<HTMLElement | null>(null);
 const input = ref<HTMLInputElement | null>(null);
 const list = ref<HTMLElement | null>(null);
@@ -150,6 +152,7 @@ function actionIcon(a: Action) {
   if (a.kind === "dnd") return Moon;
   if (a.kind === "show-app") return Bell;
   if (a.target === "spotify") return Music2;
+  if (a.target === "drop") return QrCode;
   return a.target === "settings" ? Settings2 : Plus;
 }
 /** Several people match a "text …": Enter waits until one is picked on purpose. */
@@ -212,6 +215,8 @@ async function run(a: Action) {
   } else if (a.target === "new-message") {
     tug.view = "messages";
     tug.pickerOpen = true;
+  } else if (a.target === "drop") {
+    void drop.show();
   } else if (a.target === "spotify") {
     tug.openSpotifyPanel("search");
   } else {

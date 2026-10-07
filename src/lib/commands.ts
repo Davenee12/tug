@@ -60,7 +60,10 @@ export type Action =
   | { kind: "mark-all-read"; count: number; label: string }
   | { kind: "dnd"; enabled: boolean; label: string }
   | { kind: "show-app"; appId: string; focusId: number; label: string }
-  | { kind: "open"; target: "new-message" | "settings" | "spotify"; label: string };
+  | { kind: "open"; target: OpenTarget; label: string };
+
+/** Panels and screens Ctrl+K can open by name. */
+export type OpenTarget = "new-message" | "settings" | "spotify" | "drop";
 
 const MEDIA: Array<[string[], MediaCommand, string]> = [
   [["play", "resume"], "play", "Play"],
@@ -71,10 +74,12 @@ const MEDIA: Array<[string[], MediaCommand, string]> = [
   [["quieter", "volume down"], "volumeDown", "Volume down"],
 ];
 
-const OPEN: Array<[string[], "new-message" | "settings" | "spotify", string]> = [
+const OPEN: Array<[string[], OpenTarget, string]> = [
   [["new message", "new text", "compose"], "new-message", "New message"],
   [["settings", "preferences"], "settings", "Settings"],
   [["spotify", "music"], "spotify", "Open Spotify"],
+  // tug Drop: files and text to and from the phone over Wi-Fi.
+  [["drop", "tug drop", "send files", "send file", "airdrop", "send to phone", "send to iphone"], "drop", "Open Drop"],
 ];
 
 // Exact phrases only, so "clear" or "code" inside a longer search never fire a one-off action.
