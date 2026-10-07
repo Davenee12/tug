@@ -83,28 +83,34 @@ impl Actor {
 
     /// One Entity Update notification. A truncated value (a long title) is read in full
     /// through Entity Attribute, as the spec intends; the cut value is the fallback.
-    pub(super) async fn on_media_entity(&self, data: &[u8]) {
+    pub(super) async fn on_media_entity(&mut self, data: &[u8]) {
         let Some(update) = ams::EntityUpdate::parse(data) else {
             return log::debug!("AMS update too short to decode: {data:02X?}");
         };
         log::debug!("AMS update {update}");
+        // No extra read while a stalled adapter settles: the cut value will do.
         let attr = self
             .link
             .as_ref()
+            .filter(|_| !self.wedged())
             .and_then(|l| l.media.as_ref())
-            .and_then(|m| m.entity_attribute.as_ref());
+            .and_then(|m| m.entity_attribute.clone());
         let full = match (update.truncated, attr) {
-            (true, Some(attr)) => match read_attribute(attr, update.entity, update.attribute).await {
-                Ok(value) => Some(value),
-                Err(e) => {
-                    log::debug!(
-                        "AMS full value of {} unavailable: {}",
-                        ams::attribute_name(update.entity, update.attribute),
-                        describe_error(&e)
-                    );
-                    None
+            (true, Some(attr)) => {
+                let read = read_attribute(&attr, update.entity, update.attribute).await;
+                self.note_gatt(&read);
+                match read {
+                    Ok(value) => Some(value),
+                    Err(e) => {
+                        log::debug!(
+                            "AMS full value of {} unavailable: {}",
+                            ams::attribute_name(update.entity, update.attribute),
+                            describe_error(&e)
+                        );
+                        None
+                    }
                 }
-            },
+            }
             _ => None,
         };
         let value = full.as_deref().unwrap_or(update.value);
@@ -115,6 +121,7 @@ impl Actor {
     /// The player's supported commands. iOS sends this only when the list changes (a new
     /// player, or the player enabling/disabling a command), so each one is worth a line.
     pub(super) fn on_media_commands(&self, data: &[u8]) {
+        crate::bt_inventory::record_ams_commands(data);
         self.shared.update_now_playing(|np| {
             log::info!(
                 "AMS supported commands (player {:?}): {} raw {data:?}",
@@ -135,6 +142,13 @@ impl Actor {
             np.lists(command),
             np.repeat
         );
+        if self.wedged() {
+            log::info!(
+                "AMS command {} not sent: reconnecting after a Bluetooth stall",
+                command.as_str()
+            );
+            return Err(RECONNECTING.into());
+        }
         let Some(media) = self.link.as_ref().and_then(|l| l.media.as_ref()) else {
             log::info!(
                 "AMS command {} not sent: media not set up ({context})",
@@ -143,7 +157,11 @@ impl Actor {
             return Err("Media controls aren't available right now".into());
         };
         let ch = media.remote_command.clone();
-        match winrt::write(&ch, &[command.id()]).await {
+        let result = winrt::write(&ch, &[command.id()]).await;
+        if self.note_gatt(&result) {
+            return Err(RECONNECTING.into());
+        }
+        match result {
             Ok(()) => {
                 log::info!(
                     "AMS command {} ({}) sent: ok ({context})",
@@ -161,7 +179,7 @@ impl Actor {
                 );
                 if e.is_closed() {
                     self.relink("media controls were closed by Windows");
-                    return Err("Reconnecting to your iPhone. Try again in a moment.".into());
+                    return Err(RECONNECTING.into());
                 }
                 Err(e.to_string())
             }
@@ -206,8 +224,10 @@ impl Actor {
     }
 }
 
-/// Entity Attribute: select the pair, then read its full value.
+/// Entity Attribute: select the pair, then read its full value. Holds the AMS turn across the
+/// pair, so the inventory's own pairs (`inventory::ams_read`) can't interleave with it.
 async fn read_attribute(attr: &GattCharacteristic, entity: u8, attribute: u8) -> Result<Vec<u8>, BleError> {
+    let _turn = super::inventory::AMS_ATTRIBUTE_TURN.lock().await;
     winrt::write(attr, &[entity, attribute]).await?;
     winrt::read(attr).await
 }

@@ -16,6 +16,7 @@ import SpotifyPanel from "./components/SpotifyPanel.vue";
 import WhatsNew from "./components/WhatsNew.vue";
 import PairingDialog from "./components/PairingDialog.vue";
 import { nextDownSince, RECONNECT_GRACE_MS, showConnectionPanel } from "./lib/connectionPanel";
+import { showsReconnecting } from "./lib/connectionStatus";
 import { skippedMessage } from "./lib/tugboat";
 
 const tug = useTugStore();
@@ -50,6 +51,7 @@ const panelInline = computed(() =>
     connection: tug.status.connection,
     hasDevice: tug.status.device != null,
     pairingStale: tug.status.pairingStale,
+    reconnecting: showsReconnecting(tug.status),
     downSince: downSince.value,
     now: now.value,
   }),

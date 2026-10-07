@@ -34,6 +34,10 @@ pub enum MapCommand {
         number: Option<String>,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Bluetooth inventory: the MAP folder names, from the open session (never opens one).
+    InventoryFolders {
+        reply: oneshot::Sender<crate::bt_inventory::Probe<Vec<String>>>,
+    },
 }
 
 #[derive(Clone)]
@@ -68,6 +72,16 @@ impl MapHandle {
             .send(MapCommand::Dial { number, reply })
             .map_err(|_| "Message service stopped".to_string())?;
         rx.await.map_err(|_| "Message service stopped".to_string())?
+    }
+
+    /// The MAP folder names for the Bluetooth inventory.
+    pub async fn inventory_folders(&self) -> crate::bt_inventory::Probe<Vec<String>> {
+        let (reply, rx) = oneshot::channel();
+        if self.tx.send(MapCommand::InventoryFolders { reply }).is_err() {
+            return crate::bt_inventory::Probe::Unavailable("message service stopped".into());
+        }
+        rx.await
+            .unwrap_or_else(|_| crate::bt_inventory::Probe::Unavailable("message service unavailable".into()))
     }
 }
 
@@ -123,7 +137,9 @@ mod worker {
     use crate::map::mns::{self, Outgoing};
     use crate::map::obex::RSP_NOT_FOUND;
     use crate::map::pick::choose_device;
-    use crate::map::session::{find_devices, pull_call_history, pull_contacts, MapDevice, MapError, MapSession};
+    use crate::map::session::{
+        find_devices, pull_call_history, pull_contacts, MapDevice, MapError, MapSession, PBAP_TURN,
+    };
     use crate::messages::{IncomingMessage, Status, StoredMessage, SOURCE_IPHONE_MAP};
     use crate::state::{events, keys, ConnectionState, Shared};
 
@@ -157,6 +173,11 @@ mod worker {
     /// Each pull is a whole PBAP session: however often one is asked for, this far apart is plenty.
     const CALLS_MIN_GAP: Duration = Duration::from_secs(10);
     const CALLS_PULL_TIMEOUT: Duration = Duration::from_secs(45);
+    /// While someone else holds the phone's one PBAP connection (`PBAP_TURN`: the photo pass, or
+    /// the Bluetooth inventory's phonebook check), look again this much later rather than waiting.
+    const CALLS_BUSY_RETRY: Duration = Duration::from_secs(5);
+    const CONTACTS_BUSY_RETRY: Duration = Duration::from_secs(30);
+    const PHOTOS_BUSY_RETRY: Duration = Duration::from_secs(30);
     /// Connect, hands-free setup, dial and a moment to hear the call start, end to end. Kept
     /// short: texts (send, sync, mark read) wait on this worker while a call is being placed.
     const DIAL_TIMEOUT: Duration = Duration::from_secs(15);
@@ -230,6 +251,8 @@ mod worker {
         /// Whether the photo pass has already been started (or deliberately skipped) on this
         /// connection, so it runs at most once per connection. Reset when the session drops.
         photo_pass_started: bool,
+        /// The photo pass found the PBAP turn taken: try it again at this time.
+        photo_retry_at: Option<Instant>,
         /// Last logged message-type counts, so the "message types" line logs only on change.
         last_type_counts: Option<(u32, u32, u32)>,
         /// Consecutive message-access failures while the phone is reachable but not offering it,
@@ -265,6 +288,7 @@ mod worker {
             mns_reopened_at: None,
             photo_task: None,
             photo_pass_started: false,
+            photo_retry_at: None,
             last_type_counts: None,
             connect_failures: 0,
             next_retry: None,
@@ -294,6 +318,9 @@ mod worker {
                     }
                     Some(MapCommand::Dial { number, reply }) => {
                         let _ = reply.send(w.dial(number.as_deref()).await);
+                    }
+                    Some(MapCommand::InventoryFolders { reply }) => {
+                        let _ = reply.send(w.inventory_folders().await);
                     }
                 },
                 // The phone pushed a live-texts event (or just connected to the MNS).
@@ -508,6 +535,20 @@ mod worker {
             self.set_state(false, shown);
         }
 
+        /// Bluetooth inventory: list the MAP folders on the open session. A timeout or a closed link
+        /// may leave the session out of step, so it's dropped like any failed sync.
+        async fn inventory_folders(&mut self) -> crate::bt_inventory::Probe<Vec<String>> {
+            use crate::bt_inventory::Probe;
+            let Some(session) = self.session.as_mut() else {
+                return Probe::Unavailable("message access isn't connected right now".into());
+            };
+            let result = crate::map::probe::folders(session).await;
+            if let Err(e @ (MapError::Timeout | MapError::Closed)) = &result {
+                self.fail(e);
+            }
+            Probe::from_result(result)
+        }
+
         /// Handle one message from the MNS server: the phone connecting, or an event report.
         async fn on_mns(&mut self, msg: mns::ServerMessage) {
             match msg {
@@ -536,6 +577,7 @@ mod worker {
                     self.refresh().await;
                 }
                 mns::ServerMessage::Event(event) => {
+                    crate::bt_inventory::record_mns_event(event.kind);
                     self.last_event_at = Some(Instant::now());
                     self.set_live(LiveTexts::Active);
                     log::debug!(
@@ -618,12 +660,21 @@ mod worker {
             if Instant::now() < self.next_contacts_sync {
                 return;
             }
+            // The phone takes one PBAP connection at a time: if the photo pass or the inventory's
+            // phonebook check has it, come back later rather than wait (texts run on this worker).
+            let Ok(turn) = PBAP_TURN.try_lock() else {
+                log::debug!("contacts sync deferred: the phonebook connection is in use");
+                self.next_contacts_sync = Instant::now() + CONTACTS_BUSY_RETRY;
+                return;
+            };
             // Bounded as a whole: the pull runs on the same worker as sending and mark-read. No
             // photos here (`with_photos: false`) — asking for them made the pull ~4x slower and so
             // blocked texts; a separate background pass fetches faces off this worker.
             let pulled = tokio::time::timeout(CONTACTS_PULL_TIMEOUT, pull_contacts(&device_id, false))
                 .await
                 .unwrap_or(Err(MapError::Timeout));
+            // Released before the photo pass below takes its own turn.
+            drop(turn);
             match pulled {
                 // The iPhone answers with an empty list, not a refusal, while Sync Contacts is
                 // off. Keep any names already saved and ask again rather than in 6 hours.
@@ -697,6 +748,7 @@ mod worker {
             // One attempt per connection either way: mark it before the due check so a not-due
             // connection doesn't re-read the setting on every 15-minute resync.
             self.photo_pass_started = true;
+            self.photo_retry_at = None;
             let last = self
                 .shared
                 .store
@@ -708,6 +760,14 @@ mod worker {
                 log::debug!("contact photos synced within the day; skipping the photo pass");
                 return;
             }
+            // The pass holds the phone's one PBAP connection, so it takes the turn here and keeps
+            // it until its thread ends. If the inventory's phonebook check has it, try again soon.
+            let Ok(turn) = PBAP_TURN.try_lock() else {
+                log::debug!("contact photo pass deferred: the phonebook connection is in use");
+                self.photo_pass_started = false;
+                self.photo_retry_at = Some(Instant::now() + PHOTOS_BUSY_RETRY);
+                return;
+            };
             let shared = self.shared.clone();
             // Its own thread with its own current-thread runtime, like the MAP worker: the pull's
             // WinRT handles aren't Send, so it can't be a task on the worker's runtime, and this
@@ -715,6 +775,7 @@ mod worker {
             self.photo_task = std::thread::Builder::new()
                 .name("tug-photos".into())
                 .spawn(move || {
+                    let _turn = turn;
                     let rt = tokio::runtime::Builder::new_current_thread()
                         .enable_time()
                         .build()
@@ -725,12 +786,20 @@ mod worker {
                 .ok();
         }
 
+        /// A photo pass that found the PBAP turn taken: start it once its retry time comes.
+        fn retry_deferred_photos(&mut self) {
+            if self.photo_retry_at.is_some_and(|t| Instant::now() >= t) {
+                self.maybe_sync_photos();
+            }
+        }
+
         /// Let the next connection start a fresh photo pass. A pass already running isn't force
         /// killed — it's its own thread — but it ends on its own: once the phone is gone the pull
         /// fails fast (bounded by a timeout anyway), and a failed pull never clears existing photos,
         /// so a late result is harmless. `maybe_sync_photos` won't start another until it finishes.
         fn reset_photo_pass(&mut self) {
             self.photo_pass_started = false;
+            self.photo_retry_at = None;
         }
 
         /// Pull recent calls no sooner than `after` from now (nor `CALLS_MIN_GAP` after the
@@ -752,17 +821,19 @@ mod worker {
             if Instant::now() < self.next_calls_sync {
                 return;
             }
-            // The background photo pass holds the phone's contacts (PBAP) link; a second PBAP
-            // connection fails with "only one usage of each socket address". Wait for it.
-            if self.photo_task.as_ref().is_some_and(|t| !t.is_finished()) {
-                self.next_calls_sync = Instant::now() + Duration::from_secs(5);
+            // The photo pass or the inventory's phonebook check holds the phone's one PBAP
+            // connection (a second fails with "only one usage of each socket address"): look again
+            // shortly rather than wait on this worker.
+            let Ok(turn) = PBAP_TURN.try_lock() else {
+                self.next_calls_sync = Instant::now() + CALLS_BUSY_RETRY;
                 return;
-            }
+            };
             self.last_calls_pull = Some(Instant::now());
             self.next_calls_sync = Instant::now() + CALLS_RESYNC;
             let pulled = tokio::time::timeout(CALLS_PULL_TIMEOUT, pull_call_history(&device_id, CALLS_MAX))
                 .await
                 .unwrap_or(Err(MapError::Timeout));
+            drop(turn);
             match pulled {
                 // An empty answer is also how Sync Contacts being off looks, so it only wipes the
                 // list when contacts are coming through (then the history really was cleared).
@@ -828,6 +899,7 @@ mod worker {
             if result.is_ok() {
                 self.sync_contacts_if_due().await;
                 self.sync_calls_if_due().await;
+                self.retry_deferred_photos();
             }
             self.check_mns_grace();
             match result {
@@ -915,6 +987,7 @@ mod worker {
             // SMS_CDMA, MMS, EMAIL and any the phone left blank.
             let mut type_counts: Option<(u32, u32, u32)> = None;
             if !listed.is_empty() {
+                crate::bt_inventory::record_listing_types(listed.iter().map(|m| m.msg_type.as_str()));
                 let (mut sms_gsm, mut im, mut other) = (0u32, 0u32, 0u32);
                 for m in &listed {
                     match m.msg_type.as_str() {

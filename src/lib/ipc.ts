@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppName,
+  BtInventory,
   CallRecord,
   Contact,
   SearchResults,
@@ -68,6 +69,8 @@ export const api = {
   copyText: (text: string) => invoke<void>("copy_text", { text }),
   /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */
   copyDiagnostics: () => invoke<string>("copy_diagnostics"),
+  /** The Bluetooth inventory: what the iPhone exposes to tug (runs it now; privacy-safe). */
+  btInventory: () => invoke<BtInventory>("bt_inventory"),
   /** Open tug's log folder in Explorer. */
   openLogsFolder: () => invoke<void>("open_logs_folder"),
   /** Forward an uncaught frontend error to the Rust log (name/message/stack-top only, no bodies). */
