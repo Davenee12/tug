@@ -882,6 +882,64 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_conversation_hides_all_of_it_not_just_whats_loaded() {
+        let s = Store::in_memory().unwrap();
+        // Jane's conversation, far older than any page the window has loaded, under the name
+        // variants iOS uses; Sam is someone else.
+        notify(&s, 1, "Jane Doe", "lunch?", 100);
+        notify(&s, 2, "jane doe replied to you", "ok", 200);
+        notify(&s, 3, "  Jane  Doe ", "on my way", 900);
+        notify(&s, 4, "Sam", "yo", 950);
+        s.insert_incoming(&incoming("H1", "+13025550100", "see you at 7"))
+            .unwrap();
+        s.insert_incoming(&incoming("H2", "+13025550199", "hello")).unwrap();
+        let titles = |s: &Store| {
+            s.recent(50, None, None)
+                .unwrap()
+                .into_iter()
+                .map(|n| n.title)
+                .collect::<Vec<_>>()
+        };
+        let bodies = |s: &Store| {
+            s.recent_messages(50)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.body)
+                .collect::<Vec<_>>()
+        };
+        let jane = [(MESSAGES_APP.to_string(), "Jane Doe".to_string())];
+        let address = ["+13025550100".to_string()];
+
+        s.set_conversation_hidden(&jane, &address, 5_000, true).unwrap();
+        assert_eq!(titles(&s), vec!["Sam"]);
+        assert_eq!(bodies(&s), vec!["hello"]);
+        assert!(s.search("lunch", 10, None).unwrap().is_empty(), "not in search either");
+        assert!(s.search_messages("see you", 10).unwrap().is_empty());
+
+        // A new text from her after the delete starts the conversation again.
+        notify(&s, 5, "Jane Doe", "you there?", 6_000);
+        assert_eq!(titles(&s), vec!["Jane Doe", "Sam"]);
+
+        // Undo brings back exactly what that delete hid, and leaves the new one alone.
+        s.set_conversation_hidden(&jane, &address, 5_000, false).unwrap();
+        assert_eq!(titles(&s).len(), 5);
+        assert_eq!(bodies(&s).len(), 2);
+    }
+
+    #[test]
+    fn undoing_a_delete_leaves_an_earlier_delete_in_place() {
+        let s = Store::in_memory().unwrap();
+        notify(&s, 1, "Jane Doe", "old", 100);
+        let jane = [(MESSAGES_APP.to_string(), "Jane Doe".to_string())];
+        s.set_conversation_hidden(&jane, &[], 1_000, true).unwrap();
+        notify(&s, 2, "Jane Doe", "new", 2_000);
+        s.set_conversation_hidden(&jane, &[], 3_000, true).unwrap();
+        s.set_conversation_hidden(&jane, &[], 3_000, false).unwrap();
+        let rows = s.recent(10, None, None).unwrap();
+        assert_eq!(rows.iter().map(|n| n.message.as_str()).collect::<Vec<_>>(), vec!["new"]);
+    }
+
+    #[test]
     fn deleted_texts_stay_hidden_and_arent_synced_again() {
         let s = Store::in_memory().unwrap();
         let a = s

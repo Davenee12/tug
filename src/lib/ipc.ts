@@ -84,8 +84,9 @@ export const api = {
   openWindowsSettings: (page: "bluetooth" | "location" | "notifications") => invoke<void>("open_windows_settings", { page }),
   /** Open an http(s) link (a notification's "Open in browser") in the default browser. */
   openUrl: (url: string) => invoke<void>("open_url", { url }),
-  setHidden: (notificationIds: number[], messageIds: number[], hidden: boolean) =>
-    invoke<void>("set_hidden", { notificationIds, messageIds, hidden }),
+  /** Delete a conversation (all of it, by sender and address); returns the delete's stamp, which undoes it as `undoAt`. */
+  setConversationHidden: (senders: [string, string][], addresses: string[], undoAt: number | null) =>
+    invoke<number>("set_conversation_hidden", { senders, addresses, undoAt }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),
   setWatching: (on: boolean) => invoke<void>("set_watching", { on }),
   /** Check the iPhone's switches now (Sync Contacts is read by asking the phone). */

@@ -320,25 +320,32 @@ pub fn mark_read(state: State<'_, AppState>, message_ids: Vec<i64>) {
     }
 }
 
-/// Delete a conversation from tug (`hidden: true`) or undo that. Local only.
+/// Delete a conversation from tug, all of it rather than the rows the window has loaded:
+/// notifications from `senders` ((app id, title) pairs) and texts with `addresses`. Returns the
+/// delete's timestamp; passing it back as `undo_at` undoes exactly that delete. Local only.
 #[tauri::command]
-pub fn set_hidden(
+pub fn set_conversation_hidden(
     state: State<'_, AppState>,
-    notification_ids: Vec<i64>,
-    message_ids: Vec<i64>,
-    hidden: bool,
-) -> Result<()> {
-    let at = hidden.then(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0)
-    });
+    senders: Vec<(String, String)>,
+    addresses: Vec<String>,
+    undo_at: Option<i64>,
+) -> Result<i64> {
+    let (at, hidden) = match undo_at {
+        Some(at) => (at, false),
+        None => (
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+            true,
+        ),
+    };
     state
         .shared
         .store
-        .set_hidden(&notification_ids, &message_ids, at)
-        .map_err(|e| e.to_string())
+        .set_conversation_hidden(&senders, &addresses, at, hidden)
+        .map_err(|e| e.to_string())?;
+    Ok(at)
 }
 
 /// Whether Windows is blocking tug's pop-ups, for the warning in Settings.

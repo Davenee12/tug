@@ -31,6 +31,7 @@ import { copyText } from "../lib/clipboard";
 import { isAddressLike, normalizeAddress } from "../lib/address";
 import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync } from "../lib/messageSync";
 import { canSeeWindow } from "../lib/attention";
+import { grantedOnceCache } from "../lib/permission";
 import { arrivedDuringGap, GAP_COLLECT_MS, gapSummaryText, planGapPopups } from "../lib/reconnectPopups";
 import type { ToastSpec } from "../types/protocol";
 import { isKnownConversation, outgoingAddresses, senderIndex, senderMayToast, threadCounts } from "../lib/senders";
@@ -574,23 +575,32 @@ export const useTugStore = defineStore("tug", () => {
     void api.logFrontendError("note", "MissedText", `${what} missing from the window (${add.length}); added`, "").catch(() => undefined);
   }
 
-  // Windows notification permission: ask once per launch, not on every notification.
-  let toastPermission: boolean | null = null;
   const toasts = new ToastLimiter();
   let toastSummary: number | undefined;
-  /** Windows will show pop-ups (permission granted). The settings policy is `shouldPopUp`. */
-  async function hasToastPermission(): Promise<boolean> {
-    if (toastPermission === null) {
-      toastPermission = (await isPermissionGranted()) || (await requestPermission()) === "granted";
-    }
-    return toastPermission;
-  }
+  /**
+   * Windows will show pop-ups (permission granted). The settings policy is `shouldPopUp`. A grant is
+   * remembered for the launch; a refusal is asked again, so turning tug's notifications on in
+   * Windows Settings works without a restart (lib/permission).
+   */
+  const hasToastPermission = grantedOnceCache(
+    async () => (await isPermissionGranted()) || (await requestPermission()) === "granted",
+  );
+
+  /**
+   * Resolves once the saved settings and contacts are loaded. Listeners go in before the startup
+   * reads (so no event is lost), which left a notification arriving in the first moments of a
+   * launch judged against the defaults: muted apps, quiet hours, VIPs and known senders not yet
+   * known. Every pop-up decision waits for this.
+   */
+  let markReady: () => void = () => undefined;
+  let ready = new Promise<void>((resolve) => (markReady = resolve));
   /** Whether the settings let a pop-up through right now, for a given event (see lib/popup). */
   const popupAllowed = (event: PopupEvent) => shouldPopUp(event, settings.value, new Date());
 
   // Low phone battery: one pop-up at 20% and one at 10% per discharge (see lib/battery).
   let batteryAlerted: number | null = null;
   async function checkBattery(level: number | null) {
+    await ready;
     const r = batteryAlert(level, batteryAlerted);
     // An alert that couldn't be shown (switch off, Do not disturb…) isn't used up: it comes
     // when it can. Only a shown alert (or a charge, which resets it) moves the mark.
@@ -674,8 +684,9 @@ export const useTugStore = defineStore("tug", () => {
   function queueGapPopup(n: PhoneNotification) {
     gapQueue.push(n);
     if (gapTimer !== undefined) return;
-    gapTimer = window.setTimeout(() => {
+    gapTimer = window.setTimeout(async () => {
       gapTimer = undefined;
+      await ready;
       const items = gapQueue.filter(popupEligible);
       gapQueue = [];
       const plan = planGapPopups(items);
@@ -688,6 +699,7 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   async function maybeToast(n: PhoneNotification, { replayed = false } = {}) {
+    await ready;
     // Pre-existing is backlog, except a gap arrival replayed after a reconnect (queueGapPopup).
     if (n.flags.preExisting && !replayed) return;
     if (!popupEligible(n)) return;
@@ -713,6 +725,7 @@ export const useTugStore = defineStore("tug", () => {
    * on — the backend copies the code itself, and a code text has nothing to clear in the Feed.
    */
   async function maybeToastMessage(m: SmsMessage) {
+    await ready;
     const code = codeToastForMessage(m, notifications.value, { contacts: contacts.value });
     if (code === null || recentlyCodeToasted(code)) return;
     // A code text obeys the same policy as a notification carrying a code (Messages app, no call).
@@ -822,18 +835,21 @@ export const useTugStore = defineStore("tug", () => {
    * a new text from them starts the conversation again.
    */
   async function deleteConversation(c: { key: string; contact: string; addresses: string[]; notifications: PhoneNotification[] }) {
-    const gone = new Set(c.notifications.map((n) => n.id));
-    const removedNotifications = notifications.value.filter((n) => gone.has(n.id));
+    // The backend hides the whole conversation by sender and address, not just the rows loaded
+    // here (the newest pages), so its older part can't come back in Feed scroll or search.
+    const senders = [...new Map(c.notifications.map((n) => [`${n.appId}\u0000${n.title}`, [n.appId, n.title] as [string, string]])).values()];
+    const keys = new Set(c.notifications.map(threadKey));
+    const removedNotifications = notifications.value.filter((n) => keys.has(threadKey(n)));
     const removedMessages = messages.value.filter((m) => c.addresses.includes(m.address));
-    const nIds = removedNotifications.map((n) => n.id);
-    const mIds = removedMessages.map((m) => m.id);
+    let at: number;
     try {
-      await api.setHidden(nIds, mIds, true);
+      at = await api.setConversationHidden(senders, c.addresses, null);
     } catch (e) {
       notify("error", errorMessage(e));
       return;
     }
-    const hiddenMessages = new Set(mIds);
+    const gone = new Set(removedNotifications.map((n) => n.id));
+    const hiddenMessages = new Set(removedMessages.map((m) => m.id));
     notifications.value = notifications.value.filter((n) => !gone.has(n.id));
     messages.value = messages.value.filter((m) => !hiddenMessages.has(m.id));
     if (selectedThread.value === c.key) selectedThread.value = null;
@@ -842,7 +858,7 @@ export const useTugStore = defineStore("tug", () => {
       run: () => {
         flash.value = null;
         void attempt(async () => {
-          await api.setHidden(nIds, mIds, false);
+          await api.setConversationHidden(senders, c.addresses, at);
           for (const n of removedNotifications) upsert(notifications.value, n);
           for (const m of removedMessages) upsertMessage(m);
           messages.value.sort(byArrival);
@@ -1227,6 +1243,8 @@ export const useTugStore = defineStore("tug", () => {
     // Let code rows age out of the Feed's recency window even when nothing else changes.
     clockTimer = window.setInterval(() => (clock.value = Date.now()), 60_000);
     await attempt(loadSettings);
+    // Settings and contacts are in: pop-ups held since the listeners went in can be judged now.
+    markReady();
     // Settings are in (so lastSeenVersion is known): decide whether to greet with "What's new".
     void checkWhatsNew();
     // A phone that's already low when tug starts gets its alert now, not one step later:
@@ -1256,6 +1274,7 @@ export const useTugStore = defineStore("tug", () => {
     watchRenew = undefined;
     clockTimer = undefined;
     messagesReady = false;
+    ready = new Promise<void>((resolve) => (markReady = resolve));
     started = false;
   }
 
