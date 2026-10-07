@@ -2,7 +2,7 @@
 name = "tug"
 version = "0.5.10"
 description = "Bluetooth LE companion that mirrors iPhone notifications and media controls to Windows"
-authors = ["Dave James"]
+authors = ["tug contributors"]
 edition = "2021"
 
 [lib]
@@ -23,9 +23,21 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 rusqlite = { version = "0.40", features = ["bundled", "functions"] }
-tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
 log = "0.4"
 thiserror = "2"
+# Tugboat (phone <-> PC over the local Wi-Fi): a small HTTP server while Tugboat is open, the
+# phone page's chunks sealed with XChaCha20-Poly1305 under keys derived from the QR's secret.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+# Tugboat's own accept loop: header timeouts and a connection cap, which axum::serve lacks.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+qrcode = { version = "0.14", default-features = false }
+tauri-plugin-dialog = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
@@ -41,6 +53,7 @@ windows = { version = "0.62", features = [
   "Devices_Geolocation",
   "Devices_Radios",
   "Media",
+  "Media_Audio",
   "Media_Playback",
   "Networking",
   "Networking_Sockets",
@@ -50,7 +63,14 @@ windows = { version = "0.62", features = [
   "Web_Http",
   "Web_Http_Headers",
   "Win32_Foundation",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
+  "Win32_Networking_WinSock",
   "Win32_Security_Credentials",
+  # Wake detection: the suspend/resume notification and the sleep-inclusive vs awake-only clocks.
+  "Win32_System_Power",
+  "Win32_System_WindowsProgramming",
+  "Win32_Storage_FileSystem",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
@@ -58,6 +78,11 @@ windows-collections = "0.3"
 # Same version Tauri already pulls in (see Cargo.lock), so the WebView2 controller handed back by
 # `with_webview` is the same type: lets us hook ProcessFailed to log web-content crashes.
 webview2-com = "0.39"
+
+[dev-dependencies]
+# The Tugboat integration test plays the phone over a real socket.
+hyper = { version = "1", features = ["client", "http1"] }
+http-body-util = "0.1"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

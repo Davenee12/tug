@@ -1,0 +1,32 @@
+{
+  "_comment": "Shared Tugboat crypto vector, asserted by cargo test (src-tauri/src/tugboat/crypto.rs) and vitest (src/tugboat-page/crypto.test.ts).",
+  "secret": "000102030405060708090a0b0c0d0e0f",
+  "encKey": "c4c64b0a54c97634a09aaddaa36ca581eaa689f029ac1e90e107de97cce10d68",
+  "authKey": "a3f60b7b51fdb3c69c4ce2d0a17f2562da1aedc8d734256ec4c37e0db0f32f49",
+  "nonce": "404142434445464748494a4b4c4d4e4f5051525354555657",
+  "ads": {
+    "fileId": "AAAAAAAAAAAAAAAAAAAAAA",
+    "index": 3,
+    "offerId": "BBBBBBBBBBBBBBBBBBBBBB",
+    "offerIndex": 7,
+    "up": "tugboat/1|up|AAAAAAAAAAAAAAAAAAAAAA|3",
+    "down": "tugboat/1|down|BBBBBBBBBBBBBBBBBBBBBB|7",
+    "req": "tugboat/1|req|Y2xpZW50LWlkLTEyMzQ1Ng|1843200000000001",
+    "res": "tugboat/1|res|Y2xpZW50LWlkLTEyMzQ1Ng|1843200000000001"
+  },
+  "plaintext": "Tugboat test vector: photos, files and text.",
+  "sealed": "404142434445464748494a4b4c4d4e4f505152535455565718344f9226713c5603fd9d98c0b5b2cc523185fbf125e99fb12fa986b319ffd99bf86aa8b421250d1e29f474ec758c31977ccc5b4d839e17336d1d2e",
+  "mac": {
+    "client": "Y2xpZW50LWlkLTEyMzQ1Ng",
+    "seq": 1843200000000001,
+    "method": "PUT",
+    "path": "/api/up/AAAAAAAAAAAAAAAAAAAAAA/3",
+    "mac": "GlGlXj1NuHw5kqIuQgYl9w"
+  },
+  "fileId": {
+    "name": "IMG_0001.HEIC",
+    "size": 2481152,
+    "lastModified": 1790000000000,
+    "id": "TQXok9nOQ3E4A9EcpTefLg"
+  }
+}

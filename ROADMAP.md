@@ -65,15 +65,116 @@ image cache caps, crash diagnostics, code pop-up dedupe, contact names. See CHAN
   client; Testing-mode tokens expire every 7 days) and Slack (decide its job first).
 - **Join a FaceTime link** from a text in the browser. Starting a FaceTime call isn't possible.
 - **Clear "can't connect" help** when a PC's Bluetooth can't work with an iPhone.
-- **Welcome back** digest; **Calls in Ctrl+K search**; **Send later**; **Remind me to call back**.
+- **Welcome back** digest; **Calls in Ctrl+K search**; **Remind me to call back** (Send later is
+  planned for v0.5.14).
 - **Spotify for everyone** needs Spotify's Extended Quota (registered business, 250k users).
 
-## v0.5.11 — tug Drop (next feature release, after v0.5.10)
+## v0.5.11 — Tugboat (formerly tug Drop) (next feature release, after v0.5.10)
 Move photos, files and text between the phone and PC over home Wi-Fi with no app and no fees:
-scan a QR in tug, a tug page opens in Safari, send or receive. See docs/COMPANION-PLAN.md
+scan a QR in tug, a tug page opens in the phone's browser (iPhone or Android), send or receive. See docs/COMPANION-PLAN.md
 "Phase 0.5" for the design and safety notes.
+- Your exact iPhone in the sidebar and Settings › iPhone: tug reads the model over Bluetooth (Device
+  Information Service) and shows its name ("iPhone 15 Pro Max") with tug's own drawing of that
+  design (home button, notch or Dynamic Island; mini/regular/Plus·Max). Shown on a real iPhone 15 Pro Max.
+- Fixed: false "resumed from sleep" when the Bluetooth adapter stalls; recover a wedged adapter by
+  reconnecting.
+
+## v0.5.12 — tug for developers: MCP server + `tug` CLI (planned, Dave 2026-10-06)
+tug runs a local MCP server (Claude Code, Codex, Cursor, VS Code agent mode, ChatGPT desktop) and
+ships a `tug` CLI.
+- **Tools:** newest verification code, search texts/notifications, recent dev notifications
+  (GitHub/CI/deploys), files from tug Drop (e.g. a phone screenshot into the agent), now
+  playing/play, phone battery/status, send a text (always confirmed with a click in tug).
+- **Safety:** off by default, local-only (stdio / localhost), read-only unless enabled per tool,
+  clear consent copy that AI tools will read messages.
+- **CLI:** `tug code`, `tug drop <file>`, `tug text <name> "<msg>"`.
+- Docs page with copy-paste setup per tool; "Works with" badges.
+
+## v0.5.13 — use more of Bluetooth (planned, Dave 2026-10-06)
+1. **Bluetooth inventory probe** (PR `feat/bt-inventory`; ships whenever it's ready): logs one
+   privacy-safe `bt-inventory:` line once per app run (and 15 min later) so we learn what the
+   phone really exposes before building on it.
+2. **Small wins, if the inventory confirms them:** ANCS categories (a coming-up card from Schedule
+   alerts, a voicemail card, Important pinned, the phone's own action labels); deeper AMS (a real
+   phone volume bar, "Song 4 of 12", playback speed, Apple Music shuffle/repeat state);
+   travel-aware time from the Current Time Service; connection quality from Windows 11 link info;
+   richer contact cards and birthdays if PBAP sends the fields (the inventory only counts the
+   fields tug already asks for, so this needs its own check).
+3. **Spike:** "Play iPhone audio on this PC" via `AudioPlaybackConnection` (A2DP sink).
+- **iOS limits:** signal bars/carrier need HFP (held by Windows; parked with calling); no charging
+  state, AirPods/Watch battery or Focus over Bluetooth; we won't parse Apple Continuity adverts.
+
+## v0.5.14 — everyday texting + Now Playing polish (planned, Dave 2026-10-06)
+1. **Send later:** write a text now, tug sends it at the chosen time while the phone is connected
+   (if it isn't, it sends on reconnect with a clear "Sending late" note; cancel/edit from the
+   conversation).
+2. **Quick replies:** one-tap replies on texts and in the Windows pop-up ("On my way", "Call you
+   later", …), editable in Settings.
+3. **Remind me:** right-click/⋯ on a text or notification → "Remind me in 1 hour / tonight /
+   tomorrow", shown as a Windows pop-up that opens the conversation.
+4. **Colours from album art:** the Now Playing card tints from the current cover (Spotify art
+   today; Apple Music if v0.5.13 finds a cover source), readable in light and dark.
+- Find My was considered and dropped: no public API, and tug won't use Apple ID logins.
+
+## v0.5.15 — bug fixing only
+Per the release cadence above.
+
+## v0.5.16 — voice to code (planned headline)
+Hold-to-talk dictation that types into the focused app (VS Code, terminal, the Claude Code
+prompt), with a code-aware mode (camelCase, symbols, file names). Fully local open-source speech
+recognition (e.g. whisper.cpp via whisper-rs), no account.
+
+## Later — developer track
+- tug Drop → agent/editor handoff.
+- Coding focus mode: hold pop-ups while VS Code/terminal is in front, summary after.
+- Dev notification actions (Open PR / Open in VS Code).
+- "You walked away" away-mode from Bluetooth range.
+- Pushing agent alerts *to* the iPhone isn't possible over Bluetooth without an app (ANCS is
+  phone→PC only); options are text-to-self (unverified) or the companion app.
+
+**Landed (PR `feat/tug-drop`, not yet released):**
+- **Entry points:** a Tugboat button in the sidebar under the iPhone, `tugboat` (or `drop`, `send
+  files`, `send to phone`) in Ctrl+K, and files dragged onto tug's window (opens Tugboat with them
+  offered). Works with Bluetooth down. Future CLI verb: `tug boat <file>`.
+- **Panel:** QR code + "Type the link instead"; "Can't connect?" help after 30 s (same Wi-Fi, allow
+  tug on Private networks, guest Wi-Fi/VPN/Private Relay); then the connected phone, files and
+  text in both directions with progress, Show in folder and Copy.
+- **Phone page** (bundled into tug, no CDN): Photos & videos / Files buttons, chunked resumable
+  uploads, a paste box that lands on the PC clipboard, Get → Save for PC files (1 GB cap), text to
+  copy, light/dark.
+- **Safety:** plain HTTP on the gateway adapter's private address only, random port, new 128-bit
+  secret per open (in the `#`, never sent); XChaCha20-Poly1305 per chunk with direction/file/chunk
+  bound in; every request MAC'd, first phone binds (after a network change the next scan binds),
+  replays refused. Header timeout, body timeout and a 32-connection cap; every connection ends
+  with the session. Stops passive sniffing, not an active attacker on the first page load. Stops
+  on close, quit, hiding tug to the tray (after any transfer), or 10 idle minutes; never touches
+  the firewall. "Copy link" stays out of clipboard history; text from the phone shows a toast.
+- **Files:** saved to Pictures › Tugboat (Pictures known folder) with the Mark-of-the-Web (so
+  SmartScreen checks programs and Office opens documents in Protected View), sanitized names
+  (always-hidden extensions like .lnk get `.download`), " (2)" on collisions, 8 GB per file,
+  free-space check; half-received files live in app data, never in (possibly OneDrive-synced)
+  Pictures; cross-drive saves go through a hidden temp file. HEIC kept as-is.
+- **Tested on a real iPhone (2026-10-06, test build):** connected in ~10 s, two photos arrived, a
+  PC → phone file downloaded and opened.
+- **Verify on Dave's phones before release:** iPhone (Safari): Photos picker upload incl. Live
+  Photos and a large video with the phone locking mid-way (resume), Save of a PC file (Files ›
+  Downloads), Copy on the page, light/dark. Galaxy S20 (Chrome and Samsung Internet): the Photos &
+  videos / Files pickers, a large video with the screen off mid-way, Save to Downloads, Copy,
+  light/dark. Both: the Windows firewall prompt, real Wi-Fi speed.
+- **Not in v1:** zip of several files, HEIC→JPEG, Save to Photos (needs the share sheet, which
+  wants HTTPS), mDNS.
 
 ## Future — companion apps (planned, see docs/COMPANION-PLAN.md)
+**Priority (Dave, 2026-10-06): tug must support both iPhone and Android.** The Android companion app
+(Phase 2: all-app notifications, clipboard, files, full SMS/RCS) is the step that makes Android
+first-class; Tugboat (v0.5.11, browser-based) needs no app, so it works from Android Chrome too.
+- **Android trial (no app) — when an Android test phone is available:** pair an Android phone and
+  see what tug's existing MAP (texts, live texts via MNS) and PBAP (contacts, photos, call history)
+  code gets with no app installed; note OEM quirks (some makers disable MAP or need "Allow access
+  to messages"). Notifications, media and battery aren't available over Bluetooth on Android
+  without an app. The outcome decides how Android appears in setup: a phone picker that accepts
+  Android, with an honest "texts, contacts and calls" capability list.
+
 tug stays zero-setup on the phone by default. A tug phone app is the step that unlocks files,
 clipboard and Wi-Fi speed. Order: **Phase 0** reliability and polish (now) → **Phase 1** the tug
 protocol in Rust (device keys, pairing over Bluetooth, encrypted local Wi-Fi link, events with

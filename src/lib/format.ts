@@ -105,9 +105,25 @@ export function isConversation(n: PhoneNotification): boolean {
 /** iOS rewrites the title of an inline reply ("zoe replied to you"); it's still zoe. */
 const IOS_REPLY_SUFFIX = /\s+replied to (you|your message)$/i;
 
-/** Names as people see them: iOS pads some titles ("marco ") and rewrites replies. */
+/**
+ * Invisible formatting characters some apps put in names: WhatsApp and Snapchat prefix some titles
+ * with a LEFT-TO-RIGHT MARK (U+200E), which split "sam ❤️" into two conversations. Bidi marks,
+ * embeddings and isolates, zero-width space, word joiner and friends, BOM, soft hyphen. Zero-width
+ * joiner/non-joiner stay (emoji sequences need them). Mirrors text.rs `is_invisible`.
+ */
+const INVISIBLE = /[\u00AD\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
+
+/** Names as people see them: iOS pads some titles ("marco ") and rewrites replies; apps hide marks. */
 export function cleanName(name: string): string {
-  return name.trim().replace(/\s+/g, " ").replace(IOS_REPLY_SUFFIX, "");
+  return name.replace(INVISIBLE, "").trim().replace(/\s+/g, " ").replace(IOS_REPLY_SUFFIX, "");
+}
+
+/**
+ * How two names are compared: cleaned, lower-cased, and without emoji variation selectors, so
+ * "sam ❤" and "sam ❤️" are one person. Mirrors store.rs `name_key`.
+ */
+export function nameKey(name: string): string {
+  return cleanName(name).replace(/[︎️]/g, "").toLowerCase();
 }
 
 /**
@@ -122,7 +138,7 @@ export function senderName(title: string): string {
 /** One conversation per app + sender, however the sender's name (or number) is padded, cased or formatted. */
 export function threadKey(n: Pick<PhoneNotification, "appId" | "title">): string {
   const name = n.appId === MESSAGES_APP ? senderName(n.title) : cleanName(n.title);
-  return `${n.appId}\u0000${name.toLowerCase()}`;
+  return `${n.appId}\u0000${nameKey(name)}`;
 }
 
 const byTime = (a: PhoneNotification, b: PhoneNotification) =>
@@ -258,7 +274,7 @@ export function groupConversations(
   // with the same name), so keep them all.
   const numbersFor = new Map<string, string[]>();
   for (const c of contacts) {
-    const k = cleanName(c.name).toLowerCase();
+    const k = nameKey(c.name);
     const list = numbersFor.get(k) ?? [];
     if (!list.includes(c.address)) list.push(c.address);
     numbersFor.set(k, list);
@@ -327,7 +343,7 @@ export function groupConversations(
     c.items.sort((a, b) => a.at.getTime() - b.at.getTime());
     c.latest = c.items[c.items.length - 1];
     if (c.appId === MESSAGES_APP) {
-      const fromContacts = numbersFor.get(cleanName(c.contact).toLowerCase()) ?? [];
+      const fromContacts = numbersFor.get(nameKey(c.contact)) ?? [];
       resolveNumbers(c, [...fromContacts, ...(titleNumbers.get(c.key) ?? [])]);
     }
   }
@@ -474,12 +490,12 @@ export function missedCallFor(
   notifications: PhoneNotification[],
   person: { name: string | null; address: string | null },
 ): PhoneNotification | null {
-  const name = person.name ? cleanName(person.name).toLowerCase() : null;
+  const name = person.name ? nameKey(person.name) : null;
   const digits = lastDigits(person.address);
   let best: PhoneNotification | null = null;
   for (const n of notifications) {
     if (n.category !== "missedCall" || !n.live || n.removedAt != null || !n.flags.positiveAction) continue;
-    const title = cleanName(n.title).toLowerCase();
+    const title = nameKey(n.title);
     const matches = (name && title === name) || (digits.length >= 7 && lastDigits(n.title) === digits);
     if (matches && (!best || n.receivedAt > best.receivedAt)) best = n;
   }

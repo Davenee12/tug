@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { CircleAlert } from "lucide-vue-next";
+import { CircleAlert, Upload } from "lucide-vue-next";
 import { useTugStore } from "./stores/tug";
+import { useTugboatStore } from "./stores/tugboat";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import ConnectPanel from "./components/ConnectPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
+import TugboatPanel from "./components/TugboatPanel.vue";
 import FeedPanel from "./components/FeedPanel.vue";
 import IncomingCall from "./components/IncomingCall.vue";
 import NewConversation from "./components/NewConversation.vue";
@@ -14,8 +16,11 @@ import SpotifyPanel from "./components/SpotifyPanel.vue";
 import WhatsNew from "./components/WhatsNew.vue";
 import PairingDialog from "./components/PairingDialog.vue";
 import { nextDownSince, RECONNECT_GRACE_MS, showConnectionPanel } from "./lib/connectionPanel";
+import { showsReconnecting } from "./lib/connectionStatus";
+import { skippedMessage } from "./lib/tugboat";
 
 const tug = useTugStore();
+const tugboat = useTugboatStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
 // show the Connection panel beside the feed; everything else (and narrow windows) uses
@@ -46,6 +51,7 @@ const panelInline = computed(() =>
     connection: tug.status.connection,
     hasDevice: tug.status.device != null,
     pairingStale: tug.status.pairingStale,
+    reconnecting: showsReconnecting(tug.status),
     downSince: downSince.value,
     now: now.value,
   }),
@@ -96,6 +102,18 @@ function onShortcut(e: KeyboardEvent) {
 onMounted(async () => {
   mq.addEventListener("change", onMq);
   window.addEventListener("keydown", onShortcut);
+  // Tugboat: files dragged onto the window open Tugboat with them offered to the phone.
+  void tugboat.init({
+    onSkipped: (skipped) => {
+      const msg = skippedMessage(skipped);
+      if (msg) tug.notify("info", msg);
+    },
+    // Text from the phone replaces the clipboard without asking, so say so (only once it's true).
+    onText: (ok) =>
+      ok
+        ? tug.notify("info", "Text from your phone is on your clipboard")
+        : tug.notify("error", "Text from your phone arrived, but couldn't go on the clipboard"),
+  });
   try {
     await tug.init();
   } catch (e) {
@@ -107,6 +125,7 @@ onUnmounted(() => {
   window.removeEventListener("keydown", onShortcut);
   window.clearTimeout(graceTimer);
   tug.dispose();
+  tugboat.dispose();
 });
 </script>
 
@@ -130,6 +149,19 @@ onUnmounted(() => {
     <SearchPalette v-if="tug.searchOpen" />
     <SpotifyPanel v-if="tug.spotifyPanelOpen" />
     <WhatsNew v-if="tug.whatsNewOpen" />
+    <TugboatPanel v-if="tugboat.open" />
+    <!-- Files dragged over tug: they'll go to the phone through Tugboat. The panel's own drop zone
+         lights up instead while it's open. -->
+    <div
+      v-if="tugboat.dragging && !tugboat.open"
+      class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-ink/30 p-8 backdrop-blur-[2px]"
+    >
+      <div class="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-primary bg-canvas px-12 py-10 text-center shadow-xl">
+        <Upload :size="28" class="text-primary" />
+        <p class="headline text-[24px]">Drop to send to your phone</p>
+        <p class="text-[13px] text-muted">They'll show up in Tugboat on the phone.</p>
+      </div>
+    </div>
     <!-- Last, so a ringing call sits over any other dialog. -->
     <IncomingCall v-if="tug.ringing" :key="tug.ringing.id" :call="tug.ringing" />
 

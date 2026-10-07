@@ -60,6 +60,10 @@ pub enum Command {
         enabled: bool,
         reply: Reply,
     },
+    /// Run the Bluetooth inventory now (or join the one already running); see `crate::bt_inventory`.
+    Inventory {
+        reply: oneshot::Sender<crate::bt_inventory::BtInventory>,
+    },
 }
 
 #[derive(Clone)]
@@ -115,6 +119,14 @@ pub fn start(shared: Arc<Shared>) -> BleHandle {
                     | Command::Forget { reply }
                     | Command::SetAdvertising { reply, .. } => reply,
                     Command::StartDiscovery | Command::StopDiscovery | Command::RescanDiscovery => continue,
+                    Command::Inventory { reply } => {
+                        let _ = reply.send(crate::bt_inventory::BtInventory::unavailable(
+                            crate::bt_inventory::Trigger::OnDemand,
+                            crate::state::now_ms(),
+                            "Bluetooth is only supported on Windows",
+                        ));
+                        continue;
+                    }
                 };
                 let _ = reply.send(Err("Bluetooth is only supported on Windows".into()));
             }

@@ -409,7 +409,7 @@ impl Store {
         if let Some(name) = name {
             return conn.query_row(
                 "SELECT CASE WHEN COUNT(DISTINCT photo) = 1 THEN MIN(photo) END
-                 FROM contacts WHERE lower(name) = lower(?1) AND photo IS NOT NULL",
+                 FROM contacts WHERE name_key(name) = name_key(?1) AND photo IS NOT NULL",
                 params![name],
                 |r| r.get(0),
             );
@@ -444,7 +444,7 @@ impl Store {
                  JOIN notifications n
                    ON n.app_id = ?1 AND n.message = m.body AND abs(n.received_at - m.received_at) <= ?2
                  WHERE m.direction = 'in' AND m.body <> ''
-                   AND clean_name(n.title) <> '' AND lower(clean_name(n.title)) <> lower(c.name)
+                   AND clean_name(n.title) <> '' AND name_key(n.title) <> name_key(c.name)
                    AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
                         WHERE m2.direction = 'in' AND m2.body = m.body) = 1
                    AND (SELECT COUNT(DISTINCT clean_name(n2.title)) FROM notifications n2
