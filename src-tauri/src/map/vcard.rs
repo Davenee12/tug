@@ -29,7 +29,9 @@ pub fn parse(raw: &str) -> Vec<PhonebookEntry> {
                 numbers.clear();
                 photo = None;
             }
-            "FN" if !value.trim().is_empty() => fn_name = Some(value.trim().to_string()),
+            "FN" if !crate::text::strip_invisible(&value).trim().is_empty() => {
+                fn_name = Some(crate::text::strip_invisible(&value).trim().to_string())
+            }
             "N" => {
                 if let Some(name) = structured_name(&value) {
                     n_name = Some(name);

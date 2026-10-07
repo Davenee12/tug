@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, QrCode, Smartphone } from "lucide-vue-next";
+import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, QrCode } from "lucide-vue-next";
+import { connectionBusy, connectionLabel as connectionLabelFor } from "../lib/connectionStatus";
 import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
+import { phoneModel } from "../lib/phoneModel";
 import NowPlayingCard from "./NowPlayingCard.vue";
+import PhoneArt from "./PhoneArt.vue";
 import ToggleRow from "./ToggleRow.vue";
 import TugMark from "./TugMark.vue";
 
@@ -23,28 +26,15 @@ onMounted(() => window.addEventListener("resize", onResize));
 onUnmounted(() => window.removeEventListener("resize", onResize));
 const compact = computed(() => vh.value < 800);
 
-const connectionLabel = computed(() => {
-  switch (s.value.connection) {
-    case "connected":
-      return "Connected";
-    case "connecting":
-      return "Connecting…";
-    case "disconnected":
-      return s.value.awaitingUnlock ? "Unlock your iPhone" : "Waiting for iPhone";
-    default:
-      return "Not set up";
-  }
-});
+// The phone card pictures the user's exact iPhone (model read over Bluetooth, kept while it's away).
+// The model line only shows for a model tug knows; otherwise the picture is a generic iPhone.
+const model = computed(() => phoneModel(s.value.device?.model));
+
+const connectionLabel = computed(() => connectionLabelFor(s.value));
 
 const dotClass = computed(() => {
-  switch (s.value.connection) {
-    case "connected":
-      return "bg-accent-teal";
-    case "connecting":
-      return "bg-accent-amber animate-pulse";
-    default:
-      return "bg-on-dark-soft/50";
-  }
+  if (s.value.connection === "connected") return "bg-accent-teal";
+  return connectionBusy(s.value) ? "bg-accent-amber animate-pulse" : "bg-on-dark-soft/50";
 });
 
 const batteryIcon = computed(() => {
@@ -82,14 +72,22 @@ const dnd = computed({
       <span class="font-display text-[30px] leading-none text-on-dark" style="letter-spacing: -0.03em">tug</span>
     </div>
 
-    <section :class="[compact ? 'mt-5' : 'mt-7', 'px-2']">
-      <div class="caption-upper text-on-dark-soft">Your iPhone</div>
-      <div class="mt-2 flex items-start gap-3">
-        <Smartphone :size="20" class="mt-1.5 shrink-0 text-on-dark-soft" />
+    <!-- Phone card, like a device card: the phone pictured on the left; its name, model, connection
+         and battery on the right. Takes the place of the old "Your iPhone" caption, so it's no taller. -->
+    <section :class="[compact ? 'mt-5' : 'mt-7', 'px-2']" aria-label="Your iPhone">
+      <div class="flex items-center gap-3.5">
+        <PhoneArt
+          :face="model.face"
+          :size="model.size"
+          :height="compact ? 52 : 56"
+          :lit="s.connection === 'connected'"
+          :class="s.device ? '' : 'opacity-50'"
+        />
         <div class="min-w-0 flex-1">
           <p class="truncate font-display text-[26px] leading-tight text-on-dark" style="letter-spacing: -0.02em">
             {{ s.device?.name ?? "No iPhone yet" }}
           </p>
+          <p v-if="s.device && model.known" class="truncate text-[12px] leading-snug text-on-dark-soft">{{ model.name }}</p>
           <div class="mt-1 flex items-center gap-2 text-[13px] text-on-dark-soft">
             <span :class="['size-2 rounded-full', dotClass]" />
             {{ connectionLabel }}

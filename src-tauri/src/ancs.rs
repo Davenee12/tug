@@ -335,8 +335,9 @@ impl Reassembler {
             let text = String::from_utf8_lossy(value).into_owned();
             match id {
                 ATTR_APP_IDENTIFIER => attrs.app_id = text,
-                ATTR_TITLE => attrs.title = text,
-                ATTR_SUBTITLE => attrs.subtitle = text,
+                // Names: drop the invisible marks some apps add (WhatsApp/Snapchat prefix U+200E).
+                ATTR_TITLE => attrs.title = crate::text::strip_invisible(&text),
+                ATTR_SUBTITLE => attrs.subtitle = crate::text::strip_invisible(&text),
                 ATTR_MESSAGE => attrs.message = text,
                 ATTR_DATE => attrs.date = ancs_date_to_iso(&text),
                 ATTR_POSITIVE_ACTION_LABEL => attrs.positive_label = text,
