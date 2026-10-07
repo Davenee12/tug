@@ -5,7 +5,29 @@ fn main() {
     // icon change alone would otherwise ship the stale icon.
     println!("cargo:rerun-if-changed=icons/icon.ico");
     embed_tugboat_page();
+    ensure_cli();
     tauri_build::build()
+}
+
+/// The `tug` command (`crates/tug-cli`, built by `npm run build:cli`) ships inside tug's install
+/// folder as `bin\tug.exe` (tauri.conf.json `bundle.resources`), and tauri-build insists the file
+/// exists. A debug build or a bare `cargo test` gets an empty stand-in so checks don't need the
+/// command built first (Settings hides the command while it's empty); a release build must have
+/// the real one, so a forgotten `build:cli` fails loudly instead of shipping a dud.
+fn ensure_cli() {
+    let cli = Path::new("binaries").join("tug-cli.exe");
+    println!("cargo:rerun-if-changed={}", cli.display());
+    let real = std::fs::read(&cli).is_ok_and(|b| b.starts_with(b"MZ"));
+    if real {
+        return;
+    }
+    if std::env::var("PROFILE").as_deref() == Ok("release") {
+        panic!("binaries/tug-cli.exe is missing: run `npm run build:cli -- --release` before a release build");
+    }
+    if !cli.exists() {
+        std::fs::create_dir_all("binaries").expect("create binaries/");
+        std::fs::write(&cli, b"").expect("write the tug-cli placeholder");
+    }
 }
 
 /// Embed the Tugboat phone page (built by `npm run build` into `tugboat-page/dist`) as a table of

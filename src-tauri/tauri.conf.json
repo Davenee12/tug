@@ -4,7 +4,7 @@
   "version": "0.5.11",
   "identifier": "dev.davejames.tug",
   "build": {
-    "beforeDevCommand": "npm run build:tugboat && npm run dev",
+    "beforeDevCommand": "npm run build:tugboat && npm run build:cli && npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
@@ -30,6 +30,9 @@
     "targets": [
       "nsis"
     ],
+    "resources": {
+      "binaries/tug-cli.exe": "bin/tug.exe"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

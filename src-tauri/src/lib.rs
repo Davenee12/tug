@@ -6,10 +6,12 @@ mod ble;
 mod bt_inventory;
 mod cache_trim;
 mod clipboard;
+mod codes;
 mod commands;
 mod contact_photos;
 mod device_info;
 mod device_kind;
+mod devtools;
 mod diagnostics;
 mod frontend_log;
 pub mod hfp;
@@ -87,11 +89,16 @@ pub fn run() {
             let spotify = Arc::new(spotify::Spotify::new(store, dir.clone()));
             // Tugboat: idle until the panel opens it.
             let tugboat = tugboat::TugboatService::new(app.handle().clone());
+            // Developer tools: off unless switched on in Settings. The bridge only waits for a
+            // connection (no thread, no polling); while off it answers "off" and nothing else.
+            let devtools = devtools::DevTools::new(app.handle().clone(), shared.clone(), ble.clone(), tugboat.clone());
+            devtools.start();
             app.manage(AppState {
                 shared,
                 ble,
                 spotify,
                 tugboat,
+                devtools,
             });
             // Keep the purely-cached image folders (album art/covers, app icons) from growing without
             // limit: drop the least-recently-used beyond the cap. Off the main thread so a big folder
@@ -244,6 +251,12 @@ pub fn run() {
             commands::tugboat_remove_offer,
             commands::tugboat_send_text,
             commands::tugboat_open_folder,
+            commands::devtools_status,
+            commands::devtools_set_enabled,
+            commands::devtools_set_permission,
+            commands::devtools_revoke,
+            commands::devtools_confirm,
+            commands::devtools_set_on_path,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
