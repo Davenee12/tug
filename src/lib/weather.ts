@@ -36,6 +36,50 @@ export interface Forecast {
 
 export type Unit = "f" | "c";
 
+/**
+ * How often the card asks for a fresh forecast. Open-Meteo updates current conditions every
+ * 15 minutes.
+ */
+export const REFRESH_MS = 15 * 60 * 1000;
+
+/**
+ * Whether a forecast is due a refresh. A minute early on purpose: the timer starts before the
+ * download finishes (and stamps `fetchedAt`), so a tick exactly one period later would otherwise
+ * find it a moment too fresh, skip, and leave the numbers an extra period old.
+ */
+export function isStale(fetchedAt: number, nowMs: number): boolean {
+  return nowMs - fetchedAt >= REFRESH_MS - 60_000;
+}
+
+/** The place's current hour as "YYYY-MM-DDTHH", the form Open-Meteo's local times start with. */
+export function placeHour(nowMs: number, timeZone?: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(nowMs));
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}`;
+}
+
+/**
+ * Between downloads, "now" follows the clock through the hourly forecast: once the place's hour
+ * moves past the one the forecast was fetched in, temperature, sky and day/night come from that
+ * hour and past hours drop off the strip. Feels-like, wind and humidity stay from the last
+ * download (the hourly series doesn't carry them).
+ */
+export function withCurrentHour(f: Forecast, nowMs: number): Forecast {
+  const key = placeHour(nowMs, f.timezone);
+  if (f.now.time.slice(0, 13) >= key) return f;
+  const i = f.hours.findIndex((h) => h.time.slice(0, 13) === key);
+  if (i < 0) return f;
+  const h = f.hours[i];
+  return { ...f, now: { ...f.now, time: h.time, temp: h.temp, code: h.code, day: h.day }, hours: f.hours.slice(i) };
+}
+
 /** °F where people use it (US and a few others), °C everywhere else. */
 export function defaultUnit(locale = navigator.language): Unit {
   const region = locale.split("-")[1]?.toUpperCase();
