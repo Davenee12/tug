@@ -24,7 +24,9 @@ mod store;
 mod text;
 pub mod toast;
 mod tray;
+mod wake;
 mod webview_watch;
+mod wedge;
 
 use std::sync::Arc;
 

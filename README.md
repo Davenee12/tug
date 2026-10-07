@@ -93,13 +93,18 @@ src/
   types/protocol.ts  Mirrors the Rust serde types; keep the two in sync
 ```
 
-**Connection model.** The PC advertises a connectable GATT service and the iPhone connects to it,
-so the PC is the GAP *peripheral*. Over that same link the PC is the GATT *client* of the iPhone's
-ANCS, AMS and Battery services. `GattSession.MaintainConnection` asks Windows to re-establish the link
-whenever the phone comes back in range. All Bluetooth work runs in one actor on its own thread,
-because WinRT async types aren't `Send`. Retries back off progressively (to 2 minutes while the
-phone is locked after a restart), a sub-second link blip keeps the session, and waking the PC from
-sleep reconnects at once.
+**Connection model.** The PC advertises a connectable GATT service and the iPhone connects to it, so
+the PC is the GAP *peripheral*. Over that same link the PC is the GATT *client* of the iPhone's
+ANCS, AMS and Battery services. `GattSession.MaintainConnection` asks Windows to re-establish the
+link whenever the phone comes back in range. All Bluetooth state lives in one actor on its own
+thread, so nothing about the link is shared or locked. Each GATT operation (discovery, reads,
+writes, subscribing) and opening the device run on a short-lived helper thread that the actor awaits
+with a time limit, because Windows can block the call that *starts* an operation for seconds when
+the adapter stalls (a few quick calls, such as closing the device, still run on the actor). Retries
+back off progressively (to 2 minutes while the phone is locked after a restart), a sub-second link
+blip keeps the session, an adapter that stops answering is given a few seconds and then reconnected,
+and waking the PC from sleep reconnects at once (a heartbeat on its own thread goes by Windows'
+sleep-aware clocks and its resume notification, so a stalled thread can't pass for a wake).
 
 **ANCS details that matter.** Subscribe to Data Source *before* Notification Source. Send one Control
 Point request at a time and reassemble its fragmented response. Notification UIDs are only valid within
