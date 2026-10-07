@@ -28,7 +28,7 @@ export const RELEASE_NOTES: ReleaseNote[] = [
       "Your exact iPhone now shows in the sidebar.",
       "One conversation per person, even when an app hides a mark in their name.",
       "Spotify's back and forward 15 seconds jump to the right spot.",
-      "Weather keeps itself up to date, and pop-up replies show in your conversations.",
+      "Weather keeps itself up to date.",
     ],
   },
   {
