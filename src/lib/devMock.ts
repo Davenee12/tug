@@ -23,6 +23,11 @@
 //   http://localhost:1420/?setup&btoff   …starting with Bluetooth off
 //   http://localhost:1420/?pairing    PIN confirmation dialog open
 //   http://localhost:1420/?call       a call rings 1.5 s after load (rings out after 30 s, as a missed call)
+//   http://localhost:1420/?popupreply a text from Zoe pops up 1.5 s after load and is answered from the
+//                                     Windows pop-up 2 s later, the way the backend reports it (the
+//                                     reply's `message` events, then the press carrying the stored
+//                                     reply). Add &missed to drop the `message` events, as if they never
+//                                     reached the window: the reply must show in Zoe's conversation anyway
 //   http://localhost:1420/?nodial     Settings › iPhone › Calls check fails, like a blocked hands-free link
 //   http://localhost:1420/?norepeat   player doesn't list AdvanceRepeatMode: no loop button
 //   http://localhost:1420/?repeatignored   player lists it but ignores it: the "didn't change" toast
@@ -84,6 +89,7 @@ function n(appId: string, appName: string | null, title: string, message: string
     negativeLabel: "Clear",
     removedAt: null,
     live: true,
+    fresh: false,
     ...extra,
   };
 }
@@ -984,6 +990,32 @@ if (setup && params.has("btoff")) {
 
 if (params.has("pairing")) {
   setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913", confirmOnPhone: false }), 600);
+}
+
+// ?popupreply: a text pops up and is answered from the pop-up, as toast/mod.rs reports it: the
+// MAP worker's `message` events for the reply (pending, then accepted), then `toast-pressed` with
+// kind "replied" carrying the stored reply. &missed leaves the `message` events out.
+if (params.has("popupreply")) {
+  const popped = n("com.apple.MobileSMS", "Messages", "Zoe", "are you still coming?", 0);
+  popped.id = 610;
+  const text = sms("in", "are you still coming? ", 0);
+  setTimeout(() => {
+    popped.receivedAt = text.receivedAt = Date.now();
+    history.unshift(popped);
+    messages.push(text);
+    void emit("message", text);
+    void emit("notification", popped);
+  }, 1500);
+  setTimeout(() => {
+    const reply: SmsMessage = { ...sms("out", "yes, 10 minutes away", 0), receivedAt: Date.now(), status: "pending" };
+    messages.push(reply);
+    const accepted: SmsMessage = { ...reply, status: "accepted" };
+    if (!params.has("missed")) {
+      void emit("message", reply);
+      void emit("message", accepted);
+    }
+    void emit("toast-pressed", { kind: "replied", id: popped.id, message: accepted });
+  }, 3500);
 }
 
 // ?call: the phone rings. Answer or Decline takes it down (perform_action above); left alone,

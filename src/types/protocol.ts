@@ -100,6 +100,12 @@ export interface PhoneNotification {
   removedAt: number | null;
   /** Still on the phone in the current connection, so actions can be sent. */
   live: boolean;
+  /**
+   * The event that carried this inserted it: tug had never stored it before. False on updates and
+   * on every list/search read (iOS flags replays after a reconnect as pre-existing, including what
+   * arrived during the gap; this tells the gap's new ones apart).
+   */
+  fresh: boolean;
 }
 
 export type PlaybackState = "unknown" | "paused" | "playing" | "rewinding" | "fastForwarding";
@@ -286,6 +292,8 @@ export interface ToastSpec {
 export interface ToastPressed {
   kind: "open" | "read" | "replied" | "copied" | "calledBack";
   id: number;
+  /** A reply: the text as stored (same row as its `message` events); null for other presses. */
+  message: SmsMessage | null;
 }
 
 // --- Spotify connector (mirrors src-tauri/src/spotify/{mod,model}.rs) ---

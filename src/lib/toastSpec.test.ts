@@ -21,6 +21,7 @@ function note(title: string, message: string, extra: Partial<PhoneNotification> 
     negativeLabel: "Clear",
     removedAt: null,
     live: true,
+    fresh: false,
     ...extra,
   };
 }

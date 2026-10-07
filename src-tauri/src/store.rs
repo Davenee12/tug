@@ -253,6 +253,11 @@ pub struct StoredNotification {
     pub removed_at: Option<i64>,
     /// Still on the phone in the current connection, so actions can be sent.
     pub live: bool,
+    /// This upsert inserted the row: tug had never stored this notification before. False on an
+    /// update and on every read. iOS flags everything it replays after a resubscribe as
+    /// pre-existing, including what arrived while the link was down, so this is how the window
+    /// tells "new to tug" apart from "seen before, replayed" (and pops up only the former).
+    pub fresh: bool,
     /// Part of a conversation deleted in tug: kept so the phone's re-sent copy stays
     /// hidden, but never shown.
     #[serde(skip)]
@@ -330,6 +335,7 @@ impl Store {
                 .optional()?,
             None => None,
         };
+        let fresh = existing.is_none();
         let id = match existing {
             Some(id) => {
                 conn.execute(
@@ -376,9 +382,11 @@ impl Store {
                 conn.last_insert_rowid()
             }
         };
-        conn.query_row(&format!("{SELECT} WHERE n.id = ?1"), [id], |r| {
+        let mut stored = conn.query_row(&format!("{SELECT} WHERE n.id = ?1"), [id], |r| {
             map_row(r, Some(n.session))
-        })
+        })?;
+        stored.fresh = fresh;
+        Ok(stored)
     }
 
     /// Mark a notification removed from the phone. Returns its row id if known.
@@ -526,6 +534,7 @@ fn map_row(r: &Row, live_session: Option<&str>) -> Result<StoredNotification> {
         negative_label: r.get(13)?,
         removed_at,
         hidden: r.get::<_, Option<i64>>(15)?.is_some(),
+        fresh: false,
     })
 }
 
@@ -594,6 +603,32 @@ mod tests {
             "a bare phrase isn't a suffix"
         );
         assert_eq!(clean_name(""), "");
+    }
+
+    #[test]
+    fn upsert_reports_whether_the_row_is_new_to_tug() {
+        let s = Store::in_memory().unwrap();
+        let replay = EventFlags {
+            pre_existing: true,
+            ..Default::default()
+        };
+        let text = attrs("com.apple.MobileSMS", "Jane", "running late");
+        // First sighting, live: new.
+        let first = insert(&s, "s1", 1, EventFlags::default(), &text);
+        assert!(first.fresh);
+        // The same UID updated in the same session: not new.
+        assert!(!insert(&s, "s1", 1, EventFlags::default(), &text).fresh);
+        // Replayed after a resubscribe (new session, new UID, same content): seen before, not new.
+        let again = insert(&s, "s2", 7, replay, &text);
+        assert_eq!(again.id, first.id);
+        assert!(!again.fresh);
+        // A text that arrived while the link was down: iOS flags it pre-existing too, but tug
+        // never stored it, so it's new.
+        let gap = insert(&s, "s2", 8, replay, &attrs("com.apple.MobileSMS", "Jane", "here now"));
+        assert!(gap.fresh);
+        assert!(gap.flags.pre_existing);
+        // Reads never claim new.
+        assert!(s.recent(10, None, None).unwrap().iter().all(|n| !n.fresh));
     }
 
     #[test]

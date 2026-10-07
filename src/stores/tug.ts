@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
 import {
@@ -29,6 +29,9 @@ import { MESSAGES_APP } from "../lib/format";
 import { batteryAlert } from "../lib/battery";
 import { copyText } from "../lib/clipboard";
 import { isAddressLike, normalizeAddress } from "../lib/address";
+import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync } from "../lib/messageSync";
+import { canSeeWindow } from "../lib/attention";
+import { arrivedDuringGap, GAP_COLLECT_MS, gapSummaryText, planGapPopups } from "../lib/reconnectPopups";
 import type { ToastSpec } from "../types/protocol";
 import { isKnownConversation, outgoingAddresses, senderIndex, senderMayToast, threadCounts } from "../lib/senders";
 import type {
@@ -96,6 +99,10 @@ const CODE_TOAST_WINDOW_MS = 10 * 60 * 1000;
 const CODE_TEXT_TOAST_BASE = 1_000_000_000;
 /** The low-battery pop-up's toast id: outside notification and code-text ids, so a press only opens tug. */
 const BATTERY_TOAST_ID = 2_000_000_000;
+/** The "N more notifications" pop-up (the limiter's overflow): outside notification ids, a press opens tug. */
+const OVERFLOW_TOAST_ID = 2_000_000_001;
+/** The "arrived while your iPhone was reconnecting" summary pop-up: likewise, a press opens tug. */
+const GAP_TOAST_ID = 2_000_000_002;
 
 const EMPTY_STATUS: DeviceStatus = {
   radio: "unknown",
@@ -362,11 +369,59 @@ export const useTugStore = defineStore("tug", () => {
   }
   let watchRenew: number | undefined;
   const pageVisible = ref(document.visibilityState === "visible");
+  const windowFocused = ref(document.hasFocus());
+  /**
+   * Someone can see the main view right now: the window is shown, focused and nothing covers it
+   * (lib/attention). Marking a conversation seen waits for this, so texts that land while tug sits
+   * in the tray on the Messages tab still count as unread (tray, taskbar dot, badge).
+   */
+  const canSee = computed(() =>
+    canSeeWindow({ visibility: pageVisible.value ? "visible" : "hidden", focused: windowFocused.value, overlayOpen: overlayOpen.value }),
+  );
+  const onWindowBlur = () => {
+    windowFocused.value = false;
+    leftWindow();
+  };
+  const onWindowFocus = () => {
+    windowFocused.value = true;
+    cameBack();
+    checkSwitches();
+  };
   // Registered in init() and removed in dispose(), so it's torn down with the rest (see teardown).
   const onVisibilityChange = () => {
     pageVisible.value = document.visibilityState === "visible";
-    if (pageVisible.value) checkSwitches();
+    if (document.hidden) leftWindow();
+    else {
+      cameBack();
+      // tug coming to the front is when a switch flipped on the phone should show: check now.
+      checkSwitches();
+    }
   };
+
+  /**
+   * Since when tug has been out of sight (hidden in the tray, minimized or unfocused); null while
+   * it's in front. Coming back after a while re-reads the newest texts and adds any the window
+   * never got an event for (lib/messageSync), so a missed event can't leave a text out of its
+   * conversation until a restart. Cheap: one local read of RESYNC_LIMIT rows, at most once per return.
+   */
+  let awaySince: number | null = document.hidden || !document.hasFocus() ? Date.now() : null;
+  function leftWindow() {
+    awaySince ??= Date.now();
+  }
+  function cameBack() {
+    if (document.hidden) return;
+    const due = shouldResync(awaySince, Date.now());
+    awaySince = null;
+    if (!due || !messagesReady) return;
+    void api
+      .listMessages(RESYNC_LIMIT)
+      .then((list) => addMissingMessages(settledMessages(list, Date.now()), "recent texts"))
+      .catch(() => undefined);
+    // Notifications too: a missed `notification` or `notification-removed` event would otherwise
+    // leave one out of the Feed, or still showing after it was cleared on the phone (removedAt,
+    // live), until a restart.
+    void refreshLoadedNotifications();
+  }
   // The switches get flipped on the phone, with tug on any screen or in the tray. So for the
   // first minutes after launch or pairing, check fast whenever one is still off, too.
   const FRESH_MS = 5 * 60 * 1000;
@@ -507,6 +562,18 @@ export const useTugStore = defineStore("tug", () => {
     return true;
   }
 
+  /**
+   * Add any of these stored texts the window doesn't have (never overwriting one it has; see
+   * lib/messageSync). Texts normally arrive as `message` events, so finding one missing means an
+   * event never reached the window: say so in the log (counts only), next to the backend's account.
+   */
+  function addMissingMessages(list: SmsMessage[], what: string) {
+    const add = missingMessages(messages.value, list);
+    if (!add.length) return;
+    messages.value = [...messages.value, ...add].sort(byArrival);
+    void api.logFrontendError("note", "MissedText", `${what} missing from the window (${add.length}); added`, "").catch(() => undefined);
+  }
+
   // Windows notification permission: ask once per launch, not on every notification.
   let toastPermission: boolean | null = null;
   const toasts = new ToastLimiter();
@@ -550,7 +617,8 @@ export const useTugStore = defineStore("tug", () => {
       callBack: false,
       clear: false,
     };
-    api.showToast(spec).catch(() => sendNotification({ title: spec.title, body: spec.body }));
+    // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
+    void api.showToast(spec).catch(() => undefined);
   }
 
   // A one-time code shouldn't pop up twice when it arrives on both an ANCS notification and a MAP
@@ -572,19 +640,58 @@ export const useTugStore = defineStore("tug", () => {
       toastSummary = window.setTimeout(() => {
         toastSummary = undefined;
         const held = toasts.takeHeld();
-        if (held > 0) sendNotification({ title: "tug", body: `${held} more notification${held === 1 ? "" : "s"}` });
+        // Through tug's own toast: the generic notification call never showed on the test PC.
+        if (held > 0) showInfoToast(OVERFLOW_TOAST_ID, "tug", `${held} more notification${held === 1 ? "" : "s"}`);
       }, toasts.windowMs);
     }
     return false;
   }
 
-  async function maybeToast(n: PhoneNotification) {
-    if (n.flags.silent || n.flags.preExisting) return;
+  /** A pop-up that only says something; pressing it opens tug (its id matches no notification). */
+  function showInfoToast(id: number, title: string, body: string) {
+    const spec: ToastSpec = { id, title, body, name: "", replyTo: null, markRead: false, code: null, callBack: false, clear: false };
+    void api.showToast(spec).catch(() => undefined);
+  }
+
+  /** The settings let this notification pop up (sender filter, muted apps, DND, quiet hours, VIPs). */
+  function popupEligible(n: PhoneNotification): boolean {
+    if (n.flags.silent) return false;
     // Unknown senders wait quietly in their own list, unless the text carries a one-time code.
-    if (settings.value.filterUnknown && !senderMayToast(n, senders.value)) return;
+    if (settings.value.filterUnknown && !senderMayToast(n, senders.value)) return false;
     // Settings policy: muted apps, Do not disturb, quiet hours, VIP let-through, call handling.
+    return popupAllowed(popupEventFor(n));
+  }
+
+  /**
+   * Since when the iPhone link has been lost (set when a connection drops, kept through the
+   * reconnect); null until an outage is seen this launch. Replayed notifications new to tug and
+   * posted after it arrived during the gap and may pop up (lib/reconnectPopups).
+   */
+  let linkLostAt: number | null = null;
+  let gapQueue: PhoneNotification[] = [];
+  let gapTimer: number | undefined;
+  /** Collect the replay's gap arrivals briefly, then pop up a few one by one or sum many up once. */
+  function queueGapPopup(n: PhoneNotification) {
+    gapQueue.push(n);
+    if (gapTimer !== undefined) return;
+    gapTimer = window.setTimeout(() => {
+      gapTimer = undefined;
+      const items = gapQueue.filter(popupEligible);
+      gapQueue = [];
+      const plan = planGapPopups(items);
+      if (plan.kind === "each") {
+        for (const x of plan.items) void maybeToast(x, { replayed: true });
+        return;
+      }
+      void hasToastPermission().then((ok) => ok && showInfoToast(GAP_TOAST_ID, "tug", gapSummaryText(plan.count)));
+    }, GAP_COLLECT_MS);
+  }
+
+  async function maybeToast(n: PhoneNotification, { replayed = false } = {}) {
+    // Pre-existing is backlog, except a gap arrival replayed after a reconnect (queueGapPopup).
+    if (n.flags.preExisting && !replayed) return;
+    if (!popupEligible(n)) return;
     const event = popupEventFor(n);
-    if (!popupAllowed(event)) return;
     const code = findCode(n.message || n.subtitle)?.code ?? null;
     if (code !== null && recentlyCodeToasted(code)) return; // a text pop-up already carried this code
     // Claim the code before awaiting: the notification and the text for one code can arrive in the
@@ -595,7 +702,8 @@ export const useTugStore = defineStore("tug", () => {
     // With buttons for what applies (reply, mark read, copy code, call back, clear); the
     // backend falls back to a plain pop-up itself if Windows won't take that one.
     const spec = toastSpec(n, messages.value, contacts.value);
-    api.showToast(spec).catch(() => sendNotification({ title: spec.title, body: spec.body }));
+    // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
+    void api.showToast(spec).catch(() => undefined);
   }
 
   /**
@@ -626,7 +734,8 @@ export const useTugStore = defineStore("tug", () => {
       callBack: false,
       clear: false,
     };
-    api.showToast(spec).catch(() => sendNotification({ title: spec.title, body: spec.body }));
+    // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
+    void api.showToast(spec).catch(() => undefined);
   }
 
   /**
@@ -634,7 +743,9 @@ export const useTugStore = defineStore("tug", () => {
    * reply, copied the code, asked the phone to call back). Bring tug's own state along,
    * the same way the in-app buttons do.
    */
-  function onToastPressed({ kind, id }: ToastPressed) {
+  function onToastPressed({ kind, id, message }: ToastPressed) {
+    // A reply carries the text as stored: the conversation shows it even if its events never came.
+    if (message) addMissingMessages([message], "pop-up reply");
     const n = notifications.value.find((x) => x.id === id);
     if (!n) return;
     if (kind === "open") {
@@ -734,7 +845,7 @@ export const useTugStore = defineStore("tug", () => {
           await api.setHidden(nIds, mIds, false);
           for (const n of removedNotifications) upsert(notifications.value, n);
           for (const m of removedMessages) upsertMessage(m);
-          messages.value.sort((a, b) => a.receivedAt - b.receivedAt || a.id - b.id);
+          messages.value.sort(byArrival);
           selectedThread.value = c.key;
         });
       },
@@ -1022,10 +1133,13 @@ export const useTugStore = defineStore("tug", () => {
     if (started) return;
     started = true;
     document.addEventListener("visibilitychange", onVisibilityChange);
-    teardown.push(() => document.removeEventListener("visibilitychange", onVisibilityChange));
-    // tug's window coming to the front is when a switch flipped on the phone should show: check now.
-    window.addEventListener("focus", checkSwitches);
-    teardown.push(() => window.removeEventListener("focus", checkSwitches));
+    window.addEventListener("blur", onWindowBlur);
+    window.addEventListener("focus", onWindowFocus);
+    teardown.push(() => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("blur", onWindowBlur);
+      window.removeEventListener("focus", onWindowFocus);
+    });
     teardown.push(
       installZoomShortcuts(
         () => zoom.value,
@@ -1040,6 +1154,8 @@ export const useTugStore = defineStore("tug", () => {
       ...(await Promise.all([
         on("device-status", (s) => {
           const wasConnected = status.value.connection === "connected";
+          // The start of an outage: what's posted after it and replayed on reconnect is a gap arrival.
+          if (wasConnected && s.connection !== "connected") linkLostAt = Date.now();
           if (s.battery !== status.value.battery) void checkBattery(s.battery);
           status.value = s;
           // Notification UIDs die with the connection, so nothing stays actionable.
@@ -1053,8 +1169,10 @@ export const useTugStore = defineStore("tug", () => {
         }),
         on("notification", (n) => {
           const added = upsert(notifications.value, n);
-          if (view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
-          if (added) void maybeToast(n);
+          // Seen only if someone is looking (MessageThreads marks the one on screen on coming back).
+          if (canSee.value && view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
+          if (added && arrivedDuringGap(n, linkLostAt, Date.now())) queueGapPopup(n);
+          else if (added) void maybeToast(n);
         }),
         on("notification-removed", (id) => {
           const n = notifications.value.find((x) => x.id === id);
@@ -1098,10 +1216,7 @@ export const useTugStore = defineStore("tug", () => {
     if (calls.value.length === 0) calls.value = recent;
     // Merge rather than replace: events may have arrived while these loaded.
     for (const n of first) upsert(notifications.value, n);
-    const live = new Set(messages.value.map((m) => m.id));
-    messages.value = [...msgs.filter((m) => !live.has(m.id)), ...messages.value].sort(
-      (a, b) => a.receivedAt - b.receivedAt || a.id - b.id,
-    );
+    messages.value = [...missingMessages(messages.value, msgs), ...messages.value].sort(byArrival);
     if (contacts.value.length === 0) contacts.value = people;
     status.value = s;
     statusKnown.value = true;
@@ -1126,6 +1241,9 @@ export const useTugStore = defineStore("tug", () => {
     // Everything with a lifetime gets cleared here, so init() can be called again cleanly (a
     // remount or dev hot-reload) without a leaked timer firing or an interval double-polling.
     window.clearTimeout(toastSummary);
+    window.clearTimeout(gapTimer);
+    gapTimer = undefined;
+    gapQueue = [];
     spotifyWait++;
     window.clearTimeout(freshTimer);
     window.clearTimeout(spotifySongTimer);
@@ -1626,6 +1744,7 @@ export const useTugStore = defineStore("tug", () => {
     hideCall,
     respondToCall,
     overlayOpen,
+    canSee,
     settingsSection,
     openSettings,
     closeSettings,

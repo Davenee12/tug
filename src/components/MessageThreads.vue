@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { ChevronRight, Info, Phone, Plus, RotateCcw, SendHorizontal, ShieldQuestionMark } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { replyUnavailable } from "../lib/availability";
@@ -63,12 +63,14 @@ function select(key: string) {
   tug.markSeen(key);
 }
 
-// Opening Messages without a choice shows the newest conversation, which counts as seen
-// (in tug only) — unless something is covering it, e.g. the New message picker (Ctrl+N).
+// The conversation on screen counts as seen (in tug only), including the newest one Messages
+// opens without a choice — but only while someone can see it: the window shown and focused, and
+// nothing covering it (e.g. the New message picker, Ctrl+N). Hidden in the tray, a new text stays
+// unread (tray, taskbar dot); coming back to the window marks the one on screen then.
 watch(
-  () => [selected.value?.key, tug.overlayOpen] as const,
+  () => [selected.value?.key, selected.value?.notifications.length, tug.canSee] as const,
   ([key]) => {
-    if (key && tug.view === "messages" && !tug.overlayOpen && tug.newCount(key, selected.value!.notifications)) {
+    if (key && tug.view === "messages" && tug.canSee && tug.newCount(key, selected.value!.notifications)) {
       tug.markSeen(key);
     }
   },
@@ -78,29 +80,17 @@ watch(
 // The conversation on screen is read: clear it on the phone (and so the Feed) and mark its
 // texts read there — on open, when new texts land in it, and when you come back to it. That
 // includes the newest one Messages shows by default (a deliberate choice). Clearing the phone can't
-// be undone, so only while you can actually see it: the window is focused and nothing
-// (search, the picker, settings, pairing) covers it.
-const focused = ref(document.hasFocus());
-const onFocus = () => (focused.value = true);
-const onBlur = () => (focused.value = false);
-onMounted(() => {
-  window.addEventListener("focus", onFocus);
-  window.addEventListener("blur", onBlur);
-});
-onUnmounted(() => {
-  window.removeEventListener("focus", onFocus);
-  window.removeEventListener("blur", onBlur);
-});
+// be undone, so only while you can actually see it: the window is shown and focused and nothing
+// (search, the picker, settings, pairing) covers it (the store's canSee).
 const lookingAt = (c: Conversation | null): c is Conversation =>
-  !!c && c.items.length > 0 && focused.value && tug.view === "messages" && !tug.overlayOpen;
+  !!c && c.items.length > 0 && tug.canSee && tug.view === "messages";
 watch(
   () =>
     [
       selected.value?.key,
       selected.value?.items.length,
       selected.value?.notifications.length,
-      focused.value,
-      tug.overlayOpen,
+      tug.canSee,
       tug.selectedThread,
     ] as const,
   () => {

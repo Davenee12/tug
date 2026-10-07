@@ -821,7 +821,8 @@ pub async fn spotify_set_saved(state: State<'_, AppState>, uri: String, saved: b
 }
 
 /// An uncaught frontend error (window.onerror, an unhandled promise rejection, or a Vue error),
-/// forwarded so a window crash leaves a trace in the log. Logged at warn, redacted and rate-limited
+/// forwarded so a window crash leaves a trace in the log; or a "note" that the window had to repair
+/// its state (a text it never got the event for). Logged at warn, redacted and rate-limited
 /// (see `frontend_log`); the frontend only ever sends the error's name, a trimmed message and the
 /// top of the stack, never a message body or a phone number.
 #[tauri::command]

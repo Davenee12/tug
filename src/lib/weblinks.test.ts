@@ -18,6 +18,7 @@ function note(extra: Partial<PhoneNotification> = {}): PhoneNotification {
     negativeLabel: "Clear",
     removedAt: null,
     live: true,
+    fresh: false,
     ...extra,
   };
 }

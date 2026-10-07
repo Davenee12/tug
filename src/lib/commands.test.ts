@@ -184,6 +184,7 @@ describe("call", () => {
       category: "missedCall",
       title: "Priya",
       live: true,
+      fresh: false,
       removedAt: null,
       receivedAt: 1,
       flags: { positiveAction: true },
