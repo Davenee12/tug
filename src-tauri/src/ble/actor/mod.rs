@@ -37,12 +37,19 @@ use super::{Command, Reply};
 use crate::ams::{self, NowPlaying};
 use crate::ancs::{self, Category, EventFlags, EventId, ParseError, Response};
 use crate::ancs_queue::{Request, RequestQueue, MAX_ATTEMPTS};
+use crate::device_info;
 use crate::state::{
     events, keys, AdvertisingState, AppName, ConnectionState, DiscoveredDevice, PairedDevice, PairingRequest,
     RadioState, Services, Shared, Transport,
 };
 use crate::store::NewNotification;
+use crate::wake::WakeCause;
+use crate::wedge::{WedgeWatch, Wedged};
 
+/// The wake watch: tells the actor when the PC resumed, from a thread of its own.
+mod heartbeat;
+/// The Bluetooth inventory probe (`crate::bt_inventory`), run off the connect path.
+mod inventory;
 mod link;
 mod media;
 mod notifications;
@@ -79,10 +86,9 @@ const FLAP_SETTLE_SECS: u32 = 5;
 /// notifications iOS is replaying on it) survives, so keep ANCS instead of tearing it down and
 /// losing the replay. Only a down that outlasts this is treated as a real disconnect.
 const LINK_BLIP_GRACE: Duration = Duration::from_millis(1500);
-/// A wall-clock jump larger than this between 1 s heartbeats means the PC was asleep (the
-/// monotonic heartbeat can't skip this far on its own): on wake, retry the link at once.
-const RESUME_GAP: Duration = Duration::from_secs(10);
 const ADVERTISE_RETRY_SECS: u32 = 3;
+/// Longest wait between attempts to start advertising while the adapter keeps timing out.
+const MAX_ADVERTISE_RETRY_SECS: u32 = 60;
 /// Quiet period after the last replayed notification before sweeping stale rows.
 // Long enough that a slow replay's gaps aren't mistaken for its end (that swept, then
 // restored, notifications still on the phone: a visible flicker).
@@ -92,6 +98,8 @@ const CCCD_CHECK_SECS: u32 = 15;
 const CCCD_CHECK_WATCHING_SECS: u32 = 2;
 const NOT_SHARING: &str = "Your iPhone is connected but isn't sharing notifications with this PC. On the iPhone: Settings › Bluetooth › tap ⓘ next to this PC › turn on Share System Notifications.";
 const PIN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
+/// What an action or media command says while tug is rebuilding the link on its own.
+const RECONNECTING: &str = "Reconnecting to your iPhone. Try again in a moment.";
 
 enum Event {
     NotificationSource {
@@ -114,6 +122,11 @@ enum Event {
         gen: u64,
         data: Vec<u8>,
     },
+    /// The phone's Model Number String (Device Information Service), read once per connection.
+    Model {
+        gen: u64,
+        data: Vec<u8>,
+    },
     Connection {
         gen: u64,
         connected: bool,
@@ -126,10 +139,11 @@ enum Event {
         gen: u64,
         name: String,
     },
-    /// The 1 s heartbeat saw the wall clock jump forward: the PC resumed from sleep (or was
-    /// otherwise frozen). Carries how long it was away, for the log.
+    /// The wake watch saw the PC resume from sleep (see `crate::wake`). Carries roughly how long it
+    /// was away and which signal said so, for the log.
     Woke {
         slept: Duration,
+        cause: WakeCause,
     },
     Advertising(GattServiceProviderAdvertisementStatus),
     Radio(RadioState),
@@ -227,27 +241,9 @@ struct Discovered {
 
 pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Command>) {
     let (tx, mut events) = unbounded_channel();
-    // A 1 s heartbeat that notices the wall clock jumping forward — the PC slept and woke. It runs
-    // as its own task so a long BLE await on the actor loop can't be mistaken for a wake, and so the
-    // actor retries the link the moment Windows thaws rather than sitting on a backed-off timer
-    // (which, after a resume, left tug disconnected until it was restarted).
-    {
-        let tx = tx.clone();
-        tokio::task::spawn_local(async move {
-            let mut last = SystemTime::now();
-            let mut beat = tokio::time::interval(Duration::from_secs(1));
-            beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                beat.tick().await;
-                let now = SystemTime::now();
-                let gap = now.duration_since(last).unwrap_or(Duration::ZERO);
-                last = now;
-                if woke_from_gap(gap) && tx.send(Event::Woke { slept: gap }).is_err() {
-                    break;
-                }
-            }
-        });
-    }
+    // On its own thread, not this one: a Windows call blocking the Bluetooth thread must neither be
+    // mistaken for a wake nor delay a real one.
+    heartbeat::spawn(tx.clone());
     let mut actor = Actor {
         shared,
         tx,
@@ -262,10 +258,14 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         retry_in: 0,
         connect_failures: 0,
         advertise_retry_in: None,
+        advertise_failures: 0,
         carried_name: None,
         cccd_check_in: CCCD_CHECK_SECS,
         optional_retry_at: None,
         link_down_at: None,
+        wedge: WedgeWatch::default(),
+        wedge_relink_at: None,
+        inventory: inventory::InventoryState::default(),
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -297,6 +297,8 @@ struct Actor {
     connect_failures: u32,
     /// Seconds until advertising is retried after Windows aborted it.
     advertise_retry_in: Option<u32>,
+    /// Attempts to start advertising that timed out in a row; drives that retry's backoff.
+    advertise_failures: u32,
     /// Name of a Classic-paired iPhone whose LE side is being paired on its behalf.
     carried_name: Option<String>,
     /// Seconds until the ANCS subscription is verified on the iPhone again.
@@ -308,6 +310,13 @@ struct Actor {
     /// grace before a real teardown. Set on a disconnect, cleared by the next link-up or by
     /// `finish_link_down`.
     link_down_at: Option<Instant>,
+    /// Watches GATT requests on the live link for a run of timeouts: an adapter that stopped answering.
+    wedge: WedgeWatch,
+    /// Set while recovering from such a stall: requests are paused until then, when the link is
+    /// rebuilt. Cleared by any link teardown.
+    wedge_relink_at: Option<Instant>,
+    /// When the next Bluetooth inventory report is due, and the one running now.
+    inventory: inventory::InventoryState,
 }
 
 fn now_ms() -> i64 {
@@ -352,12 +361,6 @@ fn classify_link_up(down_at: Option<Instant>, up_at: Instant) -> LinkUp {
     }
 }
 
-/// Whether a gap between heartbeats is large enough to mean the PC slept, not just scheduling
-/// jitter. Pure, so the wake detection is unit-tested.
-fn woke_from_gap(gap: Duration) -> bool {
-    gap >= RESUME_GAP
-}
-
 /// Whether a GATT/ANCS event still belongs to the live subscription and should be processed. The
 /// decision is purely the subscription generation: a momentary link-down flag doesn't invalidate
 /// events that carry the current generation, because the GATT subscription (and the pre-existing
@@ -389,8 +392,14 @@ impl Actor {
         let store = &self.shared.store;
         if let (Ok(Some(id)), Ok(name)) = (store.setting(keys::DEVICE_ID), store.setting(keys::DEVICE_NAME)) {
             let name = name.unwrap_or_else(|| "iPhone".into());
+            // The last model the phone reported, so the sidebar pictures it before it reconnects.
+            let model = store.setting(keys::DEVICE_MODEL).ok().flatten();
             self.shared.update_status(|s| {
-                s.device = Some(PairedDevice { id: id.clone(), name });
+                s.device = Some(PairedDevice {
+                    id: id.clone(),
+                    name,
+                    model,
+                });
                 s.connection = ConnectionState::Disconnected;
             });
             self.device_id = Some(id);
@@ -455,12 +464,15 @@ impl Actor {
                     .store
                     .set_setting(keys::ADVERTISE, if enabled { "true" } else { "false" });
                 if enabled {
+                    // The user asked: try now, with a fresh backoff.
+                    self.advertise_failures = 0;
                     self.start_advertising().await;
                 } else {
                     self.stop_advertising();
                 }
                 let _ = reply.send(Ok(()));
             }
+            Command::Inventory { reply } => self.request_inventory(reply),
         }
     }
 
@@ -486,13 +498,19 @@ impl Actor {
                     self.shared.update_status(|s| s.battery = Some(level.min(100)));
                 }
             }
+            Event::Model { gen, data } if event_is_current(gen, current) => self.on_model_number(&data),
             Event::Connection { gen, connected, at } if Some(gen) == link_gen => {
                 self.on_connection(connected, at).await
             }
             Event::Name { gen, name } if Some(gen) == link_gen => self.set_device_name(&name),
-            Event::Woke { slept } => {
+            Event::Woke { slept, cause } => {
+                let how = match cause {
+                    WakeCause::Slept => "the PC slept",
+                    WakeCause::Resumed => "Windows resumed",
+                    WakeCause::Frozen => "tug was suspended",
+                };
                 log::info!(
-                    "woke after ~{}s away (PC resumed from sleep); retrying the iPhone link and messages now",
+                    "woke after ~{}s away ({how}); retrying the iPhone link and messages now",
                     slept.as_secs()
                 );
                 // A real change: drop the backoff and retry at once instead of waiting it out.
@@ -503,7 +521,7 @@ impl Actor {
                 // After resume the old GATT handles are stale and Windows may never fire a reconnect
                 // for them, so drop the link and let the next tick open a fresh one.
                 if self.link.is_some() {
-                    self.relink("PC resumed from sleep");
+                    self.relink(&format!("woke ({how})"));
                 }
                 // Nudge the texts/contacts/calls worker to rebuild its MAP session too.
                 if let Some(map) = self.shared.map.get() {
@@ -515,6 +533,7 @@ impl Actor {
             | Event::MediaEntity { .. }
             | Event::MediaCommands { .. }
             | Event::Battery { .. }
+            | Event::Model { .. }
             | Event::Connection { .. }
             | Event::Name { .. } => log::debug!("ignored event from a replaced link"),
             Event::Advertising(status) => {
@@ -547,12 +566,19 @@ impl Actor {
                     GattServiceProviderAdvertisementStatus::Started
                     | GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData => {
                         self.advertise_retry_in = None;
+                        self.advertise_failures = 0;
                     }
                     _ => {}
                 }
             }
             Event::Radio(state) => {
-                self.shared.update_status(|s| s.radio = state);
+                self.shared.update_status(|s| {
+                    s.radio = state;
+                    // With Bluetooth off there's nothing to reconnect: the UI says it's off instead.
+                    if matches!(state, RadioState::Off | RadioState::Unavailable) {
+                        s.reconnecting = false;
+                    }
+                });
                 if state == RadioState::On {
                     self.retry_in = 0;
                     self.connect_failures = 0;
@@ -630,6 +656,12 @@ impl Actor {
             }
         }
 
+        // The adapter stopped answering and has had its settle: rebuild the link now.
+        if self.wedge_relink_at.is_some_and(|t| Instant::now() >= t) {
+            log::info!("reconnecting to the iPhone after the Bluetooth stall");
+            self.restart_link();
+        }
+
         // A link-down that outlasted the blip grace is a real disconnect: tear ANCS down now.
         // (A shorter down→up blip keeps ANCS, so the pre-existing-notification replay isn't lost.)
         if self.link_down_at.is_some_and(|t| link_down_is_real(t.elapsed())) {
@@ -655,12 +687,14 @@ impl Actor {
             self.emit_discovered();
         }
 
-        // A lost Data Source response would otherwise stall the queue forever.
-        let stalled = self
-            .link
-            .as_ref()
-            .and_then(|l| l.ancs.as_ref())
-            .is_some_and(|a| a.requests.timed_out(Instant::now(), ANCS_RESPONSE_TIMEOUT));
+        // A lost Data Source response would otherwise stall the queue forever. (Not while the queue is
+        // paused for a stalled adapter: no request is failed for that.)
+        let stalled = !self.wedged()
+            && self
+                .link
+                .as_ref()
+                .and_then(|l| l.ancs.as_ref())
+                .is_some_and(|a| a.requests.timed_out(Instant::now(), ANCS_RESPONSE_TIMEOUT));
         if stalled {
             if let Some(a) = self.link.as_mut().and_then(|l| l.ancs.as_mut()) {
                 let req = a.requests.inflight().cloned();
@@ -678,6 +712,7 @@ impl Actor {
         }
 
         self.sweep_if_settled();
+        self.inventory_tick();
 
         // While the user is on the iPhone screens (setup/Settings), a connect that's backed off
         // waiting for an unlock should retry promptly — they may be unlocking the phone right now.
@@ -686,8 +721,9 @@ impl Actor {
         }
 
         let ready = self.link.as_ref().is_some_and(|l| l.connected && l.ancs.is_some());
-        // Within the blip grace, don't reconnect: we're waiting to see if a down is just a flap.
-        let settling = self.link_down_at.is_some();
+        // Within the blip grace, don't reconnect: we're waiting to see if a down is just a flap. Nor
+        // while a stalled adapter settles: the link is rebuilt once it has.
+        let settling = self.link_down_at.is_some() || self.wedged();
         if self.device_id.is_none() || ready || settling || self.shared.status().radio == RadioState::Off {
             return;
         }
@@ -700,6 +736,54 @@ impl Actor {
 
     fn set_error(&self, message: String) {
         self.shared.update_status(|s| s.last_error = Some(message));
+    }
+
+    /// Recovering from a stalled adapter: requests are paused until the link is rebuilt.
+    fn wedged(&self) -> bool {
+        self.wedge_relink_at.is_some()
+    }
+
+    /// Feed the outcome of one GATT request on the live link to the wedge watch, and start recovering
+    /// if it completes a run of timeouts. Returns whether the link is (now) wedged, so callers stop
+    /// sending. Only requests on a link that reports connected count: a link that's down fails its
+    /// requests for that reason, and the link-down path handles it.
+    fn note_gatt<T>(&mut self, result: &Result<T, BleError>) -> bool {
+        match result {
+            Err(e) if e.is_timeout() => {
+                let connected = self.link.as_ref().is_some_and(|l| l.connected);
+                if connected && !self.wedged() {
+                    match self.wedge.timed_out(Instant::now()) {
+                        Some(Wedged::Relink { settle }) => self.begin_wedge_recovery(settle),
+                        Some(Wedged::Persistent { first: true }) => log::warn!(
+                            "Bluetooth adapter keeps stopping responding; no longer rebuilding the link for it until it's been quiet for {} min",
+                            crate::wedge::RECUR_WITHIN.as_secs() / 60
+                        ),
+                        Some(Wedged::Persistent { first: false }) | None => {}
+                    }
+                }
+            }
+            // The phone answered, yes or no: the adapter is working.
+            Ok(_) | Err(BleError::Protocol(_) | BleError::AccessDenied) => self.wedge.answered(),
+            Err(_) => {}
+        }
+        self.wedged()
+    }
+
+    /// The link still reports connected but the adapter has stopped answering: stop sending, let it
+    /// settle, then rebuild the link (from `tick`). Requests stay queued rather than being given up
+    /// on; the rebuilt ANCS session re-fetches everything still on the phone, with fresh retries.
+    fn begin_wedge_recovery(&mut self, settle: Duration) {
+        log::warn!("Bluetooth adapter stopped responding; reconnecting");
+        log::info!(
+            "{} Bluetooth requests in a row went unanswered on a connected link; pausing requests and reconnecting in {}s",
+            crate::wedge::STRIKES,
+            settle.as_secs()
+        );
+        self.wedge_relink_at = Some(Instant::now() + settle);
+        self.shared.update_status(|s| {
+            s.connection = ConnectionState::Connecting;
+            s.reconnecting = true;
+        });
     }
 }
 
@@ -720,6 +804,15 @@ mod tests {
             MAX_RETRY_SECS,
             "no overflow"
         );
+    }
+
+    #[test]
+    fn advertising_that_times_out_keeps_retrying_backing_off_to_a_minute() {
+        // The review's block: a CreateAsync timeout used to leave advertising off for good.
+        let waits: Vec<u32> = (1..=8)
+            .map(|f| retry_delay(ADVERTISE_RETRY_SECS, f, MAX_ADVERTISE_RETRY_SECS))
+            .collect();
+        assert_eq!(waits, vec![3, 6, 12, 24, 48, 60, 60, 60]);
     }
 
     #[test]
@@ -773,14 +866,6 @@ mod tests {
             classify_link_up(Some(down + Duration::from_secs(1)), down),
             LinkUp::Blip
         );
-    }
-
-    #[test]
-    fn a_wall_clock_jump_reads_as_a_wake() {
-        assert!(!woke_from_gap(Duration::from_secs(1)), "a normal heartbeat");
-        assert!(!woke_from_gap(Duration::from_secs(3)), "scheduling jitter isn't a wake");
-        assert!(woke_from_gap(RESUME_GAP));
-        assert!(woke_from_gap(Duration::from_secs(3600)), "a long sleep");
     }
 
     #[test]

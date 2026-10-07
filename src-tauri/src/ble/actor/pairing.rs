@@ -348,15 +348,27 @@ impl Actor {
             (true, None) => "iPhone".to_string(),
         };
         let store = &self.shared.store;
+        // Re-adopting the same phone keeps its known model; a different phone starts without one
+        // (its own is read on connect), so the sidebar never pictures the previous phone.
+        let model = (self.device_id.as_deref() == Some(le_id.as_str()))
+            .then(|| store.setting(keys::DEVICE_MODEL).ok().flatten())
+            .flatten();
+        if model.is_none() {
+            let _ = store.delete_setting(keys::DEVICE_MODEL);
+        }
         store.set_setting(keys::DEVICE_ID, &le_id).map_err(|e| e.to_string())?;
         store.set_setting(keys::DEVICE_NAME, &name).map_err(|e| e.to_string())?;
         self.drop_link();
+        // A different phone: what the Bluetooth inventory knew (and its schedule) was the old one's.
+        if self.device_id.as_deref() != Some(le_id.as_str()) {
+            self.reset_inventory();
+        }
         self.device_id = Some(le_id.clone());
         self.retry_in = 0;
         self.connect_failures = 0;
         self.stop_discovery();
         self.shared.update_status(|s| {
-            s.device = Some(PairedDevice { id: le_id, name });
+            s.device = Some(PairedDevice { id: le_id, name, model });
             s.connection = ConnectionState::Disconnected;
             s.last_error = None;
             s.pairing_stale = false;
@@ -372,9 +384,11 @@ impl Actor {
         // Read the texts device id before deleting the setting, so we can unpair it too.
         let texts_id = self.shared.store.setting(keys::TEXTS_DEVICE_ID).ok().flatten();
         self.drop_link();
+        self.reset_inventory();
         let store = &self.shared.store;
         let _ = store.delete_setting(keys::DEVICE_ID);
         let _ = store.delete_setting(keys::DEVICE_NAME);
+        let _ = store.delete_setting(keys::DEVICE_MODEL);
         // Forget the remembered texts phone too, so a new phone isn't matched to the old id.
         let _ = store.delete_setting(keys::TEXTS_DEVICE_ID);
         self.shared.update_status(|s| {
@@ -384,6 +398,7 @@ impl Actor {
             s.pairing_stale = false;
             s.awaiting_phone_allow = false;
             s.awaiting_unlock = false;
+            s.reconnecting = false;
             s.texts_pairing = crate::map::health::TextsPairing::Unknown;
             s.texts_device = None;
             s.messages_error = None;

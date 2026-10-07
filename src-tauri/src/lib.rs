@@ -3,10 +3,12 @@ mod ancs;
 mod ancs_queue;
 mod app_icons;
 mod ble;
+mod bt_inventory;
 mod cache_trim;
 mod clipboard;
 mod commands;
 mod contact_photos;
+mod device_info;
 mod device_kind;
 mod diagnostics;
 mod frontend_log;
@@ -20,9 +22,13 @@ mod perf;
 mod spotify;
 mod state;
 mod store;
+mod text;
 pub mod toast;
 mod tray;
+mod tugboat;
+mod wake;
 mod webview_watch;
+mod wedge;
 
 use std::sync::Arc;
 
@@ -66,6 +72,8 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_notification::init())
+        // Tugboat's "Choose files" picker (opened from Rust; the page never sees it).
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -77,7 +85,14 @@ pub fn run() {
             // The Spotify connector: optional, set up by the owner in Settings. Album art is
             // cached under the app-data dir; the refresh token goes to Credential Manager.
             let spotify = Arc::new(spotify::Spotify::new(store, dir.clone()));
-            app.manage(AppState { shared, ble, spotify });
+            // Tugboat: idle until the panel opens it.
+            let tugboat = tugboat::TugboatService::new(app.handle().clone());
+            app.manage(AppState {
+                shared,
+                ble,
+                spotify,
+                tugboat,
+            });
             // Keep the purely-cached image folders (album art/covers, app icons) from growing without
             // limit: drop the least-recently-used beyond the cap. Off the main thread so a big folder
             // scan never delays the window. Contact photos aren't capped here — they can't be
@@ -111,6 +126,22 @@ pub fn run() {
         // Closing the window hides tug to the tray instead of quitting (Quit is in the tray
         // menu), so the phone stays mirrored and notifications keep arriving.
         .on_window_event(|window, event| {
+            // Tugboat: files dropped onto tug's window are offered to the phone from here, so the
+            // page script never gets to name a path to offer.
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    if !paths.is_empty() {
+                        state.tugboat.offer_dropped(paths.clone());
+                    }
+                }
+                return;
+            }
+            if let tauri::WindowEvent::Focused(true) = event {
+                if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    state.tugboat.window_shown();
+                }
+                return;
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() != "main" || !tray::installed() {
                     return;
@@ -127,6 +158,9 @@ pub fn run() {
                     let _ = window.hide();
                     if let Some(state) = state {
                         tray::hint_once(window.app_handle(), &state.shared.store);
+                        // Nothing on screen would show Tugboat still listening: stop it (after any
+                        // transfer in progress).
+                        state.tugboat.window_hidden();
                     }
                 }
             }
@@ -175,6 +209,7 @@ pub fn run() {
             commands::dial,
             commands::show_toast,
             commands::copy_diagnostics,
+            commands::bt_inventory,
             commands::open_logs_folder,
             commands::spotify_status,
             commands::spotify_connect,
@@ -201,6 +236,14 @@ pub fn run() {
             commands::spotify_playlist_items,
             commands::spotify_add_to_playlist,
             commands::log_frontend_error,
+            commands::tugboat_start,
+            commands::tugboat_stop,
+            commands::tugboat_status,
+            commands::tugboat_copy_link,
+            commands::tugboat_pick_files,
+            commands::tugboat_remove_offer,
+            commands::tugboat_send_text,
+            commands::tugboat_open_folder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -208,6 +251,10 @@ pub fn run() {
             // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
             if let tauri::RunEvent::Exit = event {
                 toast::withdraw_all(app);
+                // Tugboat never outlives tug: stop listening and remove unfinished uploads.
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.tugboat.shutdown_now();
+                }
             }
         });
 }

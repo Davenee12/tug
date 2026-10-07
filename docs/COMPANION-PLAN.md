@@ -30,14 +30,14 @@ v0.5.x, keeping the cadence (every 5th version bug-fix only). Reliability first:
 notifications, PC sleep/wake, polish of setup, texts, notifications and Spotify. Nothing in later
 phases is worth building on an unreliable base.
 
-### Phase 0.5 — tug Drop (v0.5.11) — no app, no fees, works on iPhone
+### Phase 0.5 — Tugboat (formerly tug Drop) (v0.5.11) — no app, no fees, iPhone and Android
 "AirDrop between your iPhone and your Windows PC."
-- Click **Drop** in tug → a QR code → the phone's camera opens a small tug page in Safari (or any
-  browser). Nothing installed on the phone.
-- **Phone → PC:** pick photos/videos/files or paste text; files land in a "tug Drop" folder,
+- Click **Tugboat** in tug → a QR code → the phone's camera opens a small tug page in Safari,
+  Chrome or Samsung Internet. Nothing installed on the phone; works the same on iPhone and Android.
+- **Phone → PC:** pick photos/videos/files or paste text; files land in a "Tugboat" folder,
   text on the PC clipboard. **PC → phone:** drag files onto tug; they appear on the page to save.
 - Over the home Wi-Fi at full speed; never reachable from the internet; no cloud, no account.
-- Safety: tug serves the page only on the local network while Drop is open; the QR carries a
+- Safety: tug serves the page only on the local network while Tugboat is open; the QR carries a
   one-time secret so only the scanning phone connects; it shuts off when closed or idle; transfers
   are encrypted (below).
 - **Design (settled 2026-10-06 from two independent research passes — ChatGPT and Muse):**
@@ -61,7 +61,7 @@ phases is worth building on an unreliable base.
   - **Clipboard:** no clipboard API on HTTP — phone → PC is a paste box; PC → phone is a Copy
     button using the older copy fallback.
   - **Windows Firewall:** tug never adds firewall rules or changes security settings. Windows asks
-    once ("Allow tug"); if the Wi-Fi is set to Public, or the phone can't reach tug, the Drop
+    once ("Allow tug"); if the Wi-Fi is set to Public, or the phone can't reach tug, the Tugboat
     window explains it in plain words. Listen only on the chosen Wi-Fi address, only while open.
   - **Finding the PC:** enumerate adapters and pick the one with the default gateway (skip VPN,
     Hyper-V, Docker); show the address with a manual fallback. Guest Wi-Fi (client isolation), a
@@ -74,6 +74,12 @@ phases is worth building on an unreliable base.
 - Limits: same Wi-Fi only; works while the page is open (iOS allows no background sync without an
   app); clipboard is one tap, not automatic.
 - It's the first slice of Phase 1: pairing by QR, one-time keys, an encrypted local link.
+- **As built (v0.5.11, `src-tauri/src/tugboat/`, `src/tugboat-page/`):** the page uses @noble/ciphers +
+  @noble/hashes (audited, pure JS) rather than libsodium; keys via HKDF-SHA256; every request is
+  MAC'd and the first phone binds the session. PC → phone is one Save button per file (no zip in
+  v1). A shared test vector proves the JS and Rust crypto agree. Renamed from "tug Drop" to
+  **Tugboat** (Dave, 2026-10-06); received files go to `Pictures\Tugboat`. Future CLI verb:
+  `tug boat <file>`.
 
 ### Phase 1 — the tug protocol (Rust, desktop side only)
 The foundation every companion app talks to. Designed once, in Rust, before any phone code.

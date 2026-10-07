@@ -15,12 +15,15 @@ use crate::spotify::{
 };
 use crate::state::{DeviceStatus, Shared};
 use crate::store::StoredNotification;
+use crate::tugboat::session::Skipped;
+use crate::tugboat::{TugboatService, TugboatStatus};
 use serde::Serialize;
 
 pub struct AppState {
     pub shared: Arc<Shared>,
     pub ble: BleHandle,
     pub spotify: Arc<Spotify>,
+    pub tugboat: TugboatService,
 }
 
 type Result<T> = std::result::Result<T, String>;
@@ -473,9 +476,22 @@ pub fn copy_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
         phone_names: &phone_names,
     }
     .render();
+    // The latest Bluetooth inventory (privacy-safe by construction: UUIDs, names, counts).
+    let inventory = crate::bt_inventory::diagnostics_section(crate::bt_inventory::last_report().as_ref());
+    let report = format!("{report}\n{inventory}");
 
     crate::clipboard::set_text(&report)?;
     Ok(report)
+}
+
+/// The Bluetooth inventory: what the iPhone exposes to tug (GATT services, Device Information,
+/// time, battery, AMS/ANCS, PBAP/MAP, SDP, link). Runs it now (also logging it as `bt-inventory:`)
+/// or joins the one already running. Privacy-safe: no names, numbers or message text.
+#[tauri::command]
+pub async fn bt_inventory(state: State<'_, AppState>) -> Result<crate::bt_inventory::BtInventory> {
+    let (reply, rx) = tokio::sync::oneshot::channel();
+    state.ble.send(Command::Inventory { reply });
+    rx.await.map_err(|_| "Bluetooth service stopped".to_string())
 }
 
 /// Open tug's log folder in Explorer, so the owner can attach the files to a support message.
@@ -789,6 +805,70 @@ pub fn log_frontend_error(kind: String, name: String, message: String, source: S
     if allowed {
         log::warn!("{}", crate::frontend_log::summary(&kind, &name, &message, &source));
     }
+}
+
+// --- Tugboat (phone <-> PC over the local Wi-Fi; see tugboat/mod.rs) ---
+
+/// Open Tugboat: a fresh secret and port, and the QR code to scan. Returns the session already
+/// open if there is one.
+#[tauri::command]
+pub async fn tugboat_start(state: State<'_, AppState>) -> Result<TugboatStatus> {
+    state.tugboat.start().await
+}
+
+/// Close Tugboat: stop listening, invalidate the secret, remove unfinished uploads.
+#[tauri::command]
+pub async fn tugboat_stop(state: State<'_, AppState>) -> Result<()> {
+    state.tugboat.stop(None).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn tugboat_status(state: State<'_, AppState>) -> TugboatStatus {
+    state.tugboat.status()
+}
+
+/// "Copy link" in the Tugboat panel: the QR link, kept out of clipboard history and sync. Sync on
+/// purpose, like `copy_text`: the WinRT clipboard needs the main (STA) thread. (Files dropped onto
+/// tug are offered from Rust, in lib.rs; no command takes a path from the page.)
+#[tauri::command]
+pub fn tugboat_copy_link(state: State<'_, AppState>) -> Result<()> {
+    state.tugboat.copy_link()
+}
+
+/// "Choose files" in the Tugboat panel: Windows' file picker, then offer what was picked.
+#[tauri::command]
+pub async fn tugboat_pick_files(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<Skipped>> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tauri::async_runtime::spawn_blocking(move || app.dialog().file().blocking_pick_files())
+        .await
+        .map_err(|e| e.to_string())?;
+    let paths: Vec<std::path::PathBuf> = picked
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| p.into_path().ok())
+        .collect();
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    state.tugboat.offer(paths).await
+}
+
+#[tauri::command]
+pub fn tugboat_remove_offer(state: State<'_, AppState>, id: String) {
+    state.tugboat.remove_offer(&id);
+}
+
+/// Text for the phone to copy (empty clears it).
+#[tauri::command]
+pub fn tugboat_send_text(state: State<'_, AppState>, text: String) -> Result<()> {
+    state.tugboat.send_text(&text)
+}
+
+/// Open the Tugboat folder, or select one file Tugboat saved this session.
+#[tauri::command]
+pub fn tugboat_open_folder(state: State<'_, AppState>, path: Option<String>) -> Result<()> {
+    state.tugboat.open_folder(path.as_deref())
 }
 
 #[cfg(test)]

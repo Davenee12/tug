@@ -98,6 +98,18 @@ impl RequestQueue {
         Some(r)
     }
 
+    /// The Bluetooth link stopped answering altogether (see `wedge`): put the in-flight request back
+    /// at the front without counting this attempt, so a stall being recovered from can't use up its
+    /// retries and get it given up on.
+    pub fn requeue_inflight(&mut self) {
+        if let Some((r, _)) = self.inflight.take() {
+            if let Some(n) = self.attempts.get_mut(&r) {
+                *n = n.saturating_sub(1);
+            }
+            self.queue.push_front(r);
+        }
+    }
+
     /// The phone answered that the target doesn't exist (e.g. the notification
     /// was dismissed before we asked): drop it, no retry, not a failure.
     pub fn drop_inflight(&mut self) {
@@ -162,6 +174,40 @@ mod tests {
         }
         assert!(q.is_idle());
         assert!(!q.all_notifications_fetched(), "sweep must not trust missing rows now");
+    }
+
+    #[test]
+    fn a_request_held_through_a_stall_keeps_its_retries() {
+        // The adapter wedged on 2026-10-06 and each request burned all its attempts. A request paused
+        // for the stall goes back to the front, and the paused attempt isn't counted.
+        let mut q = RequestQueue::default();
+        let now = Instant::now();
+        q.push(Request::Notification(20));
+        q.push(Request::Notification(21));
+        for _ in 0..5 {
+            assert_eq!(
+                q.start_next(now),
+                Some(Request::Notification(20)),
+                "still first in line"
+            );
+            q.requeue_inflight();
+        }
+        // All its retries are still there: three real failures before it's given up on.
+        let mut gave_up = None;
+        let mut attempts_of_20 = 0;
+        while gave_up.is_none() {
+            let r = q.start_next(now).expect("queue not empty");
+            if r == Request::Notification(20) {
+                attempts_of_20 += 1;
+                gave_up = q.fail_inflight();
+            } else {
+                q.complete(&r);
+            }
+        }
+        assert_eq!(attempts_of_20, MAX_ATTEMPTS);
+        assert_eq!(gave_up, Some(Request::Notification(20)));
+        q.requeue_inflight(); // nothing in flight: a no-op
+        assert!(q.is_idle());
     }
 
     #[test]

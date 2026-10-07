@@ -26,10 +26,19 @@
 //   http://localhost:1420/?nodial     Settings › iPhone › Calls check fails, like a blocked hands-free link
 //   http://localhost:1420/?norepeat   player doesn't list AdvanceRepeatMode: no loop button
 //   http://localhost:1420/?repeatignored   player lists it but ignores it: the "didn't change" toast
+//   http://localhost:1420/?model=iPhone12,8   the phone reports that model identifier (default iPhone16,2)
+//   http://localhost:1420/?nomodel    the phone hasn't reported its model (generic picture, no model line)
+//   http://localhost:1420/?away       the phone is out of range: disconnected, last known model kept
+//   http://localhost:1420/?tugboat    the Tugboat panel open with a phone connected: a video arriving,
+//                                     saved files, a text from the phone, files on offer (?drop works too;
+//                                     add &android for an Android phone)
+//   http://localhost:1420/?tugboatwait   the Tugboat panel showing its QR code, no phone yet ("Can't
+//                                     connect?" help appears after 30 s)
+//   http://localhost:1420/?tugboatnonet  the Tugboat panel with no network a phone could use
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
+import type { CallRecord, Contact, DeviceStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -40,6 +49,8 @@ const forgotten = params.has("forgotten");
 const noPhone = setup || leftover || latephone;
 const noRepeat = params.has("norepeat");
 const repeatIgnored = params.has("repeatignored");
+// The model identifier the mock phone reports over its Device Information Service.
+const model = params.has("nomodel") ? null : params.get("model") || "iPhone16,2";
 // ?whatsnew: fake the app version to 0.5.9 so the upcoming entry shows too; otherwise report the
 // shipping version so Settings › About and the card read a real number in the browser preview.
 const whatsNewPreview = params.has("whatsnew");
@@ -118,6 +129,7 @@ const status: DeviceStatus = noPhone
       pairingStale: false,
       awaitingPhoneAllow: false,
       awaitingUnlock: false,
+      reconnecting: false,
       messagesError: null,
       contactsError: null,
       contactsShared: false,
@@ -131,7 +143,7 @@ const status: DeviceStatus = noPhone
       radio: "on",
       peripheralSupported: true,
       advertising: "on",
-      device: { id: "mock", name: "Jordan's iPhone" },
+      device: { id: "mock", name: "Jordan's iPhone", model },
       connection: "disconnected",
       battery: null,
       services: { notifications: false, media: false, battery: false, messages: false },
@@ -140,6 +152,7 @@ const status: DeviceStatus = noPhone
       pairingStale: true,
       awaitingPhoneAllow: false,
       awaitingUnlock: false,
+      reconnecting: false,
       messagesError: null,
       contactsError: null,
       contactsShared: false,
@@ -151,7 +164,7 @@ const status: DeviceStatus = noPhone
       radio: "on",
       peripheralSupported: true,
       advertising: "on",
-      device: { id: "mock", name: "Jordan's iPhone" },
+      device: { id: "mock", name: "Jordan's iPhone", model },
       connection: "connected",
       battery: 76,
       // ?nudge: notifications work but the optional switches are off, so the Feed shows its
@@ -162,6 +175,7 @@ const status: DeviceStatus = noPhone
       pairingStale: false,
       awaitingPhoneAllow: false,
       awaitingUnlock: false,
+      reconnecting: false,
       messagesError: params.has("nudge") ? "the iPhone refused message access; turn on Show Notifications for this PC" : null,
       contactsError: params.has("nudge") ? "the iPhone refused contact access" : null,
       contactsShared: false,
@@ -169,6 +183,16 @@ const status: DeviceStatus = noPhone
       textsDevice: setup ? null : "Jordan's iPhone",
       liveTexts: params.has("livetexts") ? "active" : "off",
     };
+
+// ?away: the phone is out of range. The sidebar keeps its name and last known model.
+if (params.has("away") && status.device) {
+  Object.assign(status, {
+    connection: "disconnected",
+    battery: null,
+    services: { notifications: false, media: false, battery: false, messages: false },
+    liveTexts: "off",
+  } satisfies Partial<DeviceStatus>);
+}
 
 // ?applemusic swaps Spotify for Apple Music, which lists skip ±15 s and Like/Dislike over AMS
 // (and no working repeat), so those controls can be reviewed in the browser.
@@ -394,7 +418,8 @@ let finishPairing: ((ok: boolean) => void) | null = null;
 function simulateConnect(id: string) {
   const name = (namedLater ?? discovered).find((d) => d.id === id)?.name || "Jordan's iPhone";
   const send = () => void emit("device-status", { ...status, services: { ...status.services } });
-  status.device = { id, name };
+  // The model arrives a moment after connecting (read once the services are up).
+  status.device = { id, name, model: null };
   status.connection = "connecting";
   // On a fresh bond iOS holds the ANCS subscribe open until "Allow" is tapped: the UI should
   // prompt to look at the phone during this window.
@@ -411,6 +436,7 @@ function simulateConnect(id: string) {
   }, 900);
   setTimeout(() => {
     status.services = { ...status.services, notifications: true };
+    if (status.device) status.device = { ...status.device, model };
     send();
   }, 2400);
   setTimeout(() => {
@@ -435,6 +461,90 @@ function simulateConnect(id: string) {
     history.unshift(first);
     void emit("notification", first);
   }, 16000);
+}
+
+// --- Tugboat (?tugboat, ?tugboatwait, ?tugboatnonet; the older ?drop… names still work) ---
+/** A QR-looking pattern (finder squares + scattered modules); the real one comes from Rust. */
+function mockQr(size = 33): TugboatQr {
+  const dark = (x: number, y: number) => {
+    for (const [fx, fy] of [[0, 0], [size - 7, 0], [0, size - 7]]) {
+      const dx = x - fx;
+      const dy = y - fy;
+      if (dx >= 0 && dx < 7 && dy >= 0 && dy < 7) {
+        const ring = Math.max(Math.abs(dx - 3), Math.abs(dy - 3));
+        return ring !== 2;
+      }
+      if (dx >= -1 && dx <= 7 && dy >= -1 && dy <= 7) return false;
+    }
+    return ((x * 7919 + y * 104729 + x * y * 31) % 11) < 5;
+  };
+  let path = "";
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (dark(x, y)) path += `M${x} ${y}h1v1h-1z`;
+  return { size, path };
+}
+const dropFolder = "C:\\Users\\Dave\\Pictures\\Tugboat";
+const dropOn = params.has("tugboat") || params.has("drop");
+const dropWait = params.has("tugboatwait") || params.has("dropwait");
+const dropNoNet = params.has("tugboatnonet") || params.has("dropnonet");
+const dropState: TugboatStatus = {
+  phase: "off",
+  url: null,
+  address: null,
+  qr: null,
+  phone: null,
+  phoneActive: false,
+  folder: dropFolder,
+  incoming: [],
+  outgoing: [],
+  texts: [],
+  sentText: null,
+  sending: false,
+  ended: null,
+};
+const sendDrop = () => void emit("tugboat-status", structuredClone(dropState));
+function startDrop() {
+  if (dropState.phase !== "off") return;
+  const nonet = dropNoNet;
+  Object.assign(dropState, {
+    phase: nonet ? "noNetwork" : dropOn ? "connected" : "waiting",
+    url: nonet ? null : "http://192.168.1.20:53211/#q8Z3xR0aLk2mVb7nTe4WcA",
+    address: nonet ? null : "192.168.1.20:53211",
+    qr: nonet ? null : mockQr(),
+    ended: null,
+  });
+  if (!dropOn) return;
+  Object.assign(dropState, {
+    // &android: the same session from an Android phone (Chrome or Samsung Internet).
+    phone: params.has("android") ? "Android phone" : "iPhone",
+    phoneActive: true,
+    texts: [{ id: 1, text: "https://maps.app.goo.gl/x7Qp — north entrance, 7:30", at: now - 2 * min }],
+    outgoing: [
+      { id: "o1", name: "Boarding pass.pdf", size: 184_320, downloads: 1 },
+      { id: "o2", name: "Holiday slideshow.mp4", size: 412_000_000, downloads: 0 },
+    ],
+    incoming: [
+      { id: "i3", name: "IMG_4023.MOV", size: 268_000_000, received: 0, done: false, path: null, at: now },
+      { id: "i2", name: "IMG_4022.HEIC", size: 2_481_152, received: 2_481_152, done: true, path: `${dropFolder}\\IMG_4022.HEIC`, at: now - min },
+      { id: "i1", name: "IMG_4021.HEIC", size: 3_102_200, received: 3_102_200, done: true, path: `${dropFolder}\\IMG_4021.HEIC`, at: now - min },
+    ],
+  });
+  // The video arrives over ~20 s.
+  const tick = window.setInterval(() => {
+    const v = dropState.incoming[0];
+    if (dropState.phase === "off" || !v) return window.clearInterval(tick);
+    v.received = Math.min(v.size, v.received + 14_000_000);
+    if (v.received >= v.size) {
+      Object.assign(v, { done: true, path: `${dropFolder}\\${v.name}` });
+      window.clearInterval(tick);
+    }
+    sendDrop();
+  }, 1000);
+}
+if (dropOn || dropWait || dropNoNet) {
+  setTimeout(async () => {
+    const { useTugboatStore } = await import("../stores/tugboat");
+    void useTugboatStore().show();
+  }, 400);
 }
 
 mockIPC(
@@ -520,6 +630,35 @@ mockIPC(
         return report;
       }
       case "open_logs_folder":
+        return null;
+      case "tugboat_start":
+        startDrop();
+        return structuredClone(dropState);
+      case "tugboat_status":
+        return structuredClone(dropState);
+      case "tugboat_stop":
+        Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null });
+        return null;
+      case "tugboat_pick_files": {
+        startDrop();
+        dropState.outgoing.push({ id: `o${dropState.outgoing.length + 10}`, name: "Lease agreement.pdf", size: 1_250_000, downloads: 0 });
+        sendDrop();
+        return [];
+      }
+      case "tugboat_copy_link":
+        // The real one is a private clipboard write in Rust (no history, no sync).
+        console.log("[devMock] copy Tugboat link");
+        return null;
+      case "tugboat_remove_offer":
+        dropState.outgoing = dropState.outgoing.filter((o) => o.id !== a.id);
+        sendDrop();
+        return null;
+      case "tugboat_send_text":
+        dropState.sentText = String(a.text ?? "") || null;
+        sendDrop();
+        return null;
+      case "tugboat_open_folder":
+        console.log("[devMock] open Tugboat folder", a.path ?? dropFolder);
         return null;
       case "get_settings":
         return settings;

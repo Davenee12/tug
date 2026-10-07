@@ -8,6 +8,9 @@ export type ConnectionState = "noDevice" | "disconnected" | "connecting" | "conn
 export interface PairedDevice {
   id: string;
   name: string;
+  /** Apple's model identifier ("iPhone16,2") read over Bluetooth; null until the phone reports it.
+   *  `lib/phoneModel` turns it into a name and picture. */
+  model: string | null;
 }
 
 export interface Services {
@@ -35,6 +38,8 @@ export interface DeviceStatus {
   awaitingPhoneAllow: boolean;
   /** The iPhone is connected but locked (no ANCS yet): tell the user to unlock it to reconnect. */
   awaitingUnlock: boolean;
+  /** tug is rebuilding the link on its own (Bluetooth stalled, the PC woke): say "Reconnecting…", not "Waiting". */
+  reconnecting: boolean;
   /** Why message access isn't available, when the user can fix it. */
   messagesError: string | null;
   /** Why the phone's contacts aren't available, when the user can fix it. */
@@ -394,4 +399,242 @@ export interface SpotifyPlayer {
   /** The playing track's name, checked against the phone's title before Like is offered. */
   trackName: string | null;
   deviceName: string | null;
+}
+
+// --- Tugboat (src-tauri/src/tugboat/mod.rs, session.rs, qr.rs) ---
+
+/** Off; showing the QR code; a phone has connected; or no network a phone could use. */
+export type TugboatPhase = "off" | "waiting" | "connected" | "noNetwork";
+
+/** The QR code as one SVG path in module units (the panel adds the quiet zone). */
+export interface TugboatQr {
+  size: number;
+  path: string;
+}
+
+/** A file coming from the phone (in progress, or saved this session). */
+export interface TugboatIncoming {
+  id: string;
+  name: string;
+  size: number;
+  received: number;
+  done: boolean;
+  /** Full path once saved, for "Show in folder". */
+  path: string | null;
+  at: number;
+}
+
+/** A file offered to the phone. */
+export interface TugboatOffer {
+  id: string;
+  name: string;
+  size: number;
+  /** Times the phone fetched the whole file. */
+  downloads: number;
+}
+
+/** Text the phone sent (it also went on the clipboard). */
+export interface TugboatText {
+  id: number;
+  text: string;
+  at: number;
+}
+
+/** Everything the Tugboat panel shows; also the "tugboat-status" event. */
+export interface TugboatStatus {
+  phase: TugboatPhase;
+  /** The QR link (with the secret), also shown as the manual fallback. */
+  url: string | null;
+  /** "192.168.1.20:53211". */
+  address: string | null;
+  qr: TugboatQr | null;
+  /** "iPhone", once one has connected. */
+  phone: string | null;
+  /** The phone's page is open and checking in. */
+  phoneActive: boolean;
+  /** Where received files go (Pictures\Tugboat). */
+  folder: string | null;
+  incoming: TugboatIncoming[];
+  outgoing: TugboatOffer[];
+  texts: TugboatText[];
+  /** Text currently offered to the phone. */
+  sentText: string | null;
+  /** The phone is downloading a file from the PC right now. */
+  sending: boolean;
+  /** Why Tugboat turned itself off. */
+  ended: "idle" | "hidden" | null;
+}
+
+/** "tugboat-text": text from the phone went (or failed to go) onto the PC clipboard. */
+export interface TugboatTextArrived {
+  ok: boolean;
+}
+
+/** A file that couldn't be offered to the phone, and why. */
+export interface TugboatSkipped {
+  name: string;
+  reason: "tooBig" | "folder" | "unreadable" | "tooMany";
+}
+
+// --- Bluetooth inventory (src-tauri/src/bt_inventory) ---
+// A diagnostic of what the iPhone exposes to tug. Privacy-safe by construction: UUIDs, property
+// flags, field names, counts, enums, lengths and harmless values only.
+
+/** One part of the inventory: what was found, or why it couldn't be. */
+export type Probe<T> = { ok: T } | { unavailable: string };
+
+export type InventoryTrigger = "connect" | "followUp" | "onDemand";
+
+export interface BtGattCharacteristic {
+  /** `0x2A19` for SIG UUIDs, the full 128-bit form otherwise. */
+  uuid: string;
+  name: string | null;
+  properties: string[];
+  /** For readable characteristics: "N bytes", an error, or why it wasn't read. Never the value. */
+  read: string | null;
+}
+
+export interface BtGattService {
+  uuid: string;
+  name: string | null;
+  characteristics: Probe<BtGattCharacteristic[]>;
+}
+
+export interface BtPnpId {
+  vendorIdSource: string;
+  vendorId: string;
+  vendor: string | null;
+  productId: string;
+  productVersion: string;
+}
+
+export interface BtDeviceInformation {
+  manufacturer: string | null;
+  modelNumber: string | null;
+  serialNumberLength: number | null;
+  hardwareRevision: string | null;
+  firmwareRevision: string | null;
+  softwareRevision: string | null;
+  systemIdLength: number | null;
+  regulatoryDataLength: number | null;
+  pnpId: BtPnpId | null;
+  unreadable: Record<string, string>;
+}
+
+export interface BtCurrentTime {
+  /** The phone's local wall-clock time, `YYYY-MM-DDTHH:MM:SS`. */
+  local: string;
+  dayOfWeek: string | null;
+  fractions256: number;
+  adjustReasons: string[];
+}
+
+export interface BtLocalTimeInfo {
+  timeZoneMinutes: number | null;
+  dstOffsetMinutes: number | null;
+}
+
+export interface BtReferenceTimeInfo {
+  source: string;
+  accuracyEighths: number | null;
+  accuracy: string;
+  daysSinceUpdate: number;
+  hoursSinceUpdate: number;
+}
+
+export interface BtCurrentTimeReport {
+  currentTime: Probe<BtCurrentTime>;
+  currentTimeNotifies: boolean;
+  localTimeInfo: Probe<BtLocalTimeInfo>;
+  referenceTimeInfo: Probe<BtReferenceTimeInfo>;
+  utcOffsetMinutes: number | null;
+  /** Phone clock minus PC clock in seconds (positive: the phone is ahead). */
+  skewSeconds: number | null;
+}
+
+export interface BtBatteryReport {
+  characteristics: string[];
+  level: number | null;
+  levelNotifies: boolean;
+  powerStateCharacteristic: boolean;
+}
+
+/** One AMS attribute read: a harmless value, presence + length, empty, or an error. */
+export type BtAmsValue = { value: string } | { present: number } | "empty" | { error: string };
+
+export interface BtAmsReport {
+  attributes: { name: string; result: BtAmsValue }[];
+  supportedCommands: string[] | null;
+}
+
+export interface BtAncsTally {
+  added: number;
+  modified: number;
+  removed: number;
+  categories: Record<string, number>;
+  flags: Record<string, number>;
+  detailsFetched: number;
+  attributesPresent: Record<string, number>;
+  messageSize: string;
+  actionLabels: string[];
+}
+
+export interface BtVcardFieldCounts {
+  contacts: number;
+  /** Standard vCard property names and `X-` names; anything else is counted as "custom". */
+  fields: Record<string, number>;
+  /** Standard TEL types (and Apple's IPHONE/MAIN/OTHER); anything else is "custom". */
+  telTypes: Record<string, number>;
+}
+
+export interface BtPbapReport {
+  phonebooks: Record<string, { response: string; size: number | null }>;
+  /** Why the phonebook size check didn't run (or failed) in this report. */
+  phonebooksNote: string | null;
+  /** From tug's own contacts pulls only ("contacts", "contacts+photos"). */
+  fieldCounts: Record<string, BtVcardFieldCounts>;
+  /** What fieldCounts covers: only the fields tug's own pulls ask for. */
+  fieldCountsScope: string;
+  probedAt: number | null;
+}
+
+export interface BtMapReport {
+  folders: Probe<string[]>;
+  listingTypes: Record<string, number>;
+  mnsEvents: Record<string, number>;
+  sdpFeatures: string[] | null;
+  sdpMessageTypes: string | null;
+}
+
+export interface BtSdpRecord {
+  serviceClasses: string[];
+  profiles: string[];
+  protocols: string[];
+  supportedFeatures: string | null;
+  featureNames: string[];
+  details: Record<string, string>;
+  attributeIds: string[];
+}
+
+export interface BtLinkReport {
+  parameters: Probe<{ intervalMs: number; latency: number; supervisionTimeoutMs: number }>;
+  phy: Probe<{ transmit: string; receive: string }>;
+  maxPduSize: number | null;
+}
+
+export interface BtInventory {
+  schema: number;
+  trigger: InventoryTrigger;
+  generatedAt: number;
+  gatt: Probe<BtGattService[]>;
+  deviceInformation: Probe<BtDeviceInformation>;
+  currentTime: Probe<BtCurrentTimeReport>;
+  battery: Probe<BtBatteryReport>;
+  ams: Probe<BtAmsReport>;
+  ancs: BtAncsTally;
+  pbap: Probe<BtPbapReport>;
+  map: Probe<BtMapReport>;
+  classicSdp: Probe<BtSdpRecord[]>;
+  link: Probe<BtLinkReport>;
+  audioPlayback: Probe<{ candidates: number; iphoneListed: boolean }>;
 }
