@@ -81,18 +81,18 @@ const history: PhoneNotification[] = noPhone
   ? []
   : [
       n("com.apple.mobilephone", "Phone", "Mum", "Missed Call", 3, { category: "missedCall", flags: flags({ positiveAction: true }), positiveLabel: "Dial" }),
-      n("com.apple.MobileSMS", "Messages", "Tay", "omw, 10 mins 🚗", 1),
-      n("com.apple.MobileSMS", "Messages", "Tay", "did you see the photos I sent?", 4),
+      n("com.apple.MobileSMS", "Messages", "Zoe", "omw, 10 mins 🚗", 1),
+      n("com.apple.MobileSMS", "Messages", "Zoe", "did you see the photos I sent?", 4),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Are we still meeting at 5? I can grab a table if you're running late.", 2),
       n("com.google.Gmail", "Gmail", "Google", "G-591204 is your Google verification code.", 6, { category: "email" }),
       n("net.whatsapp.WhatsApp", "WhatsApp", "Sam Okafor", "Sent you the slides, have a look before the call", 9),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Also bring the charger 🙏", 14),
       n("com.apple.mobilecal", "Calendar", "Design review", "In 15 minutes · Room 4", 18, { category: "schedule" }),
       n("com.hammerandchisel.discord", "Discord", "#release", "ci passed on main, tagging v0.4 now", 41),
-      n("com.apple.mobilemail", "Mail", "Netlify", "Deploy succeeded for topcourt-prod", 66, { category: "email", removedAt: now - 30 * min, live: false }),
+      n("com.apple.mobilemail", "Mail", "Netlify", "Deploy succeeded for example-site", 66, { category: "email", removedAt: now - 30 * min, live: false }),
       n("net.whatsapp.WhatsApp", "WhatsApp", "Sam Okafor", "Running 5 late", 180, { live: false }),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Booked for Thursday", 60 * 26, { live: false }),
-      n("com.apple.MobileSMS", "Messages", "Tay", "lol yes that's exactly what I meant", 60 * 25, { live: false, removedAt: now - 60 * 24 * min }),
+      n("com.apple.MobileSMS", "Messages", "Zoe", "lol yes that's exactly what I meant", 60 * 25, { live: false, removedAt: now - 60 * 24 * min }),
       n("com.apple.Health", null, "Stand", "Time to stand! Stand and move for a minute.", 60 * 27, { category: "healthAndFitness", live: false }),
       n("com.apple.MobileSMS", "Messages", "Bank", "Your code is 482913. Don't share it with anyone.", 60 * 50, { live: false }),
       // Unknown senders (iOS titles them with the number): they land under Messages › Unknown
@@ -131,7 +131,7 @@ const status: DeviceStatus = noPhone
       radio: "on",
       peripheralSupported: true,
       advertising: "on",
-      device: { id: "mock", name: "Dave's iPhone" },
+      device: { id: "mock", name: "Jordan's iPhone" },
       connection: "disconnected",
       battery: null,
       services: { notifications: false, media: false, battery: false, messages: false },
@@ -144,14 +144,14 @@ const status: DeviceStatus = noPhone
       contactsError: null,
       contactsShared: false,
       textsPairing: "broken",
-      textsDevice: "Dave's iPhone",
+      textsDevice: "Jordan's iPhone",
       liveTexts: "off",
     }
   : {
       radio: "on",
       peripheralSupported: true,
       advertising: "on",
-      device: { id: "mock", name: "Dave's iPhone" },
+      device: { id: "mock", name: "Jordan's iPhone" },
       connection: "connected",
       battery: 76,
       // ?nudge: notifications work but the optional switches are off, so the Feed shows its
@@ -166,7 +166,7 @@ const status: DeviceStatus = noPhone
       contactsError: params.has("nudge") ? "the iPhone refused contact access" : null,
       contactsShared: false,
       textsPairing: setup ? "missing" : params.has("textsbroken") ? "broken" : "ok",
-      textsDevice: setup ? null : "Dave's iPhone",
+      textsDevice: setup ? null : "Jordan's iPhone",
       liveTexts: params.has("livetexts") ? "active" : "off",
     };
 
@@ -210,47 +210,47 @@ const discovered: DiscoveredDevice[] = setup
   ? [
       { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
       { id: "a", name: "", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" },
-      { id: "old", name: "DTD iPhone Max 15 Pro", transport: "classic", paired: true, connected: false, canPair: false, kind: "phone" },
+      { id: "old", name: "Old iPhone", transport: "classic", paired: true, connected: false, canPair: false, kind: "phone" },
     ]
   : leftover
   ? // A fresh install with both bonds of a previous iPhone still paired in Windows (same name).
     [
       { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
-      { id: "le", name: "Dave's iPhone", transport: "le", paired: true, connected: false, canPair: false, kind: "phone" },
-      { id: "classic", name: "Dave's iPhone", transport: "classic", paired: true, connected: false, canPair: false, kind: "phone" },
+      { id: "le", name: "Jordan's iPhone", transport: "le", paired: true, connected: false, canPair: false, kind: "phone" },
+      { id: "classic", name: "Jordan's iPhone", transport: "classic", paired: true, connected: false, canPair: false, kind: "phone" },
     ]
   : latephone
   ? // The iPhone isn't discoverable yet; it appears after a rescan (see rescan_discovery below).
     [{ id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" }]
   : [
       { id: "k", name: "Keychron K3", transport: "le", paired: true, connected: true, canPair: false, kind: "accessory" },
-      { id: "a", name: "Dave's iPhone", transport: "le", paired: false, connected: true, canPair: true, kind: "phone" },
+      { id: "a", name: "Jordan's iPhone", transport: "le", paired: false, connected: true, canPair: true, kind: "phone" },
       { id: "b", name: "WH-1000XM5", transport: "classic", paired: true, connected: false, canPair: false, kind: "accessory" },
       { id: "c", name: "LE-Bose Flex", transport: "le", paired: false, connected: false, canPair: true, kind: "accessory" },
     ];
 // The same discovery list once the iPhone's name has filled in (emitted a couple of seconds later).
 const namedLater: DiscoveredDevice[] | null = setup
-  ? discovered.map((d) => (d.id === "a" ? { ...d, name: "Dave's iPhone" } : d))
+  ? discovered.map((d) => (d.id === "a" ? { ...d, name: "Jordan's iPhone" } : d))
   : null;
 
 // seenSince 0: everything still on the phone counts as new, so badges show in the preview.
-// Message access (MAP): Tay's texts, including ones read in the open chat that
+// Message access (MAP): Zoe's texts, including ones read in the open chat that
 // never became notifications, plus a reply sent from tug.
-const TAY = "+13025550142";
+const ZOE = "+13025550142";
 const contacts: Contact[] = noPhone
   ? []
   : [
-      { address: TAY, name: "Tay" },
-      { address: "+12145550199", name: "Daviel" },
-      { address: "+19725550111", name: "Dave Smith" },
+      { address: ZOE, name: "Zoe" },
+      { address: "+12145550199", name: "Priya" },
+      { address: "+19725550111", name: "Chris Smith" },
     ];
 let nextMsg = 1;
 const sms = (
   direction: "in" | "out",
   body: string,
   agoMin: number,
-  address = TAY,
-  contactName: string | null = "Tay",
+  address = ZOE,
+  contactName: string | null = "Zoe",
   msgType: string | null = "IM",
 ): SmsMessage => ({
   id: nextMsg++,
@@ -267,7 +267,7 @@ const sms = (
 const messages: SmsMessage[] = noPhone
   ? []
   : [
-      // Tay is on iMessage (IM → blue); the spammer and short code are plain texts (SMS → green),
+      // Zoe is on iMessage (IM → blue); the spammer and short code are plain texts (SMS → green),
       // so the dev view shows the blue/green tinting when the phone distinguishes them.
       sms("in", "are you coming tonight?", 40),
       sms("out", "yeah! leaving soon", 38),
@@ -289,7 +289,7 @@ const calls: CallRecord[] = noPhone
   ? []
   : [
       { direction: "missed", name: "Mum", number: "+19725550123", at: localIso(3) },
-      { direction: "outgoing", name: "Tay", number: TAY, at: localIso(52) },
+      { direction: "outgoing", name: "Zoe", number: ZOE, at: localIso(52) },
       { direction: "incoming", name: null, number: "+12145550199", at: localIso(130) },
       { direction: "missed", name: null, number: null, at: localIso(60 * 20) },
       { direction: "incoming", name: "Jane Doe", number: "+14695550188", at: localIso(60 * 26) },
@@ -302,7 +302,7 @@ const settings: Record<string, string> = {
   "ui.seenSince": "0",
   // Quiet hours, VIPs and a mute, so Settings › Notifications has something to show in the browser.
   "ui.quietHours": setup ? "" : JSON.stringify({ enabled: true, start: "22:00", end: "07:00", days: [0, 1, 2, 3, 4] }),
-  "ui.vips": setup ? "" : JSON.stringify([TAY]),
+  "ui.vips": setup ? "" : JSON.stringify([ZOE]),
   "ui.mutedApps": setup ? "" : JSON.stringify(["com.burbn.instagram"]),
 };
 // ?whatsnew: an older last-seen version so the card greets you on launch (0.5.9 + a collapsed 0.5.8).
@@ -315,7 +315,7 @@ let autostart = false;
 // starts it disconnected (to see Settings › Connectors and the empty states).
 const spotifyState: SpotifyStatus = {
   connected: !noPhone && !params.has("spotifyoff"),
-  account: !noPhone && !params.has("spotifyoff") ? "Dave James" : null,
+  account: !noPhone && !params.has("spotifyoff") ? "Jordan Lee" : null,
 };
 const artSvg =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="6" fill="#1db954"/><circle cx="24" cy="44" r="7" fill="#0b2e18"/><rect x="29" y="18" width="6" height="26" fill="#0b2e18"/><path d="M35 18 L52 14 V22 L35 26 Z" fill="#0b2e18"/></svg>';
@@ -328,15 +328,15 @@ const spotifyPlayer: SpotifyPlayer = {
   trackUri: "spotify:track:mock123",
   // The same song as the mock Now Playing, so the Like button and art show.
   trackName: "Teardrop",
-  deviceName: "Dave's iPhone",
+  deviceName: "Jordan's iPhone",
 };
 const img = (seed: string) => `https://i.scdn.co/mock/${encodeURIComponent(seed)}`;
 const spotifyPlaylists: SpotifyPlaylist[] = [
   { uri: "spotify:playlist:1", id: "1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: img("Deep Focus"), owned: false },
-  { uri: "spotify:playlist:2", id: "2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: img("Morning Run"), owned: true },
+  { uri: "spotify:playlist:2", id: "2", name: "Morning Run", owner: "Jordan", trackCount: 42, imageUrl: img("Morning Run"), owned: true },
   { uri: "spotify:playlist:3", id: "3", name: "Discover Weekly", owner: "Spotify", trackCount: 30, imageUrl: img("Discover Weekly"), owned: false },
-  { uri: "spotify:playlist:4", id: "4", name: "Coding Flow", owner: "Dave", trackCount: 88, imageUrl: img("Coding Flow"), owned: true },
-  { uri: "spotify:playlist:5", id: "5", name: "Rainy Day Jazz", owner: "Dave", trackCount: 61, imageUrl: img("Rainy Day Jazz"), owned: true },
+  { uri: "spotify:playlist:4", id: "4", name: "Coding Flow", owner: "Jordan", trackCount: 88, imageUrl: img("Coding Flow"), owned: true },
+  { uri: "spotify:playlist:5", id: "5", name: "Rainy Day Jazz", owner: "Jordan", trackCount: 61, imageUrl: img("Rainy Day Jazz"), owned: true },
 ];
 
 // A small catalogue so every panel tab/view renders in the browser. Searching filters it by name.
@@ -382,7 +382,7 @@ const catalogueArtists: SpotifyArtist[] = [
   mockArtist("cg", "Childish Gambino"),
 ];
 const spotifyDevices: SpotifyDevice[] = [
-  { id: "phone", name: "Dave's iPhone", kind: "Smartphone", isActive: true },
+  { id: "phone", name: "Jordan's iPhone", kind: "Smartphone", isActive: true },
   { id: "pc", name: "Spotify on this PC", kind: "Computer", isActive: false },
   { id: "spk", name: "Kitchen speaker", kind: "Speaker", isActive: false },
 ];
@@ -392,7 +392,7 @@ const spotifyDevices: SpotifyDevice[] = [
 // notification arrives.
 let finishPairing: ((ok: boolean) => void) | null = null;
 function simulateConnect(id: string) {
-  const name = (namedLater ?? discovered).find((d) => d.id === id)?.name || "Dave's iPhone";
+  const name = (namedLater ?? discovered).find((d) => d.id === id)?.name || "Jordan's iPhone";
   const send = () => void emit("device-status", { ...status, services: { ...status.services } });
   status.device = { id, name };
   status.connection = "connecting";
@@ -416,7 +416,7 @@ function simulateConnect(id: string) {
   setTimeout(() => {
     status.messagesError = "the iPhone refused message access; turn on Show Notifications for this PC";
     status.textsPairing = "ok";
-    status.textsDevice = "Dave's iPhone";
+    status.textsDevice = "Jordan's iPhone";
     send();
   }, 8000);
   setTimeout(() => {
@@ -425,11 +425,11 @@ function simulateConnect(id: string) {
     send();
   }, 10500);
   setTimeout(() => {
-    contacts.push({ address: TAY, name: "Tay" }, { address: "+12145550199", name: "Daviel" });
+    contacts.push({ address: ZOE, name: "Zoe" }, { address: "+12145550199", name: "Priya" });
     void emit("contacts", [...contacts]);
   }, 12000);
   setTimeout(() => {
-    const first = n("com.apple.MobileSMS", "Messages", "Tay", "hey! is this thing on? 👋", 0);
+    const first = n("com.apple.MobileSMS", "Messages", "Zoe", "hey! is this thing on? 👋", 0);
     first.id = 500;
     first.receivedAt = Date.now();
     history.unshift(first);
@@ -485,7 +485,7 @@ mockIPC(
       case "get_contacts":
         return contacts;
       case "send_message": {
-        const to = String(a.address ?? TAY);
+        const to = String(a.address ?? ZOE);
         const m: SmsMessage = { ...sms("out", String(a.text), 0, to, contacts.find((c) => c.address === to)?.name ?? null), status: "pending" };
         messages.push(m);
         setTimeout(() => void emit("message", m), 0);
@@ -566,7 +566,7 @@ mockIPC(
         // Stand-in contact photos so the avatar path is visible without a phone: a couple of mock
         // people have one, the rest fall back to initials (as iOS contacts without a photo would).
         const key = String(a.key ?? "");
-        const withPhoto = new Set([TAY, "Tay", "+19725550111", "Dave Smith", "+19725550123", "Mum"]);
+        const withPhoto = new Set([ZOE, "Zoe", "+19725550111", "Chris Smith", "+19725550123", "Mum"]);
         if (!withPhoto.has(key)) return null;
         const hue = [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
         const svg =
@@ -591,7 +591,7 @@ mockIPC(
       case "rescan_discovery":
         // ?latephone: the iPhone becomes discoverable only on a later inquiry; surface it now.
         if (latephone && !discovered.some((d) => d.kind === "phone")) {
-          discovered.push({ id: "late", name: "Dave's iPhone", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" });
+          discovered.push({ id: "late", name: "Jordan's iPhone", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" });
         }
         setTimeout(() => void emit("discovered-devices", [...discovered]), 200);
         return null;
@@ -603,7 +603,7 @@ mockIPC(
         }
         void emit("discovered-devices", [...discovered]);
         setTimeout(() => {
-          discovered.push({ id: "fresh", name: name ?? "Dave's iPhone", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" });
+          discovered.push({ id: "fresh", name: name ?? "Jordan's iPhone", transport: "classic", paired: false, connected: false, canPair: true, kind: "phone" });
           void emit("discovered-devices", [...discovered]);
         }, 1200);
         return null;
@@ -619,7 +619,7 @@ mockIPC(
         return null;
       case "pair_device":
         // Like Windows: the PIN shows on both screens; the call returns once it's answered.
-        setTimeout(() => void emit("pairing-request", { deviceName: "Dave's iPhone", pin: "482 913", confirmOnPhone: false }), 300);
+        setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913", confirmOnPhone: false }), 300);
         return new Promise<null>((resolve, reject) => {
           finishPairing = (ok) => (ok ? resolve(null) : reject("Pairing was cancelled"));
         }).then(() => {
@@ -657,7 +657,7 @@ mockIPC(
         return new Promise((resolve) =>
           setTimeout(() => {
             spotifyState.connected = true;
-            spotifyState.account = "Dave James";
+            spotifyState.account = "Jordan Lee";
             resolve({ ...spotifyState });
           }, 900),
         );
@@ -775,7 +775,7 @@ if (setup && params.has("btoff")) {
 }
 
 if (params.has("pairing")) {
-  setTimeout(() => void emit("pairing-request", { deviceName: "Dave's iPhone", pin: "482 913", confirmOnPhone: false }), 600);
+  setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913", confirmOnPhone: false }), 600);
 }
 
 // ?call: the phone rings. Answer or Decline takes it down (perform_action above); left alone,

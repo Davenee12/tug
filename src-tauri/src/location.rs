@@ -51,7 +51,7 @@ pub fn locate() -> Result<Position, String> {
     Err(DENIED.to_string())
 }
 
-/// A name for coordinates ("Orlando, Florida") comes from BigDataCloud's reverse lookup. It's
+/// A name for coordinates ("Portland, Oregon") comes from BigDataCloud's reverse lookup. It's
 /// fetched here, not from the web view: there the request never got an answer in the
 /// installed app, so "Use my location" always fell back to "Your location".
 /// Returns the JSON body as is; the UI picks the name out (`placeName` in weather.ts).
@@ -97,14 +97,5 @@ mod tests {
             Ok(p) => println!("located: {:.2}, {:.2}", p.latitude, p.longitude),
             Err(e) => panic!("locate failed: {e}"),
         }
-    }
-
-    /// Network check: `cargo test --lib location -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn place_lookup_names_orlando() {
-        let body = super::place_lookup(28.37, -81.32).expect("lookup failed");
-        let j: serde_json::Value = serde_json::from_str(&body).expect("not JSON");
-        assert_eq!(j["city"], "Orlando", "unexpected answer: {body}");
     }
 }

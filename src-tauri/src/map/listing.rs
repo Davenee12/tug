@@ -144,14 +144,14 @@ mod tests {
         let xml = r#"<?xml version="1.0"?>
 <MAP-msg-listing version = "1.0">
   <msg handle = "20000100001" subject = "omw, 10 mins" datetime = "20261004T183012"
-       sender_name = "Tay" sender_addressing = "+15559876543" type = "SMS_GSM" size = "12" read = "no" />
+       sender_name = "Zoe" sender_addressing = "+15559876543" type = "SMS_GSM" size = "12" read = "no" />
   <msg handle="20000100002" subject="Fish &amp; chips &#x1F35F;" datetime="20261004T120000"
-       sender_name='Sam' sender_addressing="sam@icloud.com" type="SMS_GSM" read="yes"/>
+       sender_name='Sam' sender_addressing="sam@example.com" type="SMS_GSM" read="yes"/>
 </MAP-msg-listing>"#;
         let msgs = parse(xml);
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].handle, "20000100001");
-        assert_eq!(msgs[0].sender_name, "Tay");
+        assert_eq!(msgs[0].sender_name, "Zoe");
         assert_eq!(msgs[0].sender_addressing, "+15559876543");
         assert!(!msgs[0].read);
         assert_eq!(msgs[1].subject, "Fish & chips 🍟");

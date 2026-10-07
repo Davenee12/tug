@@ -11,7 +11,7 @@ smartwatch or car kit does, using the Bluetooth services Apple publishes for acc
 |---|---|---|
 | Live notifications from every app, with actions (answer/decline/clear) | ANCS (Bluetooth LE) | ✅ Verified on iPhone 15 Pro Max |
 | Compact feed, real app icons, open a notification's web page | Local + App Store lookup | ✅ |
-| Search everything with Ctrl+K: people, texts, notifications, plus actions (`text tay …`, `play …`) | SQLite + FTS5 | ✅ |
+| Search everything with Ctrl+K: people, texts, notifications, plus actions (`text zoe …`, `play …`) | SQLite + FTS5 | ✅ |
 | Read texts the moment they arrive, reply and start new ones | MAP + MNS (Classic Bluetooth, OBEX) | ✅ Verified |
 | Verification codes from texts and notifications, with Copy code | Local | ✅ Verified |
 | Contact names and photos | PBAP | ✅ Verified (needs *Sync Contacts*) |

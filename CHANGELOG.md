@@ -3,8 +3,8 @@
 ## v0.5.10 — 2026-10-06
 
 Bug fixing only (every fifth release is a stabilization release). Merged as #77, #79–#81, after an
-independent code review whose five blocks were all fixed before merge. Built and checked; Dave's
-hands-on testing on the iPhone follows.
+independent code review whose five blocks were all fixed before merge. Built and checked; hands-on
+testing on the iPhone follows.
 
 ### Fixed
 - **No more all-night reconnect loops.** When the iPhone is locked after a restart, tug shows
@@ -46,7 +46,7 @@ hands-on testing on the iPhone follows.
 ## v0.5.9 — 2026-10-05
 
 Easier connecting, a full Spotify panel, quiet hours, and contact photos. Merged as #63–#75.
-Tried on Dave's iPhone where noted; Spotify search was built and reviewed but Spotify's rate limit
+Tried on a real iPhone where noted; Spotify search was built and reviewed but Spotify's rate limit
 blocked a live test tonight.
 
 ### New
@@ -61,8 +61,8 @@ blocked a live test tonight.
 - **Quiet hours, app mute and VIPs** in Settings › Notifications: hold pop-ups on a schedule, mute
   pop-ups per app, and let chosen people always get through. Calls still ring unless you turn on
   Mute calls.
-- **Contact photos** from your iPhone in Messages, Calls, the Feed and Ctrl+K. *(27 photos came
-  through on Dave's iPhone.)*
+- **Contact photos** from your iPhone in Messages, Calls, the Feed and Ctrl+K. *(Tried on a real
+  iPhone.)*
 - **More music controls:** skip back/forward 15 seconds, and Like/Dislike in Apple Music, shown only
   when the player supports them.
 - **What's new** card once after each update, and in Settings › About.
@@ -87,7 +87,7 @@ blocked a live test tonight.
 
 ## v0.5.8 — 2026-10-05
 
-Smoother setup, texts that arrive instantly, and Spotify. Merged as #48–#61; tried on Dave's
+Smoother setup, texts that arrive instantly, and Spotify. Merged as #48–#61; tried on a real
 iPhone where noted.
 
 ### New
@@ -95,19 +95,19 @@ iPhone where noted.
   tug lists it by name; click Pair, the code shows in tug, and that one pairing brings
   notifications, music, battery and texts. No LightBlue needed. Tapping the PC on the iPhone (or
   Windows' "Add a device" pop-up) still works: tug says Windows will show the code, then offers
-  your iPhone. *(Both paths proven on Dave's iPhone, including two setups from a clean install.)*
+  your iPhone. *(Both paths proven on a real iPhone, including two setups from a clean install.)*
 - **Setup tells you what to do:** "Look at your iPhone and tap Allow" while the phone waits on
   you, a checklist of the iPhone's three switches naming the one that's off, a confirmed
   **Start over** for old or duplicate pairings, and your phone's real name instead of "iPhone".
 - **Texts arrive the moment your phone gets them** (live texts), with **Sending… → Sent** on
   texts you send. If the phone drops the link, tug reconnects by itself; checking every few
-  seconds stays as a backstop. *(Connected and held on Dave's iPhone.)*
+  seconds stays as a backstop. *(Connected and held on a real iPhone.)*
 - **Codes that arrive as texts show in the Feed** with a **Copy code** button, even when the
   iPhone showed no banner, and pop up in Windows.
 - **Settings › Connectors**, starting with **Spotify**: click Connect and sign in. Then your
   playlists (with covers) play on your iPhone, repeat and shuffle work, Like the current song,
   album art on Now Playing, and Ctrl+K "play <playlist>". If Spotify is closed on the iPhone, tug
-  asks you to open it and starts the playlist as soon as it's open. *(Tried on Dave's account.)*
+  asks you to open it and starts the playlist as soon as it's open. *(Tried on a real account.)*
 
 ### Fixed
 - The Feed keeps your place when notifications come and go; Messages opens on the newest text
@@ -130,8 +130,8 @@ iPhone where noted.
 
 ## v0.5.7 — 2026-10-05
 
-tug feels built into Windows, plus a full stabilization pass. Media keys verified on Dave's iPhone;
-the rest is built and checked, with Dave's hands-on testing continuing.
+tug feels built into Windows, plus a full stabilization pass. Media keys verified on a real iPhone;
+the rest is built and checked, with hands-on testing continuing.
 
 ### New
 - **Act from the Windows pop-up:** reply to a text right in the notification, Mark read, Copy code,
@@ -169,7 +169,7 @@ the rest is built and checked, with Dave's hands-on testing continuing.
 
 ## v0.5.6 — 2026-10-05
 
-Calls, real app icons and a steadier connection. Tested on Dave's iPhone.
+Calls, real app icons and a steadier connection. Tested on a real iPhone.
 
 ### New
 - **Incoming calls ring as a card over tug:** the caller's name large, rings rippling out, how long
@@ -179,7 +179,7 @@ Calls, real app icons and a steadier connection. Tested on Dave's iPhone.
 - **Calls tab:** your iPhone's recent calls (incoming, outgoing, missed), named from your contacts,
   kept current while it's open. Needs **Sync Contacts**.
 - **Call back from tug:** any missed call still on your phone can be called back, from the Calls
-  tab, the Feed ("Call back") or Ctrl+K (`call tay`). Calling anyone else comes in v0.5.7.
+  tab, the Feed ("Call back") or Ctrl+K (`call zoe`). Calling anyone else comes in v0.5.7.
 - **Real app icons** in the Feed (Gmail, Instagram, LinkedIn…), fetched once per app from Apple's App
   Store; people keep their initials. Switch off in Data & privacy.
 - **More Ctrl+K actions:** `copy code`, `clear all` (never a ringing call), `dnd`, `mark all read`,
@@ -215,7 +215,7 @@ Setup, settings and everyday shortcuts (Sprints 5–7), plus fixes from a full f
 - **One-time codes.** A **Copy** chip on texts and notifications with a verification code; one click
   copies it and clears the notification on the phone. **Ctrl+Shift+C** copies the newest code.
 - **Delete a conversation** from tug, with **Undo**. Nothing changes on the phone.
-- **Ctrl+K actions.** Type `text tay running late`, `play`, `next`, `settings` and more. When a name
+- **Ctrl+K actions.** Type `text zoe running late`, `play`, `next`, `settings` and more. When a name
   fits several people, tug asks instead of guessing.
 - **Tray icon and taskbar dot.** tug keeps running in the tray when you close it (switchable), shows
   unread texts on its taskbar button, and Quit lives in the tray menu.
@@ -227,7 +227,7 @@ Setup, settings and everyday shortcuts (Sprints 5–7), plus fixes from a full f
 - **The phone's switches register in seconds.** While a switch is still off (first minutes after
   starting or pairing, or with setup or Settings open), tug checks every 2 seconds.
 - **Sync Contacts switched on a little late** no longer means hours without names.
-- **"Use my location"** names the place ("Orlando, Florida") instead of "Your location".
+- **"Use my location"** names the place ("Portland, Oregon") instead of "Your location".
 - Clearing a stack of notifications no longer stops at the first one the phone has already dropped.
 - tug looks further back through your inbox on first sync, as far as the phone allows.
 - Reconnects back off at the edge of Bluetooth range instead of retrying every few seconds.
@@ -268,7 +268,7 @@ Phone sync and weather (Sprint 4).
   unread dot in the phone's Messages app clears too.
 - **Renaming a contact on your phone no longer splits their conversation.** tug remembers earlier
   names, including renames made before this version, and keeps everything under the current one.
-- A contact name saved from an inline reply no longer comes out garbled ("Tayr message").
+- A contact name saved from an inline reply no longer comes out garbled ("Zoer message").
 - Message times sent with a time zone are kept instead of falling back to the sync time.
 - A name the phone sends with a text shows until the number is a known contact.
 
@@ -312,7 +312,7 @@ Stability release (Sprint 2): fixes found by a full review of the app, each with
 - **Notifications no longer vanish after a reconnect** when fetching their details fails; tug retries,
   and won't mark anything "cleared" unless it's sure.
 - **Two identical notifications or texts** (e.g. two "ok"s) are both kept instead of merged.
-- **Inline replies stay in the sender's conversation:** iOS titles them "tay replied to you", which
+- **Inline replies stay in the sender's conversation:** iOS titles them "zoe replied to you", which
   used to open a second conversation with the same message in both.
 - **Messaging can't freeze or crash** on a stuck connection or a corrupt Bluetooth packet.
 - **Now Playing progress no longer jumps back** when you change the volume.
@@ -324,9 +324,9 @@ Stability release (Sprint 2): fixes found by a full review of the app, each with
 ## v0.5.1 — 2026-10-05
 
 ### Fixed
-- One conversation per person: iOS sometimes pads a contact's name in notifications ("damian "),
+- One conversation per person: iOS sometimes pads a contact's name in notifications ("marco "),
   which split a person into two conversations. Names are now matched ignoring extra spaces and case.
-- Avatars for names with emoji ("tay 🤎") no longer show a broken character.
+- Avatars for names with emoji ("zoe 💜") no longer show a broken character.
 - Contacts: when Sync Contacts is off, tug now shows the switch to turn on (iOS refuses with an
   unusual code that was previously reported as a generic error).
 

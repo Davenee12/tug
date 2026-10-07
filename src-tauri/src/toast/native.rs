@@ -119,9 +119,9 @@ mod tests {
     fn windows_parses_the_toast_xml() {
         let busy = ToastSpec {
             id: 1,
-            title: "Messages · \"Tay\" <3 & co".into(),
+            title: "Messages · \"Zoe\" <3 & co".into(),
             body: "code 482913 \u{1}\u{1F697}".into(),
-            name: "Tay".into(),
+            name: "Zoe".into(),
             reply_to: Some("+1 (302) 555-0123".into()),
             mark_read: true,
             code: Some("482913".into()),
@@ -131,7 +131,7 @@ mod tests {
         for xml in [
             notification_toast(&busy),
             notification_toast(&ToastSpec::default()),
-            note_toast(1, "Sent to Tay", "on my way & <b>", true),
+            note_toast(1, "Sent to Zoe", "on my way & <b>", true),
         ] {
             let doc = XmlDocument::new().unwrap();
             doc.LoadXml(&HSTRING::from(&xml))

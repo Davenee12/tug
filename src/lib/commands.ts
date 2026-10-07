@@ -1,5 +1,5 @@
 // Ctrl+K actions: a few verbs typed into search, so common things become keystrokes.
-// "text tay running late", "pause", "copy code", "clear all", "new message". Pure, so it's tested.
+// "text zoe running late", "pause", "copy code", "clear all", "new message". Pure, so it's tested.
 
 import type { MediaCommand, PhoneNotification, SpotifyPlaylist } from "../types/protocol";
 import { cleanName, formatAddress, missedCallFor } from "./format";
@@ -33,9 +33,9 @@ export interface ActionContext {
   unread?: number;
   /** Apps with notifications in the feed, to match a typed app name against. */
   apps?: AppFeed[];
-  /** Calling from tug passed its hands-free check, so "call tay" can dial. */
+  /** Calling from tug passed its hands-free check, so "call zoe" can dial. */
   canDial?: boolean;
-  /** Notifications, to find a missed call "call tay" can call back from without hands-free. */
+  /** Notifications, to find a missed call "call zoe" can call back from without hands-free. */
   notifications?: PhoneNotification[];
   /** The user's Spotify playlists, for "play <name>" (empty/absent when not connected). */
   playlists?: SpotifyPlaylist[];
@@ -47,7 +47,7 @@ export type Action =
   | { kind: "send"; person: Person; text: string; label: string; detail: string }
   | { kind: "open-chat"; person: Person; label: string; detail: string }
   | { kind: "call"; person: Person; label: string; detail: string }
-  /** "call tay" before calling from tug has been checked: points to where to turn it on. */
+  /** "call zoe" before calling from tug has been checked: points to where to turn it on. */
   | { kind: "call-setup"; label: string }
   | { kind: "media"; command: MediaCommand; label: string }
   | { kind: "play-playlist"; uri: string; name: string; label: string; detail: string }
@@ -88,7 +88,7 @@ const CALL = /^(?:call|ring|phone)\s+(.+)$/i;
 const PLAY = /^play\s+(.+)$/i;
 const QUEUE = /^queue\s+(.+)$/i;
 
-/** Lowercase, drop emoji/symbols, collapse spaces: "tay 🤎" → "tay". */
+/** Lowercase, drop emoji/symbols, collapse spaces: "zoe 💜" → "zoe". */
 function key(s: string): string {
   return cleanName(s)
     .toLowerCase()
@@ -165,7 +165,7 @@ function playActions(rest: string, ctx: ActionContext): Action[] {
 }
 
 /**
- * "call tay": the iPhone calls a person (or a typed number). Only the whole name counts,
+ * "call zoe": the iPhone calls a person (or a typed number). Only the whole name counts,
  * nothing after it. Back from their missed call when the phone has one (no hands-free needed),
  * else by dialing once the hands-free check has passed; otherwise a row says why it can't.
  */

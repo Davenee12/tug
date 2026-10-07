@@ -3,8 +3,8 @@ import { parseActions, type ActionContext, type Person } from "./commands";
 import type { PhoneNotification } from "../types/protocol";
 
 const people: Person[] = [
-  { name: "tay 🤎", address: "+13026698133" },
-  { name: "Daviel", address: "+12142230313" },
+  { name: "zoe 💜", address: "+13025550173" },
+  { name: "Priya", address: "+12145550186" },
   { name: "Jo Smith", address: "+15550000001" },
   { name: "Jo Brown", address: "+15550000002" },
   { name: "Mary Ann", address: "+15550000003" },
@@ -28,14 +28,14 @@ const ctx: ActionContext = {
 
 describe("parseActions", () => {
   it("sends a text to someone by name, emoji and all", () => {
-    const [a] = parseActions("text tay running late", people);
-    expect(a).toMatchObject({ kind: "send", text: "running late", person: { address: "+13026698133" } });
-    expect(a.label).toBe("Send “running late” to tay 🤎");
+    const [a] = parseActions("text zoe running late", people);
+    expect(a).toMatchObject({ kind: "send", text: "running late", person: { address: "+13025550173" } });
+    expect(a.label).toBe("Send “running late” to zoe 💜");
   });
 
   it("accepts a few verbs and keeps the message as typed", () => {
-    expect(parseActions("tell Daviel On my way!", people)[0]).toMatchObject({ text: "On my way!" });
-    expect(parseActions("msg daviel ok", people)[0]).toMatchObject({ person: { name: "Daviel" } });
+    expect(parseActions("tell Priya On my way!", people)[0]).toMatchObject({ text: "On my way!" });
+    expect(parseActions("msg priya ok", people)[0]).toMatchObject({ person: { name: "Priya" } });
   });
 
   it("offers every person a name could mean instead of guessing", () => {
@@ -53,7 +53,7 @@ describe("parseActions", () => {
   });
 
   it("opens the conversation when there's no message yet", () => {
-    expect(parseActions("text tay", people)[0]).toMatchObject({ kind: "open-chat", label: "Message tay 🤎" });
+    expect(parseActions("text zoe", people)[0]).toMatchObject({ kind: "open-chat", label: "Message zoe 💜" });
   });
 
   it("takes a phone number directly", () => {
@@ -89,7 +89,7 @@ describe("parseActions", () => {
   });
 
   it("doesn't mistake a longer search for the copy-code verb", () => {
-    expect(parseActions("zip code 32801", people, ctx)).toEqual([]);
+    expect(parseActions("zip code 90210", people, ctx)).toEqual([]);
     expect(parseActions("promo code", people, ctx)).toEqual([]);
     expect(parseActions("decode this", people, ctx)).toEqual([]);
   });
@@ -148,10 +148,10 @@ describe("call", () => {
   const dial = { canDial: true };
 
   it("calls a person by their whole name, once calling from tug works", () => {
-    expect(parseActions("call daviel", people, dial)).toEqual([
-      { kind: "call", person: people[1], label: "Call Daviel", detail: "(214) 223-0313" },
+    expect(parseActions("call priya", people, dial)).toEqual([
+      { kind: "call", person: people[1], label: "Call Priya", detail: "(214) 555-0186" },
     ]);
-    expect(parseActions("ring tay", people, dial)[0]).toMatchObject({ kind: "call", label: "Call tay 🤎" });
+    expect(parseActions("ring zoe", people, dial)[0]).toMatchObject({ kind: "call", label: "Call zoe 💜" });
   });
 
   it("offers each match for a shared name, so one is picked on purpose", () => {
@@ -164,8 +164,8 @@ describe("call", () => {
   });
 
   it("says why instead of offering a call that can't work", () => {
-    expect(parseActions("call daviel", people, {})).toEqual([
-      { kind: "call-setup", label: "Can't call Daviel yet: only missed calls can be called back" },
+    expect(parseActions("call priya", people, {})).toEqual([
+      { kind: "call-setup", label: "Can't call Priya yet: only missed calls can be called back" },
     ]);
   });
 
@@ -173,19 +173,19 @@ describe("call", () => {
     const missed = {
       id: 9,
       category: "missedCall",
-      title: "Daviel",
+      title: "Priya",
       live: true,
       removedAt: null,
       receivedAt: 1,
       flags: { positiveAction: true },
     } as unknown as PhoneNotification;
-    expect(parseActions("call daviel", people, { notifications: [missed] })).toEqual([
-      { kind: "call", person: people[1], label: "Call Daviel back", detail: "From their missed call" },
+    expect(parseActions("call priya", people, { notifications: [missed] })).toEqual([
+      { kind: "call", person: people[1], label: "Call Priya back", detail: "From their missed call" },
     ]);
   });
 
   it("never fires on a near miss", () => {
-    expect(parseActions("call daviel later today", people, dial)).toEqual([]);
+    expect(parseActions("call priya later today", people, dial)).toEqual([]);
     expect(parseActions("call nobody", people, dial)).toEqual([]);
     expect(parseActions("callback", people, dial)).toEqual([]);
   });
@@ -193,7 +193,7 @@ describe("call", () => {
   it("plays a Spotify playlist by fuzzy name, and 'play' alone is still media", () => {
     const playlists = [
       { uri: "spotify:playlist:1", id: "1", name: "Deep Focus", owner: "Spotify", trackCount: 120, imageUrl: null, owned: false },
-      { uri: "spotify:playlist:2", id: "2", name: "Morning Run", owner: "Dave", trackCount: 42, imageUrl: null, owned: true },
+      { uri: "spotify:playlist:2", id: "2", name: "Morning Run", owner: "Jordan", trackCount: 42, imageUrl: null, owned: true },
     ];
     // Not connected: a fuzzy playlist match plays the playlist; no song-search row.
     expect(parseActions("play deep", people, { playlists })).toEqual([

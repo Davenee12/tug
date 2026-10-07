@@ -37,7 +37,7 @@
   --color-imessage: #2d8cff;
   --color-sms: #34c759;
 
-  --font-display: "EB Garamond", "Tiempos Headline", Garamond, "Times New Roman", serif;
+  --font-display: "EB Garamond", Garamond, "Times New Roman", serif;
   --font-sans: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }

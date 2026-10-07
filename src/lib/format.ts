@@ -102,10 +102,10 @@ export function isConversation(n: PhoneNotification): boolean {
   return n.appId in MESSAGING_APPS && !!n.title;
 }
 
-/** iOS rewrites the title of an inline reply ("tay replied to you"); it's still tay. */
+/** iOS rewrites the title of an inline reply ("zoe replied to you"); it's still zoe. */
 const IOS_REPLY_SUFFIX = /\s+replied to (you|your message)$/i;
 
-/** Names as people see them: iOS pads some titles ("damian ") and rewrites replies. */
+/** Names as people see them: iOS pads some titles ("marco ") and rewrites replies. */
 export function cleanName(name: string): string {
   return name.trim().replace(/\s+/g, " ").replace(IOS_REPLY_SUFFIX, "");
 }
@@ -205,7 +205,7 @@ export function groupFeed(notifications: PhoneNotification[]): FeedEntry[] {
   return entries.sort((a, b) => byTime(entryLatest(b), entryLatest(a)));
 }
 
-/** `+13026698133` → `(302) 669-8133`; anything else unchanged. */
+/** `+13025550173` → `(302) 555-0173`; anything else unchanged. */
 export function formatAddress(address: string): string {
   const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(address);
   return m ? `(${m[1]}) ${m[2]}-${m[3]}` : address;
@@ -443,7 +443,7 @@ export function snippet(text: string, query: string, width = 90): string {
 
 /**
  * Whether a notification's "negative" action is a plain dismiss. For most it's "Clear", but a
- * call's is "Decline" or "End Call": the ✕ on a WhatsApp "Active Call" row hung up Dave's call.
+ * call's is "Decline" or "End Call": the ✕ on a WhatsApp "Active Call" row hung up the user's call.
  */
 export function isDismissLabel(label: string): boolean {
   return /^(|clear|dismiss|close|delete)$/i.test(label.trim());
@@ -468,7 +468,7 @@ const lastDigits = (s: string | null | undefined) => (s ?? "").replace(/\D/g, ""
 /**
  * The phone's missed-call notification from this person that's still on the iPhone. iOS puts
  * a "Dial" action on it, so tug can have the phone call them back without a hands-free link
- * (confirmed on Dave's iPhone). Matched on the name the phone shows, or the number; newest wins.
+ * (confirmed on a real iPhone). Matched on the name the phone shows, or the number; newest wins.
  */
 export function missedCallFor(
   notifications: PhoneNotification[],

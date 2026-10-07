@@ -33,9 +33,9 @@ fn main() {
     let wait: u64 = value("--wait").and_then(|w| w.parse().ok()).unwrap_or(120);
     let base = ToastSpec {
         id: 4242,
-        title: "Messages · Tay".into(),
+        title: "Messages · Zoe".into(),
         body: "omw, 10 mins 🚗".into(),
-        name: "Tay".into(),
+        name: "Zoe".into(),
         ..Default::default()
     };
     let spec = match value("--kind").as_deref() {

@@ -75,7 +75,7 @@ watch(
 
 // The conversation on screen is read: clear it on the phone (and so the Feed) and mark its
 // texts read there — on open, when new texts land in it, and when you come back to it. That
-// includes the newest one Messages shows by default (Dave's call). Clearing the phone can't
+// includes the newest one Messages shows by default (a deliberate choice). Clearing the phone can't
 // be undone, so only while you can actually see it: the window is focused and nothing
 // (search, the picker, settings, pairing) covers it.
 const focused = ref(document.hasFocus());
@@ -166,7 +166,7 @@ const outgoing = (i: ConversationItem) => i.kind === "message" && i.m.direction 
 const distinguishes = computed(() => distinguishesIMessage(tug.messages));
 // Bubble background. Only received messages carry the phone's type (sent rows have none), so the
 // tint goes on incoming bubbles: blue when that person reached you over iMessage, green for a
-// text. Neutral unless the phone distinguishes the two (Dave's iPhone reports every one as
+// text. Neutral unless the phone distinguishes the two (the test iPhone reports every one as
 // SMS_GSM, so today it stays neutral).
 function bubbleClass(i: ConversationItem): string {
   if (outgoing(i)) return "rounded-br-sm bg-ink text-on-dark";

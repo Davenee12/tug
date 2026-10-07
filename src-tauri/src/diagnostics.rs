@@ -59,7 +59,7 @@ pub fn redact(text: &str) -> String {
     redact_emails(&redact_number_runs(&redact_bluetooth_addresses(text)))
 }
 
-/// Mask the phone's own name(s) (e.g. "Dave James's iPhone" names a person) wherever they appear.
+/// Mask the phone's own name(s) (e.g. "Jordan's iPhone" names a person) wherever they appear.
 pub fn redact_names(text: &str, names: &[String]) -> String {
     let mut out = text.to_string();
     for name in names.iter().map(|n| n.trim()).filter(|n| n.len() >= 3) {
@@ -68,7 +68,7 @@ pub fn redact_names(text: &str, names: &[String]) -> String {
     out
 }
 
-/// Bluetooth addresses (`f4:e8:c7:a2:7e:b9`, also inside Windows device ids) identify the phone.
+/// Bluetooth addresses (`00:11:22:33:44:55`, also inside Windows device ids) identify the phone.
 fn redact_bluetooth_addresses(text: &str) -> String {
     let b = text.as_bytes();
     let is_hex = |c: u8| c.is_ascii_hexdigit();
@@ -377,8 +377,8 @@ mod tests {
 
     #[test]
     fn masks_email_addresses_but_keeps_punctuation() {
-        assert_eq!(redact("to dave.james@example.com please"), "to [email] please");
-        assert_eq!(redact("<daveneejames@gmail.com>"), "<[email]>");
+        assert_eq!(redact("to jordan.lee@example.com please"), "to [email] please");
+        assert_eq!(redact("<someone@example.com>"), "<[email]>");
         assert_eq!(redact("ping a@b.co, thanks"), "ping [email], thanks");
     }
 
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn redacts_a_realistic_log_line() {
-        let line = "2026-10-05T10:11:12 [INFO] message from +13025550142 to dave@example.com saved";
+        let line = "2026-10-05T10:11:12 [INFO] message from +13025550142 to jordan@example.com saved";
         assert_eq!(
             redact(line),
             "2026-10-05T10:11:12 [INFO] message from [number] to [email] saved"
@@ -426,19 +426,19 @@ mod tests {
     fn the_phone_is_never_named_or_addressed() {
         let status = DeviceStatus {
             device: Some(crate::state::PairedDevice {
-                id: "BluetoothLE#BluetoothLEc8:8a:9a:f1:10:ac-6d:d3:61:db:5d:eb".into(),
-                name: "Dave James's iPhone".into(),
+                id: "BluetoothLE#BluetoothLE00:11:22:33:44:55-66:77:88:99:aa:bb".into(),
+                name: "My iPhone".into(),
             }),
-            texts_device: Some("Dave James's iPhone".into()),
+            texts_device: Some("My iPhone".into()),
             ..Default::default()
         };
         let json = serde_json::to_string(&anonymize_status(&status)).unwrap();
-        assert!(!json.contains("Dave") && !json.contains("6d:d3"), "{json}");
+        assert!(!json.contains("My iPhone") && !json.contains("88:99"), "{json}");
 
-        let names = vec!["Dave James's iPhone".to_string()];
+        let names = vec!["My iPhone".to_string()];
         let logs = vec![
-            "message access connected to Dave James's iPhone".to_string(),
-            "connecting to BluetoothLE#BluetoothLEc8:8a:9a:f1:10:ac-6d:d3:61:db:5d:eb".to_string(),
+            "message access connected to My iPhone".to_string(),
+            "connecting to BluetoothLE#BluetoothLE00:11:22:33:44:55-66:77:88:99:aa:bb".to_string(),
             "[2026-10-05][14:52:21][tug_lib::map][INFO] build 10.0.26200".to_string(),
         ];
         let out = Report {
@@ -451,7 +451,7 @@ mod tests {
             phone_names: &names,
         }
         .render();
-        assert!(!out.contains("Dave"), "{out}");
+        assert!(!out.contains("My iPhone"), "{out}");
         assert!(out.contains("connected to [phone]"));
         assert!(out.contains("BluetoothLE#BluetoothLE[address]-[address]"));
         assert!(out.contains("[2026-10-05][14:52:21]"), "times stay readable: {out}");

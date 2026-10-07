@@ -1,9 +1,9 @@
 # tug companion apps — plan
 
-Status: **planned, not started** (Dave, 2026-10-06). tug today needs nothing on the phone: it talks to
+Status: **planned, not started** (2026-10-06). tug today needs nothing on the phone: it talks to
 the iPhone over Bluetooth using what iOS shares with any accessory (notifications, music, battery,
 texts received, contacts, calls). That stays the default. This plan covers what a **tug app on the
-phone** would add, in what order, and what each step needs from Dave.
+phone** would add, in what order, and what each step needs from the maintainer.
 
 ## Why a phone app at all
 
@@ -31,7 +31,7 @@ notifications, PC sleep/wake, polish of setup, texts, notifications and Spotify.
 phases is worth building on an unreliable base.
 
 ### Phase 0.5 — tug Drop (v0.5.11) — no app, no fees, works on iPhone
-"AirDrop between your iPhone and your Windows PC." Dave: "game changer" (2026-10-06).
+"AirDrop between your iPhone and your Windows PC."
 - Click **Drop** in tug → a QR code → the phone's camera opens a small tug page in Safari (or any
   browser). Nothing installed on the phone.
 - **Phone → PC:** pick photos/videos/files or paste text; files land in a "tug Drop" folder,
@@ -99,7 +99,7 @@ The foundation every companion app talks to. Designed once, in Rust, before any 
 ### Phase 3 — iPhone companion (Swift)
 - Share-sheet "Send to tug" (photos, files, links), files both ways while open, clipboard while open,
   a widget showing PC status.
-- Needs the **$99/year Apple Developer account** and App Store review — Dave's call when the time comes.
+- Needs the **$99/year Apple Developer account** and App Store review — a decision for when the time comes.
 - Background limits mean Bluetooth (no app) stays the always-on link for notifications and texts.
 
 ### Phase 4 — reaching your PC away from home (optional)
@@ -114,7 +114,7 @@ The foundation every companion app talks to. Designed once, in Rust, before any 
 - New languages only arrive with the phone apps: Kotlin (Phase 2), Swift (Phase 3).
 - Local-first: devices talk directly; cloud only for Phase 4, and only if needed.
 
-## Decisions for Dave (when we get there)
+## Open decisions (when we get there)
 1. Android first (recommended) or iPhone first?
 2. Pay Apple's $99/year (iPhone app) / Google's $25 once (Play Store), or sideload Android only?
 3. Is reaching the PC away from home (Phase 4) wanted at all?

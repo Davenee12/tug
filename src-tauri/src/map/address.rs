@@ -1,7 +1,7 @@
 //! Normalising message addresses so one person is one conversation, however the
 //! phone formats their number.
 
-/// `+1 (302) 669-8133`, `13026698133`, `3026698133` → `+13026698133`.
+/// `+1 (302) 555-0173`, `13025550173`, `3025550173` → `+13025550173`.
 /// Emails are lower-cased. Short codes and other numbers keep their digits.
 pub fn normalize(raw: &str) -> String {
     let raw = raw.trim();
@@ -27,13 +27,13 @@ mod tests {
     #[test]
     fn normalises_nanp_variants_to_one_key() {
         for raw in [
-            "+1 (302) 669-8133",
-            "13026698133",
-            "3026698133",
-            "302.669.8133",
-            "+13026698133",
+            "+1 (302) 555-0173",
+            "13025550173",
+            "3025550173",
+            "302.555.0173",
+            "+13025550173",
         ] {
-            assert_eq!(normalize(raw), "+13026698133", "{raw}");
+            assert_eq!(normalize(raw), "+13025550173", "{raw}");
         }
     }
 
@@ -41,7 +41,7 @@ mod tests {
     fn keeps_international_short_codes_and_emails() {
         assert_eq!(normalize("+44 20 7946 0958"), "+442079460958");
         assert_eq!(normalize("72975"), "72975");
-        assert_eq!(normalize(" Tay@iCloud.com "), "tay@icloud.com");
+        assert_eq!(normalize(" Zoe@Example.com "), "zoe@example.com");
         assert_eq!(normalize("Unknown"), "Unknown");
     }
 }

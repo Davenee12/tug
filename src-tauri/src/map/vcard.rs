@@ -163,17 +163,17 @@ mod tests {
 
     #[test]
     fn parses_vcard30_entries() {
-        let raw = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Daviel James\r\nN:James;Daviel;;;\r\n\
-                   TEL;TYPE=CELL:(214) 223-0313\r\nTEL;TYPE=HOME:+1 972 555 0100\r\nEND:VCARD\r\n\
-                   BEGIN:VCARD\r\nVERSION:3.0\r\nFN:tay 🤎\r\nitem1.TEL:+13026698133\r\nEND:VCARD\r\n\
+        let raw = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Priya Shah\r\nN:Shah;Priya;;;\r\n\
+                   TEL;TYPE=CELL:(214) 555-0186\r\nTEL;TYPE=HOME:+1 972 555 0100\r\nEND:VCARD\r\n\
+                   BEGIN:VCARD\r\nVERSION:3.0\r\nFN:zoe 💜\r\nitem1.TEL:+13025550173\r\nEND:VCARD\r\n\
                    BEGIN:VCARD\r\nVERSION:3.0\r\nFN:No Number\r\nEND:VCARD\r\n";
         let got = parse(raw);
         assert_eq!(got.len(), 2, "cards without numbers are skipped");
-        assert_eq!(got[0].name, "Daviel James");
-        assert_eq!(got[0].numbers, vec!["(214) 223-0313", "+1 972 555 0100"]);
+        assert_eq!(got[0].name, "Priya Shah");
+        assert_eq!(got[0].numbers, vec!["(214) 555-0186", "+1 972 555 0100"]);
         assert_eq!(got[0].photo, None);
-        assert_eq!(got[1].name, "tay 🤎");
-        assert_eq!(got[1].numbers, vec!["+13026698133"]);
+        assert_eq!(got[1].name, "zoe 💜");
+        assert_eq!(got[1].numbers, vec!["+13025550173"]);
     }
 
     #[test]

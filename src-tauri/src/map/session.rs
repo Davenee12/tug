@@ -434,7 +434,7 @@ impl MapSession {
 
 /// The SetNotificationRegistration PUT, kept pure so its bytes can be tested. iOS exposes a
 /// single MAS, instance 0. The End-of-Body carries MAP's 0x30 filler byte, like the spec, BlueZ,
-/// and tug's own UpdateInbox / SetMessageStatus PUTs, which Dave's iPhone already accepts
+/// and tug's own UpdateInbox / SetMessageStatus PUTs, which the test iPhone already accepts
 /// (another iOS client sends it empty; try that if iOS ever refuses the registration).
 fn notification_registration_request(connection_id: u32, on: bool) -> Vec<u8> {
     let headers = [
@@ -448,7 +448,7 @@ fn notification_registration_request(connection_id: u32, on: bool) -> Vec<u8> {
 
 /// Pull the iPhone's contacts over PBAP (`telecom/pb.vcf`): names and numbers, plus a photo per
 /// contact when `with_photos` (the phone inlines one when it has it). Photos make the pull far
-/// slower — on Dave's phone ~60 s with photos versus ~14 s without — so the regular (fast) sync
+/// slower — on a test phone ~60 s with photos versus ~14 s without — so the regular (fast) sync
 /// passes `false` and a separate background pass passes `true`; see `map::service`.
 pub async fn pull_contacts(device_id: &str, with_photos: bool) -> Result<Vec<PhonebookEntry>> {
     let mut link = ObexLink::connect(device_id, PSE_UUID, &PBAP_TARGET, MapError::ContactsConsent).await?;

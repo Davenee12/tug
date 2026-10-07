@@ -309,9 +309,9 @@ mod tests {
     fn spec() -> ToastSpec {
         ToastSpec {
             id: 42,
-            title: "Messages · Tay".into(),
+            title: "Messages · Zoe".into(),
             body: "omw, 10 mins".into(),
-            name: "Tay".into(),
+            name: "Zoe".into(),
             ..Default::default()
         }
     }
@@ -326,7 +326,7 @@ mod tests {
             },
             ToastAction::Reply {
                 id: 3,
-                to: "tay&co@icloud.com".into(),
+                to: "zoe&co@example.com".into(),
             },
             ToastAction::Read { id: 4 },
             ToastAction::Copy {
@@ -409,7 +409,7 @@ mod tests {
         let xml = notification_toast(&spec());
         assert_eq!(
             xml,
-            r#"<toast launch="a=open&amp;id=42" activationType="foreground"><visual><binding template="ToastGeneric"><text hint-maxLines="1">Messages · Tay</text><text>omw, 10 mins</text></binding></visual></toast>"#
+            r#"<toast launch="a=open&amp;id=42" activationType="foreground"><visual><binding template="ToastGeneric"><text hint-maxLines="1">Messages · Zoe</text><text>omw, 10 mins</text></binding></visual></toast>"#
         );
     }
 
@@ -422,7 +422,7 @@ mod tests {
             ..spec()
         });
         assert!(
-            xml.contains(r#"<input id="reply" type="text" placeHolderContent="Reply to Tay"/>"#),
+            xml.contains(r#"<input id="reply" type="text" placeHolderContent="Reply to Zoe"/>"#),
             "{xml}"
         );
         assert!(xml.contains(
@@ -469,13 +469,13 @@ mod tests {
         let xml = notification_toast(&ToastSpec {
             title: r#"Messages · "><toast>"#.into(),
             body: "</text><action content=\"x\"/>\u{1}".into(),
-            name: "<Tay>".into(),
+            name: "<Zoe>".into(),
             reply_to: Some("+1302\"/><x".into()),
             ..spec()
         });
         assert_eq!(xml.matches("<toast").count(), 1, "{xml}");
         assert_eq!(xml.matches("<action ").count(), 1, "{xml}");
-        assert!(xml.contains("Reply to &lt;Tay&gt;"));
+        assert!(xml.contains("Reply to &lt;Zoe&gt;"));
         assert!(!xml.contains('\u{1}'));
     }
 

@@ -13,7 +13,7 @@ const CUE =
  */
 const CANDIDATE = /(?<![\w$£€#.:/-])(?:[A-Z]{1,3}-)?(\d{3,4}[- ]\d{3,4}|\d{4,8})(?![\w/]|[.:,-]\d)/g;
 
-/** Phone-number shapes to rule out ("302-669-8133", "(302) 669-8133", "+1 302…"). */
+/** Phone-number shapes to rule out ("302-555-0173", "(302) 555-0173", "+1 302…"). */
 const PHONE = /(\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}/g;
 
 export interface FoundCode {

@@ -5,7 +5,7 @@ import { defaultUnit, fetchForecast, nameFor, type Forecast, type Place, type Un
 
 const STALE_MS = 30 * 60 * 1000;
 const CACHE_KEY = "tug.weather.v1";
-/** Shown only until the place's real name comes back ("Orlando, Florida"). */
+/** Shown only until the place's real name comes back ("Portland, Oregon"). */
 const UNNAMED = "Your location";
 
 /**
@@ -105,7 +105,7 @@ export const useWeatherStore = defineStore("weather", () => {
     await refresh(true);
   }
 
-  /** This PC's place, named when the lookup answers ("Orlando, Florida"). Throws if it can't. */
+  /** This PC's place, named when the lookup answers ("Portland, Oregon"). Throws if it can't. */
   async function findMyPlace(): Promise<Place> {
     const pos = await api.locate();
     const name = await nameFor(pos.latitude, pos.longitude).catch(() => null);

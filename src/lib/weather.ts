@@ -163,7 +163,7 @@ export async function searchPlaces(query: string): Promise<Place[]> {
 }
 
 /**
- * A name for coordinates from "Use my location" ("Orlando, Florida"). BigDataCloud's
+ * A name for coordinates from "Use my location" ("Portland, Oregon"). BigDataCloud's
  * client-side reverse lookup (free, no key, meant for a device looking up itself), fetched
  * by the app's native side: from the web view the request never got an answer.
  */

@@ -53,19 +53,19 @@ function sms(address: string, body: string, atMin = 0, direction: "in" | "out" =
   };
 }
 
-const TAY = "+13025550142";
+const ZOE = "+13025550142";
 const contacts: Contact[] = [
-  { address: TAY, name: "Tay" },
-  { address: "jane@icloud.com", name: "Jane Doe" },
+  { address: ZOE, name: "Zoe" },
+  { address: "jane@example.com", name: "Jane Doe" },
   { address: "+447700900123", name: "Oli" },
 ];
 const known = (sender: string, out: string[] = [], allow: string[] = []) => isKnownSender(sender, contacts, out, allow);
 
 describe("isKnownSender — contacts", () => {
   it("a saved contact is known by number, and by the name iOS titles their texts with", () => {
-    expect(known(TAY)).toBe(true);
-    expect(known("Tay")).toBe(true);
-    expect(known("  tay ")).toBe(true);
+    expect(known(ZOE)).toBe(true);
+    expect(known("Zoe")).toBe(true);
+    expect(known("  zoe ")).toBe(true);
   });
 
   it("matches a contact's number however it's formatted (+1, parentheses, dashes, dots, iOS direction marks)", () => {
@@ -83,12 +83,12 @@ describe("isKnownSender — contacts", () => {
   it("aliases: an old or reply-rewritten name is still a name iOS resolved from the phone's contacts", () => {
     // The backend maps a renamed contact's old name to the current one; when it can't (ambiguous),
     // the old name still came from the iPhone's contacts, so it's known either way.
-    expect(known("tay 🤎")).toBe(true);
-    expect(known("Tay replied to you")).toBe(true);
+    expect(known("zoe 💜")).toBe(true);
+    expect(known("Zoe replied to you")).toBe(true);
   });
 
   it("a contact email matches case-insensitively", () => {
-    expect(known("Jane@iCloud.com")).toBe(true);
+    expect(known("Jane@Example.com")).toBe(true);
   });
 
   it("a 'contact' whose name is just their number (learned from a stranger's notification) doesn't make them known", () => {
@@ -138,20 +138,20 @@ describe("isKnownSender — replies and the allowlist", () => {
 
 describe("address helpers", () => {
   it("normalise like the backend's map/address.rs", () => {
-    expect(normalizeAddress("+1 (302) 669-8133")).toBe("+13026698133");
-    expect(normalizeAddress("3026698133")).toBe("+13026698133");
+    expect(normalizeAddress("+1 (302) 555-0173")).toBe("+13025550173");
+    expect(normalizeAddress("3025550173")).toBe("+13025550173");
     expect(normalizeAddress("+44 20 7946 0958")).toBe("+442079460958");
     expect(normalizeAddress("72975")).toBe("72975");
-    expect(normalizeAddress(" Tay@iCloud.com ")).toBe("tay@icloud.com");
+    expect(normalizeAddress(" Zoe@Example.com ")).toBe("zoe@example.com");
   });
 
   it("tell numbers and emails from names", () => {
-    expect(isAddressLike("+1 (302) 669-8133")).toBe(true);
+    expect(isAddressLike("+1 (302) 555-0173")).toBe(true);
     expect(isAddressLike("72975")).toBe(true);
     expect(isAddressLike("a@b.co")).toBe(true);
-    expect(isAddressLike("Tay")).toBe(false);
+    expect(isAddressLike("Zoe")).toBe(false);
     expect(isAddressLike("Room 101")).toBe(false);
-    expect(isAddressLike("tay 🤎")).toBe(false);
+    expect(isAddressLike("zoe 💜")).toBe(false);
   });
 });
 
@@ -177,14 +177,14 @@ describe("grouping unknown senders", () => {
 
   it("splits known conversations from unknown senders, never interleaved, each newest first", () => {
     const notes = [
-      note("Tay", "omw", 1),
+      note("Zoe", "omw", 1),
       note("+1 (555) 013-2244", "Congrats! Reply YES", 4),
       note("Jane Doe", "see you at 5", 3),
       note("72975", "Your code is 731904", 6),
     ];
     const index = senderIndex(contacts, [], []);
     const { known: k, unknown: u } = splitConversations(groupConversations(notes, [], contacts), index);
-    expect(k.map((c) => c.contact)).toEqual(["Jane Doe", "Tay"]);
+    expect(k.map((c) => c.contact)).toEqual(["Jane Doe", "Zoe"]);
     expect(u.map((c) => c.contact)).toEqual(["72975", "(555) 013-2244"]);
   });
 
@@ -198,7 +198,7 @@ describe("grouping unknown senders", () => {
   });
 
   it("other chat apps are never filtered", () => {
-    const wa = note("+44 7911 123456", "hi", 0, { appId: "net.whatsapp.WhatsApp", appName: "WhatsApp" });
+    const wa = note("+44 7700 900456", "hi", 0, { appId: "net.whatsapp.WhatsApp", appName: "WhatsApp" });
     const [c] = groupConversations([wa], [], []);
     expect(isKnownConversation(c, senderIndex([], [], []))).toBe(true);
     expect(senderName("+1 (555) 013-2244")).toBe("(555) 013-2244");
@@ -219,12 +219,12 @@ describe("toasts and unread for unknown senders", () => {
   });
 
   it("known senders and other apps pop up as before", () => {
-    expect(senderMayToast(note("Tay", "omw"), index)).toBe(true);
+    expect(senderMayToast(note("Zoe", "omw"), index)).toBe(true);
     expect(senderMayToast(note("Gmail", "Spam?", 0, { appId: "com.google.Gmail", appName: "Gmail" }), index)).toBe(true);
   });
 
   it("unread (badge, tray, taskbar dot) leaves unknown senders out", () => {
-    const notes = [note("Tay", "omw", 1), note("Tay", "5 mins", 2), note("+1 (555) 013-2244", "Reply YES", 3), note("72975", "code 731904", 4)];
+    const notes = [note("Zoe", "omw", 1), note("Zoe", "5 mins", 2), note("+1 (555) 013-2244", "Reply YES", 3), note("72975", "code 731904", 4)];
     const unread = groupThreads(notes)
       .filter((t) => threadCounts(t, index))
       .reduce((sum, t) => sum + t.items.length, 0);
@@ -232,8 +232,8 @@ describe("toasts and unread for unknown senders", () => {
   });
 
   it("the tray opens the newest known unread conversation, skipping newer unknown ones", () => {
-    const notes = [note("Tay", "omw", 1), note("+1 (555) 013-2244", "Reply YES", 9)];
-    expect(newestUnreadThread(notes, () => 1, (t) => threadCounts(t, index))).toBe(threadKey({ appId: SMS, title: "Tay" }));
+    const notes = [note("Zoe", "omw", 1), note("+1 (555) 013-2244", "Reply YES", 9)];
+    expect(newestUnreadThread(notes, () => 1, (t) => threadCounts(t, index))).toBe(threadKey({ appId: SMS, title: "Zoe" }));
     expect(newestUnreadThread([notes[1]], () => 1, (t) => threadCounts(t, index))).toBeNull();
   });
 });

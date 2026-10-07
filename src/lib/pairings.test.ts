@@ -14,7 +14,7 @@ const CONNECTED: DeviceStatus = {
   radio: "on",
   peripheralSupported: true,
   advertising: "on",
-  device: { id: "x", name: "Dave's iPhone" },
+  device: { id: "x", name: "Jordan's iPhone" },
   connection: "connected",
   battery: 76,
   services: { notifications: true, media: true, battery: true, messages: true },
@@ -27,7 +27,7 @@ const CONNECTED: DeviceStatus = {
   contactsError: null,
   contactsShared: false,
   textsPairing: "ok",
-  textsDevice: "Dave's iPhone",
+  textsDevice: "Jordan's iPhone",
   liveTexts: "off",
 };
 const status = (o: Partial<DeviceStatus>): DeviceStatus => ({ ...CONNECTED, ...o });
@@ -35,7 +35,7 @@ const status = (o: Partial<DeviceStatus>): DeviceStatus => ({ ...CONNECTED, ...o
 function dev(overrides: Partial<DiscoveredDevice>): DiscoveredDevice {
   return {
     id: "id",
-    name: "Dave's iPhone",
+    name: "Jordan's iPhone",
     transport: "le",
     paired: true,
     connected: false,
@@ -60,22 +60,22 @@ describe("pairedPhones", () => {
 describe("hasDuplicateIphones", () => {
   it("counts the LE and Classic sides of one phone as one", () => {
     const list = [
-      dev({ id: "le", transport: "le", name: "Dave's iPhone" }),
-      dev({ id: "classic", transport: "classic", name: "Dave's iPhone" }),
+      dev({ id: "le", transport: "le", name: "Jordan's iPhone" }),
+      dev({ id: "classic", transport: "classic", name: "Jordan's iPhone" }),
     ];
     expect(hasDuplicateIphones(list)).toBe(false);
   });
 
   it("flags two differently-named iPhones", () => {
     const list = [
-      dev({ id: "old", name: "DTD iPhone Max 15 Pro" }),
-      dev({ id: "new", name: "Dave's iPhone" }),
+      dev({ id: "old", name: "Old iPhone" }),
+      dev({ id: "new", name: "Jordan's iPhone" }),
     ];
     expect(hasDuplicateIphones(list)).toBe(true);
   });
 
   it("ignores unnamed entries so a nameless just-connected phone doesn't count", () => {
-    const list = [dev({ id: "a", name: "Dave's iPhone" }), dev({ id: "b", name: "Unnamed device" })];
+    const list = [dev({ id: "a", name: "Jordan's iPhone" }), dev({ id: "b", name: "Unnamed device" })];
     expect(hasDuplicateIphones(list)).toBe(false);
   });
 });
@@ -92,12 +92,12 @@ describe("pairingProblem", () => {
   });
 
   it("reports the remembered phone missing when a different one is paired", () => {
-    const list = [dev({ id: "new", name: "Dave's iPhone" })];
+    const list = [dev({ id: "new", name: "Jordan's iPhone" })];
     expect(pairingProblem(list, "old-gone")).toBe("remembered-missing");
   });
 
   it("reports duplicates when two iPhones are paired and none is remembered", () => {
-    const list = [dev({ id: "old", name: "DTD iPhone Max 15 Pro" }), dev({ id: "new", name: "Dave's iPhone" })];
+    const list = [dev({ id: "old", name: "Old iPhone" }), dev({ id: "new", name: "Jordan's iPhone" })];
     expect(pairingProblem(list, null)).toBe("duplicates");
   });
 
@@ -113,16 +113,16 @@ describe("pairingProblem", () => {
 
 describe("setupDeviceLists", () => {
   it("offers a discoverable iPhone even when it isn't connected to the PC yet", () => {
-    // The old LightBlue assumption required `connected`; Dave's phone was discoverable but not
-    // connected, so the wizard's list was empty and he tapped the PC from the phone instead.
-    const list = [dev({ id: "p", name: "Dave's iPhone", paired: false, connected: false, kind: "phone" })];
+    // The old LightBlue assumption required `connected`; the test phone was discoverable but not
+    // connected, so the wizard's list was empty and the PC got tapped from the phone instead.
+    const list = [dev({ id: "p", name: "Jordan's iPhone", paired: false, connected: false, kind: "phone" })];
     const { phones } = setupDeviceLists(list);
     expect(phones.map((d) => d.id)).toEqual(["p"]);
   });
 
   it("keeps an Echo Dot out of the phone offer", () => {
     const list = [
-      dev({ id: "phone", name: "Dave's iPhone", kind: "phone" }),
+      dev({ id: "phone", name: "Jordan's iPhone", kind: "phone" }),
       dev({ id: "echo", name: "Echo Dot-5TF", kind: "unknown", paired: true }),
     ];
     const lists = setupDeviceLists(list);
@@ -146,33 +146,33 @@ describe("setupDeviceLists", () => {
     // A phone that forgot this PC is discoverable over Classic inquiry with its real name, but
     // unpaired; its LE adverts are anonymous. The wizard must still offer it.
     const list = [
-      dev({ id: "classic", transport: "classic", name: "Dave's iPhone", kind: "phone", paired: false, canPair: true }),
+      dev({ id: "classic", transport: "classic", name: "Jordan's iPhone", kind: "phone", paired: false, canPair: true }),
     ];
     expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["classic"]);
   });
 
   it("shows one row when a phone appears on both transports (LE wins)", () => {
     const list = [
-      dev({ id: "le", transport: "le", name: "Dave's iPhone", kind: "phone" }),
-      dev({ id: "classic", transport: "classic", name: "Dave's iPhone", kind: "phone" }),
+      dev({ id: "le", transport: "le", name: "Jordan's iPhone", kind: "phone" }),
+      dev({ id: "classic", transport: "classic", name: "Jordan's iPhone", kind: "phone" }),
     ];
     expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["le"]);
   });
 
   it("offers the Classic row for an unpaired iPhone seen on both transports", () => {
-    // Dave's fresh setup: two "Dave's iPhone" rows; the LE one failed to pair (status 19), the
+    // A fresh setup seen in testing: two "Jordan's iPhone" rows; the LE one failed to pair (status 19), the
     // Classic one paired and brought the LE bond with it.
     const list = [
-      dev({ id: "le", transport: "le", name: "Dave’s iPhone", kind: "phone", paired: false }),
-      dev({ id: "classic", transport: "classic", name: "Dave’s iPhone", kind: "phone", paired: false }),
+      dev({ id: "le", transport: "le", name: "Jordan’s iPhone", kind: "phone", paired: false }),
+      dev({ id: "classic", transport: "classic", name: "Jordan’s iPhone", kind: "phone", paired: false }),
     ];
     expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["classic"]);
   });
 
   it("hides an unrecognised LE entry that is the Classic phone's other side", () => {
     const list = [
-      dev({ id: "le", transport: "le", name: "Dave’s iPhone", kind: "unknown", paired: false }),
-      dev({ id: "classic", transport: "classic", name: "Dave’s iPhone", kind: "phone", paired: false }),
+      dev({ id: "le", transport: "le", name: "Jordan’s iPhone", kind: "unknown", paired: false }),
+      dev({ id: "classic", transport: "classic", name: "Jordan’s iPhone", kind: "phone", paired: false }),
     ];
     const lists = setupDeviceLists(list);
     expect(lists.phones.map((d) => d.id)).toEqual(["classic"]);
@@ -181,8 +181,8 @@ describe("setupDeviceLists", () => {
 
   it("keeps the LE row when the phone connected over LE (LightBlue)", () => {
     const list = [
-      dev({ id: "le", transport: "le", name: "Dave’s iPhone", kind: "phone", paired: false, connected: true }),
-      dev({ id: "classic", transport: "classic", name: "Dave’s iPhone", kind: "phone", paired: false }),
+      dev({ id: "le", transport: "le", name: "Jordan’s iPhone", kind: "phone", paired: false, connected: true }),
+      dev({ id: "classic", transport: "classic", name: "Jordan’s iPhone", kind: "phone", paired: false }),
     ];
     expect(setupDeviceLists(list).phones.map((d) => d.id)).toEqual(["le"]);
   });
@@ -198,7 +198,7 @@ describe("setupDeviceLists", () => {
 
   it("hides Classic accessories and counts them", () => {
     const list = [
-      dev({ id: "phone", transport: "classic", name: "Dave's iPhone", kind: "phone", paired: false, canPair: true }),
+      dev({ id: "phone", transport: "classic", name: "Jordan's iPhone", kind: "phone", paired: false, canPair: true }),
       dev({ id: "airpods", transport: "classic", name: "AirPods", kind: "accessory", paired: true }),
     ];
     const lists = setupDeviceLists(list);
@@ -218,25 +218,25 @@ describe("setupDeviceLists", () => {
 describe("leftoverPhone", () => {
   it("surfaces an iPhone still paired from a previous install when nothing is remembered", () => {
     const list = [
-      dev({ id: "le", transport: "le", name: "Dave's iPhone" }),
-      dev({ id: "classic", transport: "classic", name: "Dave's iPhone" }),
+      dev({ id: "le", transport: "le", name: "Jordan's iPhone" }),
+      dev({ id: "classic", transport: "classic", name: "Jordan's iPhone" }),
     ];
     // The LE side is offered (notifications adopt the LE bond).
     expect(leftoverPhone(list, null)?.id).toBe("le");
   });
 
   it("returns the Classic side when that's the only paired bond", () => {
-    const list = [dev({ id: "classic", transport: "classic", name: "Dave's iPhone" })];
+    const list = [dev({ id: "classic", transport: "classic", name: "Jordan's iPhone" })];
     expect(leftoverPhone(list, null)?.id).toBe("classic");
   });
 
   it("stays quiet once tug remembers a phone of its own", () => {
-    const list = [dev({ id: "le", name: "Dave's iPhone" })];
+    const list = [dev({ id: "le", name: "Jordan's iPhone" })];
     expect(leftoverPhone(list, "le")).toBeNull();
   });
 
   it("is null when nothing is paired (only a fresh, unpaired phone to pair)", () => {
-    const list = [dev({ id: "p", paired: false, name: "Dave's iPhone" })];
+    const list = [dev({ id: "p", paired: false, name: "Jordan's iPhone" })];
     expect(leftoverPhone(list, null)).toBeNull();
   });
 

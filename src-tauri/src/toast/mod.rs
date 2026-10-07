@@ -37,7 +37,7 @@ pub use xml::ToastSpec;
 /// exactly those and leaves follow-up notes alone.
 #[cfg_attr(not(windows), allow(dead_code))]
 const GROUP_NOTIFICATIONS: &str = "n";
-/// Follow-ups ("Sent to Tay", "Couldn't send"): tag `note-<id>`.
+/// Follow-ups ("Sent to Zoe", "Couldn't send"): tag `note-<id>`.
 #[cfg_attr(not(windows), allow(dead_code))]
 const GROUP_NOTES: &str = "note";
 /// A "Sent" note leaves Action Center on its own after this long.
@@ -68,7 +68,7 @@ pub enum PressKind {
     CalledBack,
 }
 
-/// Recent specs, for naming people in follow-ups ("Sent to Tay").
+/// Recent specs, for naming people in follow-ups ("Sent to Zoe").
 const KEEP: usize = 32;
 static SPECS: Mutex<VecDeque<ToastSpec>> = Mutex::new(VecDeque::new());
 
@@ -360,10 +360,10 @@ mod tests {
     fn follow_ups_name_the_person_from_recent_specs() {
         remember(&ToastSpec {
             id: 77,
-            name: " Tay ".into(),
+            name: " Zoe ".into(),
             ..Default::default()
         });
-        assert_eq!(name_for(77).as_deref(), Some("Tay"));
+        assert_eq!(name_for(77).as_deref(), Some("Zoe"));
         remember(&ToastSpec {
             id: 78,
             name: "   ".into(),

@@ -283,7 +283,7 @@ function onKey(e: KeyboardEvent) {
           ref="input"
           v-model="query"
           class="h-8 flex-1 bg-transparent text-[17px] text-ink outline-none placeholder:text-muted-soft"
-          placeholder="Search, or type an action: text tay on my way · pause"
+          placeholder="Search, or type an action: text zoe on my way · pause"
           spellcheck="false"
           autocomplete="off"
           aria-label="Search"
@@ -300,7 +300,7 @@ function onKey(e: KeyboardEvent) {
           <p class="mt-1">A name, a phone number, or words from a text or notification.</p>
           <p class="mt-4 text-[12px] text-muted-soft">
             Or do something:
-            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">text tay on my way</kbd>
+            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">text zoe on my way</kbd>
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">pause</kbd>
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">copy code</kbd>
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">clear all</kbd>

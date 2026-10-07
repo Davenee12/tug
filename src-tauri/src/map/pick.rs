@@ -138,8 +138,8 @@ mod tests {
 
     #[test]
     fn falls_back_to_name_when_the_stored_id_is_absent() {
-        let devices = vec![dev("id-a", "Dave's iPhone"), dev("id-b", "Watch")];
-        let pick = choose_device(&devices, Some("id-gone"), Some("Dave's iPhone"));
+        let devices = vec![dev("id-a", "Jordan's iPhone"), dev("id-b", "Watch")];
+        let pick = choose_device(&devices, Some("id-gone"), Some("Jordan's iPhone"));
         assert_eq!(pick, Some(&devices[0]));
     }
 
@@ -187,16 +187,16 @@ mod tests {
     fn texts_pick_prefers_the_name_match() {
         let devices = vec![
             un("spk", "Kitchen Speaker", DeviceKind::Accessory),
-            un("phone", "Dave's iPhone", DeviceKind::Phone),
+            un("phone", "Jordan's iPhone", DeviceKind::Phone),
         ];
-        assert_eq!(choose_texts_candidate(&devices, "Dave's iPhone"), Some(&devices[1]));
+        assert_eq!(choose_texts_candidate(&devices, "Jordan's iPhone"), Some(&devices[1]));
     }
 
     #[test]
     fn texts_pick_never_takes_an_accessory_even_on_a_name_match() {
         // A renamed accessory that happens to match the phone's name must not be paired for texts.
-        let devices = vec![un("x", "Dave's iPhone", DeviceKind::Accessory)];
-        assert_eq!(choose_texts_candidate(&devices, "Dave's iPhone"), None);
+        let devices = vec![un("x", "Jordan's iPhone", DeviceKind::Accessory)];
+        assert_eq!(choose_texts_candidate(&devices, "Jordan's iPhone"), None);
     }
 
     #[test]
@@ -205,7 +205,7 @@ mod tests {
             un("phone", "iPhone", DeviceKind::Phone),
             un("kbd", "Keychron", DeviceKind::Accessory),
         ];
-        assert_eq!(choose_texts_candidate(&devices, "Dave's iPhone"), Some(&devices[0]));
+        assert_eq!(choose_texts_candidate(&devices, "Jordan's iPhone"), Some(&devices[0]));
     }
 
     #[test]
@@ -240,30 +240,30 @@ mod tests {
     fn le_after_classic_prefers_a_new_name_match() {
         // A phone bonded before (same name on an old entry) must not win over the fresh one.
         let devices = vec![
-            le("old", "Dave's iPhone", DeviceKind::Phone),
-            le("new", "Dave's iPhone", DeviceKind::Phone),
+            le("old", "Jordan's iPhone", DeviceKind::Phone),
+            le("new", "Jordan's iPhone", DeviceKind::Phone),
         ];
-        let pick = choose_le_after_classic(&devices, "Dave's iPhone", &before(&["old"]));
+        let pick = choose_le_after_classic(&devices, "Jordan's iPhone", &before(&["old"]));
         assert_eq!(pick, Some(&devices[1]));
     }
 
     #[test]
     fn le_after_classic_takes_a_lone_new_phone_when_names_differ() {
-        // The LE side reports the bare "iPhone" while the Classic side carried "Dave's iPhone".
+        // The LE side reports the bare "iPhone" while the Classic side carried "Jordan's iPhone".
         let devices = vec![
             le("kbd", "Keychron", DeviceKind::Accessory),
             le("phone", "iPhone", DeviceKind::Phone),
         ];
-        let pick = choose_le_after_classic(&devices, "Dave's iPhone", &before(&["kbd"]));
+        let pick = choose_le_after_classic(&devices, "Jordan's iPhone", &before(&["kbd"]));
         assert_eq!(pick, Some(&devices[1]));
     }
 
     #[test]
     fn le_after_classic_never_takes_an_accessory() {
         // A renamed accessory matching the phone's name must never be adopted for notifications.
-        let devices = vec![le("x", "Dave's iPhone", DeviceKind::Accessory)];
+        let devices = vec![le("x", "Jordan's iPhone", DeviceKind::Accessory)];
         assert_eq!(
-            choose_le_after_classic(&devices, "Dave's iPhone", &HashSet::new()),
+            choose_le_after_classic(&devices, "Jordan's iPhone", &HashSet::new()),
             None
         );
     }
@@ -281,8 +281,8 @@ mod tests {
     fn le_after_classic_falls_back_to_a_name_match_even_if_not_new() {
         // Nothing appeared since pairing (an earlier attempt already made the bond), but a
         // non-accessory name match is still safe to adopt.
-        let devices = vec![le("phone", "Dave's iPhone", DeviceKind::Phone)];
-        let pick = choose_le_after_classic(&devices, "Dave's iPhone", &before(&["phone"]));
+        let devices = vec![le("phone", "Jordan's iPhone", DeviceKind::Phone)];
+        let pick = choose_le_after_classic(&devices, "Jordan's iPhone", &before(&["phone"]));
         assert_eq!(pick, Some(&devices[0]));
     }
 
@@ -292,7 +292,7 @@ mod tests {
         // A lone phone that was already bonded and whose name doesn't match isn't a safe guess.
         let devices = vec![le("old", "Work iPhone", DeviceKind::Phone)];
         assert_eq!(
-            choose_le_after_classic(&devices, "Dave's iPhone", &before(&["old"])),
+            choose_le_after_classic(&devices, "Jordan's iPhone", &before(&["old"])),
             None
         );
     }
