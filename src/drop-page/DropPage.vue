@@ -163,6 +163,8 @@ const downloads = reactive<Record<string, Fetching>>({});
 
 async function fetchOffer(o: PageOffer) {
   if (!props.api) return;
+  const previous = downloads[o.id]?.url;
+  if (previous) URL.revokeObjectURL(previous);
   const d: Fetching = { state: "loading", got: 0 };
   downloads[o.id] = d;
   try {

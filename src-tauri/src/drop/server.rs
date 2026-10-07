@@ -5,8 +5,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::body::{to_bytes, Body, Bytes};
+use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -26,6 +26,9 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsa
                    img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; base-uri 'none'; \
                    form-action 'none'; frame-ancestors 'none'";
 
+/// The largest body there is: a sealed chunk.
+const BODY_LIMIT: usize = MAX_CHUNK as usize + OVERHEAD + 4096;
+
 pub fn router(session: Arc<Session>) -> Router {
     Router::new()
         .route("/", get(index))
@@ -37,8 +40,7 @@ pub fn router(session: Arc<Session>) -> Router {
         .route("/api/finish/{id}", post(finish_upload))
         .route("/api/down/{id}/{index}", get(get_chunk))
         .fallback(|| async { StatusCode::NOT_FOUND })
-        // A sealed chunk is the largest body there is.
-        .layer(DefaultBodyLimit::max(MAX_CHUNK as usize + OVERHEAD + 4096))
+        .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .with_state(session)
 }
 
@@ -82,6 +84,16 @@ fn authorize(s: &Session, method: &Method, uri: &Uri, headers: &HeaderMap) -> Re
     s.authorize(auth, method.as_str(), uri.path(), ua)
 }
 
+/// Authenticate a request from its headers, *then* read its body. A slow 2 MB chunk is checked
+/// as of when it started, so it can't fall behind the replay window while it uploads (and a
+/// stranger's body is never read at all).
+async fn authorize_then_read(s: &Session, req: Request) -> Result<(Authorized, Bytes), ApiError> {
+    let ok = authorize(s, req.method(), req.uri(), req.headers())?;
+    let body: Body = req.into_body();
+    let bytes = to_bytes(body, BODY_LIMIT).await.map_err(|_| ApiError::BadRequest)?;
+    Ok((ok, bytes))
+}
+
 /// Run file work and crypto off the async threads.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, ApiError> + Send + 'static) -> Result<T, ApiError> {
     tokio::task::spawn_blocking(f).await.unwrap_or(Err(ApiError::Io))
@@ -91,7 +103,7 @@ async fn index(State(s): Shared) -> Response {
     if s.is_closed() {
         return error(ApiError::Closed);
     }
-    s.touch();
+    // Not counted as activity: any device on the network could fetch the page and keep Drop on.
     let Some((html, kind)) = page::asset("/index.html") else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -129,44 +141,30 @@ async fn state(State(s): Shared, method: Method, uri: Uri, headers: HeaderMap) -
     }
 }
 
-async fn text(State(s): Shared, method: Method, uri: Uri, headers: HeaderMap, body: Bytes) -> Response {
-    let run = || {
-        let req = authorize(&s, &method, &uri, &headers)?;
-        let msg: TextRequest = s.open_json(&req, &body)?;
-        s.phone_text(msg.text)?;
-        Ok(sealed(s.seal_json(&req, &serde_json::json!({ "ok": true }))))
-    };
-    run().unwrap_or_else(error)
-}
-
-async fn begin_upload(
-    State(s): Shared,
-    Path(id): Path<String>,
-    method: Method,
-    uri: Uri,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
+async fn text(State(s): Shared, req: Request) -> Response {
     let run = async {
-        let req = authorize(&s, &method, &uri, &headers)?;
-        let msg: UploadRequest = s.open_json(&req, &body)?;
-        let s2 = s.clone();
-        let reply = blocking(move || s2.begin_upload(&id, &msg)).await?;
-        Ok(sealed(s.seal_json(&req, &reply)))
+        let (ok, body) = authorize_then_read(&s, req).await?;
+        let msg: TextRequest = s.open_json(&ok, &body)?;
+        s.phone_text(msg.text)?;
+        Ok(sealed(s.seal_json(&ok, &serde_json::json!({ "ok": true }))))
     };
     run.await.unwrap_or_else(error)
 }
 
-async fn put_chunk(
-    State(s): Shared,
-    Path((id, index)): Path<(String, u32)>,
-    method: Method,
-    uri: Uri,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
+async fn begin_upload(State(s): Shared, Path(id): Path<String>, req: Request) -> Response {
     let run = async {
-        authorize(&s, &method, &uri, &headers)?;
+        let (ok, body) = authorize_then_read(&s, req).await?;
+        let msg: UploadRequest = s.open_json(&ok, &body)?;
+        let s2 = s.clone();
+        let reply = blocking(move || s2.begin_upload(&id, &msg)).await?;
+        Ok(sealed(s.seal_json(&ok, &reply)))
+    };
+    run.await.unwrap_or_else(error)
+}
+
+async fn put_chunk(State(s): Shared, Path((id, index)): Path<(String, u32)>, req: Request) -> Response {
+    let run = async {
+        let (_, body) = authorize_then_read(&s, req).await?;
         let s2 = s.clone();
         blocking(move || s2.write_chunk(&id, index, &body)).await?;
         Ok(StatusCode::NO_CONTENT.into_response())

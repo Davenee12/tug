@@ -32,7 +32,8 @@ pub fn sanitize(name: &str) -> String {
     } else {
         trimmed.to_string()
     };
-    let (stem, _) = split_ext(&out);
+    // Windows treats "NUL.tar.gz" as the device too: check everything before the first dot.
+    let stem = out.split('.').next().unwrap_or("");
     let device = stem.trim_end_matches(' ').to_ascii_uppercase();
     if RESERVED.iter().any(|r| r.to_uppercase() == device) {
         out.insert(0, '_');
@@ -118,6 +119,7 @@ mod tests {
         assert_eq!(sanitize("lpt9"), "_lpt9");
         assert_eq!(sanitize("CONSOLE.txt"), "CONSOLE.txt");
         assert_eq!(sanitize("aux .txt"), "_aux .txt");
+        assert_eq!(sanitize("NUL.tar.gz"), "_NUL.tar.gz");
     }
 
     #[test]
