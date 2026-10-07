@@ -14,7 +14,7 @@ const CONNECTED: DeviceStatus = {
   radio: "on",
   peripheralSupported: true,
   advertising: "on",
-  device: { id: "x", name: "Jordan's iPhone" },
+  device: { id: "x", name: "Jordan's iPhone", model: null },
   connection: "connected",
   battery: 76,
   services: { notifications: true, media: true, battery: true, messages: true },

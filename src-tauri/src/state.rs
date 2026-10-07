@@ -36,6 +36,9 @@ pub mod events {
 pub mod keys {
     pub const DEVICE_ID: &str = "device_id";
     pub const DEVICE_NAME: &str = "device_name";
+    /// The phone's model identifier ("iPhone16,2") from its Device Information Service, kept so
+    /// the sidebar can picture the phone while it's away. Cleared with the device.
+    pub const DEVICE_MODEL: &str = "device_model";
     pub const ADVERTISE: &str = "advertise";
     /// The Classic (texts) device id tug last connected a MAP session to. Remembered so a
     /// phone rename can't make tug follow the old name onto the wrong device.
@@ -81,6 +84,9 @@ pub enum ConnectionState {
 pub struct PairedDevice {
     pub id: String,
     pub name: String,
+    /// Apple's model identifier ("iPhone16,2"), read over Bluetooth (Device Information Service).
+    /// None until the phone has told us, or if it never does. The UI maps it to a name and picture.
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
