@@ -277,6 +277,8 @@ export interface ToastSpec {
 export interface ToastPressed {
   kind: "open" | "read" | "replied" | "copied" | "calledBack";
   id: number;
+  /** A reply: the text as stored (same row as its `message` events); null for other presses. */
+  message: SmsMessage | null;
 }
 
 // --- Spotify connector (mirrors src-tauri/src/spotify/{mod,model}.rs) ---
