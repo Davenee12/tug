@@ -5,7 +5,7 @@
 
 import type { DeviceStatus } from "../types/protocol";
 
-type StatusInputs = Pick<DeviceStatus, "connection" | "awaitingUnlock" | "reconnecting" | "radio">;
+type StatusInputs = Pick<DeviceStatus, "connection" | "awaitingUnlock" | "reconnecting" | "radio" | "away">;
 
 /** Bluetooth is off or missing: nothing can connect, whatever the link last said. */
 export function radioDown(s: Pick<DeviceStatus, "radio">): boolean {
@@ -31,6 +31,8 @@ export function connectionLabel(s: StatusInputs): string {
   if (s.connection === "connecting") return reconnecting ? "Reconnecting…" : "Connecting…";
   // A locked phone needs the user; tug rebuilding the link on its own doesn't.
   if (s.awaitingUnlock) return "Unlock your iPhone";
+  // Out of range: one steady state while tug keeps trying quietly (failed retries don't flip it).
+  if (s.away) return "iPhone away";
   return reconnecting ? "Reconnecting…" : "Waiting for iPhone";
 }
 
@@ -56,5 +58,6 @@ export function connectionSentence(s: StatusInputs & Pick<DeviceStatus, "device"
   if (s.awaitingUnlock && s.connection !== "connecting") return "Your iPhone is connected but locked. Unlock it to reconnect.";
   if (showsReconnecting(s)) return "Reconnecting to your iPhone. No need to do anything.";
   if (s.connection === "connecting") return "Connecting to your iPhone…";
+  if (s.away) return "Your iPhone is out of range. tug reconnects by itself when it's back.";
   return "Waiting for your iPhone to reconnect. Keep Bluetooth on and the phone nearby.";
 }

@@ -17,6 +17,13 @@ describe("connectionLabel", () => {
     expect(connectionLabel({ ...base, connection: "disconnected", reconnecting: true })).toBe("Reconnecting…");
   });
 
+  it("says the iPhone is away while it's out of range, but asks for an unlock first", () => {
+    expect(connectionLabel({ ...base, connection: "disconnected", away: true })).toBe("iPhone away");
+    expect(connectionLabel({ ...base, connection: "disconnected", away: true, awaitingUnlock: true })).toBe(
+      "Unlock your iPhone",
+    );
+  });
+
   it("asks for an unlock over saying it's reconnecting", () => {
     expect(connectionLabel({ ...base, connection: "disconnected", awaitingUnlock: true, reconnecting: true })).toBe(
       "Unlock your iPhone",

@@ -366,12 +366,18 @@ impl Actor {
         self.device_id = Some(le_id.clone());
         self.retry_in = 0;
         self.connect_failures = 0;
+        // A freshly adopted phone: not away, and watched for "pair again" until it first connects.
+        self.away_since = None;
+        self.last_poke = None;
+        self.connected_since_adopt = false;
+        self.adopt_timeouts = 0;
         self.stop_discovery();
         self.shared.update_status(|s| {
             s.device = Some(PairedDevice { id: le_id, name, model });
             s.connection = ConnectionState::Disconnected;
             s.last_error = None;
             s.pairing_stale = false;
+            s.away = false;
         });
         Ok(())
     }
@@ -384,6 +390,9 @@ impl Actor {
         // Read the texts device id before deleting the setting, so we can unpair it too.
         let texts_id = self.shared.store.setting(keys::TEXTS_DEVICE_ID).ok().flatten();
         self.drop_link();
+        self.away_since = None;
+        self.last_poke = None;
+        self.shared.update_status(|s| s.away = false);
         self.reset_inventory();
         let store = &self.shared.store;
         let _ = store.delete_setting(keys::DEVICE_ID);

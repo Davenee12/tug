@@ -330,6 +330,10 @@ impl Actor {
                         log::warn!("giving up on ANCS request {gave_up:?} after {MAX_ATTEMPTS} attempts");
                         a.gave_up_on(&gave_up);
                     }
+                    // Windows closed the objects: every further request fails the same way.
+                    if self.on_closed(&e) {
+                        return;
+                    }
                 }
             }
         }
@@ -360,6 +364,11 @@ impl Actor {
         let result = winrt::write(&cp, &ancs::perform_action(uid, positive)).await;
         if self.note_gatt(&result) {
             return Err(RECONNECTING.into());
+        }
+        if let Err(e) = &result {
+            if self.on_closed(e) {
+                return Err(RECONNECTING.into());
+            }
         }
         match action_outcome(result, positive)? {
             true => log::info!("asked the iPhone to {what} notification {uid} (row {id})"),
