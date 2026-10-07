@@ -48,11 +48,14 @@ impl RateLimiter {
 }
 
 /// Keep only the known kinds the frontend sends; anything else is normalised to "error" so a
-/// malformed call can't put arbitrary text at the front of a log line.
+/// malformed call can't put arbitrary text at the front of a log line. A "note" isn't a crash:
+/// it's the window noticing its state had drifted from the backend's (e.g. a text it never got
+/// the event for), which is worth a line in the log next to the backend's own account.
 fn kind_label(kind: &str) -> &'static str {
     match kind {
         "unhandledrejection" => "unhandled rejection",
         "vue" => "vue",
+        "note" => "note",
         _ => "error",
     }
 }
@@ -117,6 +120,16 @@ mod tests {
         );
         // An unknown kind can't inject its own text.
         assert_eq!(summary("<script>", "E", "", ""), "frontend error: E");
+        // The window reporting state it had to repair isn't labelled a crash.
+        assert_eq!(
+            summary(
+                "note",
+                "MissedText",
+                "pop-up reply missing from the window (1); added",
+                ""
+            ),
+            "frontend note: MissedText: pop-up reply missing from the window (1); added"
+        );
     }
 
     #[test]

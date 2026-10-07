@@ -29,6 +29,7 @@ import { MESSAGES_APP } from "../lib/format";
 import { batteryAlert } from "../lib/battery";
 import { copyText } from "../lib/clipboard";
 import { isAddressLike, normalizeAddress } from "../lib/address";
+import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync } from "../lib/messageSync";
 import type { ToastSpec } from "../types/protocol";
 import { isKnownConversation, outgoingAddresses, senderIndex, senderMayToast, threadCounts } from "../lib/senders";
 import type {
@@ -340,7 +341,32 @@ export const useTugStore = defineStore("tug", () => {
   let watchRenew: number | undefined;
   const pageVisible = ref(document.visibilityState === "visible");
   // Registered in init() and removed in dispose(), so it's torn down with the rest (see teardown).
-  const onVisibilityChange = () => (pageVisible.value = document.visibilityState === "visible");
+  const onVisibilityChange = () => {
+    pageVisible.value = document.visibilityState === "visible";
+    if (document.hidden) leftWindow();
+    else cameBack();
+  };
+
+  /**
+   * Since when tug has been out of sight (hidden in the tray, minimized or unfocused); null while
+   * it's in front. Coming back after a while re-reads the newest texts and adds any the window
+   * never got an event for (lib/messageSync), so a missed event can't leave a text out of its
+   * conversation until a restart. Cheap: one local read of RESYNC_LIMIT rows, at most once per return.
+   */
+  let awaySince: number | null = document.hidden || !document.hasFocus() ? Date.now() : null;
+  function leftWindow() {
+    awaySince ??= Date.now();
+  }
+  function cameBack() {
+    if (document.hidden) return;
+    const due = shouldResync(awaySince, Date.now());
+    awaySince = null;
+    if (!due || !messagesReady) return;
+    void api
+      .listMessages(RESYNC_LIMIT)
+      .then((list) => addMissingMessages(settledMessages(list, Date.now()), "recent texts"))
+      .catch(() => undefined);
+  }
   // The switches get flipped on the phone, with tug on any screen or in the tray. So for the
   // first minutes after launch or pairing, check fast whenever one is still off, too.
   const FRESH_MS = 5 * 60 * 1000;
@@ -454,6 +480,18 @@ export const useTugStore = defineStore("tug", () => {
     }
     messages.value.push(m);
     return true;
+  }
+
+  /**
+   * Add any of these stored texts the window doesn't have (never overwriting one it has; see
+   * lib/messageSync). Texts normally arrive as `message` events, so finding one missing means an
+   * event never reached the window: say so in the log (counts only), next to the backend's account.
+   */
+  function addMissingMessages(list: SmsMessage[], what: string) {
+    const add = missingMessages(messages.value, list);
+    if (!add.length) return;
+    messages.value = [...messages.value, ...add].sort(byArrival);
+    void api.logFrontendError("note", "MissedText", `${what} missing from the window (${add.length}); added`, "").catch(() => undefined);
   }
 
   // Windows notification permission: ask once per launch, not on every notification.
@@ -583,7 +621,9 @@ export const useTugStore = defineStore("tug", () => {
    * reply, copied the code, asked the phone to call back). Bring tug's own state along,
    * the same way the in-app buttons do.
    */
-  function onToastPressed({ kind, id }: ToastPressed) {
+  function onToastPressed({ kind, id, message }: ToastPressed) {
+    // A reply carries the text as stored: the conversation shows it even if its events never came.
+    if (message) addMissingMessages([message], "pop-up reply");
     const n = notifications.value.find((x) => x.id === id);
     if (!n) return;
     if (kind === "open") {
@@ -683,7 +723,7 @@ export const useTugStore = defineStore("tug", () => {
           await api.setHidden(nIds, mIds, false);
           for (const n of removedNotifications) upsert(notifications.value, n);
           for (const m of removedMessages) upsertMessage(m);
-          messages.value.sort((a, b) => a.receivedAt - b.receivedAt || a.id - b.id);
+          messages.value.sort(byArrival);
           selectedThread.value = c.key;
         });
       },
@@ -970,7 +1010,13 @@ export const useTugStore = defineStore("tug", () => {
     if (started) return;
     started = true;
     document.addEventListener("visibilitychange", onVisibilityChange);
-    teardown.push(() => document.removeEventListener("visibilitychange", onVisibilityChange));
+    window.addEventListener("blur", leftWindow);
+    window.addEventListener("focus", cameBack);
+    teardown.push(() => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("blur", leftWindow);
+      window.removeEventListener("focus", cameBack);
+    });
     teardown.push(
       installZoomShortcuts(
         () => zoom.value,
@@ -1042,10 +1088,7 @@ export const useTugStore = defineStore("tug", () => {
     if (calls.value.length === 0) calls.value = recent;
     // Merge rather than replace: events may have arrived while these loaded.
     for (const n of first) upsert(notifications.value, n);
-    const live = new Set(messages.value.map((m) => m.id));
-    messages.value = [...msgs.filter((m) => !live.has(m.id)), ...messages.value].sort(
-      (a, b) => a.receivedAt - b.receivedAt || a.id - b.id,
-    );
+    messages.value = [...missingMessages(messages.value, msgs), ...messages.value].sort(byArrival);
     if (contacts.value.length === 0) contacts.value = people;
     status.value = s;
     statusKnown.value = true;
