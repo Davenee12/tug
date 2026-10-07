@@ -128,8 +128,15 @@ pub struct IncomingMessage<'a> {
     pub msg_type: Option<&'a str>,
 }
 
-// A name the phone sent with the message stands in until the number is a known contact.
-const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address, COALESCE(c.name, m.sender_name), m.body, m.sent_at, m.received_at, m.status, m.msg_type, m.gap_before
+// The contact with exactly this address; failing that, the one contact whose number matches it in
+// another format (same last 10 digits, `store::match_key`; never a guess between two names); then a
+// name the phone sent with the message, until the number is a known contact.
+const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address,
+            COALESCE(c.name, (
+                SELECT CASE WHEN COUNT(DISTINCT k.name) = 1 THEN MIN(k.name) END
+                FROM contacts k WHERE k.match_key = match_key(m.address)
+            ), m.sender_name),
+            m.body, m.sent_at, m.received_at, m.status, m.msg_type, m.gap_before
      FROM messages m LEFT JOIN contacts c ON c.address = m.address";
 
 fn map_row(r: &Row) -> Result<StoredMessage> {
@@ -420,7 +427,7 @@ impl Store {
             )?;
             let mut forget = tx.prepare("DELETE FROM contact_aliases WHERE address = ?1 AND alias = ?2")?;
             let mut stmt = tx.prepare(
-                "INSERT INTO contacts (address, name) VALUES (?1, ?2)
+                "INSERT INTO contacts (address, name, match_key) VALUES (?1, ?2, match_key(?1))
                  ON CONFLICT (address) DO UPDATE SET name = excluded.name",
             )?;
             for (address, name) in entries {
@@ -539,8 +546,8 @@ impl Store {
                         subtitle = '' AND NOT group_like(title) AS solo
                  FROM notifications WHERE app_id = ?1
              )
-             INSERT OR IGNORE INTO contacts (address, name)
-             SELECT address, name FROM (
+             INSERT OR IGNORE INTO contacts (address, name, match_key)
+             SELECT address, name, match_key(address) FROM (
                  SELECT m.address AS address, MIN(n.name) AS name, COUNT(DISTINCT n.name) AS names
                  FROM messages m
                  JOIN titled n
@@ -620,6 +627,43 @@ mod tests {
             received_at: at,
         })
         .unwrap();
+    }
+
+    #[test]
+    fn a_number_in_another_format_still_gets_the_contacts_name() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[
+            ("+447700900123".into(), "Priya".into()),
+            ("ana@example.com".into(), "Ana".into()),
+        ])
+        .unwrap();
+        let national = s
+            .insert_incoming(&incoming("H1", "07700900123", "hello"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(national.contact_name.as_deref(), Some("Priya"));
+        let email = s
+            .insert_incoming(&incoming("H2", "ana@example.com", "hi"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(email.contact_name.as_deref(), Some("Ana"));
+        let short = s.insert_incoming(&incoming("H3", "12345", "code 1")).unwrap().unwrap();
+        assert_eq!(short.contact_name, None);
+    }
+
+    #[test]
+    fn two_contacts_sharing_the_last_digits_name_neither() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[
+            ("+447700900123".into(), "Priya".into()),
+            ("+337700900123".into(), "Luc".into()),
+        ])
+        .unwrap();
+        let m = s
+            .insert_incoming(&incoming("H1", "07700900123", "hello"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.contact_name, None, "never a guess between two people");
     }
 
     #[test]
