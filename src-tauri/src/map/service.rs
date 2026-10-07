@@ -189,7 +189,7 @@ mod worker {
     use crate::map::obex::RSP_NOT_FOUND;
     use crate::map::pick::choose_device;
     use crate::map::session::{
-        find_devices, pull_call_history, pull_contacts, MapDevice, MapError, MapSession, PBAP_TURN,
+        find_devices, pull_call_history, pull_contacts, MapDevice, MapError, MapSession, PushError, PBAP_TURN,
     };
     use crate::messages::{IncomingMessage, Status, StoredMessage, SOURCE_IPHONE_MAP};
     use crate::state::{events, keys, ConnectionState, Shared};
@@ -311,6 +311,9 @@ mod worker {
         /// night; reset on success and bypassed on a real change (see the poll loop and `map.refresh`).
         connect_failures: u32,
         next_retry: Option<Instant>,
+        /// Messages read in tug while the phone couldn't be reached, to mark read on the phone
+        /// after the next successful sync instead of dropping the request.
+        queued_reads: Vec<i64>,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -343,6 +346,7 @@ mod worker {
             last_type_counts: None,
             connect_failures: 0,
             next_retry: None,
+            queued_reads: Vec::new(),
         };
         // Nothing is sending yet, so a send still pending was cut off by a crash or quit.
         match w.shared.store.fail_interrupted_sends() {
@@ -1136,6 +1140,11 @@ mod worker {
             // Only once it all went through: a sync that failed partway looks back again.
             self.backfilled = true;
             shared.store.set_setting(keys::LAST_TEXT_SYNC, &now_ms().to_string())?;
+            // Reads that waited for the phone to come back.
+            if !self.queued_reads.is_empty() {
+                let ids = std::mem::take(&mut self.queued_reads);
+                self.mark_read(&ids).await;
+            }
             // Once per change, not every poll (logged here, after the session borrow ends).
             if let Some(counts @ (sms_gsm, im, other)) = type_counts {
                 if self.last_type_counts != Some(counts) {
@@ -1157,7 +1166,10 @@ mod worker {
             let store = self.shared.store.clone();
             let session = match self.ensure().await {
                 Ok(s) => s,
-                Err(e) => return log::debug!("mark read: {e}"),
+                Err(e) => {
+                    log::debug!("mark read: {e}; will try after the next sync");
+                    return queue_reads(&mut self.queued_reads, ids);
+                }
             };
             for handle in &handles {
                 match session.set_read(handle, true).await {
@@ -1177,12 +1189,24 @@ mod worker {
                     // Refused for another reason; try again next time it's opened.
                     Err(MapError::Obex { code, .. }) => log::info!("phone refused mark-read for {handle}: {code:#04x}"),
                     Err(e) => {
-                        log::debug!("mark read failed: {e}");
+                        log::debug!("mark read failed: {e}; will try after the next sync");
+                        queue_reads(&mut self.queued_reads, ids);
                         return self.fail(&e);
                     }
                 }
             }
             log::info!("marked {} message(s) read on the iPhone", handles.len());
+        }
+
+        /// One PushMessage on the session (opening one if needed).
+        async fn push(&mut self, m: &StoredMessage) -> Result<Option<String>, PushError> {
+            match self.ensure().await {
+                Ok(session) => session.push_message(&m.address, &m.body).await,
+                Err(error) => Err(PushError {
+                    error,
+                    maybe_taken: false,
+                }),
+            }
         }
 
         /// Push a pending outgoing message (stored and shown by the command that queued it; see
@@ -1198,16 +1222,30 @@ mod worker {
             if pending.status != Status::Pending {
                 return Ok(pending);
             }
-            let result = match self.ensure().await {
-                Ok(session) => session.push_message(&pending.address, &pending.body).await,
-                Err(e) => Err(e),
-            };
+            let mut result = self.push(&pending).await;
+            // The cached session can be dead without tug knowing (the phone walked off and came
+            // back). If it failed before the phone could have the text, reconnect and try once more.
+            if let Err(e) = &result {
+                if after_push_failure(&e.error, e.maybe_taken) == PushOutcome::RetryOnce {
+                    log::info!("send failed on the open session ({e}); reconnecting to try once more");
+                    self.fail(&e.error);
+                    result = self.push(&pending).await;
+                }
+            }
             let (status, handle) = match result {
                 Ok(handle) => (Status::Accepted, handle),
                 Err(e) => {
-                    log::warn!("send failed: {e}");
-                    self.fail(&e);
-                    (Status::Failed, None)
+                    let outcome = after_push_failure(&e.error, e.maybe_taken);
+                    log::warn!("send failed: {e} ({outcome:?})");
+                    // A refusal comes over a working link: keep the session for the next sync.
+                    if !matches!(e.error, MapError::Obex { .. }) {
+                        self.fail(&e.error);
+                    }
+                    if outcome == PushOutcome::MaySent {
+                        (Status::Unconfirmed, None)
+                    } else {
+                        (Status::Failed, None)
+                    }
                 }
             };
             let updated = store
@@ -1215,6 +1253,46 @@ mod worker {
                 .map_err(|e| e.to_string())?;
             self.shared.emit(events::MESSAGE, updated.clone());
             Ok(updated)
+        }
+    }
+
+    /// At most this many reads wait for the phone; past it the oldest are dropped (opening the
+    /// conversation again asks again).
+    const QUEUED_READS_MAX: usize = 500;
+
+    /// Add reads to the waiting queue, once each, keeping the newest `QUEUED_READS_MAX`. Pure, so
+    /// it's unit-tested.
+    fn queue_reads(queue: &mut Vec<i64>, ids: &[i64]) {
+        for id in ids {
+            if !queue.contains(id) {
+                queue.push(*id);
+            }
+        }
+        if queue.len() > QUEUED_READS_MAX {
+            queue.drain(..queue.len() - QUEUED_READS_MAX);
+        }
+    }
+
+    /// What to do after a PushMessage failed.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum PushOutcome {
+        /// The link failed before the phone could have the text: reconnect and push once more.
+        RetryOnce,
+        /// The whole text went out but no answer came: it may have sent, so never push it again.
+        MaySent,
+        /// A definite no (the phone refused it, or tug couldn't reach message access at all).
+        Failed,
+    }
+
+    /// Pure, so it's unit-tested. A dead link (closed, a Windows socket error, or no answer in
+    /// time) before the final packet went out is worth one more try on a fresh session; the same
+    /// after the final packet means the phone may have it, and a second push could text them twice.
+    fn after_push_failure(e: &MapError, maybe_taken: bool) -> PushOutcome {
+        let link = matches!(e, MapError::Closed | MapError::Timeout | MapError::Win(_));
+        match (link, maybe_taken) {
+            (true, false) => PushOutcome::RetryOnce,
+            (true, true) => PushOutcome::MaySent,
+            (false, _) => PushOutcome::Failed,
         }
     }
 
@@ -1295,7 +1373,11 @@ mod worker {
 
     #[cfg(test)]
     mod tests {
-        use super::{map_retry_delay, may_have_missed, photo_sync_due, MAP_RETRY_CAP};
+        use super::{
+            after_push_failure, map_retry_delay, may_have_missed, photo_sync_due, queue_reads, PushOutcome,
+            MAP_RETRY_CAP, QUEUED_READS_MAX,
+        };
+        use crate::map::session::MapError;
         use std::time::Duration;
 
         #[test]
@@ -1309,6 +1391,33 @@ mod worker {
                 "never over the cap"
             );
             assert_eq!(map_retry_delay(0), Duration::from_secs(30), "no underflow at zero");
+        }
+
+        #[test]
+        fn reads_wait_for_the_phone_once_each_and_bounded() {
+            let mut q = Vec::new();
+            queue_reads(&mut q, &[1, 2]);
+            queue_reads(&mut q, &[2, 3]);
+            assert_eq!(q, vec![1, 2, 3]);
+            let many: Vec<i64> = (10..10 + QUEUED_READS_MAX as i64).collect();
+            queue_reads(&mut q, &many);
+            assert_eq!(q.len(), QUEUED_READS_MAX);
+            assert_eq!(q.last(), many.last(), "the newest are kept");
+            assert!(!q.contains(&1), "the oldest are dropped");
+        }
+
+        #[test]
+        fn a_dead_link_retries_once_only_before_the_phone_could_have_the_text() {
+            assert_eq!(after_push_failure(&MapError::Closed, false), PushOutcome::RetryOnce);
+            assert_eq!(after_push_failure(&MapError::Timeout, false), PushOutcome::RetryOnce);
+            assert_eq!(after_push_failure(&MapError::Timeout, true), PushOutcome::MaySent);
+            assert_eq!(after_push_failure(&MapError::Closed, true), PushOutcome::MaySent);
+            let refused = MapError::Obex {
+                op: "PushMessage",
+                code: 0xC3,
+            };
+            assert_eq!(after_push_failure(&refused, false), PushOutcome::Failed);
+            assert_eq!(after_push_failure(&MapError::Consent, false), PushOutcome::Failed);
         }
 
         #[test]
