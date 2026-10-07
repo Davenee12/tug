@@ -43,7 +43,7 @@ use crate::state::{
 };
 use crate::store::NewNotification;
 use crate::wake::WakeCause;
-use crate::wedge::WedgeWatch;
+use crate::wedge::{WedgeWatch, Wedged};
 
 /// The wake watch: tells the actor when the PC resumed, from a thread of its own.
 mod heartbeat;
@@ -84,6 +84,8 @@ const FLAP_SETTLE_SECS: u32 = 5;
 /// losing the replay. Only a down that outlasts this is treated as a real disconnect.
 const LINK_BLIP_GRACE: Duration = Duration::from_millis(1500);
 const ADVERTISE_RETRY_SECS: u32 = 3;
+/// Longest wait between attempts to start advertising while the adapter keeps timing out.
+const MAX_ADVERTISE_RETRY_SECS: u32 = 60;
 /// Quiet period after the last replayed notification before sweeping stale rows.
 // Long enough that a slow replay's gaps aren't mistaken for its end (that swept, then
 // restored, notifications still on the phone: a visible flicker).
@@ -248,6 +250,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         retry_in: 0,
         connect_failures: 0,
         advertise_retry_in: None,
+        advertise_failures: 0,
         carried_name: None,
         cccd_check_in: CCCD_CHECK_SECS,
         optional_retry_at: None,
@@ -285,6 +288,8 @@ struct Actor {
     connect_failures: u32,
     /// Seconds until advertising is retried after Windows aborted it.
     advertise_retry_in: Option<u32>,
+    /// Attempts to start advertising that timed out in a row; drives that retry's backoff.
+    advertise_failures: u32,
     /// Name of a Classic-paired iPhone whose LE side is being paired on its behalf.
     carried_name: Option<String>,
     /// Seconds until the ANCS subscription is verified on the iPhone again.
@@ -442,6 +447,8 @@ impl Actor {
                     .store
                     .set_setting(keys::ADVERTISE, if enabled { "true" } else { "false" });
                 if enabled {
+                    // The user asked: try now, with a fresh backoff.
+                    self.advertise_failures = 0;
                     self.start_advertising().await;
                 } else {
                     self.stop_advertising();
@@ -479,9 +486,9 @@ impl Actor {
             Event::Name { gen, name } if Some(gen) == link_gen => self.set_device_name(&name),
             Event::Woke { slept, cause } => {
                 let how = match cause {
-                    WakeCause::Slept => "PC resumed from sleep",
-                    WakeCause::Resumed => "Windows reported a resume",
-                    WakeCause::Frozen => "tug was suspended by Windows, as in Modern Standby",
+                    WakeCause::Slept => "the PC slept",
+                    WakeCause::Resumed => "Windows resumed",
+                    WakeCause::Frozen => "tug was suspended",
                 };
                 log::info!(
                     "woke after ~{}s away ({how}); retrying the iPhone link and messages now",
@@ -495,7 +502,7 @@ impl Actor {
                 // After resume the old GATT handles are stale and Windows may never fire a reconnect
                 // for them, so drop the link and let the next tick open a fresh one.
                 if self.link.is_some() {
-                    self.relink("PC resumed from sleep");
+                    self.relink(&format!("woke ({how})"));
                 }
                 // Nudge the texts/contacts/calls worker to rebuild its MAP session too.
                 if let Some(map) = self.shared.map.get() {
@@ -539,12 +546,19 @@ impl Actor {
                     GattServiceProviderAdvertisementStatus::Started
                     | GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData => {
                         self.advertise_retry_in = None;
+                        self.advertise_failures = 0;
                     }
                     _ => {}
                 }
             }
             Event::Radio(state) => {
-                self.shared.update_status(|s| s.radio = state);
+                self.shared.update_status(|s| {
+                    s.radio = state;
+                    // With Bluetooth off there's nothing to reconnect: the UI says it's off instead.
+                    if matches!(state, RadioState::Off | RadioState::Unavailable) {
+                        s.reconnecting = false;
+                    }
+                });
                 if state == RadioState::On {
                     self.retry_in = 0;
                     self.connect_failures = 0;
@@ -717,8 +731,13 @@ impl Actor {
             Err(e) if e.is_timeout() => {
                 let connected = self.link.as_ref().is_some_and(|l| l.connected);
                 if connected && !self.wedged() {
-                    if let Some(settle) = self.wedge.timed_out(Instant::now()) {
-                        self.begin_wedge_recovery(settle);
+                    match self.wedge.timed_out(Instant::now()) {
+                        Some(Wedged::Relink { settle }) => self.begin_wedge_recovery(settle),
+                        Some(Wedged::Persistent { first: true }) => log::warn!(
+                            "Bluetooth adapter keeps stopping responding; no longer rebuilding the link for it until it's been quiet for {} min",
+                            crate::wedge::RECUR_WITHIN.as_secs() / 60
+                        ),
+                        Some(Wedged::Persistent { first: false }) | None => {}
                     }
                 }
             }
@@ -764,6 +783,15 @@ mod tests {
             MAX_RETRY_SECS,
             "no overflow"
         );
+    }
+
+    #[test]
+    fn advertising_that_times_out_keeps_retrying_backing_off_to_a_minute() {
+        // The review's block: a CreateAsync timeout used to leave advertising off for good.
+        let waits: Vec<u32> = (1..=8)
+            .map(|f| retry_delay(ADVERTISE_RETRY_SECS, f, MAX_ADVERTISE_RETRY_SECS))
+            .collect();
+        assert_eq!(waits, vec![3, 6, 12, 24, 48, 60, 60, 60]);
     }
 
     #[test]

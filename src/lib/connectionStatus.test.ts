@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { connectionBusy, connectionLabel } from "./connectionStatus";
 
-const base = { connection: "connected" as const, awaitingUnlock: false, reconnecting: false };
+const base = { connection: "connected" as const, awaitingUnlock: false, reconnecting: false, radio: "on" as const };
 
 describe("connectionLabel", () => {
   it("names each ordinary state", () => {
@@ -21,6 +21,14 @@ describe("connectionLabel", () => {
     expect(connectionLabel({ ...base, connection: "disconnected", awaitingUnlock: true, reconnecting: true })).toBe(
       "Unlock your iPhone",
     );
+  });
+
+  it("never claims Reconnecting with Bluetooth off or missing", () => {
+    for (const radio of ["off", "unavailable"] as const) {
+      expect(connectionLabel({ ...base, connection: "disconnected", reconnecting: true, radio })).toBe("Waiting for iPhone");
+      expect(connectionLabel({ ...base, connection: "connecting", reconnecting: true, radio })).toBe("Connecting…");
+      expect(connectionBusy({ ...base, connection: "disconnected", reconnecting: true, radio })).toBe(false);
+    }
   });
 
   it("never claims Reconnecting once connected", () => {

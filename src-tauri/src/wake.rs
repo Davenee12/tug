@@ -112,8 +112,9 @@ impl WakeWatch {
         let quiet = self.quiet;
         self.quiet = self.quiet.saturating_sub(1);
         match cause {
-            // The same resume seen again by another signal: it has already been acted on.
-            Some(_) if quiet > 0 => Beat::Normal,
+            // The same resume seen again by another signal: it has already been acted on. Sleep on
+            // the clocks always counts, though: that's a second sleep, not an echo of the first.
+            Some(cause) if quiet > 0 && cause != WakeCause::Slept => Beat::Normal,
             Some(cause) => {
                 self.quiet = QUIET_BEATS;
                 let away = if cause == WakeCause::Slept { slept } else { took };
@@ -234,6 +235,22 @@ mod tests {
             matches!(w.beat(at(160, 160), false), Beat::Woke { .. }),
             "a minute frozen"
         );
+    }
+
+    #[test]
+    fn a_second_sleep_soon_after_a_wake_still_counts() {
+        // Windows' notification first, then the lid closes again before the quiet period is over.
+        let mut w = WakeWatch::new(at(100, 100));
+        assert!(matches!(w.beat(at(101, 101), true), Beat::Woke { .. }));
+        assert_eq!(
+            w.beat(at(1902, 102), false),
+            Beat::Woke {
+                away: Duration::from_secs(1800),
+                cause: WakeCause::Slept
+            }
+        );
+        // ...and its own echo is still swallowed.
+        assert_eq!(w.beat(at(1903, 103), true), Beat::Normal);
     }
 
     #[test]

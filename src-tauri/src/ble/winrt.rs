@@ -1,6 +1,7 @@
 //! Thin helpers over the WinRT GATT client API.
 
 use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use windows::core::GUID;
@@ -244,21 +245,82 @@ pub async fn bounded_for<T>(
         .map_err(|_| BleError::TimedOut)??)
 }
 
-/// Run one GATT operation — start it, wait for it, read its result — on a short-lived helper
+/// Most Bluetooth operations allowed to be running on helper threads at once. Normally there's
+/// one; a stuck adapter can leave a few behind (each exits when Windows gives its operation up),
+/// and this keeps a long stall from piling up threads without limit.
+const MAX_HELPERS: usize = 16;
+
+/// Counts helper threads in flight against a limit.
+struct HelperGate {
+    in_flight: AtomicUsize,
+    max: usize,
+}
+
+/// One admitted helper; dropping it (when the helper finishes) frees its place.
+struct HelperPermit<'a>(&'a HelperGate);
+
+impl HelperGate {
+    const fn new(max: usize) -> Self {
+        Self {
+            in_flight: AtomicUsize::new(0),
+            max,
+        }
+    }
+
+    fn try_enter(&self) -> Option<HelperPermit<'_>> {
+        if self.in_flight.fetch_add(1, Ordering::SeqCst) >= self.max {
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(HelperPermit(self))
+    }
+}
+
+impl Drop for HelperPermit<'_> {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+static HELPERS: HelperGate = HelperGate::new(MAX_HELPERS);
+
+/// Run one Bluetooth operation — start it, wait for it, read its result — on a short-lived helper
 /// thread, and await that here, giving up (as timed out) after `limit`.
 ///
 /// Windows can block the *call that starts* an operation, not just the operation. Seen on hardware
 /// (2026-10-06): while the Bluetooth adapter was hung, a CCCD read held the actor's thread ~12 s,
 /// past its 10 s limit (a timer can't fire on a blocked thread), freezing everything else on it —
 /// tug's own heartbeat included, which then mistook the freeze for the PC sleeping. On a helper, the
-/// actor only awaits a channel, so the limit always holds. A helper stuck inside Windows exits once
-/// Windows finishes or fails the operation (its own ATT timeout, or the device being closed on a
-/// relink); the wedge watch stops tug issuing more while the adapter is stuck.
-async fn off_thread<T: Send + 'static>(limit: Duration, op: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+/// actor only awaits a channel, so the limit always holds.
+///
+/// A helper the actor gave up on stays blocked until Windows itself finishes or fails the
+/// operation, and nothing tug does is known to hurry that (closing the device on a relink isn't
+/// documented to cancel it). So at most MAX_HELPERS run at once: past that, new operations fail
+/// straight away as timed out, which the wedge watch counts like any other timeout.
+pub(crate) async fn off_thread<T: Send + 'static>(
+    limit: Duration,
+    op: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    run_gated(&HELPERS, limit, op).await
+}
+
+async fn run_gated<T: Send + 'static>(
+    gate: &'static HelperGate,
+    limit: Duration,
+    op: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let Some(permit) = gate.try_enter() else {
+        log::warn!(
+            "{} Bluetooth operations are still stuck in Windows; not starting another",
+            gate.max
+        );
+        return Err(BleError::TimedOut);
+    };
     let (tx, rx) = tokio::sync::oneshot::channel();
     std::thread::Builder::new()
         .name("tug-gatt-op".into())
         .spawn(move || {
+            let _permit = permit;
             // The receiver is gone if the actor already gave up: nothing to report to.
             let _ = tx.send(op());
         })
@@ -333,6 +395,40 @@ mod tests {
             started.elapsed() < Duration::from_secs(1),
             "not held by the stuck operation"
         );
+    }
+
+    #[test]
+    fn stuck_helpers_are_capped_and_their_places_come_back() {
+        static GATE: HelperGate = HelperGate::new(2);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = std::sync::Arc::new(std::sync::Mutex::new(release_rx));
+        // Two operations stuck in "Windows" fill the gate; the actor gives up on both.
+        for _ in 0..2 {
+            let rx = release_rx.clone();
+            let r: Result<()> = rt.block_on(run_gated(&GATE, Duration::from_millis(20), move || {
+                let _ = rx.lock().unwrap().recv();
+                Ok(())
+            }));
+            assert!(matches!(r, Err(BleError::TimedOut)));
+        }
+        // A third is refused at once rather than piling up another thread.
+        let started = std::time::Instant::now();
+        let r: Result<()> = rt.block_on(run_gated(&GATE, Duration::from_secs(5), || Ok(())));
+        assert!(matches!(r, Err(BleError::TimedOut)));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        // Once Windows lets them go, their places come back.
+        release_tx.send(()).unwrap();
+        release_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while GATE.in_flight.load(Ordering::SeqCst) > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let r = rt.block_on(run_gated(&GATE, Duration::from_secs(5), || Ok(3)));
+        assert_eq!(r.ok(), Some(3));
     }
 
     #[test]

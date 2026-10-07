@@ -15,7 +15,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use windows::Win32::Foundation::{ERROR_SUCCESS, HANDLE};
 use windows::Win32::System::Power::{PowerRegisterSuspendResumeNotification, DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS};
 use windows::Win32::System::WindowsProgramming::{QueryInterruptTime, QueryUnbiasedInterruptTime};
-use windows::Win32::UI::WindowsAndMessaging::{DEVICE_NOTIFY_CALLBACK, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND};
+use windows::Win32::UI::WindowsAndMessaging::{DEVICE_NOTIFY_CALLBACK, PBT_APMRESUMEAUTOMATIC};
 
 use super::Event;
 use crate::wake::{Beat, Clocks, WakeWatch};
@@ -24,7 +24,9 @@ use crate::wake::{Beat, Clocks, WakeWatch};
 static RESUMED: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "system" fn on_power_event(_context: *const c_void, kind: u32, _setting: *const c_void) -> u32 {
-    if kind == PBT_APMRESUMEAUTOMATIC || kind == PBT_APMRESUMESUSPEND {
+    // Only the automatic resume: Windows sends it on every resume. PBT_APMRESUMESUSPEND follows only
+    // once the user is active again, possibly minutes later, and would relink a link that's fine.
+    if kind == PBT_APMRESUMEAUTOMATIC {
         RESUMED.store(true, Ordering::SeqCst);
     }
     ERROR_SUCCESS.0

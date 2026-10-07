@@ -168,10 +168,12 @@ impl Actor {
     }
 
     pub(super) async fn open_link(&mut self, id: &str) -> Result<Link, BleError> {
-        let device = winrt::bounded_for(
-            winrt::DISCOVERY_TIMEOUT,
-            BluetoothLEDevice::FromIdAsync(&HSTRING::from(id))?,
-        )
+        // Off this thread, like the GATT operations: this runs right after a relink for a stalled
+        // adapter, when Windows is most likely to block the call itself.
+        let hid = HSTRING::from(id);
+        let device = winrt::off_thread(winrt::DISCOVERY_TIMEOUT, move || {
+            Ok(BluetoothLEDevice::FromIdAsync(&hid)?.join()?)
+        })
         .await?;
         self.gen += 1;
         let gen = self.gen;
@@ -206,16 +208,15 @@ impl Actor {
             }),
         )?;
         // Ask Windows to keep the link up and re-establish it when the phone returns.
-        let gatt_session = match winrt::bounded_for(
-            winrt::DISCOVERY_TIMEOUT,
-            GattSession::FromDeviceIdAsync(&device.BluetoothDeviceId()?)?,
-        )
+        let for_session = device.clone();
+        let gatt_session = match winrt::off_thread(winrt::DISCOVERY_TIMEOUT, move || {
+            let session = GattSession::FromDeviceIdAsync(&for_session.BluetoothDeviceId()?)?.join()?;
+            let _ = session.SetMaintainConnection(true);
+            Ok(session)
+        })
         .await
         {
-            Ok(s) => {
-                let _ = s.SetMaintainConnection(true);
-                Some(s)
-            }
+            Ok(s) => Some(s),
             Err(e) => {
                 log::warn!("GattSession unavailable: {e}");
                 None
@@ -299,6 +300,8 @@ impl Actor {
             return;
         }
         log::info!("iPhone link down");
+        // Timeouts from before a real outage say nothing about the link that comes back.
+        self.wedge.new_link();
         if let Some(l) = self.link.as_mut() {
             l.ancs = None;
             l.media = None;
