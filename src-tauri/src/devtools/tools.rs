@@ -18,7 +18,7 @@ use crate::ams::{PlaybackState, RemoteCommand};
 use crate::ble::Command;
 use crate::messages::{Direction, StoredMessage};
 use crate::state::{now_ms, ConnectionState};
-use crate::store::StoredNotification;
+use crate::store::{Store, StoredNotification};
 use crate::tugboat::session::SkipReason;
 
 /// Codes older than this aren't handed out (the Feed's Ctrl+Shift+C uses the same window).
@@ -89,8 +89,12 @@ pub(super) async fn run(
 ) -> Result<serde_json::Value, BridgeError> {
     match request {
         Request::LatestCode { copy } => latest_code(dt, copy).await,
-        Request::Search { query, limit, since_ms } => search(dt, &query, limit, since_ms),
-        Request::DevNotifications { since_ms, limit } => dev_notifications(dt, since_ms, limit),
+        Request::Search { query, limit, since_ms } => {
+            on_store(dt, move |store, live| search(store, live, &query, limit, since_ms)).await
+        }
+        Request::DevNotifications { since_ms, limit } => {
+            on_store(dt, move |store, live| dev_notifications(store, live, since_ms, limit)).await
+        }
         Request::ListFiles { limit, since_ms } => {
             let folder = tugboat_folder(dt)?;
             let list = tokio::task::spawn_blocking(move || files::list(&folder, limit as usize, since_ms))
@@ -117,11 +121,22 @@ pub(super) async fn run(
     }
 }
 
-async fn latest_code(dt: &DevTools, copy: bool) -> Result<serde_json::Value, BridgeError> {
-    let store = &dt.shared.store;
+/// SQLite reads run off the async threads, so a slow disk never holds up tug's runtime.
+async fn on_store<T: Send + 'static>(
+    dt: &DevTools,
+    f: impl FnOnce(&Store, Option<&str>) -> Result<T, BridgeError> + Send + 'static,
+) -> Result<T, BridgeError> {
+    let store = dt.shared.store.clone();
     let live = dt.shared.live_session();
-    let now = now_ms();
-    let since = now - CODE_MAX_AGE_MS;
+    tokio::task::spawn_blocking(move || f(&store, live.as_deref()))
+        .await
+        .map_err(internal)?
+}
+
+/// The newest code since since: (received at, code, from, app).
+type Found = (i64, String, String, String);
+
+fn newest_code(store: &Store, live: Option<&str>, since: i64) -> Result<Option<Found>, BridgeError> {
     let mut best: Option<(i64, String, String, String)> = None;
     let mut consider = |at: i64, text: &str, from: String, app: String| {
         if at < since || best.as_ref().is_some_and(|b| b.0 >= at) {
@@ -131,7 +146,7 @@ async fn latest_code(dt: &DevTools, copy: bool) -> Result<serde_json::Value, Bri
             best = Some((at, found.code, from, app));
         }
     };
-    for n in store.recent(SCAN, None, live.as_deref()).map_err(internal)? {
+    for n in store.recent(SCAN, None, live).map_err(internal)? {
         let text = if n.message.is_empty() { &n.subtitle } else { &n.message };
         consider(n.received_at, text, n.title.clone(), notification_app(&n));
     }
@@ -140,6 +155,13 @@ async fn latest_code(dt: &DevTools, copy: bool) -> Result<serde_json::Value, Bri
             consider(m.received_at, &m.body, message_from(&m), "Messages".into());
         }
     }
+    Ok(best)
+}
+
+async fn latest_code(dt: &DevTools, copy: bool) -> Result<serde_json::Value, BridgeError> {
+    let now = now_ms();
+    let since = now - CODE_MAX_AGE_MS;
+    let best = on_store(dt, move |store, live| newest_code(store, live, since)).await?;
     let Some((at, code, from, app)) = best else {
         return Err(BridgeError::new(
             ErrorCode::NotFound,
@@ -169,9 +191,13 @@ async fn latest_code(dt: &DevTools, copy: bool) -> Result<serde_json::Value, Bri
     })
 }
 
-fn search(dt: &DevTools, query: &str, limit: u32, since_ms: Option<i64>) -> Result<serde_json::Value, BridgeError> {
-    let store = &dt.shared.store;
-    let live = dt.shared.live_session();
+fn search(
+    store: &Store,
+    live: Option<&str>,
+    query: &str,
+    limit: u32,
+    since_ms: Option<i64>,
+) -> Result<serde_json::Value, BridgeError> {
     let since = since_ms.unwrap_or(i64::MIN);
     let mut hits: Vec<(i64, MessageHit)> = store
         .search_messages(query, limit)
@@ -182,7 +208,7 @@ fn search(dt: &DevTools, query: &str, limit: u32, since_ms: Option<i64>) -> Resu
         .collect();
     hits.extend(
         store
-            .search(query, limit, live.as_deref())
+            .search(query, limit, live)
             .map_err(internal)?
             .iter()
             .filter(|n| n.received_at >= since)
@@ -193,12 +219,14 @@ fn search(dt: &DevTools, query: &str, limit: u32, since_ms: Option<i64>) -> Resu
     json(hits.into_iter().map(|(_, h)| h).collect::<Vec<_>>())
 }
 
-fn dev_notifications(dt: &DevTools, since_ms: i64, limit: u32) -> Result<serde_json::Value, BridgeError> {
-    let live = dt.shared.live_session();
-    let hits: Vec<MessageHit> = dt
-        .shared
-        .store
-        .recent(SCAN, None, live.as_deref())
+fn dev_notifications(
+    store: &Store,
+    live: Option<&str>,
+    since_ms: i64,
+    limit: u32,
+) -> Result<serde_json::Value, BridgeError> {
+    let hits: Vec<MessageHit> = store
+        .recent(SCAN, None, live)
         .map_err(internal)?
         .iter()
         .filter(|n| n.received_at >= since_ms)
@@ -301,16 +329,20 @@ async fn send_text(
             "Texts aren't connected in tug right now, so nothing can be sent.",
         ));
     }
-    let store = &dt.shared.store;
-    let contacts = store.contacts().map_err(internal)?;
-    // Addresses with texts, newest first: between one person's numbers, the one last texted.
-    let mut recent: Vec<String> = Vec::new();
-    for m in store.recent_messages(SCAN).map_err(internal)?.iter().rev() {
-        if !recent.contains(&m.address) {
-            recent.push(m.address.clone());
+    let query = to.to_string();
+    let resolved = on_store(dt, move |store, _| {
+        let contacts = store.contacts().map_err(internal)?;
+        // Addresses with texts, newest first: between one person's numbers, the one last texted.
+        let mut recent: Vec<String> = Vec::new();
+        for m in store.recent_messages(SCAN).map_err(internal)?.iter().rev() {
+            if !recent.contains(&m.address) {
+                recent.push(m.address.clone());
+            }
         }
-    }
-    let (name, address) = match resolve(to, &contacts, &recent) {
+        Ok(resolve(&query, &contacts, &recent))
+    })
+    .await?;
+    let (name, address) = match resolved {
         Recipient::One { name, address } => (name, address),
         Recipient::Several(names) => {
             return Err(BridgeError::new(
