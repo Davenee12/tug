@@ -20,6 +20,10 @@ pub const UNSHARED_RETRY: Duration = Duration::from_secs(30);
 pub const WATCHING_RETRY: Duration = Duration::from_secs(10);
 /// Once shared: look for added or renamed contacts this often (a pull takes about a second).
 pub const RESYNC: Duration = Duration::from_secs(5 * 60);
+/// While sharing: how soon to look again, so turning Sync Contacts off on the phone shows in tug
+/// within about a minute (10 s while the switches are on screen). One quick names-only pull; the
+/// app only saves and refreshes names when the phonebook actually changed.
+pub const SHARED_RECHECK: Duration = Duration::from_secs(60);
 /// A pull that failed outright (timed out, link dropped): try again after this. Not the empty
 /// answer of a switch that's off — that's `UNSHARED_RETRY`.
 pub const FAILED_RETRY: Duration = Duration::from_secs(2 * 60);
@@ -89,7 +93,7 @@ impl ContactsWatch {
                 self.off = false;
                 self.empty_in_a_row = 0;
                 Outcome {
-                    next: RESYNC,
+                    next: if watching { WATCHING_RETRY } else { SHARED_RECHECK },
                     transition,
                     log_empty: false,
                 }
@@ -166,18 +170,20 @@ mod tests {
     }
 
     #[test]
-    fn sharing_resyncs_every_5_minutes_and_turns_on_from_off_in_one_pull() {
+    fn sharing_rechecks_every_minute_and_turns_on_from_off_in_one_pull() {
         let mut w = ContactsWatch::default();
         w.record(Pull::Empty, false);
         w.record(Pull::Empty, false);
         assert!(w.off());
         let on = w.record(Pull::Shared, false);
         assert_eq!(on.transition, Some(Transition::On));
-        assert_eq!(on.next, Duration::from_secs(5 * 60));
+        assert_eq!(on.next, SHARED_RECHECK);
+        // With the switches on screen it looks every 10 s, so turning it off shows quickly too.
+        assert_eq!(w.record(Pull::Shared, true).next, WATCHING_RETRY);
         assert!(w.shared() && !w.off());
         let again = w.record(Pull::Shared, false);
         assert_eq!(again.transition, None, "on → on logs nothing");
-        assert_eq!(again.next, RESYNC);
+        assert_eq!(again.next, SHARED_RECHECK);
     }
 
     #[test]

@@ -242,6 +242,9 @@ mod worker {
         /// decides when to ask again. Shared means an empty call list really is a cleared history.
         contacts: ContactsWatch,
         last_contacts_pull: Option<Instant>,
+        /// A fingerprint of the last phonebook saved: frequent re-checks only save, re-learn names
+        /// and refresh the window when something actually changed.
+        phonebook_sig: Option<u64>,
         backfilled: bool,
         health: Health,
         /// The phone Windows has paired for texts, found even when connecting to it fails.
@@ -292,6 +295,7 @@ mod worker {
             next_contacts_sync: Instant::now(),
             contacts: ContactsWatch::default(),
             last_contacts_pull: None,
+            phonebook_sig: None,
             backfilled: false,
             health: Health::default(),
             texts_device: None,
@@ -335,11 +339,9 @@ mod worker {
                     None => break,
                     Some(MapCommand::Refresh) => w.refresh().await,
                     Some(MapCommand::CheckContacts) => {
-                        // Only while Sync Contacts isn't confirmed on: once it's sharing, the 5-minute
-                        // resync is enough, and a pull on every focus would hold up sending.
-                        if !w.contacts.shared() {
-                            w.contacts_due_now();
-                        }
+                        // Either way: the user may have just turned Sync Contacts on OR off. Pulls are
+                        // spaced at least CONTACTS_CHECK_GAP apart, so focus + visibility make one.
+                        w.contacts_due_now();
                         w.refresh().await;
                     }
                     // Wake for it: the next refresh pulls the calls once they're due.
@@ -459,6 +461,7 @@ mod worker {
                 // A different phone: nothing it shared (or didn't) carries over.
                 if self.device_id.as_deref().is_some_and(|id| id != device.id) {
                     self.contacts.forget();
+                    self.phonebook_sig = None;
                     self.publish_contacts();
                 }
                 // A fresh texts connection: check Sync Contacts straight away, not at the next due
@@ -756,6 +759,21 @@ mod worker {
                             rows.push((normalize(n), e.name.clone()));
                         }
                     }
+                    let sig = {
+                        use std::hash::{Hash, Hasher};
+                        let mut sorted = rows.clone();
+                        sorted.sort();
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        sorted.hash(&mut h);
+                        h.finish()
+                    };
+                    let first_share = self.phonebook_sig.is_none() || outcome.transition == Some(Transition::On);
+                    if !first_share && self.phonebook_sig == Some(sig) {
+                        // Same phonebook as last time: the check did its job (the switch is on).
+                        self.shared.update_status(|s| s.contacts_error = None);
+                        return;
+                    }
+                    self.phonebook_sig = Some(sig);
                     match self.shared.store.save_phonebook(&rows) {
                         Ok(n) => {
                             log::info!("contacts synced: {} people, {n} numbers", entries.len());
@@ -771,7 +789,9 @@ mod worker {
                     }
                     self.shared.update_status(|s| s.contacts_error = None);
                     // Recent calls sit behind the same switch: if it just came on, they're there too.
-                    self.next_calls_sync = Instant::now();
+                    if first_share {
+                        self.next_calls_sync = Instant::now();
+                    }
                     // Faces come from a slower WITH-PHOTO pull on its own PBAP link, off this worker
                     // so texts keep flowing; start it now that the contact rows exist (at most daily).
                     self.maybe_sync_photos();
@@ -954,6 +974,7 @@ mod worker {
                 // Forgotten (or never chosen): nothing about Sync Contacts carries over.
                 if self.contacts != ContactsWatch::default() {
                     self.contacts.forget();
+                    self.phonebook_sig = None;
                     self.publish_contacts();
                 }
                 return;
