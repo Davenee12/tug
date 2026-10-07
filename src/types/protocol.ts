@@ -40,6 +40,8 @@ export interface DeviceStatus {
   awaitingUnlock: boolean;
   /** tug is rebuilding the link on its own (Bluetooth stalled, the PC woke): say "Reconnecting…", not "Waiting". */
   reconnecting: boolean;
+  /** The iPhone is away (out of range): steady until it connects again, not flipping with each retry. */
+  away?: boolean;
   /** Why message access isn't available, when the user can fix it. */
   messagesError: string | null;
   /** Why the phone's contacts aren't available, when the user can fix it. */
