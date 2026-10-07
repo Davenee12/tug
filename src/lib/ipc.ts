@@ -9,8 +9,8 @@ import type {
   SearchResults,
   SmsMessage,
   DeviceStatus,
-  DropSkipped,
-  DropStatus,
+  TugboatSkipped,
+  TugboatStatus,
   DiscoveredDevice,
   MediaCommand,
   NowPlaying,
@@ -124,20 +124,20 @@ export const api = {
   spotifyPlaylistItems: (id: string) => invoke<SpotifyTrack[]>("spotify_playlist_items", { id }),
   spotifyAddToPlaylist: (playlistId: string, trackUri: string) =>
     invoke<void>("spotify_add_to_playlist", { playlistId, trackUri }),
-  // --- tug Drop ---
-  /** Open Drop (a fresh code), or get the session already open. */
-  dropStart: () => invoke<DropStatus>("drop_start"),
-  dropStop: () => invoke<void>("drop_stop"),
-  dropStatus: () => invoke<DropStatus>("drop_status"),
-  /** Offer files (paths) to the phone, opening Drop if needed; returns the ones skipped. */
-  dropOfferFiles: (paths: string[]) => invoke<DropSkipped[]>("drop_offer_files", { paths }),
+  // --- Tugboat ---
+  /** Open Tugboat (a fresh code), or get the session already open. */
+  tugboatStart: () => invoke<TugboatStatus>("tugboat_start"),
+  tugboatStop: () => invoke<void>("tugboat_stop"),
+  tugboatStatus: () => invoke<TugboatStatus>("tugboat_status"),
+  /** Offer files (paths) to the phone, opening Tugboat if needed; returns the ones skipped. */
+  tugboatOfferFiles: (paths: string[]) => invoke<TugboatSkipped[]>("tugboat_offer_files", { paths }),
   /** Windows' file picker, then offer what was picked. */
-  dropPickFiles: () => invoke<DropSkipped[]>("drop_pick_files"),
-  dropRemoveOffer: (id: string) => invoke<void>("drop_remove_offer", { id }),
+  tugboatPickFiles: () => invoke<TugboatSkipped[]>("tugboat_pick_files"),
+  tugboatRemoveOffer: (id: string) => invoke<void>("tugboat_remove_offer", { id }),
   /** Text for the phone to copy (empty clears it). */
-  dropSendText: (text: string) => invoke<void>("drop_send_text", { text }),
-  /** Open the tug Drop folder, or select a file Drop saved. */
-  dropOpenFolder: (path: string | null) => invoke<void>("drop_open_folder", { path }),
+  tugboatSendText: (text: string) => invoke<void>("tugboat_send_text", { text }),
+  /** Open the Tugboat folder, or select a file Tugboat saved. */
+  tugboatOpenFolder: (path: string | null) => invoke<void>("tugboat_open_folder", { path }),
 };
 
 interface EventPayloads {
@@ -154,7 +154,7 @@ interface EventPayloads {
   "open-latest-conversation": null;
   calls: CallRecord[];
   "toast-pressed": ToastPressed;
-  "drop-status": DropStatus;
+  "tugboat-status": TugboatStatus;
 }
 
 export function on<E extends keyof EventPayloads>(

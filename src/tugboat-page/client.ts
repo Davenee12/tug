@@ -26,14 +26,14 @@ interface UploadReply {
 }
 
 /** A failed request: an error code from the PC, or "network" when it couldn't be reached. */
-export class DropError extends Error {
+export class TugboatError extends Error {
   constructor(public code: string) {
     super(code);
   }
 }
 
 /** What the page needs from the PC (a real client, or the dev preview's stand-in). */
-export interface DropApi {
+export interface TugboatApi {
   state(): Promise<PageState>;
   sendText(text: string): Promise<void>;
   /** Send a file; resolves with the name it was saved under on the PC. */
@@ -77,24 +77,24 @@ function whenVisible(): Promise<void> {
   });
 }
 
-export class DropClient implements DropApi {
+export class TugboatClient implements TugboatApi {
   private last: bigint;
 
   constructor(
     private keys: Keys,
     private client: string,
   ) {
-    const stored = load("tugdrop.seq");
+    const stored = load("tugboat.seq");
     this.last = stored && /^\d+$/.test(stored) ? BigInt(stored) : 0n;
   }
 
   private seq(): bigint {
     this.last = nextSeq(this.last, Date.now());
-    save("tugdrop.seq", this.last.toString());
+    save("tugboat.seq", this.last.toString());
     return this.last;
   }
 
-  /** One signed request. Throws DropError("network") if the PC can't be reached. */
+  /** One signed request. Throws TugboatError("network") if the PC can't be reached. */
   private async request(method: string, path: string, body?: Uint8Array, seq = this.seq()): Promise<Uint8Array> {
     let res: Response;
     try {
@@ -105,7 +105,7 @@ export class DropClient implements DropApi {
         cache: "no-store",
       });
     } catch {
-      throw new DropError("network");
+      throw new TugboatError("network");
     }
     if (!res.ok) {
       let code = "error";
@@ -114,7 +114,7 @@ export class DropClient implements DropApi {
       } catch {
         /* no body */
       }
-      throw new DropError(code);
+      throw new TugboatError(code);
     }
     return new Uint8Array(await res.arrayBuffer());
   }
@@ -147,7 +147,7 @@ export class DropClient implements DropApi {
     // few tries, then the file is marked failed instead of retrying silently forever.
     let otherFailures = 0;
     for (;;) {
-      if (signal.aborted) throw new DropError("cancelled");
+      if (signal.aborted) throw new TugboatError("cancelled");
       try {
         // Ask what's already there (nothing, the first time) and send the rest.
         const reply = await this.call<UploadReply>("POST", `/api/up/${id}`, { name: file.name, size: file.size, chunkSize: CHUNK });
@@ -166,9 +166,9 @@ export class DropClient implements DropApi {
         const done = await this.call<{ savedAs: string }>("POST", `/api/finish/${id}`);
         return done.savedAs;
       } catch (e) {
-        const code = e instanceof DropError ? e.code : "error";
-        if (signal.aborted || isFatal(code)) throw e instanceof DropError ? e : new DropError(code);
-        if (code !== "network" && code !== "stale" && ++otherFailures > 5) throw new DropError(code);
+        const code = e instanceof TugboatError ? e.code : "error";
+        if (signal.aborted || isFatal(code)) throw e instanceof TugboatError ? e : new TugboatError(code);
+        if (code !== "network" && code !== "stale" && ++otherFailures > 5) throw new TugboatError(code);
         // A dropped connection (the phone locked, Safari paused us): wait, then resume.
         await whenVisible();
         await sleep(retryDelay(attempt++));
@@ -180,12 +180,12 @@ export class DropClient implements DropApi {
     try {
       await this.request("DELETE", `/api/up/${this.idFor(file)}`);
     } catch {
-      /* best effort: the PC cleans up when Drop closes anyway */
+      /* best effort: the PC cleans up when Tugboat closes anyway */
     }
   }
 
   async download(offer: PageOffer, onProgress: (got: number) => void): Promise<Blob> {
-    if (offer.size > MAX_DOWNLOAD) throw new DropError("too-big");
+    if (offer.size > MAX_DOWNLOAD) throw new TugboatError("too-big");
     // One small Blob per chunk, so each decrypted chunk can be let go as soon as it's wrapped
     // (and the final Blob just stitches them) instead of holding every chunk plus a full copy.
     const parts: Blob[] = [];
@@ -201,8 +201,8 @@ export class DropClient implements DropApi {
           onProgress(got);
           break;
         } catch (e) {
-          const code = e instanceof DropError ? e.code : "error";
-          if (isFatal(code) || attempt >= 6) throw e instanceof DropError ? e : new DropError(code);
+          const code = e instanceof TugboatError ? e.code : "error";
+          if (isFatal(code) || attempt >= 6) throw e instanceof TugboatError ? e : new TugboatError(code);
           await whenVisible();
           await sleep(retryDelay(attempt++));
         }
@@ -218,7 +218,7 @@ async function pool<T>(items: T[], limit: number, signal: AbortSignal, work: (it
   let failed: unknown = null;
   const lane = async () => {
     while (next < items.length && failed === null) {
-      if (signal.aborted) throw new DropError("cancelled");
+      if (signal.aborted) throw new TugboatError("cancelled");
       const item = items[next++];
       try {
         await work(item);
@@ -233,16 +233,16 @@ async function pool<T>(items: T[], limit: number, signal: AbortSignal, work: (it
 
 const CLIENT_ID = /^[A-Za-z0-9_-]{16,43}$/;
 
-/** The client id this browser uses for Drop on this PC address (shared by tabs, so a re-scan works). */
+/** The client id this browser uses for Tugboat on this PC address (shared by tabs, so a re-scan works). */
 export function clientId(make: () => string): string {
-  const stored = load("tugdrop.client");
+  const stored = load("tugboat.client");
   if (stored && CLIENT_ID.test(stored)) return stored;
   const id = make();
-  save("tugdrop.client", id);
+  save("tugboat.client", id);
   return id;
 }
 
 /** Use the client id the PC put in the link (this phone's, carried across a network change). */
 export function adoptClientId(id: string) {
-  if (CLIENT_ID.test(id)) save("tugdrop.client", id);
+  if (CLIENT_ID.test(id)) save("tugboat.client", id);
 }

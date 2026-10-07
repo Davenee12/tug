@@ -1,14 +1,14 @@
-// tug Drop on the desktop side: the small decisions the Drop panel makes, kept pure for tests.
+// Tugboat on the desktop side: the small decisions the Tugboat panel makes, kept pure for tests.
 
-import type { DropSkipped, DropStatus } from "../types/protocol";
+import type { TugboatSkipped, TugboatStatus } from "../types/protocol";
 
-export { formatSize } from "../drop-page/chunks";
+export { formatSize } from "../tugboat-page/chunks";
 
 /** How long the QR code shows with no phone before the panel offers connection help. */
 export const HELP_AFTER_MS = 30_000;
 
-/** Drop as it is before it's opened (and after it closes). */
-export const DROP_OFF: DropStatus = {
+/** Tugboat as it is before it's opened (and after it closes). */
+export const TUGBOAT_OFF: TugboatStatus = {
   phase: "off",
   url: null,
   address: null,
@@ -24,17 +24,17 @@ export const DROP_OFF: DropStatus = {
 };
 
 /** No phone has turned up ~30 s after the code appeared: time for "Can't connect?" help. */
-export function showConnectHelp(s: Pick<DropStatus, "phase">, shownAt: number | null, now: number): boolean {
+export function showConnectHelp(s: Pick<TugboatStatus, "phase">, shownAt: number | null, now: number): boolean {
   return s.phase === "waiting" && shownAt !== null && now - shownAt >= HELP_AFTER_MS;
 }
 
 /** Files are still arriving from the phone (closing would cut them off). */
-export function transferring(s: Pick<DropStatus, "incoming">): boolean {
+export function transferring(s: Pick<TugboatStatus, "incoming">): boolean {
   return s.incoming.some((i) => !i.done);
 }
 
 /** One plain sentence for files that couldn't be offered to the phone, or null if all were. */
-export function skippedMessage(skipped: DropSkipped[]): string | null {
+export function skippedMessage(skipped: TugboatSkipped[]): string | null {
   if (!skipped.length) return null;
   if (skipped.length === 1) {
     const { name, reason } = skipped[0];
@@ -42,9 +42,9 @@ export function skippedMessage(skipped: DropSkipped[]): string | null {
       case "tooBig":
         return `“${name}” is over 1 GB, too big to send to a phone's browser.`;
       case "folder":
-        return `“${name}” is a folder. Drop the files inside it instead.`;
+        return `“${name}” is a folder. Send the files inside it instead.`;
       case "tooMany":
-        return `“${name}” wasn't added: that's as many files as Drop can offer at once.`;
+        return `“${name}” wasn't added: that's as many files as Tugboat can offer at once.`;
       default:
         return `Couldn't read “${name}”.`;
     }

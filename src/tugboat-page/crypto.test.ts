@@ -5,7 +5,7 @@ import { ad, authHeader, b64, deriveKeys, fileId, open, requestMac, seal, unb64,
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
-describe("shared test vector (also asserted by cargo test in src-tauri/src/drop/crypto.rs)", () => {
+describe("shared test vector (also asserted by cargo test in src-tauri/src/tugboat/crypto.rs)", () => {
   const keys = deriveKeys(hexToBytes(vector.secret));
 
   it("derives the same keys", () => {
@@ -22,7 +22,7 @@ describe("shared test vector (also asserted by cargo test in src-tauri/src/drop/
   it("signs requests the same way", () => {
     const m = vector.mac;
     expect(b64(requestMac(keys, m.client, BigInt(m.seq), m.method, m.path))).toBe(m.mac);
-    expect(authHeader(keys, m.client, BigInt(m.seq), m.method, m.path)).toBe(`TugDrop ${m.client}.${m.seq}.${m.mac}`);
+    expect(authHeader(keys, m.client, BigInt(m.seq), m.method, m.path)).toBe(`Tugboat ${m.client}.${m.seq}.${m.mac}`);
   });
 
   it("names files stably", () => {

@@ -65,13 +65,13 @@ export function isFatal(code: string): boolean {
 export function messageFor(code: string): string {
   switch (code) {
     case "network":
-      return "Can't reach your PC. Make sure Drop is still open in tug and you're on the same Wi-Fi.";
+      return "Can't reach your PC. Make sure Tugboat is still open in tug and you're on the same Wi-Fi.";
     case "closed":
-      return "Drop was closed on your PC. Open Drop in tug and scan the new code.";
+      return "Tugboat was closed on your PC. Open Tugboat in tug and scan the new code.";
     case "unauthorized":
-      return "This link has expired. Open Drop in tug and scan the code again.";
+      return "This link has expired. Open Tugboat in tug and scan the code again.";
     case "in-use":
-      return "Drop is already open on another device. Close Drop in tug and open it again for a new code.";
+      return "Tugboat is already open on another device. Close Tugboat in tug and open it again for a new code.";
     case "too-big":
       return "This file is too big to send.";
     case "no-space":

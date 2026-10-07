@@ -1,5 +1,5 @@
-//! The HTTP side of Drop: serves the phone page and the small API it talks to. Plain HTTP on one
-//! LAN address while Drop is open; every `/api` request is authenticated (`auth.rs`) and every
+//! The HTTP side of Tugboat: serves the phone page and the small API it talks to. Plain HTTP on one
+//! LAN address while Tugboat is open; every `/api` request is authenticated (`auth.rs`) and every
 //! body is sealed (`crypto.rs`), so the network only ever sees ciphertext and chunk numbers.
 
 use std::future::Future;
@@ -50,7 +50,7 @@ pub async fn serve(listener: TcpListener, session: Arc<Session>, shutdown: impl 
         .with_graceful_shutdown(shutdown)
         .await
     {
-        log::warn!("drop: server stopped: {e}");
+        log::warn!("tugboat: server stopped: {e}");
     }
 }
 
@@ -103,7 +103,7 @@ async fn index(State(s): Shared) -> Response {
     if s.is_closed() {
         return error(ApiError::Closed);
     }
-    // Not counted as activity: any device on the network could fetch the page and keep Drop on.
+    // Not counted as activity: any device on the network could fetch the page and keep Tugboat on.
     let Some((html, kind)) = page::asset("/index.html") else {
         return StatusCode::NOT_FOUND.into_response();
     };

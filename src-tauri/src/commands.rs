@@ -7,8 +7,6 @@ use tauri::State;
 
 use crate::ams::{NowPlaying, RemoteCommand, RepeatMode};
 use crate::ble::{BleHandle, Command};
-use crate::drop::session::Skipped;
-use crate::drop::{DropService, DropStatus};
 use crate::map::calls::CallRecord;
 use crate::messages::{Contact, StoredMessage};
 use crate::spotify::{
@@ -17,13 +15,15 @@ use crate::spotify::{
 };
 use crate::state::{DeviceStatus, Shared};
 use crate::store::StoredNotification;
+use crate::tugboat::session::Skipped;
+use crate::tugboat::{TugboatService, TugboatStatus};
 use serde::Serialize;
 
 pub struct AppState {
     pub shared: Arc<Shared>,
     pub ble: BleHandle,
     pub spotify: Arc<Spotify>,
-    pub drop: DropService,
+    pub tugboat: TugboatService,
 }
 
 type Result<T> = std::result::Result<T, String>;
@@ -794,40 +794,40 @@ pub fn log_frontend_error(kind: String, name: String, message: String, source: S
     }
 }
 
-// --- tug Drop (phone <-> PC over the local Wi-Fi; see drop/mod.rs) ---
+// --- Tugboat (phone <-> PC over the local Wi-Fi; see tugboat/mod.rs) ---
 
-/// Open Drop: a fresh secret and port, and the QR code to scan. Returns the session already
+/// Open Tugboat: a fresh secret and port, and the QR code to scan. Returns the session already
 /// open if there is one.
 #[tauri::command]
-pub async fn drop_start(state: State<'_, AppState>) -> Result<DropStatus> {
-    state.drop.start().await
+pub async fn tugboat_start(state: State<'_, AppState>) -> Result<TugboatStatus> {
+    state.tugboat.start().await
 }
 
-/// Close Drop: stop listening, invalidate the secret, remove unfinished uploads.
+/// Close Tugboat: stop listening, invalidate the secret, remove unfinished uploads.
 #[tauri::command]
-pub async fn drop_stop(state: State<'_, AppState>) -> Result<()> {
-    state.drop.stop(None).await;
+pub async fn tugboat_stop(state: State<'_, AppState>) -> Result<()> {
+    state.tugboat.stop(None).await;
     Ok(())
 }
 
 #[tauri::command]
-pub fn drop_status(state: State<'_, AppState>) -> DropStatus {
-    state.drop.status()
+pub fn tugboat_status(state: State<'_, AppState>) -> TugboatStatus {
+    state.tugboat.status()
 }
 
-/// Offer files to the phone (dragged onto tug), opening Drop first if needed. Returns the ones
+/// Offer files to the phone (dragged onto tug), opening Tugboat first if needed. Returns the ones
 /// that couldn't be offered (folders, over 1 GB, unreadable).
 #[tauri::command]
-pub async fn drop_offer_files(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec<Skipped>> {
+pub async fn tugboat_offer_files(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec<Skipped>> {
     state
-        .drop
+        .tugboat
         .offer(paths.into_iter().map(std::path::PathBuf::from).collect())
         .await
 }
 
-/// "Choose files" in the Drop panel: Windows' file picker, then offer what was picked.
+/// "Choose files" in the Tugboat panel: Windows' file picker, then offer what was picked.
 #[tauri::command]
-pub async fn drop_pick_files(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<Skipped>> {
+pub async fn tugboat_pick_files(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<Skipped>> {
     use tauri_plugin_dialog::DialogExt;
     let picked = tauri::async_runtime::spawn_blocking(move || app.dialog().file().blocking_pick_files())
         .await
@@ -840,24 +840,24 @@ pub async fn drop_pick_files(app: tauri::AppHandle, state: State<'_, AppState>) 
     if paths.is_empty() {
         return Ok(Vec::new());
     }
-    state.drop.offer(paths).await
+    state.tugboat.offer(paths).await
 }
 
 #[tauri::command]
-pub fn drop_remove_offer(state: State<'_, AppState>, id: String) {
-    state.drop.remove_offer(&id);
+pub fn tugboat_remove_offer(state: State<'_, AppState>, id: String) {
+    state.tugboat.remove_offer(&id);
 }
 
 /// Text for the phone to copy (empty clears it).
 #[tauri::command]
-pub fn drop_send_text(state: State<'_, AppState>, text: String) -> Result<()> {
-    state.drop.send_text(&text)
+pub fn tugboat_send_text(state: State<'_, AppState>, text: String) -> Result<()> {
+    state.tugboat.send_text(&text)
 }
 
-/// Open the tug Drop folder, or select one file Drop saved this session.
+/// Open the Tugboat folder, or select one file Tugboat saved this session.
 #[tauri::command]
-pub fn drop_open_folder(state: State<'_, AppState>, path: Option<String>) -> Result<()> {
-    state.drop.open_folder(path.as_deref())
+pub fn tugboat_open_folder(state: State<'_, AppState>, path: Option<String>) -> Result<()> {
+    state.tugboat.open_folder(path.as_deref())
 }
 
 #[cfg(test)]

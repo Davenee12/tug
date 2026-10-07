@@ -4,17 +4,17 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { Check, Copy, Download, FileUp, Image as ImageIcon, LoaderCircle, Send, WifiOff, X } from "lucide-vue-next";
 import TugMark from "../components/TugMark.vue";
-import { DropError, type DropApi, type PageOffer, type PageState } from "./client";
+import { TugboatError, type TugboatApi, type PageOffer, type PageState } from "./client";
 import { MAX_DOWNLOAD, MAX_UPLOAD, formatSize, isFatal, messageFor } from "./chunks";
 import { copyText } from "./copy";
 
-const props = defineProps<{ api: DropApi | null }>();
+const props = defineProps<{ api: TugboatApi | null }>();
 
 const POLL_MS = 2000;
 
 type Connection = "connecting" | "ok" | "network";
 const connection = ref<Connection>("connecting");
-/** A problem that ends the page (Drop closed, link expired, in use elsewhere). */
+/** A problem that ends the page (Tugboat closed, link expired, in use elsewhere). */
 const fatal = ref<string | null>(props.api ? null : "no-secret");
 
 // --- Polling the PC for files on offer and text ---
@@ -33,7 +33,7 @@ async function poll() {
     pcText.value = s.text;
     connection.value = "ok";
   } catch (e) {
-    const code = e instanceof DropError ? e.code : "network";
+    const code = e instanceof TugboatError ? e.code : "network";
     if (isFatal(code) && code !== "too-big" && code !== "no-space") fatal.value = code;
     else connection.value = "network";
   } finally {
@@ -105,7 +105,7 @@ async function pump() {
         u.state = "saved";
       } catch (e) {
         if (u.ctrl.signal.aborted) continue;
-        const code = e instanceof DropError ? e.code : "error";
+        const code = e instanceof TugboatError ? e.code : "error";
         u.state = "failed";
         u.error = messageFor(code);
         if (["closed", "unauthorized", "in-use"].includes(code)) fatal.value = code;
@@ -137,7 +137,7 @@ async function sendText() {
     draft.value = "";
     textState.value = "sent";
   } catch (e) {
-    const code = e instanceof DropError ? e.code : "error";
+    const code = e instanceof TugboatError ? e.code : "error";
     textState.value = "failed";
     if (["closed", "unauthorized", "in-use"].includes(code)) fatal.value = code;
   }
@@ -171,13 +171,13 @@ async function fetchOffer(o: PageOffer) {
     const blob = await props.api.download(o, (got) => (downloads[o.id].got = got));
     downloads[o.id] = { state: "ready", got: o.size, url: URL.createObjectURL(blob) };
   } catch (e) {
-    const code = e instanceof DropError ? e.code : "error";
+    const code = e instanceof TugboatError ? e.code : "error";
     downloads[o.id] = { state: "failed", got: 0, error: messageFor(code) };
   }
 }
 
 const fatalMessage = computed(() =>
-  fatal.value === "no-secret" ? "Open this page by scanning the code in Drop, in tug on your PC." : messageFor(fatal.value ?? ""),
+  fatal.value === "no-secret" ? "Open this page by scanning the Tugboat code in tug on your PC." : messageFor(fatal.value ?? ""),
 );
 </script>
 
@@ -185,7 +185,7 @@ const fatalMessage = computed(() =>
   <div class="mx-auto flex min-h-dvh max-w-[560px] flex-col px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
     <header class="flex items-center gap-2.5">
       <TugMark :size="30" class="text-ink" />
-      <h1 class="headline text-[30px] leading-none">tug Drop</h1>
+      <h1 class="headline text-[30px] leading-none">Tugboat</h1>
       <span
         v-if="!fatal"
         class="ml-auto inline-flex items-center gap-1.5 rounded-full bg-card px-3 py-1 text-[13px] font-medium text-body"
@@ -202,7 +202,7 @@ const fatalMessage = computed(() =>
     </header>
     <p class="mt-2 text-[14px] text-muted">Private to your Wi-Fi, encrypted.</p>
 
-    <!-- Ended: Drop closed, link expired, or in use elsewhere. -->
+    <!-- Ended: Tugboat closed, link expired, or in use elsewhere. -->
     <div v-if="fatal" class="card mt-8 flex flex-col items-center gap-3 px-6 py-10 text-center">
       <WifiOff :size="28" class="text-muted" />
       <p class="text-[17px] text-ink">{{ fatalMessage }}</p>

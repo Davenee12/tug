@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { DROP_OFF, HELP_AFTER_MS, percent, showConnectHelp, skippedMessage, transferring } from "./drop";
+import { TUGBOAT_OFF, HELP_AFTER_MS, percent, showConnectHelp, skippedMessage, transferring } from "./tugboat";
 
-describe("Drop panel decisions", () => {
+describe("Tugboat panel decisions", () => {
   it("offers connection help only after 30 s with no phone", () => {
     const waiting = { phase: "waiting" as const };
     expect(showConnectHelp(waiting, 1000, 1000 + HELP_AFTER_MS - 1)).toBe(false);
@@ -11,7 +11,7 @@ describe("Drop panel decisions", () => {
   });
 
   it("knows when files are still arriving", () => {
-    expect(transferring(DROP_OFF)).toBe(false);
+    expect(transferring(TUGBOAT_OFF)).toBe(false);
     const file = { id: "a", name: "a.jpg", size: 10, received: 4, done: false, path: null, at: 0 };
     expect(transferring({ incoming: [file] })).toBe(true);
     expect(transferring({ incoming: [{ ...file, received: 10, done: true }] })).toBe(false);

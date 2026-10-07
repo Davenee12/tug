@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// tug Drop: a QR code the iPhone's camera opens as a small tug page in Safari. Files and text go
-// both ways over the home Wi-Fi while this is open; closing it switches Drop off.
+// Tugboat: a QR code the iPhone's camera opens as a small tug page in Safari. Files and text go
+// both ways over the home Wi-Fi while this is open; closing it switches Tugboat off.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   ArrowDownToLine,
@@ -17,14 +17,14 @@ import {
   X,
 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { useDropStore } from "../stores/drop";
+import { useTugboatStore } from "../stores/tugboat";
 import { useFocusTrap } from "../lib/focusTrap";
 import { copyText } from "../lib/clipboard";
-import { formatSize, percent, showConnectHelp, skippedMessage, transferring } from "../lib/drop";
+import { formatSize, percent, showConnectHelp, skippedMessage, transferring } from "../lib/tugboat";
 
 const tug = useTugStore();
-const drop = useDropStore();
-const s = computed(() => drop.status);
+const tugboat = useTugboatStore();
+const s = computed(() => tugboat.status);
 const root = ref<HTMLElement | null>(null);
 
 useFocusTrap(root, () => requestClose());
@@ -34,9 +34,10 @@ const now = ref(Date.now());
 let clock: number | undefined;
 onMounted(() => (clock = window.setInterval(() => (now.value = Date.now()), 1000)));
 onUnmounted(() => window.clearInterval(clock));
-const help = computed(() => showConnectHelp(s.value, drop.shownAt, now.value));
+const help = computed(() => showConnectHelp(s.value, tugboat.shownAt, now.value));
 
-const phoneName = computed(() => s.value.phone ?? "iPhone");
+// The phone as its page reported it ("iPhone", "Android phone"…); just "phone" until one connects.
+const phoneName = computed(() => s.value.phone ?? "phone");
 /** Once a phone is connected the code steps aside (it can be shown again). */
 const showCode = ref(false);
 /** The last address the code pointed at, to notice a network change. */
@@ -66,7 +67,7 @@ function requestClose() {
     confirmClose.value = true;
     return;
   }
-  void drop.close();
+  void tugboat.close();
 }
 
 const copiedLink = ref(false);
@@ -85,7 +86,7 @@ async function copyPhoneText(id: number, text: string) {
 }
 
 async function choose() {
-  const msg = skippedMessage(await drop.pickFiles());
+  const msg = skippedMessage(await tugboat.pickFiles());
   if (msg) tug.notify("info", msg);
 }
 
@@ -93,7 +94,7 @@ const draft = ref("");
 async function sendText() {
   const text = draft.value.trim();
   if (!text) return;
-  if (await drop.sendText(text)) draft.value = "";
+  if (await tugboat.sendText(text)) draft.value = "";
   else tug.notify("error", "Couldn't send that text.");
 }
 
@@ -106,7 +107,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
       ref="root"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="drop-title"
+      aria-labelledby="tugboat-title"
       class="flex max-h-[86vh] w-full max-w-[860px] flex-col overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-xl"
     >
       <header class="flex items-center gap-3 border-b border-hairline-soft px-6 py-4">
@@ -114,16 +115,15 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
           <QrCode :size="18" />
         </span>
         <div class="min-w-0 flex-1">
-          <h2 id="drop-title" class="headline text-[22px] leading-tight">Drop</h2>
-          <p class="text-[13px] text-muted">Photos, files and text between your {{ phoneName }} and this PC</p>
+          <h2 id="tugboat-title" class="headline text-[22px] leading-tight">Tugboat</h2>
         </div>
-        <button class="rounded-md p-1.5 text-muted active:bg-surface-card" aria-label="Close Drop" @click="requestClose">
+        <button class="rounded-md p-1.5 text-muted active:bg-surface-card" aria-label="Close Tugboat" @click="requestClose">
           <X :size="18" />
         </button>
       </header>
 
       <div v-if="confirmClose" class="flex items-center gap-3 border-b border-hairline-soft bg-surface-soft px-6 py-3" role="alert">
-        <p class="flex-1 text-[14px] text-ink">Files are still arriving from your {{ phoneName }}. Close Drop and stop them?</p>
+        <p class="flex-1 text-[14px] text-ink">Files are still arriving from your {{ phoneName }}. Close Tugboat and stop them?</p>
         <button class="btn-secondary btn-sm" @click="confirmClose = false">Keep open</button>
         <button class="btn-primary btn-sm" @click="requestClose">Close</button>
       </div>
@@ -133,25 +133,25 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
         <section class="flex flex-col border-hairline-soft px-6 py-5 md:overflow-y-auto md:border-r" aria-label="Connect your phone">
           <!-- Turned itself off -->
           <div v-if="s.phase === 'off'" class="flex flex-1 flex-col items-center justify-center gap-3 py-8 text-center">
-            <template v-if="drop.starting">
+            <template v-if="tugboat.starting">
               <LoaderCircle :size="22" class="animate-spin text-muted" />
-              <p class="text-[14px] text-muted">Starting Drop…</p>
+              <p class="text-[14px] text-muted">Starting Tugboat…</p>
             </template>
             <template v-else>
               <p class="text-[14px] text-body">
                 {{
-                  drop.error ??
-                  (s.ended === "idle" ? "Drop turned off after 10 minutes without use." : "Drop is off.")
+                  tugboat.error ??
+                  (s.ended === "idle" ? "Tugboat turned off after 10 minutes without use." : "Tugboat is off.")
                 }}
               </p>
-              <button class="btn-primary btn-sm" @click="drop.start()">Start again</button>
+              <button class="btn-primary btn-sm" @click="tugboat.start()">Start again</button>
             </template>
           </div>
 
           <!-- No network a phone could use -->
           <div v-else-if="s.phase === 'noNetwork'" class="flex flex-1 flex-col items-center justify-center gap-3 py-8 text-center">
             <WifiOff :size="24" class="text-muted" />
-            <p class="text-[14px] text-body">Connect this PC to your Wi-Fi (or a network cable) to use Drop.</p>
+            <p class="text-[14px] text-body">Connect this PC to your Wi-Fi (or a network cable) to use Tugboat.</p>
             <p class="text-[12px] text-muted-soft">The code appears here as soon as it is.</p>
           </div>
 
@@ -163,7 +163,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
             <p class="font-display text-[22px] leading-tight text-ink">{{ phoneName }} connected</p>
             <p class="flex items-center gap-2 text-[13px] text-muted">
               <span :class="['size-2 rounded-full', s.phoneActive ? 'bg-accent-teal' : 'bg-muted-soft']" />
-              {{ s.phoneActive ? "The Drop page is open" : `Open the Drop page on your ${phoneName} to send` }}
+              {{ s.phoneActive ? `Tugboat is open on your ${phoneName}` : `Open Tugboat on your ${phoneName} to send` }}
             </p>
             <button class="mt-1 text-[13px] font-medium text-muted underline-offset-2 active:text-ink" @click="showCode = true">
               Show the code again
@@ -178,20 +178,19 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
                 class="block size-[212px]"
                 shape-rendering="crispEdges"
                 role="img"
-                aria-label="QR code to open Drop on your phone"
+                aria-label="QR code to open Tugboat on your phone"
               >
                 <path :d="s.qr.path" class="fill-ink" />
               </svg>
             </div>
-            <p class="mt-4 text-center text-[15px] font-medium text-ink">Scan with your {{ phoneName }} camera</p>
-            <p class="mt-1 text-center text-[13px] text-muted">It opens a tug page in Safari. Nothing to install.</p>
+            <p class="mt-4 text-center text-[15px] font-medium text-ink">Scan with your phone's camera to send photos, files and text.</p>
 
             <div v-if="help" class="mt-4 rounded-lg bg-surface-soft px-3.5 py-3 text-[13px] text-body" role="status">
               <p class="font-medium text-ink">Can't connect?</p>
               <ul class="mt-1.5 list-disc space-y-1 pl-4">
-                <li>Make sure your {{ phoneName }} is on the same Wi-Fi as this PC.</li>
+                <li>Make sure your phone is on the same Wi-Fi as this PC.</li>
                 <li>If Windows asked about tug, allow it on Private networks.</li>
-                <li>Guest Wi-Fi, a VPN on the phone or iCloud Private Relay can block it.</li>
+                <li>Guest Wi-Fi, a VPN on the phone, or iCloud Private Relay on an iPhone can block it.</li>
               </ul>
             </div>
 
@@ -211,8 +210,8 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
 
         <!-- Right: what's moving -->
         <div class="min-h-0 px-6 py-5 md:overflow-y-auto">
-          <section aria-labelledby="drop-from">
-            <h3 id="drop-from" class="caption-upper text-muted-soft">From your {{ phoneName }}</h3>
+          <section aria-labelledby="tugboat-from">
+            <h3 id="tugboat-from" class="caption-upper text-muted-soft">From your {{ phoneName }}</h3>
             <p v-if="!hasIncoming" class="mt-2 text-[14px] text-muted">Photos, files and text you send from the phone show up here.</p>
 
             <ul v-if="s.texts.length" class="mt-3 space-y-2">
@@ -241,23 +240,23 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
                     <div class="h-full rounded-full bg-primary transition-[width] duration-300" :style="{ width: `${percent(f.received, f.size)}%` }" />
                   </div>
                 </div>
-                <button v-if="f.done" class="btn-secondary btn-sm shrink-0" @click="drop.openFolder(f.path)">Show</button>
+                <button v-if="f.done" class="btn-secondary btn-sm shrink-0" @click="tugboat.openFolder(f.path)">Show</button>
               </li>
             </ul>
           </section>
 
-          <section class="mt-7" aria-labelledby="drop-to">
-            <h3 id="drop-to" class="caption-upper text-muted-soft">To your {{ phoneName }}</h3>
+          <section class="mt-7" aria-labelledby="tugboat-to">
+            <h3 id="tugboat-to" class="caption-upper text-muted-soft">To your {{ phoneName }}</h3>
             <div
               :class="[
                 'mt-3 flex flex-col items-center gap-2 rounded-xl border border-dashed px-4 py-5 text-center transition-colors',
-                drop.dragging ? 'border-primary bg-primary/5' : 'border-hairline',
+                tugboat.dragging ? 'border-primary bg-primary/5' : 'border-hairline',
               ]"
             >
               <Upload :size="20" class="text-muted" />
-              <p class="text-[14px] text-body">Drag files onto tug, or</p>
+              <p class="text-[14px] text-body">Drag files onto tug to tug them over, or</p>
               <button class="btn-secondary btn-sm" :disabled="s.phase === 'off'" @click="choose">Choose files</button>
-              <p class="text-[12px] text-muted-soft">Up to 1 GB each. They show up on the Drop page to save.</p>
+              <p class="text-[12px] text-muted-soft">Up to 1 GB each. They show up in Tugboat on the phone to save.</p>
             </div>
 
             <ul v-if="s.outgoing.length" class="mt-3 divide-y divide-hairline-soft">
@@ -272,17 +271,17 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
                     </template>
                   </p>
                 </div>
-                <button class="rounded-md p-1.5 text-muted active:bg-surface-card" :aria-label="`Stop offering ${o.name}`" @click="drop.removeOffer(o.id)">
+                <button class="rounded-md p-1.5 text-muted active:bg-surface-card" :aria-label="`Stop offering ${o.name}`" @click="tugboat.removeOffer(o.id)">
                   <X :size="15" />
                 </button>
               </li>
             </ul>
 
             <div class="mt-4">
-              <label for="drop-text" class="text-[13px] font-medium text-body">Text to copy on your {{ phoneName }}</label>
+              <label for="tugboat-text" class="text-[13px] font-medium text-body">Text to copy on your {{ phoneName }}</label>
               <div class="mt-1.5 flex items-start gap-2">
                 <textarea
-                  id="drop-text"
+                  id="tugboat-text"
                   v-model="draft"
                   rows="2"
                   class="input h-auto min-h-[64px] resize-y py-2.5"
@@ -295,15 +294,15 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
                   Send
                 </button>
               </div>
-              <p v-if="s.sentText" class="mt-2 truncate text-[12px] text-muted">On the Drop page now: “{{ s.sentText }}”</p>
+              <p v-if="s.sentText" class="mt-2 truncate text-[12px] text-muted">On your phone now: “{{ s.sentText }}”</p>
             </div>
           </section>
         </div>
       </div>
 
       <footer class="flex items-center gap-3 border-t border-hairline-soft px-6 py-3 text-[12px] text-muted">
-        <span class="min-w-0 truncate">Received files go to Pictures › tug Drop</span>
-        <button class="btn-secondary btn-sm shrink-0" @click="drop.openFolder()">
+        <span class="min-w-0 truncate">Received files go to Pictures › Tugboat</span>
+        <button class="btn-secondary btn-sm shrink-0" @click="tugboat.openFolder()">
           <FolderOpen :size="14" />
           Open folder
         </button>

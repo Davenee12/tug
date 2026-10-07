@@ -53,7 +53,7 @@ import type {
 import { bestTrack, nextRepeat, sameSong } from "../lib/spotify";
 import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
-import { useDropStore } from "./drop";
+import { useTugboatStore } from "./tugboat";
 
 /** The Spotify panel's tabs. */
 export type SpotifyTab = "search" | "playlists" | "recent" | "top" | "queue";
@@ -322,7 +322,7 @@ export const useTugStore = defineStore("tug", () => {
       pickerOpen.value ||
       spotifyPanelOpen.value ||
       whatsNewOpen.value ||
-      useDropStore().open ||
+      useTugboatStore().open ||
       !!pairingRequest.value ||
       !!ringing.value,
   );

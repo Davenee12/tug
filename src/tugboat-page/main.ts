@@ -1,7 +1,7 @@
 import { createApp } from "vue";
 import "./page.css";
-import DropPage from "./DropPage.vue";
-import { DropClient, adoptClientId, clientId, type DropApi } from "./client";
+import TugboatPage from "./TugboatPage.vue";
+import { TugboatClient, adoptClientId, clientId, type TugboatApi } from "./client";
 import { deriveKeys, randomId, unb64 } from "./crypto";
 
 /**
@@ -15,7 +15,7 @@ function takeSecret(): Uint8Array | null {
   const fromHash = unb64(secretPart ?? "");
   if (fromHash && fromHash.length === 16) {
     try {
-      sessionStorage.setItem("tugdrop.secret", secretPart);
+      sessionStorage.setItem("tugboat.secret", secretPart);
     } catch {
       /* private mode: this load only */
     }
@@ -24,7 +24,7 @@ function takeSecret(): Uint8Array | null {
     return fromHash;
   }
   try {
-    const stored = unb64(sessionStorage.getItem("tugdrop.secret") ?? "");
+    const stored = unb64(sessionStorage.getItem("tugboat.secret") ?? "");
     return stored && stored.length === 16 ? stored : null;
   } catch {
     return null;
@@ -32,15 +32,20 @@ function takeSecret(): Uint8Array | null {
 }
 
 async function boot() {
-  let api: DropApi | null = null;
-  // `npm run dev:drop` → /?mock previews the page without a PC (never in the built page).
+  let api: TugboatApi | null = null;
+  // `npm run dev:tugboat` → /?mock previews the page without a PC (never in the built page).
   if (import.meta.env.DEV && new URLSearchParams(location.search).has("mock")) {
     api = (await import("./devMock")).mockApi();
   } else {
     const secret = takeSecret();
-    if (secret) api = new DropClient(deriveKeys(secret), clientId(randomId));
+    if (secret) api = new TugboatClient(deriveKeys(secret), clientId(randomId));
   }
-  createApp(DropPage, { api }).mount("#app");
+  createApp(TugboatPage, { api }).mount("#app");
+  // Scanning the code again in the same tab only changes the `#` (no reload): take the secret
+  // out of the address bar again and start fresh with it.
+  window.addEventListener("hashchange", () => {
+    if (location.hash.length > 1 && takeSecret()) location.reload();
+  });
 }
 
 void boot();

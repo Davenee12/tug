@@ -1,4 +1,4 @@
-//! One Drop session: its keys, who's bound to it, files coming in and on offer, and texts. The
+//! One Tugboat session: its keys, who's bound to it, files coming in and on offer, and texts. The
 //! HTTP handlers (`server.rs`) and the Tauri glue (`mod.rs`) both work through this; nothing here
 //! knows about Tauri, so the integration test can run a whole session over a socket.
 
@@ -32,7 +32,7 @@ const ACTIVE: Duration = Duration::from_secs(8);
 
 /// What the session tells the outside world.
 pub trait Sink: Send + Sync {
-    /// Something the Drop panel shows changed. `urgent` for state changes; progress isn't, and
+    /// Something the Tugboat panel shows changed. `urgent` for state changes; progress isn't, and
     /// may be coalesced.
     fn changed(&self, urgent: bool);
     /// The phone sent text: it goes on the PC clipboard.
@@ -42,7 +42,7 @@ pub trait Sink: Send + Sync {
 /// Why an API request failed. Mapped to an HTTP status and a short code (never content).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApiError {
-    /// The session is over (Drop closed, or a new code was made).
+    /// The session is over (Tugboat closed, or a new code was made).
     Closed,
     Unauthorized,
     /// Another device already has this session.
@@ -98,7 +98,7 @@ impl ApiError {
 
 fn io_err(context: &str, e: std::io::Error) -> ApiError {
     // The error kind only: paths here name the user's files.
-    log::warn!("drop: {context} failed: {:?}", e.kind());
+    log::warn!("tugboat: {context} failed: {:?}", e.kind());
     if e.raw_os_error() == Some(112) {
         // ERROR_DISK_FULL
         return ApiError::NoSpace;
@@ -161,11 +161,11 @@ pub struct StateReply {
     pub text: Option<PageText>,
 }
 
-// --- What the Drop panel shows (mirrored in src/types/protocol.ts) ---
+// --- What the Tugboat panel shows (mirrored in src/types/protocol.ts) ---
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DropIncoming {
+pub struct TugboatIncoming {
     pub id: String,
     pub name: String,
     pub size: u64,
@@ -178,7 +178,7 @@ pub struct DropIncoming {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DropOffer {
+pub struct TugboatOffer {
     pub id: String,
     pub name: String,
     pub size: u64,
@@ -188,20 +188,20 @@ pub struct DropOffer {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DropText {
+pub struct TugboatText {
     pub id: u32,
     pub text: String,
     pub at: i64,
 }
 
-/// The session part of `DropStatus`.
+/// The session part of `TugboatStatus`.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub phone: Option<String>,
     pub phone_active: bool,
-    pub incoming: Vec<DropIncoming>,
-    pub outgoing: Vec<DropOffer>,
-    pub texts: Vec<DropText>,
+    pub incoming: Vec<TugboatIncoming>,
+    pub outgoing: Vec<TugboatOffer>,
+    pub texts: Vec<TugboatText>,
     pub sent_text: Option<String>,
 }
 
@@ -253,14 +253,14 @@ struct State {
     last_activity: Instant,
     uploads: Vec<Upload>,
     offers: Vec<Offer>,
-    texts: Vec<DropText>,
+    texts: Vec<TugboatText>,
     pc_text: Option<PageText>,
     next_text_id: u32,
 }
 
 pub struct Session {
     pub keys: Keys,
-    /// `Pictures\tug Drop`.
+    /// `Pictures\Tugboat`.
     pub folder: PathBuf,
     /// Where unfinished uploads are written (tug's local app data, not the Pictures folder, so a
     /// OneDrive-synced Pictures never uploads half-received files). Emptied on start and stop.
@@ -358,7 +358,7 @@ impl Session {
                 st.last_activity = Instant::now();
                 if ok.first {
                     st.phone = Some(device_label(user_agent.unwrap_or("")).to_string());
-                    log::info!("drop: phone connected");
+                    log::info!("tugboat: phone connected");
                 }
                 drop(st);
                 if ok.first || !was_active {
@@ -368,7 +368,7 @@ impl Session {
             }
             Err(why) => {
                 // Logged without anything from the request itself.
-                log::debug!("drop: request refused ({why:?})");
+                log::debug!("tugboat: request refused ({why:?})");
                 Err(match why {
                     Rejected::OtherDevice => ApiError::InUse,
                     Rejected::Replayed => ApiError::Stale,
@@ -384,7 +384,7 @@ impl Session {
             .keys
             .open(&ad::request(&req.client, req.seq), body)
             .ok_or_else(|| {
-                log::debug!("drop: request body failed to decrypt");
+                log::debug!("tugboat: request body failed to decrypt");
                 ApiError::BadRequest
             })?;
         serde_json::from_slice(&plain).map_err(|_| ApiError::BadRequest)
@@ -449,7 +449,7 @@ impl Session {
             PlanError::BadChunkSize => ApiError::BadRequest,
         })?;
         fs::create_dir_all(&self.incoming).map_err(|e| io_err("create the incoming folder", e))?;
-        fs::create_dir_all(&self.folder).map_err(|e| io_err("create the Drop folder", e))?;
+        fs::create_dir_all(&self.folder).map_err(|e| io_err("create the Tugboat folder", e))?;
         // Enough room for this file, with a margin. Files already arriving reserved theirs when
         // they started (set_len below), so the free figure already allows for them.
         // Both where it's written and where it ends up (they differ if Pictures is on another drive).
@@ -507,11 +507,11 @@ impl Session {
         };
         let expected = plan.expected_len(index).ok_or(ApiError::BadRequest)?;
         let plain = self.keys.open(&ad::up(id, index), sealed).ok_or_else(|| {
-            log::debug!("drop: chunk {index} failed to decrypt");
+            log::debug!("tugboat: chunk {index} failed to decrypt");
             ApiError::BadChunk
         })?;
         if plain.len() != expected {
-            log::debug!("drop: chunk {index} has the wrong length");
+            log::debug!("tugboat: chunk {index} has the wrong length");
             return Err(ApiError::BadChunk);
         }
         let mut f = OpenOptions::new()
@@ -531,7 +531,7 @@ impl Session {
         Ok(())
     }
 
-    /// Every chunk is in: check the size and move it into the Drop folder under a free name.
+    /// Every chunk is in: check the size and move it into the Tugboat folder under a free name.
     pub fn finish_upload(&self, id: &str) -> Result<FinishReply, ApiError> {
         let _one_at_a_time = self.finishing.lock().unwrap_or_else(|p| p.into_inner());
         let (name, size) = {
@@ -563,7 +563,7 @@ impl Session {
             let _ = fs::remove_file(&final_path);
             return Err(io_err("save a received file", e));
         }
-        log::info!("drop: saved a file from the phone ({size} bytes)");
+        log::info!("tugboat: saved a file from the phone ({size} bytes)");
         let mut st = self.state();
         if let Some(u) = st.uploads.iter_mut().find(|u| u.id == id) {
             u.phase = Phase::Saved {
@@ -576,7 +576,7 @@ impl Session {
         Ok(FinishReply { saved_as: final_name })
     }
 
-    /// Claim a free name in the Drop folder by creating it empty (`create_new` fails if another
+    /// Claim a free name in the Tugboat folder by creating it empty (`create_new` fails if another
     /// file got there first, so nothing is ever overwritten).
     fn reserve_name(&self, name: &str) -> Result<(String, PathBuf), ApiError> {
         for _ in 0..20 {
@@ -649,7 +649,7 @@ impl Session {
         st.next_text_id += 1;
         st.texts.insert(
             0,
-            DropText {
+            TugboatText {
                 id,
                 text: text.clone(),
                 at: now_ms(),
@@ -773,7 +773,7 @@ impl Session {
                 .uploads
                 .iter()
                 .rev()
-                .map(|u| DropIncoming {
+                .map(|u| TugboatIncoming {
                     id: u.id.clone(),
                     name: match &u.phase {
                         Phase::Saved { name, .. } => name.clone(),
@@ -792,7 +792,7 @@ impl Session {
             outgoing: st
                 .offers
                 .iter()
-                .map(|o| DropOffer {
+                .map(|o| TugboatOffer {
                     id: o.id.clone(),
                     name: o.name.clone(),
                     size: o.size,
@@ -827,7 +827,7 @@ fn offer_plan(size: u64) -> Plan {
 pub fn clean_incoming(dir: &Path) {
     if dir.exists() {
         if let Err(e) = fs::remove_dir_all(dir) {
-            log::warn!("drop: couldn't remove unfinished files: {:?}", e.kind());
+            log::warn!("tugboat: couldn't remove unfinished files: {:?}", e.kind());
         }
     }
 }

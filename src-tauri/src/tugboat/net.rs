@@ -1,6 +1,6 @@
 //! Which address the phone should use to reach this PC: the IPv4 address of the adapter that has
 //! the default gateway (the home Wi-Fi or Ethernet), never loopback, VPNs, Hyper-V/WSL vEthernet,
-//! Docker or link-local. Drop listens only on that address.
+//! Docker or link-local. Tugboat listens only on that address.
 
 use std::net::Ipv4Addr;
 
@@ -95,7 +95,7 @@ fn score(a: &Adapter, ip: Ipv4Addr) -> Option<i64> {
     if ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || ip.is_multicast() {
         return None;
     }
-    // Only home-network (private) addresses: Drop must never be reachable from the internet,
+    // Only home-network (private) addresses: Tugboat must never be reachable from the internet,
     // e.g. on a network that hands out public addresses. 100.64/10 is nearly always Tailscale.
     if cgnat(ip) || !private(ip) {
         return None;
@@ -111,7 +111,7 @@ fn score(a: &Adapter, ip: Ipv4Addr) -> Option<i64> {
     Some(s)
 }
 
-/// The best address to serve Drop on, if any adapter qualifies. Only private (home) ranges;
+/// The best address to serve Tugboat on, if any adapter qualifies. Only private (home) ranges;
 /// prefers the adapter with the default gateway, then real Wi-Fi/Ethernet, then the lower
 /// metric; ties go to the first listed.
 pub fn best(adapters: &[Adapter]) -> Option<Ipv4Addr> {
@@ -165,7 +165,7 @@ fn adapters() -> Vec<Adapter> {
             break;
         }
         if rc != ERROR_BUFFER_OVERFLOW.0 {
-            log::debug!("drop: GetAdaptersAddresses failed ({rc})");
+            log::debug!("tugboat: GetAdaptersAddresses failed ({rc})");
             return Vec::new();
         }
         buf.clear();

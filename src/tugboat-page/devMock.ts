@@ -1,10 +1,10 @@
 // Dev-only stand-in for the PC, so the phone page can be reviewed in a browser:
-// `npm run dev:drop` → http://localhost:1430/?mock (add &busy for files on offer and PC text,
+// `npm run dev:tugboat` → http://localhost:1430/?mock (add &busy for files on offer and PC text,
 // &offline for the "can't reach your PC" banner, &closed for the ended state).
 
-import { DropError, type DropApi, type PageOffer, type PageState } from "./client";
+import { TugboatError, type TugboatApi, type PageOffer, type PageState } from "./client";
 
-export function mockApi(): DropApi {
+export function mockApi(): TugboatApi {
   const params = new URLSearchParams(location.search);
   const busy = params.has("busy");
   const offers: PageOffer[] = busy
@@ -18,8 +18,8 @@ export function mockApi(): DropApi {
   return {
     async state() {
       await sleep(150);
-      if (params.has("closed")) throw new DropError("closed");
-      if (params.has("offline")) throw new DropError("network");
+      if (params.has("closed")) throw new TugboatError("closed");
+      if (params.has("offline")) throw new TugboatError("network");
       return state;
     },
     async sendText() {
@@ -28,7 +28,7 @@ export function mockApi(): DropApi {
     async upload(file, onProgress, signal) {
       // Pretend to send at ~40 MB/s.
       for (let sent = 0; sent < file.size; sent += 4 << 20) {
-        if (signal.aborted) throw new DropError("cancelled");
+        if (signal.aborted) throw new TugboatError("cancelled");
         onProgress(sent);
         await sleep(100);
       }
@@ -40,7 +40,7 @@ export function mockApi(): DropApi {
         onProgress(got);
         await sleep(120);
       }
-      return new Blob(["tug drop preview"], { type: offer.type });
+      return new Blob(["Tugboat preview"], { type: offer.type });
     },
   };
 }

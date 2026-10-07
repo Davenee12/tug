@@ -9,7 +9,6 @@ mod commands;
 mod contact_photos;
 mod device_kind;
 mod diagnostics;
-mod drop;
 mod frontend_log;
 pub mod hfp;
 mod location;
@@ -23,6 +22,7 @@ mod state;
 mod store;
 pub mod toast;
 mod tray;
+mod tugboat;
 mod webview_watch;
 
 use std::sync::Arc;
@@ -67,7 +67,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_notification::init())
-        // tug Drop's "Choose files" picker (opened from Rust; the page never sees it).
+        // Tugboat's "Choose files" picker (opened from Rust; the page never sees it).
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
@@ -80,13 +80,13 @@ pub fn run() {
             // The Spotify connector: optional, set up by the owner in Settings. Album art is
             // cached under the app-data dir; the refresh token goes to Credential Manager.
             let spotify = Arc::new(spotify::Spotify::new(store, dir.clone()));
-            // tug Drop: idle until the panel opens it.
-            let drop = drop::DropService::new(app.handle().clone());
+            // Tugboat: idle until the panel opens it.
+            let tugboat = tugboat::TugboatService::new(app.handle().clone());
             app.manage(AppState {
                 shared,
                 ble,
                 spotify,
-                drop,
+                tugboat,
             });
             // Keep the purely-cached image folders (album art/covers, app icons) from growing without
             // limit: drop the least-recently-used beyond the cap. Off the main thread so a big folder
@@ -211,14 +211,14 @@ pub fn run() {
             commands::spotify_playlist_items,
             commands::spotify_add_to_playlist,
             commands::log_frontend_error,
-            commands::drop_start,
-            commands::drop_stop,
-            commands::drop_status,
-            commands::drop_offer_files,
-            commands::drop_pick_files,
-            commands::drop_remove_offer,
-            commands::drop_send_text,
-            commands::drop_open_folder,
+            commands::tugboat_start,
+            commands::tugboat_stop,
+            commands::tugboat_status,
+            commands::tugboat_offer_files,
+            commands::tugboat_pick_files,
+            commands::tugboat_remove_offer,
+            commands::tugboat_send_text,
+            commands::tugboat_open_folder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -226,9 +226,9 @@ pub fn run() {
             // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
             if let tauri::RunEvent::Exit = event {
                 toast::withdraw_all(app);
-                // Drop never outlives tug: stop listening and remove unfinished uploads.
+                // Tugboat never outlives tug: stop listening and remove unfinished uploads.
                 if let Some(state) = app.try_state::<AppState>() {
-                    state.drop.shutdown_now();
+                    state.tugboat.shutdown_now();
                 }
             }
         });

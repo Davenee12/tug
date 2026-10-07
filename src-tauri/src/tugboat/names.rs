@@ -10,7 +10,7 @@ const RESERVED: &[&str] = &[
     "LPT³", "CONIN$", "CONOUT$",
 ];
 
-/// The phone's name for a file → a plain file name that's safe to create in the Drop folder.
+/// The phone's name for a file → a plain file name that's safe to create in the Tugboat folder.
 /// Drops any folder parts, characters Windows forbids, control characters, trailing dots and
 /// spaces, and reserved device names (`CON`, `COM1`…), and keeps it a sensible length.
 pub fn sanitize(name: &str) -> String {

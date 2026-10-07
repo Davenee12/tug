@@ -1,4 +1,4 @@
-// tug Drop's crypto on the phone, byte-for-byte the same as src-tauri/src/drop/crypto.rs.
+// Tugboat's crypto on the phone, byte-for-byte the same as src-tauri/src/tugboat/crypto.rs.
 //
 // The page is plain HTTP, so `crypto.subtle` doesn't exist here; `crypto.getRandomValues` does.
 // Everything else comes from @noble/ciphers and @noble/hashes (audited, pure JS), bundled by tug.
@@ -10,7 +10,7 @@ import { hkdf } from "@noble/hashes/hkdf.js";
 import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 
-export const VERSION = "tug-drop/1";
+export const VERSION = "tugboat/1";
 export const NONCE_LEN = 24;
 export const TAG_LEN = 16;
 export const OVERHEAD = NONCE_LEN + TAG_LEN;
@@ -24,7 +24,7 @@ export interface Keys {
   auth: Uint8Array;
 }
 
-/** The encryption and request-signing keys for one Drop session's secret. */
+/** The encryption and request-signing keys for one Tugboat session's secret. */
 export function deriveKeys(secret: Uint8Array): Keys {
   const salt = utf8(VERSION);
   return {
@@ -63,7 +63,7 @@ export function requestMac(keys: Keys, client: string, seq: bigint, method: stri
 }
 
 export function authHeader(keys: Keys, client: string, seq: bigint, method: string, path: string): string {
-  return `TugDrop ${client}.${seq}.${b64(requestMac(keys, client, seq, method, path))}`;
+  return `Tugboat ${client}.${seq}.${b64(requestMac(keys, client, seq, method, path))}`;
 }
 
 /**
