@@ -74,6 +74,10 @@ phases is worth building on an unreliable base.
 - Limits: same Wi-Fi only; works while the page is open (iOS allows no background sync without an
   app); clipboard is one tap, not automatic.
 - It's the first slice of Phase 1: pairing by QR, one-time keys, an encrypted local link.
+- **As built (v0.5.11, `src-tauri/src/drop/`, `src/drop-page/`):** the page uses @noble/ciphers +
+  @noble/hashes (audited, pure JS) rather than libsodium; keys via HKDF-SHA256; every request is
+  MAC'd and the first phone binds the session. PC → phone is one Save button per file (no zip in
+  v1). A shared test vector proves the JS and Rust crypto agree.
 
 ### Phase 1 — the tug protocol (Rust, desktop side only)
 The foundation every companion app talks to. Designed once, in Rust, before any phone code.

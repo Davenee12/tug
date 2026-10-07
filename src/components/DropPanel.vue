@@ -39,10 +39,23 @@ const help = computed(() => showConnectHelp(s.value, drop.shownAt, now.value));
 const phoneName = computed(() => s.value.phone ?? "iPhone");
 /** Once a phone is connected the code steps aside (it can be shown again). */
 const showCode = ref(false);
+/** The last address the code pointed at, to notice a network change. */
+let lastAddress = s.value.address;
 watch(
   () => s.value.phase,
   (p) => {
     if (p !== "connected") showCode.value = false;
+    if (p === "off") lastAddress = null;
+  },
+);
+// The network changed (maybe via a moment with none): the phone needs the new code, so bring it
+// back into view.
+watch(
+  () => s.value.address,
+  (now) => {
+    if (!now) return;
+    if (lastAddress && now !== lastAddress) showCode.value = true;
+    lastAddress = now;
   },
 );
 

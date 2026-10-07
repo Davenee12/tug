@@ -311,6 +311,7 @@ function onKey(e: KeyboardEvent) {
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">clear all</kbd>
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">dnd</kbd>
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">new message</kbd>
+            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">drop</kbd>
           </p>
         </li>
         <li v-else-if="!searching && results && options.length === 0" class="px-4 py-8 text-center text-[13px] text-muted">

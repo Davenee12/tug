@@ -4,7 +4,7 @@
   "version": "0.5.10",
   "identifier": "dev.davejames.tug",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:drop && npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
