@@ -1,6 +1,7 @@
 //! Thin helpers over the WinRT GATT client API.
 
 use std::fmt;
+use std::time::Duration;
 
 use windows::core::GUID;
 use windows::Devices::Bluetooth::BluetoothCacheMode;
@@ -16,6 +17,10 @@ use windows::Storage::Streams::{DataReader, DataWriter, IBuffer};
 pub enum BleError {
     Win(windows::core::Error),
     Unreachable,
+    /// Windows didn't finish the operation within its time limit. Unlike `Unreachable` (Windows
+    /// answering promptly that the link is down), a run of these on a link that still reports
+    /// connected means the adapter itself has stopped responding (see `wedge`).
+    TimedOut,
     AccessDenied,
     Protocol(Option<u8>),
     NotFound(&'static str),
@@ -35,6 +40,10 @@ impl BleError {
     /// connection brings them back.
     pub fn is_closed(&self) -> bool {
         matches!(self, Self::Win(e) if e.code() == windows::core::HRESULT(0x8000_0013_u32 as i32))
+    }
+
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::TimedOut)
     }
 
     /// The ATT error code the peripheral answered with, when it answered with one.
@@ -60,6 +69,7 @@ impl fmt::Display for BleError {
             ),
             Self::Win(e) => write!(f, "Windows Bluetooth error: {}", e.message()),
             Self::Unreachable => f.write_str("iPhone is out of range or not connected"),
+            Self::TimedOut => f.write_str("iPhone is out of range or not responding"),
             Self::AccessDenied => f.write_str("Windows denied access to the device"),
             // ATT: 0x05 insufficient authentication, 0x08 authorization, 0x0F encryption.
             Self::Protocol(Some(0x05 | 0x08 | 0x0F)) => {
@@ -104,32 +114,36 @@ fn check(status: GattCommunicationStatus, protocol_error: windows::core::Result<
 /// First GATT service with `uuid`, going to the device rather than the cache so
 /// a fresh link (or a fresh bond) is reflected.
 pub async fn service(device: &BluetoothLEDevice, uuid: GUID) -> Result<Option<GattDeviceService>> {
-    let res = bounded_for(
-        DISCOVERY_TIMEOUT,
-        device.GetGattServicesForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?,
-    )
-    .await?;
-    check(res.Status()?, res.ProtocolError())?;
-    let services = res.Services()?;
-    Ok(if services.Size()? > 0 {
-        Some(services.GetAt(0)?)
-    } else {
-        None
+    let device = device.clone();
+    off_thread(DISCOVERY_TIMEOUT, move || {
+        let res = device
+            .GetGattServicesForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?
+            .join()?;
+        check(res.Status()?, res.ProtocolError())?;
+        let services = res.Services()?;
+        Ok(if services.Size()? > 0 {
+            Some(services.GetAt(0)?)
+        } else {
+            None
+        })
     })
+    .await
 }
 
 pub async fn characteristic(service: &GattDeviceService, uuid: GUID, name: &'static str) -> Result<GattCharacteristic> {
-    let res = bounded_for(
-        DISCOVERY_TIMEOUT,
-        service.GetCharacteristicsForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?,
-    )
-    .await?;
-    check(res.Status()?, res.ProtocolError())?;
-    let chars = res.Characteristics()?;
-    if chars.Size()? == 0 {
-        return Err(BleError::NotFound(name));
-    }
-    Ok(chars.GetAt(0)?)
+    let service = service.clone();
+    off_thread(DISCOVERY_TIMEOUT, move || {
+        let res = service
+            .GetCharacteristicsForUuidWithCacheModeAsync(uuid, BluetoothCacheMode::Uncached)?
+            .join()?;
+        check(res.Status()?, res.ProtocolError())?;
+        let chars = res.Characteristics()?;
+        if chars.Size()? == 0 {
+            return Err(BleError::NotFound(name));
+        }
+        Ok(chars.GetAt(0)?)
+    })
+    .await
 }
 
 /// A live notification subscription. Dropping it unregisters the handler, so a setup
@@ -177,72 +191,108 @@ pub async fn subscribe(ch: &GattCharacteristic, on_value: impl Fn(Vec<u8>) + Sen
 
 /// Write the CCCD on the peripheral to turn notifications on.
 pub async fn enable_notify(ch: &GattCharacteristic) -> Result<()> {
+    let ch = ch.clone();
     // On a fresh bond iOS holds this write open until "Allow" is tapped on the phone.
-    let res = bounded_for(
-        SUBSCRIBE_TIMEOUT,
-        ch.WriteClientCharacteristicConfigurationDescriptorWithResultAsync(
-            GattClientCharacteristicConfigurationDescriptorValue::Notify,
-        )?,
-    )
-    .await?;
-    check(res.Status()?, res.ProtocolError())
+    off_thread(SUBSCRIBE_TIMEOUT, move || {
+        let res = ch
+            .WriteClientCharacteristicConfigurationDescriptorWithResultAsync(
+                GattClientCharacteristicConfigurationDescriptorValue::Notify,
+            )?
+            .join()?;
+        check(res.Status()?, res.ProtocolError())
+    })
+    .await
 }
 
 /// Whether notifications are currently enabled on the peripheral, read back
 /// from the device. The CCCD is shared by every app on this PC using the link.
 pub async fn notify_enabled(ch: &GattCharacteristic) -> Result<bool> {
-    let res = bounded(ch.ReadClientCharacteristicConfigurationDescriptorAsync()?).await?;
-    check(res.Status()?, res.ProtocolError())?;
-    Ok(res.ClientCharacteristicConfigurationDescriptor()?
-        == GattClientCharacteristicConfigurationDescriptorValue::Notify)
+    let ch = ch.clone();
+    off_thread(GATT_OP_TIMEOUT, move || {
+        let res = ch.ReadClientCharacteristicConfigurationDescriptorAsync()?.join()?;
+        check(res.Status()?, res.ProtocolError())?;
+        Ok(res.ClientCharacteristicConfigurationDescriptor()?
+            == GattClientCharacteristicConfigurationDescriptorValue::Notify)
+    })
+    .await
 }
 
 /// Longest a single GATT read or write may take. Windows normally fails these promptly
 /// when the link drops, but a stuck one would park the whole actor (and with it the ANCS
-/// timeout, reconnects and the CCCD watchdog), so give up and treat it as unreachable.
-const GATT_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// Any WinRT Bluetooth operation, given up on after GATT_OP_TIMEOUT (as unreachable): service
-/// discovery, CCCD reads/writes and opening the device can hang just like reads and writes
-/// when the phone drops mid-way, and every one of them runs on the actor's loop.
-pub async fn bounded<T>(op: impl std::future::IntoFuture<Output = windows::core::Result<T>>) -> Result<T> {
-    bounded_for(GATT_OP_TIMEOUT, op).await
-}
+/// timeout, reconnects and the CCCD watchdog), so give up and report it as timed out.
+const GATT_OP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Opening the device and discovering services. Uncached discovery right after pairing
 /// takes well over 10 s on an iPhone; giving up sooner tore the whole link down (texts
 /// with it) and retried forever.
-pub const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Subscribing (CCCD write). After a new pairing iOS asks "Allow notifications?" and only
 /// answers this write once it's tapped, so leave a person time to see and tap it.
-const SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// `bounded` with its own limit, for steps that legitimately take longer.
+/// Any WinRT Bluetooth operation already started on the actor's thread, given up on (as timed out)
+/// after `limit`: opening the device and discovery can hang just like reads and writes when the
+/// phone drops mid-way. Prefer `off_thread` for GATT operations: this bounds only the wait, not the
+/// call that started the operation.
 pub async fn bounded_for<T>(
-    limit: std::time::Duration,
+    limit: Duration,
     op: impl std::future::IntoFuture<Output = windows::core::Result<T>>,
 ) -> Result<T> {
     Ok(tokio::time::timeout(limit, op)
         .await
-        .map_err(|_| BleError::Unreachable)??)
+        .map_err(|_| BleError::TimedOut)??)
+}
+
+/// Run one GATT operation — start it, wait for it, read its result — on a short-lived helper
+/// thread, and await that here, giving up (as timed out) after `limit`.
+///
+/// Windows can block the *call that starts* an operation, not just the operation. Seen on hardware
+/// (2026-10-06): while the Bluetooth adapter was hung, a CCCD read held the actor's thread ~12 s,
+/// past its 10 s limit (a timer can't fire on a blocked thread), freezing everything else on it —
+/// tug's own heartbeat included, which then mistook the freeze for the PC sleeping. On a helper, the
+/// actor only awaits a channel, so the limit always holds. A helper stuck inside Windows exits once
+/// Windows finishes or fails the operation (its own ATT timeout, or the device being closed on a
+/// relink); the wedge watch stops tug issuing more while the adapter is stuck.
+async fn off_thread<T: Send + 'static>(limit: Duration, op: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("tug-gatt-op".into())
+        .spawn(move || {
+            // The receiver is gone if the actor already gave up: nothing to report to.
+            let _ = tx.send(op());
+        })
+        .map_err(|e| {
+            log::warn!("couldn't start a Bluetooth operation thread: {e}");
+            BleError::Unreachable
+        })?;
+    match tokio::time::timeout(limit, rx).await {
+        Ok(Ok(result)) => result,
+        // The helper ended without answering (it can only panic, which aborts a release build).
+        Ok(Err(_)) => Err(BleError::Unreachable),
+        Err(_) => Err(BleError::TimedOut),
+    }
 }
 
 pub async fn write(ch: &GattCharacteristic, bytes: &[u8]) -> Result<()> {
-    let op = ch.WriteValueWithResultAndOptionAsync(&to_buffer(bytes)?, GattWriteOption::WriteWithResponse)?;
-    let res = tokio::time::timeout(GATT_OP_TIMEOUT, op)
-        .await
-        .map_err(|_| BleError::Unreachable)??;
-    check(res.Status()?, res.ProtocolError())
+    let (ch, bytes) = (ch.clone(), bytes.to_vec());
+    off_thread(GATT_OP_TIMEOUT, move || {
+        let res = ch
+            .WriteValueWithResultAndOptionAsync(&to_buffer(&bytes)?, GattWriteOption::WriteWithResponse)?
+            .join()?;
+        check(res.Status()?, res.ProtocolError())
+    })
+    .await
 }
 
 pub async fn read(ch: &GattCharacteristic) -> Result<Vec<u8>> {
-    let op = ch.ReadValueWithCacheModeAsync(BluetoothCacheMode::Uncached)?;
-    let res = tokio::time::timeout(GATT_OP_TIMEOUT, op)
-        .await
-        .map_err(|_| BleError::Unreachable)??;
-    check(res.Status()?, res.ProtocolError())?;
-    Ok(from_buffer(&res.Value()?)?)
+    let ch = ch.clone();
+    off_thread(GATT_OP_TIMEOUT, move || {
+        let res = ch.ReadValueWithCacheModeAsync(BluetoothCacheMode::Uncached)?.join()?;
+        check(res.Status()?, res.ProtocolError())?;
+        Ok(from_buffer(&res.Value()?)?)
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -255,5 +305,47 @@ mod tests {
             format!("{:?}", sig_uuid(0x180F)),
             "0000180F-0000-1000-8000-00805F9B34FB"
         );
+    }
+
+    #[test]
+    fn a_timeout_reads_as_a_timeout_not_a_refusal() {
+        assert!(BleError::TimedOut.is_timeout());
+        assert!(!BleError::Unreachable.is_timeout());
+        assert!(!BleError::Protocol(Some(0x0E)).is_timeout());
+        assert_eq!(BleError::TimedOut.att_code(), None);
+    }
+
+    #[test]
+    fn an_operation_that_never_finishes_is_given_up_on_and_the_caller_keeps_going() {
+        // The 2026-10-06 stall: the operation blocks its thread far past the limit. The awaiting
+        // side must still get its timeout on time.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let r: Result<()> = rt.block_on(off_thread(Duration::from_millis(50), || {
+            std::thread::sleep(Duration::from_secs(2));
+            Ok(())
+        }));
+        assert!(matches!(r, Err(BleError::TimedOut)));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "not held by the stuck operation"
+        );
+    }
+
+    #[test]
+    fn an_operation_that_finishes_returns_its_result() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let r = rt.block_on(off_thread(Duration::from_secs(5), || Ok(7)));
+        assert_eq!(r.ok(), Some(7));
+        let r: Result<()> = rt.block_on(off_thread(Duration::from_secs(5), || {
+            Err(BleError::Protocol(Some(0xA2)))
+        }));
+        assert_eq!(r.err().and_then(|e| e.att_code()), Some(0xA2));
     }
 }

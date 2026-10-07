@@ -38,9 +38,11 @@ export function connectionHealth(s: DeviceStatus, counts: HealthCounts): HealthL
           // A stale awaitingUnlock flag must never claim a forgotten phone is "connected".
           detail: s.device && s.awaitingUnlock
             ?"Your iPhone is connected but locked. Unlock it to reconnect."
-            : s.device
-              ? "Waiting for your iPhone to reconnect."
-              : "Pair your iPhone to set this up.",
+            : s.device && s.reconnecting
+              ? "Reconnecting to your iPhone. No need to do anything."
+              : s.device
+                ? "Waiting for your iPhone to reconnect."
+                : "Pair your iPhone to set this up.",
         };
 
   return [

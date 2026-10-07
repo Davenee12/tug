@@ -83,28 +83,34 @@ impl Actor {
 
     /// One Entity Update notification. A truncated value (a long title) is read in full
     /// through Entity Attribute, as the spec intends; the cut value is the fallback.
-    pub(super) async fn on_media_entity(&self, data: &[u8]) {
+    pub(super) async fn on_media_entity(&mut self, data: &[u8]) {
         let Some(update) = ams::EntityUpdate::parse(data) else {
             return log::debug!("AMS update too short to decode: {data:02X?}");
         };
         log::debug!("AMS update {update}");
+        // No extra read while a stalled adapter settles: the cut value will do.
         let attr = self
             .link
             .as_ref()
+            .filter(|_| !self.wedged())
             .and_then(|l| l.media.as_ref())
-            .and_then(|m| m.entity_attribute.as_ref());
+            .and_then(|m| m.entity_attribute.clone());
         let full = match (update.truncated, attr) {
-            (true, Some(attr)) => match read_attribute(attr, update.entity, update.attribute).await {
-                Ok(value) => Some(value),
-                Err(e) => {
-                    log::debug!(
-                        "AMS full value of {} unavailable: {}",
-                        ams::attribute_name(update.entity, update.attribute),
-                        describe_error(&e)
-                    );
-                    None
+            (true, Some(attr)) => {
+                let read = read_attribute(&attr, update.entity, update.attribute).await;
+                self.note_gatt(&read);
+                match read {
+                    Ok(value) => Some(value),
+                    Err(e) => {
+                        log::debug!(
+                            "AMS full value of {} unavailable: {}",
+                            ams::attribute_name(update.entity, update.attribute),
+                            describe_error(&e)
+                        );
+                        None
+                    }
                 }
-            },
+            }
             _ => None,
         };
         let value = full.as_deref().unwrap_or(update.value);
@@ -135,6 +141,13 @@ impl Actor {
             np.lists(command),
             np.repeat
         );
+        if self.wedged() {
+            log::info!(
+                "AMS command {} not sent: reconnecting after a Bluetooth stall",
+                command.as_str()
+            );
+            return Err(RECONNECTING.into());
+        }
         let Some(media) = self.link.as_ref().and_then(|l| l.media.as_ref()) else {
             log::info!(
                 "AMS command {} not sent: media not set up ({context})",
@@ -143,7 +156,11 @@ impl Actor {
             return Err("Media controls aren't available right now".into());
         };
         let ch = media.remote_command.clone();
-        match winrt::write(&ch, &[command.id()]).await {
+        let result = winrt::write(&ch, &[command.id()]).await;
+        if self.note_gatt(&result) {
+            return Err(RECONNECTING.into());
+        }
+        match result {
             Ok(()) => {
                 log::info!(
                     "AMS command {} ({}) sent: ok ({context})",
@@ -161,7 +178,7 @@ impl Actor {
                 );
                 if e.is_closed() {
                     self.relink("media controls were closed by Windows");
-                    return Err("Reconnecting to your iPhone. Try again in a moment.".into());
+                    return Err(RECONNECTING.into());
                 }
                 Err(e.to_string())
             }

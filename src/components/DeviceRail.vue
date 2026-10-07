@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, Smartphone } from "lucide-vue-next";
+import { connectionBusy, connectionLabel as connectionLabelFor } from "../lib/connectionStatus";
 import { useTugStore } from "../stores/tug";
 import NowPlayingCard from "./NowPlayingCard.vue";
 import ToggleRow from "./ToggleRow.vue";
@@ -21,28 +22,11 @@ onMounted(() => window.addEventListener("resize", onResize));
 onUnmounted(() => window.removeEventListener("resize", onResize));
 const compact = computed(() => vh.value < 800);
 
-const connectionLabel = computed(() => {
-  switch (s.value.connection) {
-    case "connected":
-      return "Connected";
-    case "connecting":
-      return "Connecting…";
-    case "disconnected":
-      return s.value.awaitingUnlock ? "Unlock your iPhone" : "Waiting for iPhone";
-    default:
-      return "Not set up";
-  }
-});
+const connectionLabel = computed(() => connectionLabelFor(s.value));
 
 const dotClass = computed(() => {
-  switch (s.value.connection) {
-    case "connected":
-      return "bg-accent-teal";
-    case "connecting":
-      return "bg-accent-amber animate-pulse";
-    default:
-      return "bg-on-dark-soft/50";
-  }
+  if (s.value.connection === "connected") return "bg-accent-teal";
+  return connectionBusy(s.value) ? "bg-accent-amber animate-pulse" : "bg-on-dark-soft/50";
 });
 
 const batteryIcon = computed(() => {

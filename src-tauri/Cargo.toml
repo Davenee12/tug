@@ -51,6 +51,9 @@ windows = { version = "0.62", features = [
   "Web_Http_Headers",
   "Win32_Foundation",
   "Win32_Security_Credentials",
+  # Wake detection: the suspend/resume notification and the sleep-inclusive vs awake-only clocks.
+  "Win32_System_Power",
+  "Win32_System_WindowsProgramming",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }

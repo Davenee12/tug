@@ -9,6 +9,7 @@ const base: PanelInputs = {
   connection: "connecting",
   hasDevice: true,
   pairingStale: false,
+  reconnecting: false,
   downSince: T0,
   now: T0,
 };
@@ -39,6 +40,19 @@ describe("showConnectionPanel", () => {
     expect(showConnectionPanel({ ...late, connection: "connected" })).toBe(false);
     expect(showConnectionPanel({ ...late, inSettings: true })).toBe(false);
     expect(showConnectionPanel({ ...late, wide: false })).toBe(false);
+  });
+});
+
+describe("showConnectionPanel while tug reconnects on its own", () => {
+  it("stays hidden however long the automatic reconnect takes, then follows the grace again", () => {
+    // 2026-10-06: a Bluetooth stall took ~100 s to recover from; the setup pane had nothing to offer.
+    const later = { ...base, connection: "disconnected" as const, now: T0 + 2 * RECONNECT_GRACE_MS };
+    expect(showConnectionPanel({ ...later, reconnecting: true })).toBe(false);
+    expect(showConnectionPanel(later)).toBe(true);
+  });
+
+  it("still shows straight away when the pairing is dead", () => {
+    expect(showConnectionPanel({ ...base, connection: "disconnected", pairingStale: true, reconnecting: true })).toBe(true);
   });
 });
 
