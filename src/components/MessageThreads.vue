@@ -5,7 +5,7 @@ import { useTugStore } from "../stores/tug";
 import { replyUnavailable } from "../lib/availability";
 import { clockTime, dayLabel, formatAddress, groupConversations, threadKey, type Conversation, type ConversationItem } from "../lib/format";
 import { shouldStickToBottom } from "../lib/scroll";
-import { bubbleKind, distinguishesIMessage } from "../lib/messageType";
+import { bubbleKind, distinguishesIMessage, messageText } from "../lib/messageType";
 import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import ConversationRow from "./ConversationRow.vue";
@@ -171,7 +171,16 @@ const statusLabel = (i: ConversationItem) => {
   if (i.kind !== "message" || i.m.direction !== "out") return "";
   // "accepted" (the iPhone took it) and "sent" (a MAP SendingSuccess event confirmed it, when
   // live texts are working) both read as "Sent" — a send the user can trust either way.
-  return { pending: "Sending…", accepted: "Sent", sent: "Sent", failed: "Not sent", received: "" }[i.m.status];
+  // "unconfirmed": the whole text went out but the phone never answered. No Retry: it may have
+  // sent, and a second try could text them twice.
+  return {
+    pending: "Sending…",
+    accepted: "Sent",
+    sent: "Sent",
+    failed: "Not sent",
+    unconfirmed: "May have sent — check your iPhone",
+    received: "",
+  }[i.m.status];
 };
 
 // Composer: replies go through the iPhone over message access (MAP).
@@ -341,7 +350,7 @@ function onKey(e: KeyboardEvent) {
               <span v-if="item.kind === 'notification' && item.n.subtitle" class="mb-0.5 block text-[12px] font-medium text-muted">
                 {{ item.n.subtitle }}
               </span>
-              {{ item.body || "(no preview)" }}
+              {{ item.kind === "message" ? messageText(item.m) : item.body || "(no preview)" }}
             </div>
             <span class="mx-1 mt-1 flex items-center gap-1.5 font-mono text-[11px] text-muted-soft">
               {{ clockTime(item.at) }}

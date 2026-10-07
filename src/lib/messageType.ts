@@ -40,6 +40,20 @@ export function distinguishesIMessage(messages: Pick<SmsMessage, "msgType">[]): 
   return false;
 }
 
+/** Shown for a text with no words: a photo or other attachment the phone won't send over. */
+export const ATTACHMENT_ONLY = "Photo or attachment — open it on your iPhone";
+
+/**
+ * What to show for a text. The phone sends no text for a photo or other attachment (MAP leaves
+ * attachments out), so an empty MMS or untyped text says so instead of "(no preview)". An empty
+ * plain text or iMessage is just empty.
+ */
+export function messageText(m: Pick<SmsMessage, "body" | "msgType">): string {
+  if (m.body) return m.body;
+  const t = (m.msgType ?? "").toUpperCase();
+  return t === "MMS" || classifyType(m.msgType) === "unknown" ? ATTACHMENT_ONLY : "(no preview)";
+}
+
 /**
  * The colour family for one message's bubble, or null to keep the neutral look. Only returns a
  * colour when the phone distinguishes the two and this message's own type is known.

@@ -206,7 +206,8 @@ pub struct Shared {
     pub store: Arc<Store>,
     status: Mutex<DeviceStatus>,
     now_playing: Mutex<NowPlaying>,
-    /// The phone's recent calls (PBAP), newest first. Not stored: the phone keeps the real list.
+    /// The phone's recent calls (PBAP), newest first. The last list is saved (`map::calls::save`)
+    /// so Recents shows it at launch until the phone answers again.
     calls: Mutex<Vec<CallRecord>>,
     /// Current ANCS subscription id; rows from it can still take actions.
     live_session: Mutex<Option<String>>,
@@ -237,12 +238,13 @@ pub fn now_ms() -> i64 {
 
 impl Shared {
     pub fn new(app: AppHandle, store: Arc<Store>) -> Self {
+        let calls = crate::map::calls::load(&store);
         Self {
             app,
             store,
             status: Mutex::default(),
             now_playing: Mutex::default(),
-            calls: Mutex::default(),
+            calls: Mutex::new(calls),
             live_session: Mutex::default(),
             pairing_confirm: Mutex::default(),
             map: OnceLock::new(),
@@ -334,6 +336,7 @@ impl Shared {
             changed.then(|| current.clone())
         };
         if let Some(calls) = changed {
+            crate::map::calls::save(&self.store, &calls);
             self.emit(events::CALLS, calls);
         }
     }

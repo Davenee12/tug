@@ -46,7 +46,9 @@ impl Direction {
 /// `received` for incoming; outgoing goes `pending` → `accepted` (taken by the iPhone for
 /// sending; not proof of delivery) → `sent` (the phone's MAP `SendingSuccess` event confirmed
 /// it left), or `failed` (the push failed, or a `SendingFailure` event came back). Without live
-/// texts (`map::mns`) a send stops at `accepted`; the UI shows both as "Sent".
+/// texts (`map::mns`) a send stops at `accepted`; the UI shows both as "Sent". `unconfirmed`: the
+/// whole text went out but the phone's answer never came, so it may have sent ("check your
+/// iPhone"); never retried automatically, and a later send report still settles it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Status {
@@ -55,6 +57,7 @@ pub enum Status {
     Accepted,
     Sent,
     Failed,
+    Unconfirmed,
 }
 
 impl Status {
@@ -65,6 +68,7 @@ impl Status {
             Status::Accepted => "accepted",
             Status::Sent => "sent",
             Status::Failed => "failed",
+            Status::Unconfirmed => "unconfirmed",
         }
     }
 
@@ -74,6 +78,7 @@ impl Status {
             "accepted" => Status::Accepted,
             "sent" => Status::Sent,
             "failed" => Status::Failed,
+            "unconfirmed" => Status::Unconfirmed,
             _ => Status::Received,
         }
     }
@@ -123,8 +128,15 @@ pub struct IncomingMessage<'a> {
     pub msg_type: Option<&'a str>,
 }
 
-// A name the phone sent with the message stands in until the number is a known contact.
-const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address, COALESCE(c.name, m.sender_name), m.body, m.sent_at, m.received_at, m.status, m.msg_type, m.gap_before
+// The contact with exactly this address; failing that, the one contact whose number matches it in
+// another format (same last 10 digits, `store::match_key`; never a guess between two names); then a
+// name the phone sent with the message, until the number is a known contact.
+const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address,
+            COALESCE(c.name, (
+                SELECT CASE WHEN COUNT(DISTINCT k.name) = 1 THEN MIN(k.name) END
+                FROM contacts k WHERE k.match_key = match_key(m.address)
+            ), m.sender_name),
+            m.body, m.sent_at, m.received_at, m.status, m.msg_type, m.gap_before
      FROM messages m LEFT JOIN contacts c ON c.address = m.address";
 
 fn map_row(r: &Row) -> Result<StoredMessage> {
@@ -276,7 +288,7 @@ impl Store {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, handle, received_at FROM messages
-             WHERE source = ?1 AND direction = 'out' AND status IN ('pending', 'accepted')
+             WHERE source = ?1 AND direction = 'out' AND status IN ('pending', 'accepted', 'unconfirmed')
                AND received_at > ?2",
         )?;
         let rows = stmt.query_map(params![source, now - CONFIRM_WINDOW_MS], |r| {
@@ -310,6 +322,17 @@ impl Store {
         }
         conn.query_row(&format!("{SELECT} WHERE m.id = ?1"), [id], map_row)
             .map(Some)
+    }
+
+    /// One outgoing message by id; `None` if there's no such outgoing row.
+    pub fn outgoing(&self, id: i64) -> Result<Option<StoredMessage>> {
+        self.conn()
+            .query_row(
+                &format!("{SELECT} WHERE m.id = ?1 AND m.direction = 'out'"),
+                [id],
+                map_row,
+            )
+            .optional()
     }
 
     /// Flag a message as the first one after a possible gap (see `StoredMessage::gap_before`).
@@ -404,7 +427,7 @@ impl Store {
             )?;
             let mut forget = tx.prepare("DELETE FROM contact_aliases WHERE address = ?1 AND alias = ?2")?;
             let mut stmt = tx.prepare(
-                "INSERT INTO contacts (address, name) VALUES (?1, ?2)
+                "INSERT INTO contacts (address, name, match_key) VALUES (?1, ?2, match_key(?1))
                  ON CONFLICT (address) DO UPDATE SET name = excluded.name",
             )?;
             for (address, name) in entries {
@@ -480,7 +503,10 @@ impl Store {
     /// notifications into this contact's conversation: each text must have come from
     /// exactly one stored sender *and* appear under exactly one name, and the pairing must
     /// hold for at least two different texts. (One shared "ok" from an unsaved sender whose
-    /// own text never reached tug is a coincidence, not a rename.) Returns how many were learned.
+    /// own text never reached tug is a coincidence, not a rename.) Group texts never count: a
+    /// notification with a subtitle or a title naming several people ("Sam & Alex") isn't one
+    /// contact's name, and an alias from it would retitle the whole group. Returns how many were
+    /// learned.
     pub fn learn_aliases(&self) -> Result<usize> {
         self.conn().execute(
             "INSERT OR IGNORE INTO contact_aliases (address, alias)
@@ -490,6 +516,7 @@ impl Store {
                  JOIN contacts c ON c.address = m.address
                  JOIN notifications n
                    ON n.app_id = ?1 AND n.message = m.body AND abs(n.received_at - m.received_at) <= ?2
+                  AND n.subtitle = '' AND NOT group_like(n.title)
                  WHERE m.direction = 'in' AND m.body <> ''
                    AND clean_name(n.title) <> '' AND name_key(n.title) <> name_key(c.name)
                    AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
@@ -507,20 +534,24 @@ impl Store {
     /// notification with the same text as an incoming message, arriving close in
     /// time. Only unambiguous matches count: the text must have come from exactly
     /// one sender and match exactly one name — otherwise two people who both sent
-    /// "ok" could swap names. Returns the newly learned contacts.
+    /// "ok" could swap names. Group texts (a subtitle, or a title naming several people) never name
+    /// anyone, though they still count against a text being unambiguous. Returns the newly learned
+    /// contacts.
     pub fn learn_contacts(&self) -> Result<Vec<Contact>> {
         let conn = self.conn();
         // Names as the UI shows them (clean_name mirrors format.ts cleanName).
         let mut stmt = conn.prepare(
             "WITH titled AS (
-                 SELECT message, received_at, clean_name(title) AS name FROM notifications WHERE app_id = ?1
+                 SELECT message, received_at, clean_name(title) AS name,
+                        subtitle = '' AND NOT group_like(title) AS solo
+                 FROM notifications WHERE app_id = ?1
              )
-             INSERT OR IGNORE INTO contacts (address, name)
-             SELECT address, name FROM (
+             INSERT OR IGNORE INTO contacts (address, name, match_key)
+             SELECT address, name, match_key(address) FROM (
                  SELECT m.address AS address, MIN(n.name) AS name, COUNT(DISTINCT n.name) AS names
                  FROM messages m
                  JOIN titled n
-                   ON n.message = m.body AND n.name <> '' AND abs(n.received_at - m.received_at) <= ?2
+                   ON n.message = m.body AND n.name <> '' AND n.solo AND abs(n.received_at - m.received_at) <= ?2
                  WHERE m.direction = 'in' AND m.body <> ''
                    AND m.address NOT IN (SELECT address FROM contacts)
                    AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
@@ -577,6 +608,95 @@ mod tests {
             received_at: at,
         })
         .unwrap();
+    }
+
+    fn notify_sub(s: &Store, uid: u32, title: &str, subtitle: &str, message: &str, at: i64) {
+        let attrs = NotificationAttributes {
+            app_id: MESSAGES_APP.into(),
+            title: title.into(),
+            subtitle: subtitle.into(),
+            message: message.into(),
+            ..Default::default()
+        };
+        s.upsert_notification(&NewNotification {
+            session: "s1",
+            uid,
+            category: Category::Social,
+            flags: EventFlags::default(),
+            attrs: &attrs,
+            received_at: at,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_number_in_another_format_still_gets_the_contacts_name() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[
+            ("+447700900123".into(), "Priya".into()),
+            ("ana@example.com".into(), "Ana".into()),
+        ])
+        .unwrap();
+        let national = s
+            .insert_incoming(&incoming("H1", "07700900123", "hello"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(national.contact_name.as_deref(), Some("Priya"));
+        let email = s
+            .insert_incoming(&incoming("H2", "ana@example.com", "hi"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(email.contact_name.as_deref(), Some("Ana"));
+        let short = s.insert_incoming(&incoming("H3", "12345", "code 1")).unwrap().unwrap();
+        assert_eq!(short.contact_name, None);
+    }
+
+    #[test]
+    fn two_contacts_sharing_the_last_digits_name_neither() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[
+            ("+447700900123".into(), "Priya".into()),
+            ("+337700900123".into(), "Luc".into()),
+        ])
+        .unwrap();
+        let m = s
+            .insert_incoming(&incoming("H1", "07700900123", "hello"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.contact_name, None, "never a guess between two people");
+    }
+
+    #[test]
+    fn group_texts_never_name_a_sender() {
+        let s = Store::in_memory().unwrap();
+        notify(&s, 1, "Sam & Alex", "pizza tonight?", 990);
+        s.insert_incoming(&incoming("H1", "+13025550100", "pizza tonight?"))
+            .unwrap();
+        notify_sub(&s, 2, "Weekend crew", "Jo", "who's driving", 990);
+        s.insert_incoming(&incoming("H2", "+13025550101", "who's driving"))
+            .unwrap();
+        assert!(s.learn_contacts().unwrap().is_empty());
+        // A one-to-one notification still teaches the name.
+        notify(&s, 3, "Jo", "on my way", 990);
+        s.insert_incoming(&incoming("H3", "+13025550101", "on my way")).unwrap();
+        let learned = s.learn_contacts().unwrap();
+        assert_eq!(learned.len(), 1);
+        assert_eq!(learned[0].name, "Jo");
+    }
+
+    #[test]
+    fn group_titles_never_become_aliases() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "zoe".into())]).unwrap();
+        for (uid, (handle, text)) in [("H1", "dinner at 7?"), ("H2", "running late")].into_iter().enumerate() {
+            notify(&s, uid as u32, "zoe & Sam", text, 990);
+            s.insert_incoming(&incoming(handle, "+13025550173", text)).unwrap();
+        }
+        assert_eq!(s.learn_aliases().unwrap(), 0);
+        for (uid, text) in ["dinner at 7?", "running late"].into_iter().enumerate() {
+            notify_sub(&s, 10 + uid as u32, "zoe 2", "Sam", text, 990);
+        }
+        assert_eq!(s.learn_aliases().unwrap(), 0, "a subtitle marks a group text");
     }
 
     #[test]
@@ -1077,6 +1197,37 @@ mod tests {
             s.retry_outgoing(m.id, 9_500).unwrap().is_none(),
             "a pending retry can't double up"
         );
+    }
+
+    #[test]
+    fn an_unconfirmed_send_round_trips_and_can_still_be_settled() {
+        let s = Store::in_memory().unwrap();
+        let m = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "hi", 1_000)
+            .unwrap();
+        let m = s.set_outgoing_status(m.id, Status::Unconfirmed, None).unwrap();
+        assert_eq!(m.status, Status::Unconfirmed);
+        assert_eq!(s.outgoing_unconfirmed(SOURCE_IPHONE_MAP, 2_000).unwrap().len(), 1);
+        assert!(
+            s.retry_outgoing(m.id, 2_000).unwrap().is_none(),
+            "never retried: it may have sent"
+        );
+        assert_eq!(s.fail_interrupted_sends().unwrap(), 0, "not swept as interrupted");
+    }
+
+    #[test]
+    fn outgoing_by_id_is_only_sends() {
+        let s = Store::in_memory().unwrap();
+        let out = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "hi", 1_000)
+            .unwrap();
+        let inc = s
+            .insert_incoming(&incoming("H1", "+13025550100", "yo"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.outgoing(out.id).unwrap(), Some(out));
+        assert_eq!(s.outgoing(inc.id).unwrap(), None);
+        assert_eq!(s.outgoing(9_999).unwrap(), None);
     }
 
     #[test]

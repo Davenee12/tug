@@ -188,8 +188,9 @@ export interface SmsMessage {
    * Outgoing: pending → accepted (taken by the iPhone; not proof of delivery) → sent (a MAP
    * SendingSuccess event confirmed it left), or failed. Without live texts a send stops at
    * accepted; the UI shows both accepted and sent as "Sent".
+   * Unconfirmed: the whole text went out but the phone never answered, so it may have sent.
    */
-  status: "received" | "pending" | "accepted" | "sent" | "failed";
+  status: "received" | "pending" | "accepted" | "sent" | "failed" | "unconfirmed";
   /**
    * The MAP message type the phone reported (SMS_GSM, SMS_CDMA, MMS, EMAIL, IM), for telling
    * iMessage (IM) from a plain text. Null for history from before tug stored it, and for sends.

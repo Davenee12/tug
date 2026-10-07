@@ -151,6 +151,20 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE messages ADD COLUMN gap_before INTEGER NOT NULL DEFAULT 0;
     "#,
+    // v10: aliases learned from group-text notifications ("Sam & Alex", "Sam, Alex & 2 others")
+    // could retitle every notification from that group as one contact. The learners skip those
+    // now; drop any already learned.
+    r#"
+    DELETE FROM contact_aliases WHERE group_like(alias);
+    "#,
+    // v11: the last 10 digits of a contact's number (`match_key`), so a text from the same number
+    // in another format (national "07700 900123" vs the contact's "+44 7700 900123") still shows
+    // the contact's name. A plain column, set on insert, so an older build can still write.
+    r#"
+    ALTER TABLE contacts ADD COLUMN match_key TEXT;
+    UPDATE contacts SET match_key = match_key(address);
+    CREATE INDEX contacts_match_key ON contacts (match_key);
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
@@ -170,6 +184,24 @@ pub(crate) fn clean_name(name: &str) -> String {
     name
 }
 
+/// Whether a notification title names several people, as iOS titles a group text ("Sam & Alex",
+/// "Sam, Alex & Jo", "Sam & 2 others"). Such a title is never one contact's name. Also callable from
+/// SQL as `group_like`.
+pub(crate) fn looks_like_group(title: &str) -> bool {
+    let t = clean_name(title).to_lowercase();
+    t.contains('&') || t.contains(',') || t.contains(" others")
+}
+
+/// The key that matches one phone number across formats: its last 10 digits, when it has at least
+/// 10 (emails and short codes have none, and only match exactly). Also callable from SQL.
+pub(crate) fn match_key(address: &str) -> Option<String> {
+    if address.contains('@') {
+        return None;
+    }
+    let digits: Vec<char> = address.chars().filter(char::is_ascii_digit).collect();
+    (digits.len() >= 10).then(|| digits[digits.len() - 10..].iter().collect())
+}
+
 /// How two names are compared (matching the UI's `nameKey`, format.ts): the cleaned name,
 /// lower-cased, without emoji variation selectors, so "sam ❤" and "sam ❤️" are one person.
 pub(crate) fn name_key(name: &str) -> String {
@@ -186,6 +218,12 @@ fn register_functions(conn: &Connection) -> Result<()> {
     conn.create_scalar_function("clean_name", 1, flags, |ctx| Ok(clean_name(&ctx.get::<String>(0)?)))?;
     conn.create_scalar_function("name_key", 1, flags, |ctx| {
         Ok(ctx.get::<Option<String>>(0)?.map(|s| name_key(&s)))
+    })?;
+    conn.create_scalar_function("match_key", 1, flags, |ctx| {
+        Ok(ctx.get::<Option<String>>(0)?.and_then(|s| match_key(&s)))
+    })?;
+    conn.create_scalar_function("group_like", 1, flags, |ctx| {
+        Ok(ctx.get::<Option<String>>(0)?.is_some_and(|s| looks_like_group(&s)))
     })?;
     conn.create_scalar_function("strip_invisible", 1, flags, |ctx| {
         Ok(ctx.get::<Option<String>>(0)?.map(|s| crate::text::strip_invisible(&s)))
@@ -780,6 +818,67 @@ mod tests {
         assert_ne!(name_key("sam \u{2764}"), name_key("sam"));
     }
 
+    /// Back to a real older database: undo the schema later migrations added, so they apply again.
+    fn rewind(conn: &Connection, version: i64) {
+        if version < 11 {
+            conn.execute_batch("DROP INDEX contacts_match_key; ALTER TABLE contacts DROP COLUMN match_key;")
+                .unwrap();
+        }
+        if version < 9 {
+            conn.execute_batch("ALTER TABLE messages DROP COLUMN gap_before")
+                .unwrap();
+        }
+        conn.pragma_update(None, "user_version", version).unwrap();
+    }
+
+    #[test]
+    fn match_key_is_the_last_ten_digits_of_a_real_number() {
+        assert_eq!(match_key("+447700900123").as_deref(), Some("7700900123"));
+        assert_eq!(match_key("07700900123").as_deref(), Some("7700900123"));
+        assert_eq!(match_key("+13025550173").as_deref(), Some("3025550173"));
+        assert_eq!(match_key("12345"), None, "short codes match exactly only");
+        assert_eq!(match_key("ana1234567890@example.com"), None);
+    }
+
+    #[test]
+    fn group_titles_are_recognised() {
+        for t in [
+            "Sam & Alex",
+            "Sam, Alex",
+            "Sam & 2 others",
+            "Sam, Alex & 1 other",
+            "\u{200E}Sam & Jo",
+        ] {
+            assert!(looks_like_group(t), "{t}");
+        }
+        for t in ["Sam", "zoe \u{1F49C}", "Dr Other", "Mothers Day"] {
+            assert!(!looks_like_group(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn upgrading_drops_aliases_learned_from_group_titles() {
+        let s = Store::in_memory().unwrap();
+        {
+            let conn = s.conn();
+            conn.execute_batch(
+                "INSERT INTO contact_aliases (address, alias) VALUES
+                     ('+13025550100', 'Sam & Alex'), ('+13025550100', 'Sam, Alex & 2 others'),
+                     ('+13025550100', 'Sammy');",
+            )
+            .unwrap();
+            rewind(&conn, 9);
+        }
+        migrate(&mut s.conn()).unwrap();
+        let left: Vec<String> = {
+            let conn = s.conn();
+            let mut stmt = conn.prepare("SELECT alias FROM contact_aliases").unwrap();
+            let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+            rows.collect::<Result<_>>().unwrap()
+        };
+        assert_eq!(left, vec!["Sammy".to_string()]);
+    }
+
     #[test]
     fn a_title_saved_with_an_invisible_mark_is_cleaned_and_its_replay_reuses_the_row() {
         // Rows saved before v8 kept WhatsApp's U+200E; the upgrade cleans them so the phone's
@@ -795,10 +894,7 @@ mod tests {
             )
             .unwrap();
             let id = conn.last_insert_rowid();
-            // Back to a real v7 database: undo what later migrations added, so they apply again.
-            conn.execute_batch("ALTER TABLE messages DROP COLUMN gap_before")
-                .unwrap();
-            conn.pragma_update(None, "user_version", 7).unwrap();
+            rewind(&conn, 7);
             id
         };
         migrate(&mut s.conn()).unwrap();
