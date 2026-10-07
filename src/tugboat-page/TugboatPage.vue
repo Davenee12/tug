@@ -29,6 +29,7 @@ async function poll() {
   try {
     const s = await props.api.state();
     offers.value = s.offers;
+    forgetWithdrawn(s.offers);
     if (s.text?.id !== pcText.value?.id) copied.value = false;
     pcText.value = s.text;
     connection.value = "ok";
@@ -161,10 +162,25 @@ interface Fetching {
 }
 const downloads = reactive<Record<string, Fetching>>({});
 
+/** Let go of a fetched file (its memory) and its Save button. */
+function release(id: string) {
+  const url = downloads[id]?.url;
+  if (url) URL.revokeObjectURL(url);
+  delete downloads[id];
+}
+
+/** The PC stopped offering these: free any copy the page still holds. */
+function forgetWithdrawn(offered: PageOffer[]) {
+  const still = new Set(offered.map((o) => o.id));
+  for (const id of Object.keys(downloads)) if (!still.has(id)) release(id);
+}
+
 async function fetchOffer(o: PageOffer) {
   if (!props.api) return;
-  const previous = downloads[o.id]?.url;
-  if (previous) URL.revokeObjectURL(previous);
+  // Hold at most one assembled file (they can be up to 1 GB each): fetching another lets go of
+  // any earlier one that's ready, which goes back to "Get". No timer: a save sheet can stay open.
+  for (const [id, d] of Object.entries(downloads)) if (id !== o.id && d.state === "ready") release(id);
+  release(o.id);
   const d: Fetching = { state: "loading", got: 0 };
   downloads[o.id] = d;
   try {
@@ -200,7 +216,7 @@ const fatalMessage = computed(() =>
         {{ connection === "ok" ? "Connected" : connection === "network" ? "Can't reach PC" : "Connecting…" }}
       </span>
     </header>
-    <p class="mt-2 text-[14px] text-muted">Private to your Wi-Fi, encrypted.</p>
+    <p class="mt-2 text-[14px] text-muted">Encrypted between your phone and your PC.</p>
 
     <!-- Ended: Tugboat closed, link expired, or in use elsewhere. -->
     <div v-if="fatal" class="card mt-8 flex flex-col items-center gap-3 px-6 py-10 text-center">
@@ -288,7 +304,7 @@ const fatalMessage = computed(() =>
             <Send v-else :size="16" />
             Send
           </button>
-          <span v-if="textState === 'sent'" class="text-[14px] text-muted" role="status">Sent. It's on your PC's clipboard.</span>
+          <span v-if="textState === 'sent'" class="text-[14px] text-muted" role="status">Sent to your PC.</span>
           <span v-else-if="textState === 'failed'" class="text-[14px] text-error" role="alert">Couldn't send. Try again.</span>
         </div>
       </section>

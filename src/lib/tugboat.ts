@@ -20,6 +20,7 @@ export const TUGBOAT_OFF: TugboatStatus = {
   outgoing: [],
   texts: [],
   sentText: null,
+  sending: false,
   ended: null,
 };
 
@@ -28,9 +29,9 @@ export function showConnectHelp(s: Pick<TugboatStatus, "phase">, shownAt: number
   return s.phase === "waiting" && shownAt !== null && now - shownAt >= HELP_AFTER_MS;
 }
 
-/** Files are still arriving from the phone (closing would cut them off). */
-export function transferring(s: Pick<TugboatStatus, "incoming">): boolean {
-  return s.incoming.some((i) => !i.done);
+/** Files are still moving either way (closing would cut them off). */
+export function transferring(s: Pick<TugboatStatus, "incoming" | "sending">): boolean {
+  return s.sending || s.incoming.some((i) => !i.done);
 }
 
 /** One plain sentence for files that couldn't be offered to the phone, or null if all were. */

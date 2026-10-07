@@ -11,6 +11,7 @@ import type {
   DeviceStatus,
   TugboatSkipped,
   TugboatStatus,
+  TugboatTextArrived,
   DiscoveredDevice,
   MediaCommand,
   NowPlaying,
@@ -129,8 +130,8 @@ export const api = {
   tugboatStart: () => invoke<TugboatStatus>("tugboat_start"),
   tugboatStop: () => invoke<void>("tugboat_stop"),
   tugboatStatus: () => invoke<TugboatStatus>("tugboat_status"),
-  /** Offer files (paths) to the phone, opening Tugboat if needed; returns the ones skipped. */
-  tugboatOfferFiles: (paths: string[]) => invoke<TugboatSkipped[]>("tugboat_offer_files", { paths }),
+  /** The QR link on the clipboard, kept out of clipboard history and sync (it carries the secret). */
+  tugboatCopyLink: () => invoke<void>("tugboat_copy_link"),
   /** Windows' file picker, then offer what was picked. */
   tugboatPickFiles: () => invoke<TugboatSkipped[]>("tugboat_pick_files"),
   tugboatRemoveOffer: (id: string) => invoke<void>("tugboat_remove_offer", { id }),
@@ -155,6 +156,9 @@ interface EventPayloads {
   calls: CallRecord[];
   "toast-pressed": ToastPressed;
   "tugboat-status": TugboatStatus;
+  "tugboat-text": TugboatTextArrived;
+  /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */
+  "tugboat-dropped": TugboatSkipped[];
 }
 
 export function on<E extends keyof EventPayloads>(

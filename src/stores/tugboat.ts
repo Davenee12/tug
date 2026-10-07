@@ -1,5 +1,6 @@
 // Tugboat's panel state: the session status from Rust, whether the panel is open, and files
-// dragged onto tug's window. The work (server, crypto, files) is all in src-tauri/src/tugboat.
+// dragged over tug's window (only to show the overlay: Rust takes the drop itself, so no path
+// ever comes from page script). The work (server, crypto, files) is all in src-tauri/src/tugboat.
 
 import { defineStore } from "pinia";
 import { ref } from "vue";
@@ -26,15 +27,27 @@ export const useTugboatStore = defineStore("tugboat", () => {
   function apply(s: TugboatStatus) {
     const hadCode = status.value.url !== null;
     status.value = s;
+    // Stopped because tug's window hid to the tray: don't greet the user with a dead panel.
+    if (s.phase === "off" && s.ended === "hidden") open.value = false;
     if (s.url && (!hadCode || shownAt.value === null)) shownAt.value = Date.now();
     if (!s.url) shownAt.value = null;
   }
 
-  /** Listen for status, and for files dragged onto the window (they open Tugboat, offered to the phone). */
-  async function init(onSkipped: (skipped: TugboatSkipped[]) => void) {
+  /**
+   * Listen for status; for files dropped onto the window (Rust opens Tugboat and offers them, then
+   * says which were skipped); and for text from the phone landing on the clipboard.
+   */
+  async function init(handlers: { onSkipped: (skipped: TugboatSkipped[]) => void; onText: (ok: boolean) => void }) {
     if (started) return;
     started = true;
-    teardown.push(await on("tugboat-status", apply));
+    teardown.push(
+      await on("tugboat-status", apply),
+      await on("tugboat-dropped", (skipped) => {
+        open.value = true;
+        handlers.onSkipped(skipped);
+      }),
+      await on("tugboat-text", ({ ok }) => handlers.onText(ok)),
+    );
     // After a window reload Tugboat may still be running: show it again rather than leave it unseen.
     try {
       const s = await api.tugboatStatus();
@@ -49,11 +62,7 @@ export const useTugboatStore = defineStore("tugboat", () => {
         await getCurrentWebview().onDragDropEvent((e) => {
           const p = e.payload;
           if (p.type === "enter") dragging.value = p.paths.length > 0;
-          else if (p.type === "leave") dragging.value = false;
-          else if (p.type === "drop") {
-            dragging.value = false;
-            if (p.paths.length) void offer(p.paths).then(onSkipped);
-          }
+          else if (p.type === "leave" || p.type === "drop") dragging.value = false;
         }),
       );
     } catch {
@@ -98,14 +107,13 @@ export const useTugboatStore = defineStore("tugboat", () => {
     apply({ ...TUGBOAT_OFF, folder: status.value.folder });
   }
 
-  /** Offer files to the phone (dragged in, or picked), opening Tugboat first if it's closed. */
-  async function offer(paths: string[]): Promise<TugboatSkipped[]> {
-    open.value = true;
+  /** "Copy link": done in Rust, kept out of clipboard history and sync. */
+  async function copyLink(): Promise<boolean> {
     try {
-      return await api.tugboatOfferFiles(paths);
-    } catch (e) {
-      error.value = typeof e === "string" ? e : "Couldn't offer those files.";
-      return [];
+      await api.tugboatCopyLink();
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -146,8 +154,8 @@ export const useTugboatStore = defineStore("tugboat", () => {
     start,
     show,
     close,
-    offer,
     pickFiles,
+    copyLink,
     removeOffer,
     sendText,
     openFolder,
