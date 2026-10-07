@@ -18,7 +18,7 @@ import {
   type Conversation,
   type Thread,
 } from "../lib/format";
-import { replyAddress, toastSpec } from "../lib/toastSpec";
+import { replyAddress, replyReadsConversation, toastSpec } from "../lib/toastSpec";
 import { shouldPopUp, type PopupEvent } from "../lib/popup";
 import { isVip, vipIndex } from "../lib/vips";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
@@ -67,7 +67,13 @@ import {
   type PlaybackDevice,
 } from "../lib/playback";
 import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
-import { CHECKING_MAX_MS, phoneSwitches, switchesPending as anySwitchPending, type SwitchContext } from "../lib/phoneSwitches";
+import {
+  CHECKING_MAX_MS,
+  phoneSwitches,
+  switchCheckDue,
+  switchesPending as anySwitchPending,
+  type SwitchContext,
+} from "../lib/phoneSwitches";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 import { useTugboatStore } from "./tugboat";
 import { useDevToolsStore } from "./devtools";
@@ -466,9 +472,17 @@ export const useTugStore = defineStore("tug", () => {
   const switches = computed(() => phoneSwitches(status.value, switchContext.value));
   // Not "no contacts saved": names kept from before a re-pair hid a Sync Contacts that was off.
   const switchesPending = computed(() => !!status.value.device && anySwitchPending(switches.value));
-  /** Ask the phone about its switches now (window to the front, "Check again"). */
+  /**
+   * Ask the phone about its switches now (window to the front, "Check again"). At most one per
+   * SWITCH_CHECK_GAP_MS: focus and visibility both fire on the same return.
+   */
+  let lastSwitchCheck: number | null = null;
   function checkSwitches() {
-    if (status.value.device) void api.checkSwitches().catch(() => undefined);
+    if (!status.value.device) return;
+    const now = Date.now();
+    if (!switchCheckDue(lastSwitchCheck, now)) return;
+    lastSwitchCheck = now;
+    void api.checkSwitches().catch(() => undefined);
   }
   /**
    * The Connect panel is on screen and tug is visible: the Feed stand-in (showConnect) outside
@@ -761,6 +775,8 @@ export const useTugStore = defineStore("tug", () => {
   function onToastPressed({ kind, id, message }: ToastPressed) {
     // A reply carries the text as stored: the conversation shows it even if its events never came.
     if (message) addMissingMessages([message], "pop-up reply");
+    // A reply the phone didn't take (failed, or not confirmed) leaves the conversation unread.
+    if (kind === "replied" && !replyReadsConversation(message)) return;
     const n = notifications.value.find((x) => x.id === id);
     if (!n) return;
     if (kind === "open") {
@@ -1272,6 +1288,9 @@ export const useTugStore = defineStore("tug", () => {
     window.clearInterval(watchRenew);
     window.clearInterval(clockTimer);
     window.clearTimeout(switchTimer);
+    window.clearTimeout(transferCheck);
+    transferCheck = undefined;
+    lastSwitchCheck = null;
     toastSummary = undefined;
     watchRenew = undefined;
     clockTimer = undefined;

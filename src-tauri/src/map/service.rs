@@ -145,6 +145,15 @@ async fn deliver_or_fail(shared: &Shared, map: &MapHandle, id: i64) -> Result<St
 }
 
 pub fn start(shared: Arc<Shared>) -> MapHandle {
+    // Nothing can be sending yet (the handle doesn't exist until this returns), so a send still
+    // pending was cut off by a crash or quit. Done here, before the worker thread starts, rather
+    // than on it: a send queued in the moment before the worker ran would otherwise be swept up
+    // as "interrupted" while it was really on its way.
+    match shared.store.fail_interrupted_sends() {
+        Ok(0) => {}
+        Ok(n) => log::info!("{n} interrupted send(s) marked not sent"),
+        Err(e) => log::warn!("checking interrupted sends failed: {e}"),
+    }
     let (tx, rx) = mpsc::unbounded_channel();
     #[cfg(windows)]
     {
@@ -191,7 +200,7 @@ mod worker {
 
     use super::MapCommand;
     use crate::map::address::normalize;
-    use crate::map::contacts_watch::{ContactsWatch, Pull, Transition};
+    use crate::map::contacts_watch::{check_now_at, ContactsWatch, Pull, Transition};
     use crate::map::health::{Attempt, Health, LiveTexts, TextsPairing};
     use crate::map::listing;
     use crate::map::mns::{self, Outgoing};
@@ -209,11 +218,10 @@ mod worker {
     /// Once per launch, page further back than that: a fresh install otherwise only sees the
     /// last few texts, often all from one person, and other recent chats never show up.
     const BACKFILL_MAX: u16 = 100;
-    // How often contacts are pulled (and when an empty phonebook means Sync Contacts is off) lives
-    // in `contacts_watch`, pure and unit-tested.
-    /// A "check now" this soon after the last contacts pull waits out the gap instead: each pull is
-    /// a whole PBAP connection, and focus + watching + "Check again" can all ask at once.
-    const CONTACTS_CHECK_GAP: Duration = Duration::from_secs(3);
+    // How often contacts are pulled (and when an empty phonebook means Sync Contacts is off), and
+    // when a "check now" pulls, live in `contacts_watch`, pure and unit-tested.
+    /// `LAST_TEXT_SYNC` is only read as "has tug synced before", so it's written at most this often.
+    const LAST_TEXT_SYNC_EVERY: Duration = Duration::from_secs(60);
     const CONTACTS_PULL_TIMEOUT: Duration = Duration::from_secs(90);
     /// The slow WITH-PHOTO phonebook pull runs off this worker, so give it well over the ~60 s it
     /// took on a test phone for 27 photos — nothing is waiting on it, and a timeout only ends the
@@ -324,6 +332,8 @@ mod worker {
         queued_reads: Vec<i64>,
         /// Texts whose download keeps timing out, so one can't block every newer text.
         fetch_tries: FetchTries,
+        /// When `LAST_TEXT_SYNC` was last written (at most every `LAST_TEXT_SYNC_EVERY`).
+        text_sync_saved: Option<Instant>,
     }
 
     pub async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<MapCommand>) {
@@ -359,13 +369,9 @@ mod worker {
             next_retry: None,
             queued_reads: Vec::new(),
             fetch_tries: FetchTries::default(),
+            text_sync_saved: None,
         };
-        // Nothing is sending yet, so a send still pending was cut off by a crash or quit.
-        match w.shared.store.fail_interrupted_sends() {
-            Ok(0) => {}
-            Ok(n) => log::info!("{n} interrupted send(s) marked not sent"),
-            Err(e) => log::warn!("checking interrupted sends failed: {e}"),
-        }
+        // Interrupted sends were already marked failed in `start`, before any send could be queued.
         // Old names from renames that happened while tug wasn't keeping track.
         match w.shared.store.learn_aliases() {
             Ok(0) => {}
@@ -384,10 +390,18 @@ mod worker {
                     None => break,
                     Some(MapCommand::Refresh) => w.refresh().await,
                     Some(MapCommand::CheckContacts) => {
-                        // Either way: the user may have just turned Sync Contacts on OR off. Pulls are
-                        // spaced at least CONTACTS_CHECK_GAP apart, so focus + visibility make one.
-                        w.contacts_due_now();
-                        w.refresh().await;
+                        // Either way: the user may have just turned Sync Contacts on OR off. Only a
+                        // check that brings the pull forward does anything: a second ask (focus +
+                        // visibility, "Check again") finds it already due and costs nothing, rather
+                        // than another inbox listing and phonebook pull ahead of any send.
+                        if let Some(at) = w.contacts_due_now() {
+                            if at <= Instant::now() {
+                                w.refresh().await;
+                            } else {
+                                // Too soon after the last pull: wake for it once the gap is up.
+                                next = next.min(at);
+                            }
+                        }
                     }
                     // Wake for it: the next refresh pulls the calls once they're due.
                     Some(MapCommand::RefreshCalls(after)) => next = next.min(w.calls_soon(after)),
@@ -612,21 +626,23 @@ mod worker {
             });
         }
 
-        /// Pull contacts as soon as possible (no sooner than `CONTACTS_CHECK_GAP` after the last).
-        fn contacts_due_now(&mut self) {
-            let mut at = Instant::now();
-            if let Some(last) = self.last_contacts_pull {
-                at = at.max(last + CONTACTS_CHECK_GAP);
-            }
-            self.next_contacts_sync = self.next_contacts_sync.min(at);
+        /// Pull contacts as soon as possible (no sooner than `contacts_watch::CHECK_GAP` after the
+        /// last). Returns when, if that brought the pull forward; `None` if one was already due by
+        /// then, so the caller doesn't refresh again for nothing.
+        fn contacts_due_now(&mut self) -> Option<Instant> {
+            let at = check_now_at(Instant::now(), self.last_contacts_pull, self.next_contacts_sync)?;
+            self.next_contacts_sync = at;
+            Some(at)
         }
 
         fn fail(&mut self, e: &MapError) {
             if self.session.take().is_some() {
                 log::info!("message access dropped: {e}");
             }
-            // What the phone shares is per connection; ask again on the next one.
+            // What the phone shares is per connection; ask again on the next one, and treat its
+            // first phonebook as new (saved, and the photo pass started) rather than "unchanged".
             self.contacts.connection_dropped();
+            self.phonebook_sig = None;
             self.publish_contacts();
             self.reset_photo_pass();
             self.stop_live_texts();
@@ -813,6 +829,9 @@ mod worker {
                     if !first_share && self.phonebook_sig == Some(sig) {
                         // Same phonebook as last time: the check did its job (the switch is on).
                         self.shared.update_status(|s| s.contacts_error = None);
+                        // Still give faces their turn: after a reconnect this is the only pull that
+                        // runs, and the pass checks for itself whether it's due (at most daily).
+                        self.maybe_sync_photos();
                         return;
                     }
                     self.phonebook_sig = Some(sig);
@@ -1255,7 +1274,12 @@ mod worker {
             }
             // Only once it all went through: a sync that failed partway looks back again.
             self.backfilled = true;
-            shared.store.set_setting(keys::LAST_TEXT_SYNC, &now_ms().to_string())?;
+            // Only whether tug has synced before is read back, so a write a minute is plenty (live
+            // texts and the poll can sync every few seconds).
+            if self.text_sync_saved.is_none_or(|t| t.elapsed() >= LAST_TEXT_SYNC_EVERY) {
+                shared.store.set_setting(keys::LAST_TEXT_SYNC, &now_ms().to_string())?;
+                self.text_sync_saved = Some(Instant::now());
+            }
             // Reads that waited for the phone to come back.
             if !self.queued_reads.is_empty() {
                 let ids = std::mem::take(&mut self.queued_reads);

@@ -122,7 +122,7 @@ const COMMANDS: Array<[string, string]> = [
           description="Disconnects every AI tool now. Each one has to be restarted to connect again."
         >
           <button :class="['btn-secondary btn-sm', confirmRevoke ? 'text-error' : '']" :disabled="devtools.working" @click="revoke">
-            {{ confirmRevoke ? "Tap again to revoke" : "Revoke access" }}
+            {{ confirmRevoke ? "Click again to revoke" : "Revoke access" }}
           </button>
         </SettingsRow>
       </div>

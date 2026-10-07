@@ -25,6 +25,18 @@ export type SwitchState = "on" | "off" | "checking" | "waiting";
 export const CHECKING_MAX_MS = 60_000;
 
 /**
+ * "Check the switches now" asks at most this often. Coming to the front fires both focus and
+ * visibility, and each check is a message-access listing plus a phonebook pull ahead of any send,
+ * so they collapse into one. Watching (the switches card open) polls on its own in the backend.
+ */
+export const SWITCH_CHECK_GAP_MS = 3_000;
+
+/** Whether a "check the switches now" may go out, given when the last one did (null: never). */
+export function switchCheckDue(lastAt: number | null, now: number): boolean {
+  return lastAt == null || now - lastAt >= SWITCH_CHECK_GAP_MS || now < lastAt;
+}
+
+/**
  * When answers became possible, so "checking" can be bounded. Kept by the store (`tug.switches`).
  * Without it (pure callers that only care about on/off), "checking" isn't time-bounded.
  */

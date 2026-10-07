@@ -25,8 +25,15 @@ pub const RESYNC: Duration = Duration::from_secs(5 * 60);
 /// app only saves and refreshes names when the phonebook actually changed.
 pub const SHARED_RECHECK: Duration = Duration::from_secs(60);
 /// A pull that failed outright (timed out, link dropped): try again after this. Not the empty
-/// answer of a switch that's off — that's `UNSHARED_RETRY`.
-pub const FAILED_RETRY: Duration = Duration::from_secs(2 * 60);
+/// answer of a switch that's off — that's `UNSHARED_RETRY`. Long, because a pull that hangs holds
+/// the message worker (and so any send) for up to its 90 s timeout; coming back to tug's window
+/// asks again at once anyway.
+pub const FAILED_RETRY: Duration = Duration::from_secs(10 * 60);
+/// The same, while the switches are on screen and the user is waiting on the answer.
+pub const FAILED_RETRY_WATCHING: Duration = Duration::from_secs(2 * 60);
+/// A "check now" (tug's window to the front, the switches card opening, "Check again") this soon
+/// after the last pull waits out the gap instead: each pull is a whole PBAP connection.
+pub const CHECK_GAP: Duration = Duration::from_secs(3);
 /// Empty answers in a row before Sync Contacts counts as off.
 pub const OFF_AFTER_EMPTY: u32 = 2;
 /// Log every this-many empty answers in a row at debug (plus the first), not every pull.
@@ -112,7 +119,7 @@ impl ContactsWatch {
                 }
             }
             Pull::Failed => Outcome {
-                next: if watching { UNSHARED_RETRY } else { FAILED_RETRY },
+                next: if watching { FAILED_RETRY_WATCHING } else { FAILED_RETRY },
                 transition: None,
                 log_empty: false,
             },
@@ -132,9 +139,21 @@ impl ContactsWatch {
     }
 }
 
+/// When a "check now" should pull: right away, or `CHECK_GAP` after the last pull if that was
+/// very recent. `None` when a pull is already due by then, so asking again (focus and visibility
+/// together, "Check again" right after) changes nothing and costs nothing.
+pub fn check_now_at<I>(now: I, last_pull: Option<I>, next_pull: I) -> Option<I>
+where
+    I: Copy + Ord + std::ops::Add<Duration, Output = I>,
+{
+    let at = last_pull.map_or(now, |last| now.max(last + CHECK_GAP));
+    (at < next_pull).then_some(at)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn empty_answers_turn_off_after_two_and_keep_checking_every_30s_indefinitely() {
@@ -225,7 +244,36 @@ mod tests {
             }
         );
         assert!(w.shared());
-        assert_eq!(w.record(Pull::Failed, true).next, UNSHARED_RETRY);
+        assert_eq!(w.record(Pull::Failed, true).next, FAILED_RETRY_WATCHING);
+        assert_eq!(FAILED_RETRY, Duration::from_secs(10 * 60), "a hung pull holds sends up");
+        assert_eq!(FAILED_RETRY_WATCHING, Duration::from_secs(2 * 60));
+    }
+
+    #[test]
+    fn a_check_pulls_now_unless_one_is_already_due() {
+        let t0 = Instant::now();
+        let s = Duration::from_secs;
+        // Nothing pulled yet, next pull a minute off: pull now.
+        assert_eq!(check_now_at(t0, None, t0 + s(60)), Some(t0));
+        // Already due (focus then visibility): the second ask does nothing.
+        assert_eq!(check_now_at(t0, None, t0), None);
+        assert_eq!(check_now_at(t0 + s(1), None, t0), None);
+        // A pull a second ago: wait out the gap, once.
+        let last = t0 - s(1);
+        assert_eq!(check_now_at(t0, Some(last), t0 + s(60)), Some(last + CHECK_GAP));
+        assert_eq!(check_now_at(t0, Some(last), last + CHECK_GAP), None);
+        // An old pull doesn't hold a check back.
+        assert_eq!(check_now_at(t0, Some(t0 - s(600)), t0 + s(30)), Some(t0));
+    }
+
+    #[test]
+    fn the_owners_check_rates_hold() {
+        // Within seconds while the switches card is open, about a minute otherwise, 30 s unshared.
+        let mut w = ContactsWatch::default();
+        assert_eq!(w.record(Pull::Shared, true).next, Duration::from_secs(10));
+        assert_eq!(w.record(Pull::Shared, false).next, Duration::from_secs(60));
+        assert_eq!(w.record(Pull::Empty, false).next, Duration::from_secs(30));
+        assert_eq!(w.record(Pull::Empty, true).next, Duration::from_secs(10));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { replyAddress, toastSpec } from "./toastSpec";
+import { replyAddress, replyReadsConversation, toastSpec } from "./toastSpec";
 import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const T0 = Date.parse("2026-10-05T12:00:00");
@@ -123,5 +123,21 @@ describe("toastSpec", () => {
     expect(toastSpec(note("Zoe", "x", { removedAt: T0 }), [], contacts).clear).toBe(false);
     const sticky = note("x", "y", { appId: "com.apple.mobilecal", appName: "Calendar", flags: { silent: false, important: false, preExisting: false, positiveAction: false, negativeAction: false } });
     expect(toastSpec(sticky, [], contacts)).toMatchObject({ clear: false, markRead: false, replyTo: null });
+  });
+});
+
+describe("replyReadsConversation", () => {
+  const msg = (status: SmsMessage["status"]) => ({ status }) as SmsMessage;
+  it("reads the conversation only for a reply the phone took", () => {
+    expect(replyReadsConversation(msg("sent"))).toBe(true);
+    expect(replyReadsConversation(msg("accepted"))).toBe(true);
+    expect(replyReadsConversation(msg("failed"))).toBe(false);
+    expect(replyReadsConversation(msg("unconfirmed"))).toBe(false);
+    expect(replyReadsConversation(msg("pending"))).toBe(false);
+  });
+
+  it("keeps the old behaviour without a stored row", () => {
+    expect(replyReadsConversation(null)).toBe(true);
+    expect(replyReadsConversation(undefined)).toBe(true);
   });
 });

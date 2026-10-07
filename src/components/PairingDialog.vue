@@ -47,8 +47,8 @@ onMounted(async () => {
         <p class="text-[13px] text-on-dark-soft">
           {{
             tug.pairingRequest?.pin
-              ? "Check it matches the code on your iPhone, then tap Pair here and on the phone."
-              : "Tap Pair here, then confirm on your iPhone."
+              ? "Check it matches the code on your iPhone, then click Pair here and tap it on the phone."
+              : "Click Pair here, then confirm on your iPhone."
           }}
         </p>
 

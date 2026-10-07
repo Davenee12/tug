@@ -137,6 +137,16 @@ pub fn wait_for_link_up(have_link: bool, linked: bool, since_poke: Option<Durati
 /// adopting a phone keeps the full budget (a fresh bond can wait on the phone's "Allow").
 pub const RECONNECT_DISCOVERY: Duration = Duration::from_secs(10);
 
+/// Whether a timed-out connect should throw away Windows' device/session objects for the phone
+/// and open fresh ones (a timeout can leave them stuck: switching back to a phone needed a
+/// restart). Only when the link was up (setup itself hung) or the phone hasn't connected since it
+/// was adopted. A timeout while Windows reports the link down is just an away phone: keep the
+/// link, whose ConnectionStatusChanged handler connects the moment it comes back, and wait for
+/// that instead of polling with fresh objects.
+pub fn drop_link_on_timeout(linked: bool, connected_since_adopt: bool) -> bool {
+    linked || !connected_since_adopt
+}
+
 /// Timed-out connects after adopting a phone, with no success yet, before tug says to pair again.
 pub const ADOPT_TIMEOUTS_BEFORE_REPAIR: u32 = 2;
 
@@ -355,5 +365,18 @@ mod tests {
             !suggests_pair_again(true, 9),
             "a phone that connected since is just out of range"
         );
+    }
+
+    #[test]
+    fn a_timeout_with_the_link_down_keeps_the_link_and_waits() {
+        // An away phone: keep the link (its link-up handler connects at once) and wait for it.
+        assert!(!drop_link_on_timeout(false, true));
+        // Setup hung on a live link: Windows' objects may be stuck, so start fresh.
+        assert!(drop_link_on_timeout(true, true));
+        // A just-adopted phone that hasn't connected yet: fresh objects (switching back to a phone).
+        assert!(drop_link_on_timeout(false, false));
+        assert!(drop_link_on_timeout(true, false));
+        // Kept, the next attempt waits for Windows' link-up instead of polling discovery.
+        assert!(wait_for_link_up(true, false, Some(Duration::ZERO)));
     }
 }

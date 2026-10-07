@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { CHECKING_MAX_MS, phoneSwitches, switchesOff, switchesPending, type SwitchContext, type SwitchState } from "./phoneSwitches";
+import {
+  CHECKING_MAX_MS,
+  phoneSwitches,
+  SWITCH_CHECK_GAP_MS,
+  switchCheckDue,
+  switchesOff,
+  switchesPending,
+  type SwitchContext,
+  type SwitchState,
+} from "./phoneSwitches";
 import type { DeviceStatus } from "../types/protocol";
 
 // A fully connected, everything-on phone; tests override only what they exercise.
@@ -176,5 +185,18 @@ describe("phoneSwitches", () => {
   it("switchesPending counts Sync Contacts off even with names saved (contacts.length missed it)", () => {
     expect(switchesPending(phoneSwitches(CONNECTED))).toBe(false);
     expect(switchesPending(phoneSwitches({ ...CONNECTED, contactsShared: false, contactsOff: true }, { ...ctx, savedContacts: 214 }))).toBe(true);
+  });
+});
+
+describe("switchCheckDue", () => {
+  it("lets the first check through and collapses focus + visibility into one", () => {
+    expect(switchCheckDue(null, 1_000)).toBe(true);
+    expect(switchCheckDue(1_000, 1_000)).toBe(false);
+    expect(switchCheckDue(1_000, 1_000 + SWITCH_CHECK_GAP_MS - 1)).toBe(false);
+    expect(switchCheckDue(1_000, 1_000 + SWITCH_CHECK_GAP_MS)).toBe(true);
+  });
+
+  it("never sticks if the clock went backwards", () => {
+    expect(switchCheckDue(10_000, 5_000)).toBe(true);
   });
 });

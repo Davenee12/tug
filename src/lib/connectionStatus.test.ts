@@ -69,6 +69,11 @@ describe("connectionSentence agrees with the sidebar label", () => {
     { connection: "connecting" as const, reconnecting: true, label: "Reconnecting…", sentence: /^Reconnecting/ },
     { connection: "connecting" as const, radio: "off" as const, label: "Bluetooth is off", sentence: /Bluetooth is off/ },
     { connection: "disconnected" as const, radio: "off" as const, label: "Bluetooth is off", sentence: /Bluetooth is off/ },
+    { connection: "disconnected" as const, away: true, label: "iPhone away", sentence: /out of range/ },
+    // Away wins over reconnecting in both, so the label and the sentence never disagree.
+    { connection: "disconnected" as const, away: true, reconnecting: true, label: "iPhone away", sentence: /out of range/ },
+    { connection: "disconnected" as const, awaitingUnlock: true, reconnecting: true, label: "Unlock your iPhone", sentence: /Unlock it/ },
+    { connection: "connecting" as const, awaitingUnlock: true, label: "Connecting…", sentence: /^Connecting/ },
   ];
   it.each(cases)("$label", (c) => {
     const s = { ...base, ...c, device };

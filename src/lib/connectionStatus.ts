@@ -54,10 +54,12 @@ export function connectionSentence(s: StatusInputs & Pick<DeviceStatus, "device"
   if (radioDown(s)) {
     return s.radio === "off" ? "Bluetooth is off in Windows. Turn it on to reach your iPhone." : "This PC has no usable Bluetooth adapter.";
   }
+  const reconnecting = "Reconnecting to your iPhone. No need to do anything.";
+  if (s.connection === "connecting") return showsReconnecting(s) ? reconnecting : "Connecting to your iPhone…";
   // A stale awaitingUnlock flag must never claim a forgotten phone is "connected" (handled above).
-  if (s.awaitingUnlock && s.connection !== "connecting") return "Your iPhone is connected but locked. Unlock it to reconnect.";
-  if (showsReconnecting(s)) return "Reconnecting to your iPhone. No need to do anything.";
-  if (s.connection === "connecting") return "Connecting to your iPhone…";
+  if (s.awaitingUnlock) return "Your iPhone is connected but locked. Unlock it to reconnect.";
+  // Away before reconnecting, as in the label: one steady "out of range" while tug retries quietly.
   if (s.away) return "Your iPhone is out of range. tug reconnects by itself when it's back.";
+  if (showsReconnecting(s)) return reconnecting;
   return "Waiting for your iPhone to reconnect. Keep Bluetooth on and the phone nearby.";
 }

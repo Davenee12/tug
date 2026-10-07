@@ -23,6 +23,16 @@ function addressInTitle(title: string): string | null {
  * guess between several), or the number/email iOS shows for an unknown sender. Null when
  * tug can't tell, and then the pop-up offers no reply box.
  */
+/**
+ * Whether a reply sent from a pop-up reads the conversation (seen here, read and cleared on the
+ * phone), as replying on the phone would. Only a reply the phone took: a failed or unconfirmed one
+ * leaves the conversation unread, with the notification still there to come back to. No stored
+ * row (an older backend) keeps the old behaviour.
+ */
+export function replyReadsConversation(message: SmsMessage | null | undefined): boolean {
+  return !message || message.status === "accepted" || message.status === "sent";
+}
+
 export function replyAddress(n: PhoneNotification, messages: SmsMessage[], contacts: Contact[]): string | null {
   if (n.appId !== MESSAGES_APP || !isConversation(n)) return null;
   const key = threadKey(n);

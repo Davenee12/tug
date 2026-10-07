@@ -185,12 +185,20 @@ impl Actor {
                 self.fail_connect(&e);
                 // A timed-out attempt may have left Windows' device/session objects for this phone
                 // stuck (switching back to a phone needed a restart): open fresh ones next time.
+                // Not for a phone that's simply away (link down): dropping the link would lose its
+                // link-up handler and the wait for it, and every retry would poll discovery again.
                 if e.is_timeout() {
-                    // drop_link forgets "unlock your iPhone" (right for Forget or a switch); this
-                    // is the same phone, so keep what the failed attempt decided.
-                    let awaiting_unlock = self.shared.status().awaiting_unlock;
-                    self.drop_link();
-                    self.shared.update_status(|s| s.awaiting_unlock = awaiting_unlock);
+                    if link_policy::drop_link_on_timeout(!link_down, self.connected_since_adopt) {
+                        // drop_link forgets "unlock your iPhone" (right for Forget or a switch);
+                        // this is the same phone, so keep what the failed attempt decided.
+                        let awaiting_unlock = self.shared.status().awaiting_unlock;
+                        self.drop_link();
+                        self.shared.update_status(|s| s.awaiting_unlock = awaiting_unlock);
+                    } else {
+                        // Wait for Windows' link-up from now (`wait_for_link_up`), poking only
+                        // every LINK_DOWN_POKE.
+                        self.last_poke = Some(Instant::now());
+                    }
                     if !self.connected_since_adopt {
                         self.adopt_timeouts = self.adopt_timeouts.saturating_add(1);
                     }
