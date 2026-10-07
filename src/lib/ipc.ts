@@ -77,6 +77,7 @@ export const api = {
   logFrontendError: (kind: string, name: string, message: string, source: string) =>
     invoke<void>("log_frontend_error", { kind, name, message, source }),
   setUnread: (count: number) => invoke<void>("set_unread", { count }),
+  popupsBlocked: () => invoke<boolean>("popups_blocked"),
   openWindowsSettings: (page: "bluetooth" | "location" | "notifications") => invoke<void>("open_windows_settings", { page }),
   /** Open an http(s) link (a notification's "Open in browser") in the default browser. */
   openUrl: (url: string) => invoke<void>("open_url", { url }),

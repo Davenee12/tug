@@ -196,6 +196,7 @@ pub fn run() {
             commands::set_hidden,
             commands::set_unread,
             commands::open_windows_settings,
+            commands::popups_blocked,
             commands::open_url,
             commands::locate,
             commands::place_lookup,

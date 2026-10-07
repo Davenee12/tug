@@ -129,12 +129,39 @@ fn show_native(
     native::show(toast, move |arguments, input| on_activated(&handle, arguments, input))
 }
 
+/// Settings' "Pop-up sound" (on unless turned off): whether tug's pop-ups play the Windows sound.
+#[cfg(windows)]
+fn sound_on(app: &AppHandle) -> bool {
+    use tauri::Manager;
+    app.try_state::<crate::commands::AppState>()
+        .and_then(|s| s.shared.store.setting("ui.popupSound").ok().flatten())
+        .as_deref()
+        != Some("false")
+}
+
+/// Whether Windows is blocking tug's pop-ups (notifications turned off for tug, for every app,
+/// or by policy). False when it can't tell: only a clear "off" shows the warning.
+pub fn blocked(app: &AppHandle) -> bool {
+    #[cfg(windows)]
+    {
+        native::blocked(&aumid(app)).unwrap_or_else(|e| {
+            log::warn!("couldn't read Windows' pop-up setting: {}", e.message());
+            false
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        false
+    }
+}
+
 /// Pop up one phone notification with the actions its spec allows.
 pub fn show(app: &AppHandle, spec: ToastSpec) {
     remember(&spec);
     #[cfg(windows)]
     {
-        let xml = xml::notification_toast(&spec);
+        let xml = xml::notification_toast(&spec, sound_on(app));
         match show_native(app, &xml, &spec.id.to_string(), GROUP_NOTIFICATIONS, None) {
             Ok(()) => return,
             Err(e) => log::warn!("actionable pop-up failed ({}); showing a plain one", e.message()),
@@ -323,7 +350,7 @@ async fn copy(app: &AppHandle, code: String) -> Result<(), String> {
 /// it), in its own group so the phone clearing the notification doesn't take it back.
 #[cfg(windows)]
 fn note(app: &AppHandle, id: i64, title: &str, body: &str, quiet: bool) {
-    let xml = xml::note_toast(id, title, body, quiet);
+    let xml = xml::note_toast(id, title, body, quiet || !sound_on(app));
     let tag = format!("note-{id}");
     if let Err(e) = show_native(app, &xml, &tag, GROUP_NOTES, quiet.then_some(SENT_NOTE_TTL)) {
         log::warn!("follow-up pop-up failed ({}); showing a plain one", e.message());

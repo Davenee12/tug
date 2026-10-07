@@ -235,7 +235,11 @@ fn action(content: &str, args: &ToastAction, input: Option<&str>) -> String {
 }
 
 /// The toast for one phone notification, with the buttons its spec allows.
-pub fn notification_toast(spec: &ToastSpec) -> String {
+///
+/// `sound` is Settings' "Pop-up sound": off, the pop-up comes in silently (the iPhone already
+/// chimes, and the Windows sound can make a Bluetooth speaker that's the PC's output drop what
+/// it's playing).
+pub fn notification_toast(spec: &ToastSpec, sound: bool) -> String {
     let id = spec.id;
     let name = clip(&spec.name, NAME_MAX);
     let mut inputs = String::new();
@@ -276,7 +280,7 @@ pub fn notification_toast(spec: &ToastSpec) -> String {
     } else {
         format!("<actions>{inputs}{}</actions>", actions.concat())
     };
-    toast(&ToastAction::Open { id }, &spec.title, &spec.body, &actions, false)
+    toast(&ToastAction::Open { id }, &spec.title, &spec.body, &actions, !sound)
 }
 
 /// A plain follow-up (a reply was sent, or something couldn't be done). Clicking it brings
@@ -405,8 +409,15 @@ mod tests {
     }
 
     #[test]
+    fn pop_up_sound_off_makes_the_toast_silent() {
+        let silent = r#"<audio silent="true"/></toast>"#;
+        assert!(notification_toast(&spec(), false).ends_with(silent));
+        assert!(!notification_toast(&spec(), true).contains("<audio"));
+    }
+
+    #[test]
     fn a_plain_notification_only_opens_tug() {
-        let xml = notification_toast(&spec());
+        let xml = notification_toast(&spec(), true);
         assert_eq!(
             xml,
             r#"<toast launch="a=open&amp;id=42" activationType="foreground"><visual><binding template="ToastGeneric"><text hint-maxLines="1">Messages · Zoe</text><text>omw, 10 mins</text></binding></visual></toast>"#
@@ -415,12 +426,15 @@ mod tests {
 
     #[test]
     fn a_text_from_a_person_gets_a_reply_box_send_and_mark_read() {
-        let xml = notification_toast(&ToastSpec {
-            reply_to: Some("+13025550123".into()),
-            mark_read: true,
-            clear: true,
-            ..spec()
-        });
+        let xml = notification_toast(
+            &ToastSpec {
+                reply_to: Some("+13025550123".into()),
+                mark_read: true,
+                clear: true,
+                ..spec()
+            },
+            true,
+        );
         assert!(
             xml.contains(r#"<input id="reply" type="text" placeHolderContent="Reply to Zoe"/>"#),
             "{xml}"
@@ -438,41 +452,53 @@ mod tests {
 
     #[test]
     fn codes_missed_calls_and_clearable_notifications_get_their_buttons() {
-        let code = notification_toast(&ToastSpec {
-            code: Some("482913".into()),
-            clear: true,
-            ..spec()
-        });
+        let code = notification_toast(
+            &ToastSpec {
+                code: Some("482913".into()),
+                clear: true,
+                ..spec()
+            },
+            true,
+        );
         assert!(code.contains(r#"<action content="Copy code" arguments="a=copy&amp;id=42&amp;code=482913""#));
         assert!(code.contains(r#"<action content="Clear" arguments="a=clear&amp;id=42""#));
-        let missed = notification_toast(&ToastSpec {
-            call_back: true,
-            clear: true,
-            ..spec()
-        });
+        let missed = notification_toast(
+            &ToastSpec {
+                call_back: true,
+                clear: true,
+                ..spec()
+            },
+            true,
+        );
         assert!(missed.contains(r#"<action content="Call back" arguments="a=call&amp;id=42""#));
         assert!(!missed.contains("<input"));
     }
 
     #[test]
     fn bad_reply_addresses_and_codes_get_no_button() {
-        let xml = notification_toast(&ToastSpec {
-            reply_to: Some("  ".into()),
-            code: Some("48 2913".into()),
-            ..spec()
-        });
+        let xml = notification_toast(
+            &ToastSpec {
+                reply_to: Some("  ".into()),
+                code: Some("48 2913".into()),
+                ..spec()
+            },
+            true,
+        );
         assert!(!xml.contains("<actions>"), "{xml}");
     }
 
     #[test]
     fn hostile_text_cant_break_the_xml() {
-        let xml = notification_toast(&ToastSpec {
-            title: r#"Messages · "><toast>"#.into(),
-            body: "</text><action content=\"x\"/>\u{1}".into(),
-            name: "<Zoe>".into(),
-            reply_to: Some("+1302\"/><x".into()),
-            ..spec()
-        });
+        let xml = notification_toast(
+            &ToastSpec {
+                title: r#"Messages · "><toast>"#.into(),
+                body: "</text><action content=\"x\"/>\u{1}".into(),
+                name: "<Zoe>".into(),
+                reply_to: Some("+1302\"/><x".into()),
+                ..spec()
+            },
+            true,
+        );
         assert_eq!(xml.matches("<toast").count(), 1, "{xml}");
         assert_eq!(xml.matches("<action ").count(), 1, "{xml}");
         assert!(xml.contains("Reply to &lt;Zoe&gt;"));
@@ -481,11 +507,14 @@ mod tests {
 
     #[test]
     fn long_text_is_clipped() {
-        let xml = notification_toast(&ToastSpec {
-            title: "t".repeat(500),
-            body: "b".repeat(5000),
-            ..spec()
-        });
+        let xml = notification_toast(
+            &ToastSpec {
+                title: "t".repeat(500),
+                body: "b".repeat(5000),
+                ..spec()
+            },
+            true,
+        );
         assert!(xml.len() < 1200, "{}", xml.len());
         assert!(xml.contains('…'));
     }
