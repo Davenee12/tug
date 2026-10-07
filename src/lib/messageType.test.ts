@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { bubbleKind, classifyType, distinguishesIMessage } from "./messageType";
+import { ATTACHMENT_ONLY, bubbleKind, classifyType, distinguishesIMessage, messageText } from "./messageType";
+
+describe("messageText", () => {
+  it("says a wordless MMS or untyped text is a photo or attachment", () => {
+    expect(messageText({ body: "", msgType: "MMS" })).toBe(ATTACHMENT_ONLY);
+    expect(messageText({ body: "", msgType: null })).toBe(ATTACHMENT_ONLY);
+    expect(messageText({ body: "", msgType: "EMAIL" })).toBe(ATTACHMENT_ONLY);
+  });
+
+  it("keeps the text when there is one, and plain texts stay as they were", () => {
+    expect(messageText({ body: "look!", msgType: "MMS" })).toBe("look!");
+    expect(messageText({ body: "", msgType: "SMS_GSM" })).toBe("(no preview)");
+    expect(messageText({ body: "", msgType: "IM" })).toBe("(no preview)");
+  });
+});
 
 const m = (msgType: string | null) => ({ msgType });
 
