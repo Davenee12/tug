@@ -93,6 +93,7 @@ impl Actor {
                 if let Some(map) = self.shared.map.get() {
                     map.refresh();
                 }
+                self.read_model_number();
             }
             Err(e) => {
                 // setup_ancs names the new session before subscribing; if setup then failed,
@@ -353,6 +354,52 @@ impl Actor {
             link._battery = battery;
         }
         Ok(())
+    }
+
+    /// Read the phone's model identifier ("iPhone16,2") from its Device Information Service, once
+    /// per connection, so the UI can picture the exact phone. Purely cosmetic, so it runs as its
+    /// own task: the actor loop (notifications, reconnects) never waits on it, every WinRT step is
+    /// bounded, and a missing service or failed read is only logged. The result comes back as
+    /// `Event::Model`, stamped with this subscription so a value from a replaced link is ignored.
+    pub(super) fn read_model_number(&self) {
+        let Some(link) = self.link.as_ref() else { return };
+        let (device, gen, tx) = (link.device.clone(), link.sub_gen, self.tx.clone());
+        tokio::task::spawn_local(async move {
+            let read = async {
+                let svc = winrt::service(&device, winrt::sig_uuid(device_info::DEVICE_INFORMATION_SERVICE))
+                    .await?
+                    .ok_or(BleError::NotFound("Device Information service"))?;
+                let ch = winrt::characteristic(&svc, winrt::sig_uuid(device_info::MODEL_NUMBER_STRING), "model number")
+                    .await?;
+                winrt::read(&ch).await
+            };
+            match read.await {
+                Ok(data) => {
+                    let _ = tx.send(Event::Model { gen, data });
+                }
+                Err(e) => log::debug!("iPhone model not available: {e}"),
+            }
+        });
+    }
+
+    /// The phone's Model Number String arrived: keep it (settings + status) if it's a real
+    /// identifier and differs from what we had.
+    pub(super) fn on_model_number(&mut self, data: &[u8]) {
+        let Some(model) = device_info::parse_model_number(data) else {
+            log::debug!("ignoring an unreadable iPhone model number ({} bytes)", data.len());
+            return;
+        };
+        let current = self.shared.status().device.and_then(|d| d.model);
+        if current.as_deref() == Some(model.as_str()) {
+            return;
+        }
+        log::info!("the iPhone is a {model}");
+        let _ = self.shared.store.set_setting(keys::DEVICE_MODEL, &model);
+        self.shared.update_status(|s| {
+            if let Some(d) = s.device.as_mut() {
+                d.model = Some(model);
+            }
+        });
     }
 
     /// Another app on this PC (e.g. Phone Link) can turn the shared ANCS CCCDs off,
