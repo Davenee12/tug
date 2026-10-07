@@ -33,6 +33,7 @@ function note(title: string, message: string, atMin = 0, extra: Partial<PhoneNot
     negativeLabel: "Clear",
     removedAt: null,
     live: true,
+    fresh: false,
     ...extra,
   };
 }

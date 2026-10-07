@@ -89,6 +89,7 @@ function n(appId: string, appName: string | null, title: string, message: string
     negativeLabel: "Clear",
     removedAt: null,
     live: true,
+    fresh: false,
     ...extra,
   };
 }
