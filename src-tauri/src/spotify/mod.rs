@@ -50,6 +50,9 @@ const CLIENT_ID: &str = "61a67dc51282488092dbf75214d6e7b8";
 const ACCOUNT_KEY: &str = "ui.spotifyAccount";
 /// Refresh the access token this long before it actually expires.
 const EXPIRY_SKEW_MS: i64 = 60_000;
+/// Setting holding the end of a Spotify rate-limit penalty (Unix ms), so a restart honours it:
+/// asking again during one only lengthens it (testing hit a 19-hour one, twice, across a restart).
+const BLOCKED_UNTIL_KEY: &str = "spotify.blockedUntil";
 
 /// What the Spotify Settings section shows. Mirrored in `src/types/protocol.ts`.
 #[derive(Debug, Clone, Serialize)]
@@ -97,9 +100,11 @@ pub struct Spotify {
     session: Mutex<Session>,
     /// Set from a 429's Retry-After: until then tug asks Spotify nothing (asking anyway only
     /// lengthens the penalty; testing hit a 19-hour one).
-    blocked_until: Mutex<Option<std::time::Instant>>,
-    /// The last "is this song liked?" answer, so the poll asks only when the song changes.
-    saved_cache: Mutex<Option<(String, bool)>>,
+    /// As Unix ms, mirrored in the `spotify.blockedUntil` setting so a restart still honours it.
+    blocked_until: Mutex<Option<i64>>,
+    /// Held across a token refresh: commands run on several threads at once, and Spotify rotates
+    /// the refresh token, so two refreshes racing would spend the same token twice (invalid_grant).
+    refreshing: Mutex<()>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -112,12 +117,21 @@ fn pe(s: &str) -> String {
 
 impl Spotify {
     pub fn new(store: Arc<Store>, cache_dir: PathBuf) -> Self {
+        let blocked_until = store
+            .setting(BLOCKED_UNTIL_KEY)
+            .ok()
+            .flatten()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .filter(|until| model::blocked_for(Some(*until), now_ms()).is_some());
+        if let Some(secs) = model::blocked_for(blocked_until, now_ms()) {
+            log::info!("Spotify rate limit from before the restart: still pausing Spotify requests for {secs}s");
+        }
         Self {
             store,
             cache_dir,
             session: Mutex::default(),
-            blocked_until: Mutex::new(None),
-            saved_cache: Mutex::new(None),
+            blocked_until: Mutex::new(blocked_until),
+            refreshing: Mutex::new(()),
         }
     }
 
@@ -142,6 +156,7 @@ impl Spotify {
     pub fn connect(&self) -> Result<SpotifyStatus, String> {
         let client_id = CLIENT_ID;
 
+        let ticket = listener::begin_sign_in();
         let tcp = listener::bind()?;
         let redirect = listener::REGISTERED_REDIRECT;
         let verifier = auth::code_verifier(&http::random_bytes(32)?);
@@ -150,7 +165,7 @@ impl Spotify {
         let url = auth::authorize_url(client_id, redirect, &challenge, &state);
 
         crate::commands::open_in_browser(&url)?;
-        let query = listener::wait_for_callback(tcp, listener::CALLBACK_TIMEOUT)?;
+        let query = listener::wait_for_callback(tcp, listener::CALLBACK_TIMEOUT, ticket)?;
         let callback = auth::parse_callback(&query).ok_or("Spotify didn't return an authorization code.")?;
         let code = auth::verify(&callback, &state)?;
 
@@ -202,22 +217,52 @@ impl Spotify {
 
     // ---- Token management -----------------------------------------------------------------
 
+    /// The current access token, if it is still good.
+    fn valid_token(&self) -> Option<String> {
+        let s = lock(&self.session);
+        s.access_token
+            .clone()
+            .filter(|_| !model::token_expired(s.expires_at_ms, now_ms(), EXPIRY_SKEW_MS))
+    }
+
     /// A valid access token, refreshing first if the current one is missing or near expiry.
     fn access_token(&self) -> Result<String, ApiError> {
-        {
-            let s = lock(&self.session);
-            if let Some(token) = &s.access_token {
-                if !model::token_expired(s.expires_at_ms, now_ms(), EXPIRY_SKEW_MS) {
-                    return Ok(token.clone());
-                }
-            }
+        if let Some(token) = self.valid_token() {
+            return Ok(token);
         }
-        self.refresh()
+        let _one_at_a_time = lock(&self.refreshing);
+        // Another thread may have refreshed while this one waited.
+        if let Some(token) = self.valid_token() {
+            return Ok(token);
+        }
+        self.refresh_locked()
+    }
+
+    /// Refresh after the API refused the token (a 401), unless another thread already replaced
+    /// the token `stale` while this one waited.
+    fn refresh_after_401(&self, stale: &str) -> Result<String, ApiError> {
+        let _one_at_a_time = lock(&self.refreshing);
+        if let Some(token) = self.valid_token().filter(|t| t != stale) {
+            return Ok(token);
+        }
+        self.refresh_locked()
     }
 
     /// Exchange the stored refresh token for a fresh access token (and a rotated refresh token,
-    /// when Spotify sends one). A failed refresh means the connection is dead.
-    fn refresh(&self) -> Result<String, ApiError> {
+    /// when Spotify sends one). Called with `refreshing` held. A revoked token disconnects tug,
+    /// so Settings shows Reconnect instead of every request failing.
+    fn refresh_locked(&self) -> Result<String, ApiError> {
+        let result = self.exchange_refresh_token();
+        if result == Err(ApiError::Unauthorized) {
+            log::info!("Spotify sign-in was revoked or expired; disconnecting so Settings offers Reconnect");
+            if let Err(e) = self.disconnect() {
+                log::warn!("couldn't clear the dead Spotify sign-in: {e}");
+            }
+        }
+        result
+    }
+
+    fn exchange_refresh_token(&self) -> Result<String, ApiError> {
         let client_id = CLIENT_ID;
         let refresh = creds::load(creds::TARGET)
             .map_err(|e| ApiError::Other { status: 0, message: e })?
@@ -235,14 +280,17 @@ impl Spotify {
         )
         .map_err(|e| ApiError::Other { status: 0, message: e })?;
         if !resp.is_success() {
-            return Err(model::classify(resp.status, &resp.body, resp.retry_after));
+            return Err(model::classify_token(resp.status, &resp.body, resp.retry_after));
         }
         let tokens = parse_tokens(&resp.body).ok_or(ApiError::Other {
             status: 0,
             message: "unreadable token response".into(),
         })?;
         if let Some(new_refresh) = tokens.refresh_token {
-            let _ = creds::store(creds::TARGET, &new_refresh);
+            // The old token is spent now: failing to keep the new one means signing in again later.
+            if let Err(e) = creds::store(creds::TARGET, &new_refresh) {
+                log::warn!("couldn't save Spotify's new sign-in token: {e}");
+            }
         }
         let mut s = lock(&self.session);
         s.access_token = Some(tokens.access_token.clone());
@@ -260,13 +308,8 @@ impl Spotify {
         path: &str,
         body: Option<(&'static str, String)>,
     ) -> Result<http::Response, ApiError> {
-        if let Some(until) = *lock(&self.blocked_until) {
-            let now = std::time::Instant::now();
-            if now < until {
-                return Err(ApiError::RateLimited {
-                    retry_after: (until - now).as_secs().max(1),
-                });
-            }
+        if let Some(retry_after) = model::blocked_for(*lock(&self.blocked_until), now_ms()) {
+            return Err(ApiError::RateLimited { retry_after });
         }
         let url = format!("{API_BASE}{path}");
         let token = self.access_token()?;
@@ -275,7 +318,7 @@ impl Spotify {
         };
         let resp = send(&token)?;
         let resp = if resp.status == 401 {
-            let token = self.refresh()?;
+            let token = self.refresh_after_401(&token)?;
             send(&token)?
         } else {
             resp
@@ -285,8 +328,11 @@ impl Spotify {
         } else {
             let err = model::classify(resp.status, &resp.body, resp.retry_after);
             if let ApiError::RateLimited { retry_after } = err {
-                *lock(&self.blocked_until) =
-                    Some(std::time::Instant::now() + std::time::Duration::from_secs(retry_after));
+                let until = now_ms().saturating_add((retry_after as i64).saturating_mul(1000));
+                *lock(&self.blocked_until) = Some(until);
+                if let Err(e) = self.store.set_setting(BLOCKED_UNTIL_KEY, &until.to_string()) {
+                    log::warn!("couldn't save the Spotify rate-limit pause: {e}");
+                }
                 log::info!("Spotify rate limit: pausing Spotify requests for {retry_after}s");
             }
             Err(err)
@@ -561,17 +607,12 @@ impl Spotify {
         }))
     }
 
+    /// Whether the song is liked, asked fresh on every read (tug reads once per song, so a cache
+    /// saved nothing and kept the heart stale after a Like/Unlike made on the phone).
     fn saved_state(&self, uri: &str) -> Option<bool> {
-        if let Some((cached_uri, saved)) = lock(&self.saved_cache).as_ref() {
-            if cached_uri == uri {
-                return Some(*saved);
-            }
-        }
         let path = format!("/me/library/contains?uris={}", pe(uri));
         let resp = self.api(Method::Get, &path, None).ok()?;
-        let saved = model::parse_contains(&resp.body)?;
-        *lock(&self.saved_cache) = Some((uri.to_string(), saved));
-        Some(saved)
+        model::parse_contains(&resp.body)
     }
 
     pub fn set_repeat(&self, mode: RepeatMode) -> Result<(), String> {
@@ -595,7 +636,6 @@ impl Spotify {
         // field: uris" (test account, 2026-10-05).
         let path = format!("/me/library?uris={}", pe(uri));
         self.api(method, &path, None).map_err(|e| e.user_message())?;
-        *lock(&self.saved_cache) = Some((uri.to_string(), saved));
         Ok(())
     }
 

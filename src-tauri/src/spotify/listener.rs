@@ -8,7 +8,27 @@
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+/// Which sign-in is the live one. Pressing Connect again while an earlier sign-in still waits
+/// (up to 3 minutes) used to fail with "another app may be using port 8972" — tug itself was.
+/// Now the new attempt takes over: the earlier wait sees it's no longer current and lets go of
+/// the port.
+static SIGN_IN: AtomicU64 = AtomicU64::new(0);
+
+/// What an abandoned earlier sign-in returns once a newer one takes over.
+pub const SUPERSEDED: &str = "Started a new Spotify sign-in.";
+
+/// Start a sign-in, superseding any earlier one still waiting. Returns its ticket.
+pub fn begin_sign_in() -> u64 {
+    SIGN_IN.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Whether `ticket` is still the live sign-in.
+pub fn is_current(ticket: u64) -> bool {
+    SIGN_IN.load(Ordering::SeqCst) == ticket
+}
 
 /// The redirect path tug listens on.
 pub const REDIRECT_PATH: &str = "/callback";
@@ -74,21 +94,35 @@ fn not_found() -> &'static str {
     "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 }
 
-/// Bind `REDIRECT_PORT` on `127.0.0.1` for the sign-in redirect.
+/// Bind `REDIRECT_PORT` on `127.0.0.1` for the sign-in redirect. An earlier sign-in that was just
+/// superseded releases the port within its next poll (100 ms), so a short retry covers it.
 pub fn bind() -> Result<TcpListener, String> {
-    TcpListener::bind(("127.0.0.1", REDIRECT_PORT)).map_err(|e| {
-        format!("Couldn't listen for Spotify's sign-in on port {REDIRECT_PORT} (another app may be using it): {e}")
-    })
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    loop {
+        match TcpListener::bind(("127.0.0.1", REDIRECT_PORT)) {
+            Ok(l) => return Ok(l),
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => {
+                return Err(format!(
+                    "Couldn't listen for Spotify's sign-in on port {REDIRECT_PORT} (another app may be using it): {e}"
+                ))
+            }
+        }
+    }
 }
 
 /// Accept connections until the `/callback` arrives (or the deadline passes), and return its
 /// query string. Non-callback requests are answered with 404 and ignored.
-pub fn wait_for_callback(listener: TcpListener, timeout: Duration) -> Result<String, String> {
+/// Gives up (releasing the port) as soon as a newer sign-in starts.
+pub fn wait_for_callback(listener: TcpListener, timeout: Duration, ticket: u64) -> Result<String, String> {
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("loopback listener error: {e}"))?;
     let deadline = Instant::now() + timeout;
     loop {
+        if !is_current(ticket) {
+            return Err(SUPERSEDED.into());
+        }
         if Instant::now() >= deadline {
             return Err("Spotify sign-in timed out. Please try again.".into());
         }
@@ -151,6 +185,22 @@ mod tests {
         assert!(is_callback("/callback"));
         assert!(!is_callback("/favicon.ico"));
         assert!(!is_callback("/other?/callback"));
+    }
+
+    #[test]
+    fn a_new_sign_in_supersedes_a_waiting_one() {
+        let first = begin_sign_in();
+        assert!(is_current(first));
+        let second = begin_sign_in();
+        assert!(!is_current(first) && is_current(second));
+        // The earlier wait lets go at once instead of holding the port for 3 minutes.
+        let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let started = Instant::now();
+        assert_eq!(
+            wait_for_callback(l, CALLBACK_TIMEOUT, first),
+            Err(SUPERSEDED.to_string())
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

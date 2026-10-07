@@ -76,6 +76,10 @@ const DEFAULT_QUIET_HOURS = { enabled: false, start: "22:00", end: "07:00", days
 
 /** What the backend says when Spotify can't see the iPhone (mirrors `model::NO_PHONE`). */
 const SPOTIFY_NO_PHONE = "Open Spotify on your iPhone.";
+/** What an earlier sign-in returns when Connect is pressed again (mirrors `listener::SUPERSEDED`). */
+const SPOTIFY_SIGN_IN_RESTARTED = "Started a new Spotify sign-in.";
+/** The start of the backend's dead-sign-in message (mirrors `ApiError::Unauthorized`'s text). */
+const SPOTIFY_SIGN_IN_EXPIRED = "Spotify sign-in expired.";
 /** How long to wait for Spotify to open on the iPhone before giving up. */
 const SPOTIFY_WAIT_MS = 60_000;
 /** How long Spotify takes to report a transfer before tug re-reads where it is playing. */
@@ -446,6 +450,8 @@ export const useTugStore = defineStore("tug", () => {
       return await fn();
     } catch (e) {
       notify("error", errorMessage(e));
+      // Spotify's sign-in died (the backend has cleared it): show Settings as disconnected.
+      if (errorMessage(e).startsWith(SPOTIFY_SIGN_IN_EXPIRED)) void loadSpotify();
       return undefined;
     }
   }
@@ -1174,7 +1180,7 @@ export const useTugStore = defineStore("tug", () => {
   async function loadSpotify() {
     const s = await attempt(api.spotifyStatus);
     if (s) spotify.value = s;
-    if (spotify.value.connected) void loadPlaylists();
+    // Playlists load when the Spotify panel or Ctrl+K first needs them, not at launch.
   }
 
   /** Load the user's playlists once (cached); pass force to reload after a (re)connect. */
@@ -1193,12 +1199,14 @@ export const useTugStore = defineStore("tug", () => {
       playlists.value = [];
       void loadPlaylists(true);
       notify("info", spotify.value.account ? `Connected to Spotify as ${spotify.value.account}.` : "Connected to Spotify.");
+      spotifyConnecting.value = false;
       return true;
     } catch (e) {
+      // Connect pressed again: the newer sign-in carries on (and owns the spinner).
+      if (errorMessage(e) === SPOTIFY_SIGN_IN_RESTARTED) return false;
       notify("error", errorMessage(e));
-      return false;
-    } finally {
       spotifyConnecting.value = false;
+      return false;
     }
   }
 
@@ -1259,7 +1267,8 @@ export const useTugStore = defineStore("tug", () => {
    * Resolves true once playing or waiting, false on an error.
    */
   async function startPlayback(doPlay: () => Promise<void>, what: string): Promise<boolean> {
-    const onDevice = spotifyDevice.value ? ` on ${spotifyTargetName.value}` : " on your iPhone";
+    // Where it will play: the device that is playing now (or the chosen one), by Spotify's name for it.
+    const onDevice = ` on ${spotifyTargetName.value}`;
     const playing = () => notify("info", `Playing ${what}${onDevice}.`);
     const tryPlay = async (): Promise<"ok" | "no-phone" | string> => {
       try {

@@ -350,6 +350,21 @@ impl ApiError {
     }
 }
 
+/// Classify a failed token-endpoint response. A 400 `invalid_grant` means the refresh token was
+/// revoked or already used: the connection is dead, exactly like a 401 from the API.
+pub fn classify_token(status: u16, body: &str, retry_after: Option<u64>) -> ApiError {
+    if status == 400 && body.to_lowercase().contains("invalid_grant") {
+        return ApiError::Unauthorized;
+    }
+    classify(status, body, retry_after)
+}
+
+/// Seconds left on a saved rate-limit penalty (`blocked_until` as Unix ms), or `None` once over.
+pub fn blocked_for(blocked_until_ms: Option<i64>, now_ms: i64) -> Option<u64> {
+    let until = blocked_until_ms?;
+    (until > now_ms).then(|| ((until - now_ms) as u64).div_ceil(1000).max(1))
+}
+
 /// Classify a non-success response. `retry_after` is the parsed `Retry-After` header, if any.
 pub fn classify(status: u16, body: &str, retry_after: Option<u64>) -> ApiError {
     let lower = body.to_lowercase();
@@ -1098,5 +1113,29 @@ mod tests {
             error_message(r#"{"error":"invalid_grant","error_description":"code expired"}"#),
             "code expired"
         );
+    }
+
+    #[test]
+    fn a_revoked_refresh_token_means_disconnected() {
+        let body = r#"{"error":"invalid_grant","error_description":"Refresh token revoked"}"#;
+        assert_eq!(classify_token(400, body, None), ApiError::Unauthorized);
+        // Other token-endpoint failures keep their usual meaning.
+        assert!(matches!(
+            classify_token(400, r#"{"error":"invalid_client"}"#, None),
+            ApiError::Other { status: 400, .. }
+        ));
+        assert_eq!(
+            classify_token(429, "", Some(30)),
+            ApiError::RateLimited { retry_after: 30 }
+        );
+    }
+
+    #[test]
+    fn a_saved_rate_limit_penalty_survives_until_it_ends() {
+        assert_eq!(blocked_for(None, 1_000), None);
+        assert_eq!(blocked_for(Some(1_000), 1_000), None);
+        assert_eq!(blocked_for(Some(500), 1_000), None);
+        assert_eq!(blocked_for(Some(68_908_000), 1_000), Some(68_907));
+        assert_eq!(blocked_for(Some(1_001), 1_000), Some(1));
     }
 }

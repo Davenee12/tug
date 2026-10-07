@@ -39,6 +39,9 @@ const expanded = ref<number | null>(null);
 // Esc closes from anywhere in the dialog, not only from the search box.
 useFocusTrap(root, () => close());
 onMounted(async () => {
+  // "play <playlist>" needs the playlists: read them the first time the palette opens, not at
+  // every launch (each launch read spent Spotify's rate limit for nothing).
+  if (tug.spotify.connected) void tug.loadPlaylists();
   await nextTick();
   input.value?.focus();
 });
