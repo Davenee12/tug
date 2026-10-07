@@ -88,15 +88,15 @@ describe("connectionHealth", () => {
   });
 
   it("says tug is reconnecting while it rebuilds the link on its own", () => {
-    const m = health({ connection: "connecting", reconnecting: true, device: { id: "x", name: "iPhone" } });
+    const m = health({ connection: "connecting", reconnecting: true, device: { id: "x", name: "iPhone", model: null } });
     for (const key of ["notifications", "media", "battery", "texts"]) {
       expect(m.get(key)!.state, key).toBe("waiting");
       expect(m.get(key)!.detail, key).toMatch(/^Reconnecting to your iPhone/);
     }
-    const locked = health({ connection: "disconnected", reconnecting: true, awaitingUnlock: true, device: { id: "x", name: "iPhone" } });
+    const locked = health({ connection: "disconnected", reconnecting: true, awaitingUnlock: true, device: { id: "x", name: "iPhone", model: null } });
     expect(locked.get("notifications")!.detail).toMatch(/Unlock it to reconnect/);
     // Bluetooth off wins: the radio row says so, and nothing claims to be reconnecting.
-    const off = health({ connection: "disconnected", reconnecting: true, radio: "off", device: { id: "x", name: "iPhone" } });
+    const off = health({ connection: "disconnected", reconnecting: true, radio: "off", device: { id: "x", name: "iPhone", model: null } });
     expect(off.get("radio")!.detail).toMatch(/Bluetooth is off/);
     expect(off.get("notifications")!.detail).not.toMatch(/Reconnecting/);
   });
