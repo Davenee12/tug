@@ -4,7 +4,7 @@ import { ChevronRight, Info, Phone, Plus, RotateCcw, SendHorizontal, ShieldQuest
 import { useTugStore } from "../stores/tug";
 import { clockTime, dayLabel, formatAddress, groupConversations, threadKey, type Conversation, type ConversationItem } from "../lib/format";
 import { shouldStickToBottom } from "../lib/scroll";
-import { bubbleKind, distinguishesIMessage } from "../lib/messageType";
+import { bubbleKind, distinguishesIMessage, messageText } from "../lib/messageType";
 import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import ConversationRow from "./ConversationRow.vue";
@@ -359,7 +359,7 @@ function onKey(e: KeyboardEvent) {
               <span v-if="item.kind === 'notification' && item.n.subtitle" class="mb-0.5 block text-[12px] font-medium text-muted">
                 {{ item.n.subtitle }}
               </span>
-              {{ item.body || "(no preview)" }}
+              {{ item.kind === "message" ? messageText(item.m) : item.body || "(no preview)" }}
             </div>
             <span class="mx-1 mt-1 flex items-center gap-1.5 font-mono text-[11px] text-muted-soft">
               {{ clockTime(item.at) }}
