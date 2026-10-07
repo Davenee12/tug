@@ -473,9 +473,22 @@ pub fn copy_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
         phone_names: &phone_names,
     }
     .render();
+    // The latest Bluetooth inventory (privacy-safe by construction: UUIDs, names, counts).
+    let inventory = crate::bt_inventory::diagnostics_section(crate::bt_inventory::last_report().as_ref());
+    let report = format!("{report}\n{inventory}");
 
     crate::clipboard::set_text(&report)?;
     Ok(report)
+}
+
+/// The Bluetooth inventory: what the iPhone exposes to tug (GATT services, Device Information,
+/// time, battery, AMS/ANCS, PBAP/MAP, SDP, link). Runs it now (also logging it as `bt-inventory:`)
+/// or joins the one already running. Privacy-safe: no names, numbers or message text.
+#[tauri::command]
+pub async fn bt_inventory(state: State<'_, AppState>) -> Result<crate::bt_inventory::BtInventory> {
+    let (reply, rx) = tokio::sync::oneshot::channel();
+    state.ble.send(Command::Inventory { reply });
+    rx.await.map_err(|_| "Bluetooth service stopped".to_string())
 }
 
 /// Open tug's log folder in Explorer, so the owner can attach the files to a support message.

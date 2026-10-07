@@ -121,6 +121,7 @@ impl Actor {
     /// The player's supported commands. iOS sends this only when the list changes (a new
     /// player, or the player enabling/disabling a command), so each one is worth a line.
     pub(super) fn on_media_commands(&self, data: &[u8]) {
+        crate::bt_inventory::record_ams_commands(data);
         self.shared.update_now_playing(|np| {
             log::info!(
                 "AMS supported commands (player {:?}): {} raw {data:?}",
@@ -223,8 +224,10 @@ impl Actor {
     }
 }
 
-/// Entity Attribute: select the pair, then read its full value.
+/// Entity Attribute: select the pair, then read its full value. Holds the AMS turn across the
+/// pair, so the inventory's own pairs (`inventory::ams_read`) can't interleave with it.
 async fn read_attribute(attr: &GattCharacteristic, entity: u8, attribute: u8) -> Result<Vec<u8>, BleError> {
+    let _turn = super::inventory::AMS_ATTRIBUTE_TURN.lock().await;
     winrt::write(attr, &[entity, attribute]).await?;
     winrt::read(attr).await
 }

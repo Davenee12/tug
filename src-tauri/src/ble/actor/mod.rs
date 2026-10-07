@@ -48,6 +48,8 @@ use crate::wedge::{WedgeWatch, Wedged};
 
 /// The wake watch: tells the actor when the PC resumed, from a thread of its own.
 mod heartbeat;
+/// The Bluetooth inventory probe (`crate::bt_inventory`), run off the connect path.
+mod inventory;
 mod link;
 mod media;
 mod notifications;
@@ -263,6 +265,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         link_down_at: None,
         wedge: WedgeWatch::default(),
         wedge_relink_at: None,
+        inventory: inventory::InventoryState::default(),
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -312,6 +315,8 @@ struct Actor {
     /// Set while recovering from such a stall: requests are paused until then, when the link is
     /// rebuilt. Cleared by any link teardown.
     wedge_relink_at: Option<Instant>,
+    /// When the next Bluetooth inventory report is due, and the one running now.
+    inventory: inventory::InventoryState,
 }
 
 fn now_ms() -> i64 {
@@ -467,6 +472,7 @@ impl Actor {
                 }
                 let _ = reply.send(Ok(()));
             }
+            Command::Inventory { reply } => self.request_inventory(reply),
         }
     }
 
@@ -706,6 +712,7 @@ impl Actor {
         }
 
         self.sweep_if_settled();
+        self.inventory_tick();
 
         // While the user is on the iPhone screens (setup/Settings), a connect that's backed off
         // waiting for an unlock should retry promptly — they may be unlocking the phone right now.
