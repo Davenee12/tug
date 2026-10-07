@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { FastForward, Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, Rewind, RotateCcw, Shuffle, SkipBack, SkipForward, ThumbsDown, ThumbsUp, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { duration } from "../lib/format";
-import { canRestart, createHoldRepeater, repeatLabel, SKIP_SECONDS, skipMode, skipTargetMs, supportsDislike, supportsLike } from "../lib/media";
+import { canRestart, createHoldRepeater, repeatLabel, SKIP_SECONDS, skipLabel, skipMode, skipTargetMs, supportsDislike, supportsLike } from "../lib/media";
 import { seekFraction } from "../lib/spotify";
 
 // `compact` (from the sidebar, on short windows) drops the card's second row of extra controls and
@@ -126,6 +126,8 @@ const can = (c: string) => np.value.available.length === 0 || np.value.available
 const backMode = computed(() => skipMode(np.value, "back", seekable.value));
 const forwardMode = computed(() => skipMode(np.value, "forward", seekable.value));
 const skipBack = computed(() => backMode.value !== "none");
+const backLabel = computed(() => skipLabel(backMode.value, "back"));
+const forwardLabel = computed(() => skipLabel(forwardMode.value, "forward"));
 const skipForward = computed(() => forwardMode.value !== "none");
 // Spotify jumps to the exact time through the Spotify connection (its own skip command restarts
 // the song); other players get the phone's skip command.
@@ -266,21 +268,21 @@ function restart() {
           <button
             v-if="skipBack"
             class="flex items-center gap-0.5 rounded-full px-1.5 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
-            :aria-label="`Back ${SKIP_SECONDS} seconds`"
-            :title="`Back ${SKIP_SECONDS} seconds`"
+            :aria-label="backLabel.text"
+            :title="backLabel.text"
             @click="skip('back')"
           >
             <Rewind :size="15" />
-            <span class="text-[10px]">{{ SKIP_SECONDS }}</span>
+            <span v-if="backLabel.seconds" class="text-[10px]">{{ backLabel.seconds }}</span>
           </button>
           <button
             v-if="skipForward"
             class="flex items-center gap-0.5 rounded-full px-1.5 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
-            :aria-label="`Forward ${SKIP_SECONDS} seconds`"
-            :title="`Forward ${SKIP_SECONDS} seconds`"
+            :aria-label="forwardLabel.text"
+            :title="forwardLabel.text"
             @click="skip('forward')"
           >
-            <span class="text-[10px]">{{ SKIP_SECONDS }}</span>
+            <span v-if="forwardLabel.seconds" class="text-[10px]">{{ forwardLabel.seconds }}</span>
             <FastForward :size="15" />
           </button>
         </div>
@@ -380,21 +382,21 @@ function restart() {
         <button
           v-if="skipBack"
           class="flex items-center gap-0.5 rounded-full px-2 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
-          :aria-label="`Back ${SKIP_SECONDS} seconds`"
-          :title="`Back ${SKIP_SECONDS} seconds`"
+          :aria-label="backLabel.text"
+          :title="backLabel.text"
           @click="skip('back')"
         >
           <Rewind :size="15" />
-          <span class="font-mono text-[10px]">{{ SKIP_SECONDS }}</span>
+          <span v-if="backLabel.seconds" class="font-mono text-[10px]">{{ backLabel.seconds }}</span>
         </button>
         <button
           v-if="skipForward"
           class="flex items-center gap-0.5 rounded-full px-2 py-1.5 text-on-dark-soft active:bg-surface-dark-soft active:text-on-dark"
-          :aria-label="`Forward ${SKIP_SECONDS} seconds`"
-          :title="`Forward ${SKIP_SECONDS} seconds`"
+          :aria-label="forwardLabel.text"
+          :title="forwardLabel.text"
           @click="skip('forward')"
         >
-          <span class="font-mono text-[10px]">{{ SKIP_SECONDS }}</span>
+          <span v-if="forwardLabel.seconds" class="font-mono text-[10px]">{{ forwardLabel.seconds }}</span>
           <FastForward :size="15" />
         </button>
         <button
