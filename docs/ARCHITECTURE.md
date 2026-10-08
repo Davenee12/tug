@@ -181,14 +181,17 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
 
 Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attention`
-(is the window really visible), `battery`, `codeFeed`, `codes`, `commands` (Ctrl+K verbs),
+(is the window really visible), `battery`, `coalesce` (one render per frame for bursts of
+updates), `codeFeed`, `codes`, `commands` (Ctrl+K verbs),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),
 `devtools`, `errorReport`, `escape`, `format` (conversation grouping and display), `health`,
 `locating`, `media` (which controls show, skip routing), `messageSync`, `messageType`, `pairings`,
 `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
-(unknown-sender filter), `spotify`, `toastLimiter`, `toastSpec`, `tugboat`, `vips`, `weather`,
-`weblinks`, `whatsNew`. Components and stores should call these rather than grow logic of their own.
+(unknown-sender filter), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
+they re-render), `threadWindow` (long conversations render their newest texts first),
+`toastLimiter`, `toastSpec`, `tugboat`, `vips`, `weather`, `weblinks`, `whatsNew`. Components and
+stores should call these rather than grow logic of their own.
 
 Integration tests: `tugboat/tests.rs` plays the phone over a real socket; `tug-bridge` tests run the
 handshake over a real named pipe (including a low-integrity impostor). Hardware probes live in
@@ -248,6 +251,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?tugboat` (`&android`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring / waiting for a phone / no usable network |
 | `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
 | `/?whatsnew` | The What's new card for the newest release |
+| `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then
 `http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`).
@@ -266,7 +270,11 @@ The Tugboat phone page has its own mock: `npm run dev:tugboat`, then
 5. **Teach the dev mock** the new command or event so the UI can be built and reviewed without a
    phone, and add a URL scenario if it's a new state.
 6. **Tell the truth in the UI.** If tug can't know something, it says so; no states that can't end.
-7. **Say what you verified.** `npm run check` passing is not "works on an iPhone".
+7. **Keep the window idle.** tug sits open all day, so anything that ticks lives in the small
+   component that shows it (`lib/useNow`, which also stops while tug is hidden), never in a store
+   that big lists read. No transitions on width or height and no endless animations outside short,
+   bounded states; long lists render a page at a time (`lib/useRevealMore`). Check with `/?heavy`.
+8. **Say what you verified.** `npm run check` passing is not "works on an iPhone".
 
 ## Testing without hardware
 

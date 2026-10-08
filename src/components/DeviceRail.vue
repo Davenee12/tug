@@ -34,7 +34,7 @@ const connectionLabel = computed(() => connectionLabelFor(s.value));
 
 const dotClass = computed(() => {
   if (s.value.connection === "connected") return "bg-accent-teal";
-  return connectionBusy(s.value) ? "bg-accent-amber animate-pulse" : "bg-on-dark-soft/50";
+  return connectionBusy(s.value) ? "bg-accent-amber animate-pulse motion-reduce:animate-none" : "bg-on-dark-soft/50";
 });
 
 const batteryIcon = computed(() => {
