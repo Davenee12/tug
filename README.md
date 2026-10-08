@@ -144,6 +144,12 @@ and strips local paths (your user folder) from the exes. Browser preview scenari
 `http://127.0.0.1:8972/callback`, add its listeners while in Development Mode, and put its own
 Client ID there.
 
+## Support tug
+
+tug is free and open source, and stays that way. If it saves you time, you can
+[sponsor its development on GitHub](https://github.com/sponsors/Davenee12). Sponsorships go
+first towards code signing, so Windows stops warning about the installer.
+
 ## Contributing
 
 Bug reports, fixes and ideas are welcome. Read **[CONTRIBUTING.md](CONTRIBUTING.md)** for setup,
