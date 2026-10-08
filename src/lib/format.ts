@@ -60,7 +60,7 @@ export function notificationTime(n: PhoneNotification): Date {
 }
 
 export function clockTime(d: Date): string {
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return localeFormat(d, "clock", { hour: "numeric", minute: "2-digit" });
 }
 
 export function relativeTime(d: Date, now = Date.now()): string {
@@ -68,7 +68,7 @@ export function relativeTime(d: Date, now = Date.now()): string {
   if (s < 45) return "now";
   if (s < 3600) return `${Math.round(s / 60)}m`;
   if (s < 86400) return `${Math.round(s / 3600)}h`;
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  return localeFormat(d, "shortDate", { month: "short", day: "numeric" });
 }
 
 export function dayLabel(d: Date, now = new Date()): string {
@@ -76,8 +76,21 @@ export function dayLabel(d: Date, now = new Date()): string {
   const days = Math.round((start(now) - start(d)) / 86400000);
   if (days === 0) return "Today";
   if (days === 1) return "Yesterday";
-  if (days < 7) return d.toLocaleDateString([], { weekday: "long" });
-  return d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
+  if (days < 7) return localeFormat(d, "weekday", { weekday: "long" });
+  return localeFormat(d, "longDate", { month: "long", day: "numeric", year: "numeric" });
+}
+
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+/**
+ * `d.toLocaleDateString([], options)` (or …TimeString), the same words, with the formatter built
+ * once per format instead of on every call: that costs ~50 µs a time, and a conversation, the call
+ * list or the Feed formats a few hundred dates per render.
+ */
+function localeFormat(d: Date, name: string, options: Intl.DateTimeFormatOptions): string {
+  if (Number.isNaN(d.getTime())) return "Invalid Date";
+  let f = dateFormats.get(name);
+  if (!f) dateFormats.set(name, (f = new Intl.DateTimeFormat([], options)));
+  return f.format(d);
 }
 
 export function duration(seconds: number | null): string {

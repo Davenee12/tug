@@ -5,6 +5,7 @@ import { useTugStore } from "../stores/tug";
 import { callsEmptyHint } from "../lib/availability";
 import { callKey, callKeys, callName, callTime, clockTime, formatAddress, groupCalls, MESSAGES_APP } from "../lib/format";
 import { preservedScrollTop } from "../lib/scroll";
+import { useRevealMore } from "../lib/useRevealMore";
 import type { CallDirection, CallRecord } from "../types/protocol";
 import AppAvatar from "./AppAvatar.vue";
 
@@ -23,7 +24,11 @@ onMounted(() => {
 onUnmounted(() => window.clearInterval(live));
 
 const nameFor = computed(() => new Map(tug.contacts.map((c) => [c.address, c.name])));
-const groups = computed(() => groupCalls(tug.calls));
+// A page of calls at first, more as you scroll (the phone can list hundreds): opening Calls then
+// builds the rows on screen, not the whole history.
+const scroller = ref<HTMLElement | null>(null);
+const limit = useRevealMore(scroller, "callsEnd", 40);
+const groups = computed(() => groupCalls(tug.calls.slice(0, limit.value)));
 
 // A stable key per call so a new call at the top doesn't re-key (and so re-render) every row below
 // it. Built from the same objects groupCalls returns, so a per-render identity lookup is enough.
@@ -39,7 +44,6 @@ const keyOf = (c: CallRecord) => keyMap.value.get(c) ?? callKey(c);
 // left alone the viewport would slide down by the new row's height. Measure before the DOM updates
 // (this watcher runs pre-flush), then restore — stay pinned at the top if they were already there
 // (so the newest call is seen), otherwise keep the rows under their eye still.
-const scroller = ref<HTMLElement | null>(null);
 const topKey = (gs: Array<{ calls: CallRecord[] }>): string | undefined => {
   const c = gs[0]?.calls[0];
   return c ? callKey(c) : undefined;
@@ -63,8 +67,12 @@ const DIRECTION: Record<CallDirection, { label: string; icon: typeof Phone; tone
   missed: { label: "Missed", icon: PhoneMissed, tone: "bg-error/10 text-error" },
 };
 
-const name = (c: CallRecord) => callName(c, nameFor.value);
-const route = (c: CallRecord) => tug.callRoute(name(c), c.number);
+// Each call's name and call route, worked out once when the calls, contacts or notifications
+// change rather than several times per row on every render.
+const names = computed(() => new Map(tug.calls.map((c) => [c, callName(c, nameFor.value)])));
+const routes = computed(() => new Map(tug.calls.map((c) => [c, tug.callRoute(name(c), c.number)])));
+const name = (c: CallRecord) => names.value.get(c) ?? callName(c, nameFor.value);
+const route = (c: CallRecord) => (routes.value.has(c) ? routes.value.get(c)! : tug.callRoute(name(c), c.number));
 // Every row with a number can be clicked: it calls when tug can, and says why when it can't
 // (rows that look tappable but do nothing were confusing).
 function callFrom(c: CallRecord) {
@@ -96,7 +104,7 @@ const emptyHint = computed(() => callsEmptyHint(tug.status, tug.switchContext));
 
     <div class="mx-auto w-full max-w-3xl">
       <section v-for="g in groups" :key="g.label">
-        <h2 class="caption-upper sticky top-0 z-10 bg-canvas/95 px-3 pt-5 pb-2 text-muted backdrop-blur-sm">{{ g.label }}</h2>
+        <h2 class="caption-upper sticky top-0 z-10 bg-canvas px-3 pt-5 pb-2 text-muted">{{ g.label }}</h2>
         <ul class="flex flex-col gap-0.5">
           <li
             v-for="c in g.calls"
@@ -155,6 +163,7 @@ const emptyHint = computed(() => callsEmptyHint(tug.status, tug.switchContext));
           </li>
         </ul>
       </section>
+      <div v-if="limit < tug.calls.length" ref="callsEnd" class="h-10" />
 
       <p v-if="tug.calls.length" class="px-3 pt-6 text-[12px] text-muted-soft">
         Your iPhone's last {{ tug.calls.length }} calls. Calls themselves happen on the phone.

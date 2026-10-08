@@ -6,6 +6,7 @@ import { dayLabel, entryLatest, groupFeed, notificationTime, type FeedEntry } fr
 import { optionalNudge } from "../lib/connectFlow";
 import type { CodeEntry } from "../lib/codeFeed";
 import { preservedScrollTop } from "../lib/scroll";
+import { reuseUnchanged, sameFeedEntry } from "../lib/stableList";
 import CallsPanel from "./CallsPanel.vue";
 import CodeFeedRow from "./CodeFeedRow.vue";
 import FeedEntryRow from "./FeedEntryRow.vue";
@@ -26,8 +27,15 @@ type Row =
   | { kind: "entry"; key: string; at: number; entry: FeedEntry }
   | { kind: "code"; key: string; at: number; code: CodeEntry };
 
+// Grouped on their own (not with the code rows below, which tick each minute), and kept stable: a
+// row whose notifications didn't change keeps its entry object, so one new notification or text
+// re-renders that row only, not the whole Feed (lib/stableList).
+const entries = computed<FeedEntry[]>((prev) =>
+  reuseUnchanged(prev, groupFeed(tug.notifications.filter((n) => n.removedAt == null)), sameFeedEntry),
+);
+
 const rows = computed<Row[]>(() => {
-  const list: Row[] = groupFeed(tug.notifications.filter((n) => n.removedAt == null)).map((entry) => ({
+  const list: Row[] = entries.value.map((entry) => ({
     kind: "entry",
     key: entry.key,
     at: notificationTime(entryLatest(entry)).getTime(),
@@ -180,7 +188,7 @@ const nudgeDismissed = ref(false);
 
       <div class="mx-auto w-full max-w-3xl">
         <section v-for="g in entryGroups" :key="g.label">
-          <h2 class="caption-upper sticky top-0 z-10 bg-canvas/95 px-3 pt-5 pb-2 text-muted backdrop-blur-sm">{{ g.label }}</h2>
+          <h2 class="caption-upper sticky top-0 z-10 bg-canvas px-3 pt-5 pb-2 text-muted">{{ g.label }}</h2>
           <div class="flex flex-col gap-0.5">
             <template v-for="r in g.rows" :key="r.key">
               <CodeFeedRow v-if="r.kind === 'code'" :entry="r.code" />

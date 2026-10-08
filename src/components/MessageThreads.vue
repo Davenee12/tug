@@ -1,20 +1,28 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
-import { ChevronRight, Info, Phone, Plus, RotateCcw, SendHorizontal, ShieldQuestionMark } from "lucide-vue-next";
+import { computed, nextTick, reactive, ref, watch } from "vue";
+import { ChevronRight, Info, Phone, Plus, RotateCcw, ShieldQuestionMark } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { replyUnavailable } from "../lib/availability";
 import { clockTime, dayLabel, formatAddress, groupConversations, threadKey, type Conversation, type ConversationItem } from "../lib/format";
 import { shouldStickToBottom } from "../lib/scroll";
+import { reuseUnchanged, sameConversation, sameItems } from "../lib/stableList";
+import { olderWindowStart, REVEAL_PX, startIncluding, windowStart } from "../lib/threadWindow";
 import { bubbleKind, distinguishesIMessage, messageText } from "../lib/messageType";
 import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import ConversationRow from "./ConversationRow.vue";
+import MessageComposer from "./MessageComposer.vue";
 import { findCode } from "../lib/codes";
 import type { SmsMessage } from "../types/protocol";
 
 const tug = useTugStore();
+// Regrouped on every text and notification, but kept stable: a conversation whose contents didn't
+// change keeps its object, so only the rows that changed re-render (lib/stableList).
+const grouped = computed<Conversation[]>((prev) =>
+  reuseUnchanged(prev, groupConversations(tug.notifications, tug.messages, tug.contacts), sameConversation),
+);
 const convs = computed(() => {
-  const list = groupConversations(tug.notifications, tug.messages, tug.contacts);
+  const list = grouped.value;
   // A conversation started with + shows (empty) until its first message exists.
   const draft = tug.composeTo;
   // Once a real conversation exists for the draft's number, the draft is done (M9).
@@ -33,18 +41,19 @@ const convs = computed(() => {
         latest: placeholder,
         notifications: [],
       };
-      list.unshift(empty);
+      return [empty, ...list];
     }
   }
   return list;
 });
 // Filter unknown senders: people you don't know wait in a collapsed section at the bottom.
 // The draft (always someone you chose to text) stays with your conversations.
-const sections = computed(() => {
+const sections = computed<{ known: Conversation[]; unknown: Conversation[] }>((prev) => {
   const known: Conversation[] = [];
   const unknown: Conversation[] = [];
   for (const c of convs.value) (c.items.length === 0 || tug.isKnown(c) ? known : unknown).push(c);
-  return { known, unknown };
+  // Unchanged lists: hand back the same object, so nothing that reads them re-renders.
+  return prev && sameItems(prev.known, known) && sameItems(prev.unknown, unknown) ? prev : { known, unknown };
 });
 // The open conversation lives in the store so the Feed can open one directly. With nothing
 // chosen, the newest *known* one opens: opening reads it, and that shouldn't happen to spam.
@@ -129,12 +138,50 @@ watch(convs, (list) => {
   if (real) tug.openThread(real.key);
 });
 
+// A long conversation renders its newest items only; scrolling up near the top reveals older ones
+// (lib/threadWindow). `anchor` is the oldest item on screen, set when the conversation opens.
+const anchor = ref<string | null>(null);
+watch(
+  () => selected.value?.key,
+  () => {
+    const items = selected.value?.items ?? [];
+    anchor.value = items[windowStart(items, null)]?.id ?? null;
+  },
+  { immediate: true },
+);
+const firstShown = computed(() => windowStart(selected.value?.items ?? [], anchor.value));
+const shownItems = computed(() => (selected.value?.items ?? []).slice(firstShown.value));
+let revealing = false;
+async function showOlder() {
+  const el = scroller.value;
+  const items = selected.value?.items ?? [];
+  if (!el || revealing || firstShown.value === 0) return;
+  revealing = true;
+  // Keep what's on screen still while rows go in above it (the browser's own anchoring is held
+  // off for this one change, so the two don't both adjust).
+  el.style.overflowAnchor = "none";
+  const top = el.scrollTop;
+  const height = el.scrollHeight;
+  anchor.value = items[olderWindowStart(firstShown.value)].id;
+  await nextTick();
+  el.scrollTop = top + (el.scrollHeight - height);
+  el.style.overflowAnchor = "";
+  revealing = false;
+}
+function onThreadScroll() {
+  if ((scroller.value?.scrollTop ?? Infinity) < REVEAL_PX) void showOlder();
+}
+
 // Arriving from search: scroll to the item and briefly highlight it.
 const flashed = ref<string | null>(null);
 watch(
   () => [tug.focusItem, selected.value?.key] as const,
   async ([item]) => {
     if (!item) return;
+    // An older item than the window shows: reveal down to it first.
+    const items = selected.value?.items ?? [];
+    const start = startIncluding(firstShown.value, items.findIndex((i) => i.id === item));
+    if (start !== firstShown.value) anchor.value = items[start].id;
     await nextTick();
     const el = scroller.value?.querySelector<HTMLElement>(`[data-item="${item}"]`);
     if (!el) return;
@@ -147,7 +194,9 @@ watch(
   { flush: "post", immediate: true },
 );
 
-function showDay(i: number): boolean {
+function showDay(shown: number): boolean {
+  // Against the item before it in the whole conversation, shown or not, so the labels match.
+  const i = firstShown.value + shown;
   const items = selected.value?.items ?? [];
   return i === 0 || dayLabel(items[i].at) !== dayLabel(items[i - 1].at);
 }
@@ -186,15 +235,12 @@ const statusLabel = (i: ConversationItem) => {
 // Composer: replies go through the iPhone over message access (MAP).
 // One draft per conversation: a shared box carried text typed to one person into another's
 // conversation, where Enter would send it to the wrong person.
-const drafts = ref<Record<string, string>>({});
-const draft = computed({
-  get: () => (selected.value ? (drafts.value[selected.value.key] ?? "") : ""),
-  set: (text: string) => {
-    if (selected.value) drafts.value = { ...drafts.value, [selected.value.key]: text };
-  },
-});
-const draftFor = (key: string) => drafts.value[key] ?? "";
-const setDraftFor = (key: string, text: string) => (drafts.value = { ...drafts.value, [key]: text });
+// Only MessageComposer reads a draft while rendering, so typing re-renders the composer alone,
+// not this whole view with the conversation in it.
+const drafts = reactive(new Map<string, string>());
+const draftFor = (key: string) => drafts.get(key) ?? "";
+const setDraftFor = (key: string, text: string) => drafts.set(key, text);
+const draft = computed(() => (selected.value ? draftFor(selected.value.key) : ""));
 const sending = ref(false);
 /** Number chosen in the To: picker, per conversation (several numbers under one name). */
 const chosen = ref<Record<string, string>>({});
@@ -243,13 +289,6 @@ async function retry(m: SmsMessage) {
   const conv = selected.value;
   if ((await tug.retryMessage(m.id)) && conv) void tug.clearItems(conv.notifications);
   retrying.value = null;
-}
-
-function onKey(e: KeyboardEvent) {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    void send();
-  }
 }
 </script>
 
@@ -323,8 +362,8 @@ function onKey(e: KeyboardEvent) {
         <button class="btn-secondary btn-sm shrink-0" @click="tug.moveToConversations(selected)">Move to conversations</button>
       </div>
 
-      <div ref="scroller" class="flex-1 overflow-y-auto px-8 py-6">
-        <template v-for="(item, i) in selected.items" :key="item.id">
+      <div ref="scroller" class="flex-1 overflow-y-auto px-8 py-6" @scroll.passive="onThreadScroll">
+        <template v-for="(item, i) in shownItems" :key="item.id">
           <div v-if="showDay(i)" class="caption-upper my-4 text-center text-muted-soft">{{ dayLabel(item.at) }}</div>
           <p
             v-if="item.kind === 'message' && item.m.gapBefore"
@@ -389,18 +428,15 @@ function onKey(e: KeyboardEvent) {
           </select>
           <span v-if="selected.addresses.length > 1">· {{ selected.addresses.length }} numbers under this name</span>
         </label>
-        <form v-if="canReply" class="flex items-end gap-2" @submit.prevent="send()">
-          <textarea
-            v-model="draft"
-            rows="1"
-            class="input h-auto max-h-32 min-h-10 resize-none py-2.5 leading-snug"
-            :placeholder="`Text ${selected.contact}`"
-            @keydown="onKey"
-          />
-          <button type="submit" class="btn-primary w-10 shrink-0 px-0" :disabled="!draft.trim() || sending || !replyTo" aria-label="Send">
-            <SendHorizontal :size="16" />
-          </button>
-        </form>
+        <MessageComposer
+          v-if="canReply"
+          :drafts="drafts"
+          :draft-key="selected.key"
+          :placeholder="`Text ${selected.contact}`"
+          :blocked="sending || !replyTo"
+          @update="(text) => setDraftFor(selected!.key, text)"
+          @send="send()"
+        />
         <p v-else class="flex items-center gap-2 py-1 text-[13px] text-muted">
           <Info :size="14" class="shrink-0" />
           {{ replyHint }}
