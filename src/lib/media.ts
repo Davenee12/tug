@@ -94,6 +94,30 @@ export function canRestart(elapsed: number | null): boolean {
   return elapsed == null || elapsed > RESTART_AFTER_S;
 }
 
+/**
+ * Where the song is now, in seconds. AMS only reports the position on a state change, so while
+ * playing it advances from when the phone reported it (never from the last update of any kind: a
+ * volume change must not rewind the bar), at the player's rate, and stops at the song's end.
+ */
+export function elapsedSeconds(
+  np: Pick<NowPlaying, "elapsed" | "elapsedAt" | "state" | "rate" | "duration">,
+  nowMs: number,
+): number | null {
+  const base = np.elapsed;
+  if (base == null) return null;
+  const reportedAt = np.elapsedAt ?? nowMs;
+  const drift = np.state === "playing" ? (Math.max(0, nowMs - reportedAt) / 1000) * (np.rate ?? 1) : 0;
+  return np.duration != null ? Math.min(base + drift, np.duration) : base + drift;
+}
+
+/**
+ * The position only moves while a song plays from a known position, so only then does anything
+ * need to tick: paused, stopped or unknown, the bar and the time stay put without a timer.
+ */
+export function positionMoves(np: Pick<NowPlaying, "elapsed" | "state">): boolean {
+  return np.state === "playing" && np.elapsed != null;
+}
+
 // --- Press-and-hold volume --------------------------------------------------
 // Holding the volume up/down button should keep changing the volume: one step on press,
 // then a steady (slightly accelerating) repeat. Each step is one AMS VolumeUp/VolumeDown.

@@ -75,6 +75,7 @@ import {
   type SwitchContext,
 } from "../lib/phoneSwitches";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
+import { coalesce, nextFrame } from "../lib/coalesce";
 import { useTugboatStore } from "./tugboat";
 import { useDevToolsStore } from "./devtools";
 
@@ -158,6 +159,8 @@ export const useTugStore = defineStore("tug", () => {
   /** The backend's status has arrived; until then `status` is a placeholder that says "noDevice". */
   const statusKnown = ref(false);
   const nowPlaying = ref<NowPlaying>(EMPTY_NOW_PLAYING);
+  /** Now Playing updates, applied once per frame (lib/coalesce), so a song change renders once. */
+  const nowPlayingUpdates = coalesce<NowPlaying>((np) => (nowPlaying.value = np), nextFrame);
   /** Newest first. */
   const notifications = ref<PhoneNotification[]>([]);
   /** Messages from message access (MAP), oldest first. */
@@ -401,6 +404,8 @@ export const useTugStore = defineStore("tug", () => {
     pageVisible.value = document.visibilityState === "visible";
     if (document.hidden) leftWindow();
     else {
+      // The minute clock skips its ticks while hidden: catch the code rows up now.
+      if (clockTimer !== undefined) clock.value = Date.now();
       cameBack();
       // tug coming to the front is when a switch flipped on the phone should show: check now.
       checkSwitches();
@@ -1198,9 +1203,8 @@ export const useTugStore = defineStore("tug", () => {
           }
           statusKnown.value = true;
         }),
-        on("now-playing", (np) => {
-          nowPlaying.value = np;
-        }),
+        // A song change arrives as several updates a few ms apart: one render per frame, not each.
+        on("now-playing", (np) => nowPlayingUpdates.push(np)),
         on("notification", (n) => {
           const added = upsert(notifications.value, n);
           // Seen only if someone is looking (MessageThreads marks the one on screen on coming back).
@@ -1254,12 +1258,17 @@ export const useTugStore = defineStore("tug", () => {
     if (contacts.value.length === 0) contacts.value = people;
     status.value = s;
     statusKnown.value = true;
+    // Any update that came in while these loaded lands first, as it would have without the frame wait.
+    nowPlayingUpdates.flush();
     nowPlaying.value = np;
     hasMore.value = first.length === PAGE;
     // The backlog is in; from here a newly delivered code text is a live arrival that may pop up.
     messagesReady = true;
-    // Let code rows age out of the Feed's recency window even when nothing else changes.
-    clockTimer = window.setInterval(() => (clock.value = Date.now()), 60_000);
+    // Let code rows age out of the Feed's recency window even when nothing else changes. Not while
+    // tug is hidden (nobody sees the Feed); coming back catches up at once (onVisibilityChange).
+    clockTimer = window.setInterval(() => {
+      if (!document.hidden) clock.value = Date.now();
+    }, 60_000);
     await attempt(loadSettings);
     // Settings and contacts are in: pop-ups held since the listeners went in can be judged now.
     markReady();
@@ -1287,6 +1296,7 @@ export const useTugStore = defineStore("tug", () => {
     window.clearTimeout(flashTimer);
     window.clearInterval(watchRenew);
     window.clearInterval(clockTimer);
+    nowPlayingUpdates.cancel();
     window.clearTimeout(switchTimer);
     window.clearTimeout(transferCheck);
     transferCheck = undefined;

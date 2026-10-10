@@ -1,10 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import { FastForward, Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, Rewind, RotateCcw, Shuffle, SkipBack, SkipForward, ThumbsDown, ThumbsUp, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { duration } from "../lib/format";
-import { canRestart, createHoldRepeater, repeatLabel, SKIP_SECONDS, skipLabel, skipMode, skipTargetMs, supportsDislike, supportsLike } from "../lib/media";
-import { seekFraction } from "../lib/spotify";
+import {
+  canRestart,
+  createHoldRepeater,
+  elapsedSeconds,
+  repeatLabel,
+  SKIP_SECONDS,
+  skipLabel,
+  skipMode,
+  skipTargetMs,
+  supportsDislike,
+  supportsLike,
+} from "../lib/media";
+import NowPlayingProgress from "./NowPlayingProgress.vue";
 
 // `compact` (from the sidebar, on short windows) drops the card's second row of extra controls and
 // tucks them into rows that are there anyway, so the card keeps its one-row height and still fits
@@ -35,34 +45,14 @@ const sameSong = computed(() => !!sp.value && tug.spotifyTrackVerified);
 const art = computed(() => (sameSong.value ? sp.value?.albumArt ?? null : null));
 
 // Click/drag-to-seek: only when Spotify is the player and we know the song length. Otherwise the
-// bar is a plain progress indicator, exactly as before.
+// bar is a plain progress indicator, exactly as before. The bar and times tick on their own in
+// NowPlayingProgress, so the rest of this card doesn't re-render every second.
 const seekable = computed(() => !!sp.value && tug.connected && (np.value.duration ?? 0) > 0);
-const bar = ref<HTMLElement | null>(null);
-/** The fraction a drag is currently at, so the fill follows the pointer before it commits. */
-const dragFraction = ref<number | null>(null);
-function fractionAt(e: PointerEvent): number {
-  const rect = bar.value?.getBoundingClientRect();
-  return rect ? seekFraction(e.clientX, rect) : 0;
+function seekTo(fraction: number) {
+  if (np.value.duration != null) void tug.spotifySeek(fraction * np.value.duration * 1000);
 }
-function seekDown(e: PointerEvent) {
-  if (!seekable.value) return;
-  (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-  dragFraction.value = fractionAt(e);
-}
-function seekMove(e: PointerEvent) {
-  if (dragFraction.value == null) return;
-  dragFraction.value = fractionAt(e);
-}
-function seekUp() {
-  if (dragFraction.value == null) return;
-  const f = dragFraction.value;
-  dragFraction.value = null;
-  if (np.value.duration != null) void tug.spotifySeek(f * np.value.duration * 1000);
-}
-
-// AMS only reports elapsed time on state changes; advance it locally while playing.
-const now = ref(Date.now());
-const timer = window.setInterval(() => (now.value = Date.now()), 1000);
+/** Where the song is right now, read when a button needs it (AMS only reports it on changes). */
+const elapsedNow = () => elapsedSeconds(np.value, Date.now());
 
 // Press-and-hold volume: one AMS step on press, then a steady repeat. The timing lives in
 // lib/media.ts (pure, unit-tested); this just wires DOM events to it. Volume is a 0–1 fraction,
@@ -96,28 +86,11 @@ onMounted(() => {
   document.addEventListener("visibilitychange", onVisibility);
 });
 onUnmounted(() => {
-  window.clearInterval(timer);
   window.removeEventListener("blur", stopHolds);
   document.removeEventListener("visibilitychange", onVisibility);
   stopHolds();
 });
 
-const elapsed = computed(() => {
-  const base = np.value.elapsed;
-  if (base == null) return null;
-  // Advance from when the phone reported the position, not from the last update of
-  // any kind (a volume change must not rewind the bar).
-  const reportedAt = np.value.elapsedAt ?? now.value;
-  const drift = playing.value ? (Math.max(0, now.value - reportedAt) / 1000) * (np.value.rate ?? 1) : 0;
-  return np.value.duration != null ? Math.min(base + drift, np.value.duration) : base + drift;
-});
-const progress = computed(() =>
-  dragFraction.value != null
-    ? dragFraction.value * 100
-    : elapsed.value != null && np.value.duration
-      ? (elapsed.value / np.value.duration) * 100
-      : 0,
-);
 const can = (c: string) => np.value.available.length === 0 || np.value.available.includes(c as never);
 
 // Extra AMS controls, shown only when the current player lists them (see lib/media). Skip ±15 s is
@@ -135,9 +108,10 @@ function skip(direction: "back" | "forward") {
   const mode = direction === "back" ? backMode.value : forwardMode.value;
   if (mode === "seek") {
     // No position from the phone yet: don't guess (Forward would land at 0:15).
-    if (elapsed.value == null) return;
+    const elapsed = elapsedNow();
+    if (elapsed == null) return;
     const delta = direction === "back" ? -SKIP_SECONDS : SKIP_SECONDS;
-    void tug.spotifySeek(skipTargetMs(elapsed.value, delta, np.value.duration ?? null));
+    void tug.spotifySeek(skipTargetMs(elapsed, delta, np.value.duration ?? null));
   } else if (mode === "ams") {
     void tug.media(direction === "back" ? "skipBackward" : "skipForward");
   }
@@ -156,7 +130,7 @@ const compactSkip = computed(() => !!props.compact && (skipBack.value || skipFor
 
 // Start the song over with Back, only where Back restarts rather than skips (see canRestart).
 function restart() {
-  if (canRestart(elapsed.value)) void tug.media("previousTrack");
+  if (canRestart(elapsedNow())) void tug.media("previousTrack");
   else tug.notify("info", "Already at the start of the song");
 }
 
@@ -238,30 +212,8 @@ function restart() {
         </div>
       </div>
 
-      <!-- When Spotify is the player, click or drag the bar to seek; otherwise it just shows
-           progress. Its box is unchanged either way so the compact card keeps its height. -->
-      <div
-        ref="bar"
-        :class="['mt-3 h-1 overflow-hidden rounded-full bg-surface-dark-soft', seekable ? 'cursor-pointer' : '']"
-        :role="seekable ? 'slider' : undefined"
-        :aria-label="seekable ? 'Seek' : undefined"
-        :aria-valuenow="seekable ? Math.round(progress) : undefined"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        @pointerdown="seekDown"
-        @pointermove="seekMove"
-        @pointerup="seekUp"
-        @pointercancel="seekUp"
-      >
-        <!-- Keyed by track so a new song starts at its position instead of sliding back. -->
-        <div
-          :key="np.title ?? ''"
-          :class="['h-full rounded-full bg-on-dark ease-linear', dragFraction == null ? 'transition-[width] duration-1000' : '']"
-          :style="{ width: `${progress}%` }"
-        />
-      </div>
-      <div class="mt-1.5 flex items-center justify-between font-mono text-[11px] text-on-dark-soft">
-        <span>{{ duration(elapsed) }}</span>
+      <!-- The bar (click or drag to seek with Spotify) and the elapsed/total times. -->
+      <NowPlayingProgress :np="np" :seekable="seekable" @seek="seekTo">
         <!-- Compact only: skip ±15 s between the times. The negative margin keeps the full-size
              hit area without making this row any taller than the times alone. -->
         <div v-if="compactSkip" class="-my-1.5 flex items-center gap-1">
@@ -286,8 +238,7 @@ function restart() {
             <FastForward :size="15" />
           </button>
         </div>
-        <span>{{ duration(np.duration) }}</span>
-      </div>
+      </NowPlayingProgress>
 
       <!-- One row: playback modes bookend it (Spotify only), volume just inside, transport centred.
            Nothing else goes here: for Spotify it already spans the card's full width. -->

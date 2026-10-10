@@ -16,8 +16,38 @@ import {
   skipLabel,
   skipMode,
   skipTargetMs,
+  elapsedSeconds,
+  positionMoves,
   type HoldTimers,
 } from "./media";
+
+describe("elapsedSeconds", () => {
+  const playing = { elapsed: 60, elapsedAt: 1_000_000, state: "playing" as const, rate: 1, duration: 200 };
+
+  it("advances from when the phone reported the position, at the player's rate", () => {
+    expect(elapsedSeconds(playing, 1_000_000)).toBe(60);
+    expect(elapsedSeconds(playing, 1_010_000)).toBe(70);
+    expect(elapsedSeconds({ ...playing, rate: 2 }, 1_010_000)).toBe(80);
+  });
+
+  it("holds still when paused, stops at the song's end and never runs backwards", () => {
+    expect(elapsedSeconds({ ...playing, state: "paused" }, 1_010_000)).toBe(60);
+    expect(elapsedSeconds(playing, 1_500_000)).toBe(200);
+    expect(elapsedSeconds(playing, 990_000)).toBe(60);
+  });
+
+  it("is unknown without a position", () => {
+    expect(elapsedSeconds({ ...playing, elapsed: null }, 1_010_000)).toBeNull();
+  });
+});
+
+describe("positionMoves", () => {
+  it("only while playing from a known position (otherwise nothing needs to tick)", () => {
+    expect(positionMoves({ state: "playing", elapsed: 3 })).toBe(true);
+    expect(positionMoves({ state: "paused", elapsed: 3 })).toBe(false);
+    expect(positionMoves({ state: "playing", elapsed: null })).toBe(false);
+  });
+});
 
 describe("supportsRepeat", () => {
   it("needs AdvanceRepeatMode in the player's command list", () => {

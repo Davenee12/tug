@@ -61,13 +61,17 @@ const nowDot = computed(() =>
   f.value ? `${Math.min(100, Math.max(0, ((f.value.now.temp - range.value.lo) / range.value.span) * 100))}%` : "0",
 );
 
-// The place's clock, ticking on the minute.
+// The place's clock, ticking on the minute. Hidden in the tray nobody reads it, so it holds still
+// (no re-render) and catches up the moment tug is shown again.
 const now = ref(new Date());
 let clock: number | undefined;
 function tick() {
-  now.value = new Date();
+  if (!document.hidden) now.value = new Date();
   clock = window.setTimeout(tick, 60_000 - (Date.now() % 60_000) + 50);
 }
+const onVisibility = () => {
+  if (!document.hidden) now.value = new Date();
+};
 
 // ---- Open / close: drag anywhere on the card, down for more, up for less (or click the top) ----
 const open = ref(false);
@@ -80,6 +84,7 @@ let gesture: { x: number; y: number; h: number; id: number; onHeader: boolean; d
 
 onMounted(() => {
   tick();
+  document.addEventListener("visibilitychange", onVisibility);
   ro = new ResizeObserver(() => (full.value = inner.value?.scrollHeight ?? 0));
   watch(
     inner,
@@ -93,6 +98,7 @@ onMounted(() => {
 onUnmounted(() => {
   ro?.disconnect();
   window.clearTimeout(clock);
+  document.removeEventListener("visibilitychange", onVisibility);
 });
 
 const height = computed(() => (dragH.value !== null ? dragH.value : open.value ? full.value : 0));

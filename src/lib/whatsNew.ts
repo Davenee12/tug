@@ -21,6 +21,17 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.13",
+    title: "Faster and steadier",
+    highlights: [
+      "tug is much lighter on your PC: almost no CPU while it sits there or hides in the tray.",
+      "If your iPhone restarts, tug tells you to unlock it and reconnects by itself.",
+      "Texts reconnect within seconds when your phone drops them.",
+      "tug boat finds the file you meant anywhere on your PC.",
+      "Works better with iPhones set to other languages and in other time zones.",
+    ],
+  },
+  {
     version: "0.5.12",
     title: "tug for developers, and a steadier tug",
     highlights: [
