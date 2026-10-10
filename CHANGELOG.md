@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.5.13 — 2026-10-09
+
+A faster, steadier tug that works on more people's PCs. Merged as #103 and #104.
+
+### Improved
+- **Much lighter on your PC.** tug's window used about a fifth of a CPU core just sitting there
+  while music played; now it's close to nothing, and nothing at all while tug is in the tray.
+  Switching tabs, opening conversations and typing feel quicker.
+- **Steadier reconnects.** If your iPhone restarts, tug says "Your iPhone restarted. Unlock it and
+  tug reconnects by itself" instead of suggesting you pair again. A freshly paired phone isn't
+  called "away" after one slow first connect, and tug checks less often when your phone has been
+  gone for hours. Texts reconnect within seconds after the phone drops them, and say "Reconnecting
+  to your texts…" instead of a setup message.
+- **`tug boat` finds the file you meant** anywhere on your PC (via Windows Search), and asks when
+  several files match.
+- **iPhones set to other languages:** Clear, music details and verification codes work beyond
+  English; Clear never acts on a call's Decline or End button.
+
+### Fixed
+- Notification times are right when your phone and PC are in different time zones.
+- Clear history deletes texts for good (they don't come back from your phone), clears recent
+  calls, and says exactly what it does.
+- Tugboat's help explains Public vs Private networks and the firewall prompt on non-admin accounts.
+- An Android phone gets a clear "This doesn't look like an iPhone" message.
+- "Mute calls" describes what it really does.
+- The `tug` command and AI tools work on Windows' built-in Administrator account.
+
 ## v0.5.12 — 2026-10-07
 
 tug for developers: your AI tools and your terminal can use your phone through tug, always with
