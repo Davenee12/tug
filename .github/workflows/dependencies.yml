@@ -1,0 +1,55 @@
+# Dependency checks: known vulnerabilities, licences and where crates come from. Runs on every PR,
+# on main, and weekly so a new advisory against an unchanged lockfile still shows up.
+# Informational for now (not a required status); see docs/SECURITY-MODEL.md.
+name: dependencies
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 6 * * 1"
+
+# Read-only token: both jobs only read the lockfiles.
+permissions:
+  contents: read
+
+concurrency:
+  group: dependencies-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-deny:
+    # The action runs in a Linux container; that's fine because src-tauri/deny.toml pins the
+    # dependency graph to tug's Windows target, so what's checked is what ships.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Advisories on their own, so a new RUSTSEC entry is easy to tell apart from a licence or
+        # source problem in the PR checks list.
+        checks: [advisories, "bans licenses sources"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: src-tauri/Cargo.toml
+          arguments: --workspace --all-features
+          command: check
+          command-arguments: ${{ matrix.checks }}
+
+  npm-audit:
+    # Production dependencies only: dev tooling (Vite, vitest, the Tauri CLI) never ships in the
+    # app, and its advisories are mostly about dev servers that tug doesn't expose.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm audit --omit=dev --audit-level=high

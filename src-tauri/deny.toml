@@ -1,0 +1,55 @@
+# cargo-deny: known vulnerabilities, licences, duplicate/banned crates and crate sources.
+# Run locally with `cargo deny --manifest-path src-tauri/Cargo.toml --workspace check`
+# (install: `cargo install cargo-deny --locked`). CI runs it in .github/workflows/dependencies.yml.
+
+[graph]
+# tug ships for Windows x64 only (WinRT Bluetooth, NSIS installer). Checking just that target keeps
+# Linux/macOS-only crates (Tauri's GTK/WebKitGTK stack, objc, ...) out of the graph, so a finding
+# here is always about code that's in the installer.
+targets = ["x86_64-pc-windows-msvc"]
+all-features = true
+
+[advisories]
+# Fail on every vulnerability, unmaintained-crate and unsound advisory in the Windows graph,
+# except the ones listed (each with a reason) below.
+yanked = "warn"
+ignore = [
+  # glib 0.18: `VariantStrIter` is unsound. glib only comes in through Tauri's GTK backend for
+  # Linux (tauri -> tray-icon/muda/wry -> gtk 0.18 -> glib), and
+  # `cargo tree -i glib --target x86_64-pc-windows-msvc` prints nothing: it isn't compiled into
+  # tug. Kept here so a run without the target filter above doesn't fail on it.
+  # Revisit when Tauri moves to gtk-rs >= 0.20 (glib >= 0.20 has the fix), then delete this line.
+  { id = "RUSTSEC-2024-0429", reason = "glib is Linux-only (Tauri's GTK backend); not in tug's Windows build. Revisit when Tauri uses gtk >= 0.20." },
+]
+
+[licenses]
+# Exactly the licences tug's Windows build uses today. tug is MIT and mustn't take on copyleft
+# obligations by accident: anything not listed (GPL, AGPL, LGPL, unknown) fails the check, and a
+# new licence is a deliberate edit here.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "Unicode-3.0",
+  "Zlib",
+  # File-level copyleft only (cssparser/selectors, used by Tauri's HTML/CSP handling): it applies
+  # to changes made to those crates' own files, which tug doesn't make.
+  "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Several crates appear at two versions because Tauri and the `windows` crate move at different
+# speeds; that's noise, not a defect.
+multiple-versions = "allow"
+wildcards = "deny"
+# Path dependencies inside this workspace (tug-bridge) have no version requirement by design.
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io; no git dependencies or other registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -5,6 +5,8 @@ description = "Bluetooth LE companion that mirrors iPhone notifications and medi
 authors = ["tug contributors"]
 license = "MIT"
 edition = "2021"
+# An app, never a crates.io package (and its path dependencies couldn't be published anyway).
+publish = false
 
 # `tug` itself is the workspace root. The two small crates are the local bridge that companion
 # processes use to talk to the running app (`tug-bridge`) and the `tug` command plus MCP server
