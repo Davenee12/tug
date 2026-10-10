@@ -131,6 +131,10 @@ pub struct DeviceStatus {
     /// all (an Android phone, say), so "unlock your iPhone" would be wrong forever. Set by the
     /// ANCS setup that finds no ANCS, cleared by one that finds it.
     pub not_iphone: bool,
+    /// With `awaiting_unlock`: the phone was working this run and its notifications went away on
+    /// a live link, so it restarted ("Your iPhone restarted. Unlock it and tug reconnects by
+    /// itself."). Cleared with `awaiting_unlock`.
+    pub phone_restarted: bool,
     /// Message access has worked with this phone since it was set up (or tug started), so a drop
     /// is a reconnect ("Reconnecting to your texts…"), not a setup problem. Cleared on Forget and
     /// when another phone is adopted.

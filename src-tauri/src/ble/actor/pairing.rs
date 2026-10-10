@@ -371,6 +371,9 @@ impl Actor {
         self.last_poke = None;
         self.connected_since_adopt = false;
         self.adopt_timeouts = 0;
+        // A new phone: no session yet this run, and its grace period starts now.
+        self.had_session = false;
+        self.adopted_at = Some(Instant::now());
         self.stop_discovery();
         self.shared.update_status(|s| {
             s.device = Some(PairedDevice { id: le_id, name, model });
@@ -412,6 +415,7 @@ impl Actor {
             s.pairing_stale = false;
             s.awaiting_phone_allow = false;
             s.awaiting_unlock = false;
+            s.phone_restarted = false;
             s.not_iphone = false;
             s.texts_were_connected = false;
             s.reconnecting = false;

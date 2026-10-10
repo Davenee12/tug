@@ -44,6 +44,8 @@ export interface DeviceStatus {
    * so the store's initial status needn't name it.
    */
   notIphone?: boolean;
+  /** With awaitingUnlock: the phone restarted after working this run (unlock and tug reconnects). */
+  phoneRestarted?: boolean;
   /**
    * Message access has worked with this phone since it was set up (or tug started), so texts
    * being down now is a reconnect, not a setup problem. Optional only so the store's initial

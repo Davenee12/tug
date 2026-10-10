@@ -273,6 +273,8 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         radio_recheck_in: link_policy::RADIO_RECHECK_SECS,
         connected_since_adopt: true,
         adopt_timeouts: 0,
+        had_session: false,
+        adopted_at: None,
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -337,6 +339,11 @@ struct Actor {
     connected_since_adopt: bool,
     /// Timed-out connects since adopting the phone, while it hasn't connected yet.
     adopt_timeouts: u32,
+    /// The phone has connected this run (since tug started, or since it was adopted): ANCS going
+    /// missing after that means it restarted.
+    had_session: bool,
+    /// When this phone was adopted (paired) this run, for its grace period before "away".
+    adopted_at: Option<Instant>,
 }
 
 fn now_ms() -> i64 {
@@ -543,7 +550,10 @@ impl Actor {
                 self.link_down_at = None;
                 self.retry_in = 0;
                 self.last_poke = None;
-                self.shared.update_status(|s| s.awaiting_unlock = false);
+                self.shared.update_status(|s| {
+                    s.awaiting_unlock = false;
+                    s.phone_restarted = false;
+                });
                 // After resume the old GATT handles can be stale and Windows may never fire a
                 // reconnect for them. Read the subscription back (bounded): a link that answers is
                 // kept, so a short sleep doesn't cost a full reconnect and its notification replay.

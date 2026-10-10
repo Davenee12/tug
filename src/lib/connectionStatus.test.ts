@@ -75,6 +75,14 @@ describe("connectionSentence agrees with the sidebar label", () => {
     { connection: "disconnected" as const, away: true, reconnecting: true, label: "iPhone away", sentence: /out of range/ },
     { connection: "disconnected" as const, awaitingUnlock: true, reconnecting: true, label: "Unlock your iPhone", sentence: /Unlock it/ },
     { connection: "connecting" as const, awaitingUnlock: true, label: "Connecting…", sentence: /^Connecting/ },
+    // The phone restarted after working this run: say so, and that unlocking is all it takes.
+    {
+      connection: "disconnected" as const,
+      awaitingUnlock: true,
+      phoneRestarted: true,
+      label: "iPhone restarted: unlock it",
+      sentence: /^Your iPhone restarted\. Unlock it and tug reconnects by itself\.$/,
+    },
     // An Android phone paired by mistake: never "Unlock your iPhone".
     { connection: "disconnected" as const, notIphone: true, label: "Not an iPhone", sentence: /doesn't look like an iPhone/ },
     { connection: "disconnected" as const, notIphone: true, awaitingUnlock: true, label: "Not an iPhone", sentence: /works with iPhone/ },

@@ -5,7 +5,13 @@
 
 import type { DeviceStatus } from "../types/protocol";
 
-type StatusInputs = Pick<DeviceStatus, "connection" | "awaitingUnlock" | "reconnecting" | "radio" | "away" | "notIphone">;
+type StatusInputs = Pick<
+  DeviceStatus,
+  "connection" | "awaitingUnlock" | "reconnecting" | "radio" | "away" | "notIphone" | "phoneRestarted"
+>;
+
+/** The phone restarted after working this run: iOS holds notifications until the first unlock. */
+export const PHONE_RESTARTED = "Your iPhone restarted. Unlock it and tug reconnects by itself.";
 
 /** The paired phone isn't an iPhone (an Android phone). Mirrors `NOT_AN_IPHONE` in ble/winrt.rs. */
 export const NOT_AN_IPHONE = "This doesn't look like an iPhone. tug works with iPhone for now.";
@@ -35,7 +41,7 @@ export function connectionLabel(s: StatusInputs): string {
   // Not an iPhone at all: unlocking would never help.
   if (s.notIphone) return "Not an iPhone";
   // A locked phone needs the user; tug rebuilding the link on its own doesn't.
-  if (s.awaitingUnlock) return "Unlock your iPhone";
+  if (s.awaitingUnlock) return s.phoneRestarted ? "iPhone restarted: unlock it" : "Unlock your iPhone";
   // Out of range: one steady state while tug keeps trying quietly (failed retries don't flip it).
   if (s.away) return "iPhone away";
   return reconnecting ? "Reconnecting…" : "Waiting for iPhone";
@@ -63,7 +69,7 @@ export function connectionSentence(s: StatusInputs & Pick<DeviceStatus, "device"
   if (s.connection === "connecting") return showsReconnecting(s) ? reconnecting : "Connecting to your iPhone…";
   // A stale awaitingUnlock flag must never claim a forgotten phone is "connected" (handled above).
   if (s.notIphone) return NOT_AN_IPHONE;
-  if (s.awaitingUnlock) return "Your iPhone is connected but locked. Unlock it to reconnect.";
+  if (s.awaitingUnlock) return s.phoneRestarted ? PHONE_RESTARTED : "Your iPhone is connected but locked. Unlock it to reconnect.";
   // Away before reconnecting, as in the label: one steady "out of range" while tug retries quietly.
   if (s.away) return "Your iPhone is out of range. tug reconnects by itself when it's back.";
   if (showsReconnecting(s)) return reconnecting;
