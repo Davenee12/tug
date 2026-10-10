@@ -127,6 +127,21 @@ pub struct DeviceStatus {
     /// The iPhone is connected but isn't offering notifications (ANCS) — it's locked after a
     /// restart, or mid-update before its first unlock. The UI says to unlock it to reconnect.
     pub awaiting_unlock: bool,
+    /// The paired phone offers no notifications (ANCS) and doesn't look like an Apple device at
+    /// all (an Android phone, say), so "unlock your iPhone" would be wrong forever. Set by the
+    /// ANCS setup that finds no ANCS, cleared by one that finds it.
+    pub not_iphone: bool,
+    /// With `awaiting_unlock`: the phone was working this run and its notifications went away on
+    /// a live link, so it restarted ("Your iPhone restarted. Unlock it and tug reconnects by
+    /// itself."). Cleared with `awaiting_unlock`.
+    pub phone_restarted: bool,
+    /// Message access has worked with this phone since it was set up (or tug started), so a drop
+    /// is a reconnect ("Reconnecting to your texts…"), not a setup problem. Cleared on Forget and
+    /// when another phone is adopted.
+    pub texts_were_connected: bool,
+    /// Message access has failed several times in a row: the UI says it can't reach texts right
+    /// now instead of "Reconnecting…". Cleared by the next working sync.
+    pub texts_unreachable: bool,
     /// tug is rebuilding the link on its own (Bluetooth stopped responding, the PC woke, Windows
     /// closed tug's Bluetooth objects): the phone doesn't need the user, so the UI says
     /// "Reconnecting…" rather than "Waiting for iPhone". Cleared once connected, or after a few

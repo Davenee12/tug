@@ -191,6 +191,16 @@ describe("connectionHealth", () => {
     expect(connectionHealth(missing, { contacts: 0, calls: 0 }, ctx).find((l) => l.key === "texts")!.state).toBe("off");
   });
 
+  it("texts that worked and dropped read as reconnecting, never as a setup problem", () => {
+    const ctx = { now: 10 * 60_000, connectedSince: 0, messagesSince: null, savedContacts: 0 };
+    const down = { ...CONNECTED, services: { notifications: true, media: true, battery: true, messages: false } };
+    const texts = (s: DeviceStatus) => connectionHealth(s, { contacts: 0, calls: 0 }, ctx).find((l) => l.key === "texts")!;
+    expect(texts({ ...down, textsWereConnected: true })).toMatchObject({ state: "waiting", detail: "Reconnecting to your texts…" });
+    expect(texts(down).detail).toMatch(/hasn't opened message access yet/);
+    // Back up: the note is gone.
+    expect(texts({ ...CONNECTED, textsWereConnected: true }).state).toBe("ok");
+  });
+
   it("media and battery stop 'waiting' a minute after connecting", () => {
     const s = { ...CONNECTED, services: { notifications: true, media: false, battery: false, messages: true } };
     const at = (now: number) => connectionHealth(s, { contacts: 3, calls: 4 }, { now, connectedSince: 0, messagesSince: 0, savedContacts: 3 });

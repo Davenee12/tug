@@ -87,6 +87,9 @@ windows = { version = "0.62", features = [
   "Win32_System_Power",
   # Settings › Developer tools › Add tug to PATH (the user's own PATH, HKCU only).
   "Win32_System_Registry",
+  # Tugboat's help: whether this account is an administrator (the firewall prompt may need one).
+  "Win32_Security",
+  "Win32_System_Threading",
   "Win32_System_WindowsProgramming",
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",

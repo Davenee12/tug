@@ -4657,6 +4657,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tug-bridge",
+ "windows",
 ]
 
 [[package]]

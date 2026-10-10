@@ -9,13 +9,67 @@ use std::sync::LazyLock;
 
 use fancy_regex::Regex;
 
-/// Words that mean "this message carries a code".
+/// Words that mean "this message carries a code", in English and the iPhone's other major
+/// languages, as whole words (Unicode-aware edges). Mirrors `CUE_WORDS` in `src/lib/codes.ts`.
+const CUE_WORDS: &[&str] = &[
+    // en
+    "code",
+    "codes",
+    "passcode",
+    "pass code",
+    "verification",
+    "verify",
+    "otp",
+    "one[- ]time",
+    "2fa",
+    "two[- ]factor",
+    "security",
+    "login",
+    "log in",
+    "sign[- ]in",
+    "pin",
+    r"authenticat\p{L}*",
+    r"confirm\p{L}*",
+    // es, pt
+    "código",
+    "codigo",
+    "verificación",
+    "verificação",
+    "clave",
+    "senha", // fr
+    "vérification",
+    "vérifier", // de
+    "bestätigungscode",
+    "sicherheitscode",
+    "anmeldecode",
+    "verifizierungscode",
+    "aktivierungscode",
+    "freischaltcode",
+    // it
+    "codice",
+    "verifica", // nl
+    "verificatiecode",
+    "beveiligingscode",
+    "inlogcode",
+    "bevestigingscode", // sv, no, da, pl, tr, ru
+    "kod",
+    "koden",
+    "kode",
+    "kodu",
+    "engångskod",
+    "doğrulama",
+    "код",
+    "кода",
+];
+
 static CUE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)\b(code|codes|passcode|pass code|verification|verify|otp|one[- ]time|2fa|two[- ]factor|security|login|log in|sign[- ]in|pin|authenticat[A-Za-z0-9_]*|confirm[A-Za-z0-9_]*|código|codigo)\b",
-    )
-    .expect("CUE compiles")
+    let w = r"[\p{L}\p{N}_]";
+    Regex::new(&format!("(?i)(?<!{w})(?:{})(?!{w})", CUE_WORDS.join("|"))).expect("CUE compiles")
 });
+
+/// Scripts without spaces between words: matched anywhere (ja, zh, ko).
+static CUE_ANYWHERE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"コード|验证码|驗證碼|校验码|认证码|인증\s?번호|인증\s?코드").expect("compiles"));
 
 /// 4–8 digits, optionally split once by a dash or space (482-913), or a provider prefix like
 /// G-482913. Not part of a longer number, a price, a time or a phone number.
@@ -43,8 +97,10 @@ pub struct FoundCode {
 }
 
 /// The one code in `text`, or `None` (no cue word, no candidate, or several different numbers).
+/// Always needs a cue word: a bare number is as likely an order number, a price or a time.
 pub fn find_code(text: &str) -> Option<FoundCode> {
-    if text.is_empty() || !CUE.is_match(text).unwrap_or(false) {
+    let cued = CUE.is_match(text).unwrap_or(false) || CUE_ANYWHERE.is_match(text).unwrap_or(false);
+    if text.is_empty() || !cued {
         return None;
     }
     let phones: Vec<(usize, usize)> = PHONE.find_iter(text).flatten().map(|m| (m.start(), m.end())).collect();

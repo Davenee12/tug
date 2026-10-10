@@ -136,7 +136,11 @@ pub fn desired(np: &NowPlaying, now_ms: i64) -> SmtcState {
     };
     // AMS reports 0 while paused; Windows only needs the rate to advance a playing track.
     let rate = np.rate.filter(|r| playing && r.is_finite() && *r != 0.0).unwrap_or(1.0);
-    let shown = shown_track(np.title.as_deref().unwrap_or(""), np.artist.as_deref().unwrap_or(""));
+    let shown = shown_track(
+        np.player.as_deref(),
+        np.title.as_deref().unwrap_or(""),
+        np.artist.as_deref().unwrap_or(""),
+    );
     SmtcState {
         enabled: true,
         status,
@@ -155,15 +159,35 @@ pub fn desired(np: &NowPlaying, now_ms: i64) -> SmtcState {
 /// Title and artist for the flyout. On Spotify Connect the iPhone sends the title as
 /// "Song • Artist" and the artist as "Listening on <device>"; the flyout shows the song and the
 /// artist, never the device hint as an artist (as the Now Playing card, `src/lib/playback.ts`).
-fn shown_track(title: &str, artist: &str) -> (String, String) {
-    let hint = artist.trim().to_lowercase();
-    if hint.starts_with("listening on ") && hint.len() > "listening on ".len() {
+fn shown_track(player: Option<&str>, title: &str, artist: &str) -> (String, String) {
+    if is_connect_line(player, title, artist) {
         return match title.rsplit_once(" • ") {
             Some((song, by)) if !song.trim().is_empty() => (song.trim().to_string(), by.trim().to_string()),
             _ => (title.to_string(), String::new()),
         };
     }
     (title.to_string(), artist.to_string())
+}
+
+/// Spotify Connect on an iPhone in any language. The English "Listening on <device>" is matched
+/// directly; a localized hint ("Écoute sur Cuisine") is recognised by its shape: the phone names
+/// Spotify as the player, the title is "Song • Artist", and the artist line isn't part of the
+/// title, as a real artist would be. Mirrors `isConnectLine` in `src/lib/playback.ts`.
+fn is_connect_line(player: Option<&str>, title: &str, artist: &str) -> bool {
+    let hint = artist.trim().to_lowercase();
+    if hint
+        .strip_prefix("listening on ")
+        .is_some_and(|device| !device.trim().is_empty())
+    {
+        return true;
+    }
+    if !player.is_some_and(|p| p.to_lowercase().contains("spotify")) || hint.is_empty() {
+        return false;
+    }
+    match title.trim().rsplit_once(" • ") {
+        Some((song, by)) if !song.trim().is_empty() && !by.trim().is_empty() => !title.to_lowercase().contains(&hint),
+        _ => false,
+    }
 }
 
 /// The position now: the phone's last report, advanced while playing (as the card does).
@@ -455,10 +479,42 @@ mod tests {
         np.title = Some("Sweet Music".into());
         let s = desired(&np, 0);
         assert_eq!((s.title.as_str(), s.artist.as_str()), ("Sweet Music", ""));
-        // A normal track with a bullet in its title is left alone.
+        // Another player's track with a bullet in its title is left alone, and so is a Spotify
+        // track whose artist is in the title.
         let mut np = spotify();
+        np.player = Some("Podcasts".into());
         np.title = Some("A • B".into());
         assert_eq!(desired(&np, 0).title, "A • B");
+        let mut np = spotify();
+        np.title = Some("Intro • Massive Attack".into());
+        let s = desired(&np, 0);
+        assert_eq!(
+            (s.title.as_str(), s.artist.as_str()),
+            ("Intro • Massive Attack", "Massive Attack")
+        );
+    }
+
+    #[test]
+    fn spotify_connect_hint_in_other_languages_is_never_the_artist() {
+        for hint in [
+            "Écoute sur Cuisine",
+            "Wiedergabe auf Küche",
+            "Escuchando en Salón",
+            "正在 客厅 上收听",
+        ] {
+            let mut np = spotify();
+            np.title = Some("Sweet Music • Voice, Trini Baby".into());
+            np.artist = Some(hint.into());
+            let s = desired(&np, 0);
+            assert_eq!(
+                (s.title.as_str(), s.artist.as_str()),
+                ("Sweet Music", "Voice, Trini Baby"),
+                "{hint}"
+            );
+        }
+        // An ordinary Spotify track is untouched.
+        let s = desired(&spotify(), 0);
+        assert_eq!((s.title.as_str(), s.artist.as_str()), ("Teardrop", "Massive Attack"));
     }
 
     #[test]

@@ -23,6 +23,8 @@ export interface PanelInputs {
   pairingStale: boolean;
   /** tug is rebuilding the link on its own (Bluetooth stalled, the PC woke): nothing for the user to do. */
   reconnecting: boolean;
+  /** The phone is connected but locked (or just restarted): it only needs unlocking. */
+  awaitingUnlock?: boolean;
   /** When the phone was last seen going away (null while connected). */
   downSince: number | null;
   now: number;
@@ -36,6 +38,8 @@ export function showConnectionPanel(p: PanelInputs, graceMs = RECONNECT_GRACE_MS
   // tug is rebuilding the link on its own (the rail says "Reconnecting…"): the setup pane has
   // nothing to offer. Once that gives up after a few attempts, the usual grace applies.
   if (p.reconnecting) return false;
+  // Locked or restarted: the sidebar says to unlock it; pairing and Start over would be wrong.
+  if (p.awaitingUnlock) return false;
   // Paired and (re)connecting: only once it's clearly not a quick relink.
   return p.downSince != null && p.now - p.downSince >= graceMs;
 }

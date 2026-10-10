@@ -25,6 +25,8 @@ pub enum BleError {
     AccessDenied,
     Protocol(Option<u8>),
     NotFound(&'static str),
+    /// No ANCS, and the phone doesn't look like an Apple device at all (an Android phone).
+    NotAnIphone,
 }
 
 /// ERROR_BAD_COMMAND: what Windows reports when it connects with a bond the iPhone no
@@ -60,6 +62,7 @@ impl BleError {
             Self::Unreachable => Failure::Unreachable,
             Self::TimedOut => Failure::TimedOut,
             Self::NotFound(_) => Failure::NotFound,
+            Self::NotAnIphone => Failure::NotAnIphone,
             _ => Failure::Other,
         }
     }
@@ -96,9 +99,14 @@ impl fmt::Display for BleError {
             Self::Protocol(Some(code)) => write!(f, "iPhone rejected the request (ATT error 0x{code:02X})"),
             Self::Protocol(None) => f.write_str("iPhone rejected the request"),
             Self::NotFound(what) => write!(f, "{what} not found on the iPhone"),
+            Self::NotAnIphone => f.write_str(NOT_AN_IPHONE),
         }
     }
 }
+
+/// What tug says when the paired phone isn't an iPhone. Mirrored by `NOT_AN_IPHONE` in
+/// `src/lib/connectionStatus.ts`.
+pub const NOT_AN_IPHONE: &str = "This doesn't look like an iPhone. tug works with iPhone for now.";
 
 pub type Result<T> = std::result::Result<T, BleError>;
 

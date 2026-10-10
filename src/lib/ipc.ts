@@ -142,6 +142,8 @@ export const api = {
   tugboatStart: () => invoke<TugboatStatus>("tugboat_start"),
   tugboatStop: () => invoke<void>("tugboat_stop"),
   tugboatStatus: () => invoke<TugboatStatus>("tugboat_status"),
+  /** Whether this Windows account is an administrator (the firewall prompt may need one). */
+  tugboatUserIsAdmin: () => invoke<boolean>("tugboat_user_is_admin"),
   /** The QR link on the clipboard, kept out of clipboard history and sync (it carries the secret). */
   tugboatCopyLink: () => invoke<void>("tugboat_copy_link"),
   /** Windows' file picker, then offer what was picked. */

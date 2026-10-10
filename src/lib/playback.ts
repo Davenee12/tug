@@ -16,6 +16,22 @@ export function connectHint(artist: string | null | undefined): string | null {
   return m && m[1] ? m[1] : null;
 }
 
+/**
+ * Spotify Connect on an iPhone in any language: the English "Listening on" is matched directly;
+ * otherwise (the hint is localized, e.g. "Écoute sur Cuisine") it's recognised by its shape: the
+ * phone names Spotify as the player, the title is "Song • Artist", and the artist line isn't part
+ * of the title, as a real artist would be. Mirrors `is_connect_line` in `src-tauri/src/media_keys.rs`.
+ */
+export function isConnectLine(np: { title: string | null; artist: string | null; player?: string | null }): boolean {
+  if (connectHint(np.artist)) return true;
+  if (!np.player || !/spotify/i.test(np.player)) return false;
+  const title = np.title?.trim() ?? "";
+  const artist = np.artist?.trim() ?? "";
+  const at = title.lastIndexOf(BULLET);
+  if (!artist || at <= 0 || !title.slice(at + BULLET.length).trim()) return false;
+  return !title.toLowerCase().includes(artist.toLowerCase());
+}
+
 export interface TrackLines {
   title: string | null;
   /** The real artist, or null to hide the line (never the "Listening on" hint). */
@@ -32,11 +48,12 @@ export interface TrackLines {
  * in the song name). Anything else is shown exactly as the phone sent it.
  */
 export function trackLines(
-  np: { title: string | null; artist: string | null; album: string | null },
+  np: { title: string | null; artist: string | null; album: string | null; player?: string | null },
   spotify?: Pick<SpotifyPlayer, "trackName" | "trackArtists"> | null,
 ): TrackLines {
+  // The device is only read from the English hint; a localized one still splits the title.
   const hint = connectHint(np.artist);
-  if (!hint) return { title: np.title, artist: np.artist, album: np.album, hint: null };
+  if (!isConnectLine(np)) return { title: np.title, artist: np.artist, album: np.album, hint: null };
   const raw = np.title?.trim() ?? "";
   const name = spotify?.trackName?.trim();
   const artists = spotify?.trackArtists?.trim();

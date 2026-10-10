@@ -15,6 +15,7 @@ import {
   messageTime,
   missedCallFor,
   newestUnreadThread,
+  notificationTime,
   snippet,
   threadKey,
 } from "./format";
@@ -285,6 +286,25 @@ describe("canClear", () => {
     expect(canClear({ ...active, negativeLabel: "Clear" })).toBe(true);
     expect(canClear({ ...active, negativeLabel: "" })).toBe(true);
   });
+
+  it("clears on an iPhone in another language (the label is localized)", () => {
+    for (const label of ["Löschen", "Effacer", "Borrar", "Cancella", "Apagar", "Wissen", "清除", "消去", "지우기", "Очистить"]) {
+      expect(canClear(note("Zoe", "hey", 0, { negativeLabel: label })), label).toBe(true);
+    }
+  });
+
+  it("still never ends or declines a call in another language", () => {
+    const active = note("davia", "Active Call", 0, { appId: "net.whatsapp.WhatsApp", category: "other" });
+    for (const label of ["Beenden", "Auflegen", "Raccrocher", "Terminer l’appel", "Colgar", "Rechazar", "Encerrar", "Ophangen", "終了", "挂断", "종료", "Завершить"]) {
+      expect(canClear({ ...active, negativeLabel: label }), label).toBe(false);
+    }
+    // Unknown labels (an app's own call or room actions) get no Clear: an allow-list, not a guess.
+    for (const label of ["Avböj", "Bitir", "Rozłącz", "Сбросить", "Disconnect", "Leave", "Ignore", "Mute", "Snooze"]) {
+      expect(canClear({ ...active, negativeLabel: label }), label).toBe(false);
+    }
+    // No negative action at all: nothing to send.
+    expect(canClear(note("Zoe", "hey", 0, { flags: { silent: false, important: false, preExisting: false, positiveAction: false, negativeAction: false } }))).toBe(false);
+  });
 });
 
 describe("recent calls", () => {
@@ -398,5 +418,37 @@ describe("message order", () => {
   it("falls back to when tug got it without a usable phone time", () => {
     expect(messageTime({ sentAt: null, receivedAt: T0 }).getTime()).toBe(T0);
     expect(messageTime({ sentAt: "not a date", receivedAt: T0 }).getTime()).toBe(T0);
+  });
+});
+
+describe("notificationTime", () => {
+  /** The phone's clock as ANCS gives it: local ISO with no zone, `offsetMin` from this PC's zone. */
+  const phoneLocal = (atMin: number, offsetMin = 0) => {
+    const d = new Date(T0 + (atMin + offsetMin) * min);
+    return new Date(d.getTime() - d.getTimezoneOffset() * min).toISOString().slice(0, 19);
+  };
+  const preExisting = { silent: false, important: false, preExisting: true, positiveAction: false, negativeAction: true };
+
+  it("uses the phone's time when it agrees with when tug saw it", () => {
+    expect(notificationTime(note("Zoe", "hi", 2, { postedAt: phoneLocal(0) })).getTime()).toBe(T0);
+    expect(notificationTime(note("Zoe", "hi", 0, { postedAt: phoneLocal(3) })).getTime()).toBe(T0 + 3 * min);
+  });
+
+  it("uses tug's receive time when the phone is in another time zone", () => {
+    // Phone 5 hours ahead (or behind) of the PC, a notification arriving live.
+    expect(notificationTime(note("Zoe", "hi", 0, { postedAt: phoneLocal(0, 300) })).getTime()).toBe(T0);
+    expect(notificationTime(note("Zoe", "hi", 0, { postedAt: phoneLocal(0, -300) })).getTime()).toBe(T0);
+    // Ahead is impossible even for a replay.
+    expect(notificationTime(note("Zoe", "hi", 0, { postedAt: phoneLocal(0, 60), flags: preExisting })).getTime()).toBe(T0);
+  });
+
+  it("keeps an old notification's own time when the phone replays it on connecting", () => {
+    // Posted two hours before tug first saw it (it was waiting on the phone).
+    expect(notificationTime(note("Zoe", "hi", 120, { postedAt: phoneLocal(0), flags: preExisting })).getTime()).toBe(T0);
+  });
+
+  it("falls back to the receive time without a usable phone time", () => {
+    expect(notificationTime(note("Zoe", "hi", 0)).getTime()).toBe(T0);
+    expect(notificationTime(note("Zoe", "hi", 0, { postedAt: "not a date" })).getTime()).toBe(T0);
   });
 });

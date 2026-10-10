@@ -19,6 +19,7 @@ import {
 import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
 import { useFocusTrap } from "../lib/focusTrap";
+import { api } from "../lib/ipc";
 import { copyText } from "../lib/clipboard";
 import { capitalised, closeWarning, formatSize, percent, showConnectHelp, skippedMessage } from "../lib/tugboat";
 
@@ -35,6 +36,14 @@ let clock: number | undefined;
 onMounted(() => (clock = window.setInterval(() => (now.value = Date.now()), 1000)));
 onUnmounted(() => window.clearInterval(clock));
 const help = computed(() => showConnectHelp(s.value, tugboat.shownAt, now.value));
+// On an account that isn't an administrator, Windows' firewall prompt may need one to answer.
+const isAdmin = ref(true);
+onMounted(() => {
+  api
+    .tugboatUserIsAdmin()
+    .then((v) => (isAdmin.value = v !== false))
+    .catch(() => undefined);
+});
 
 // The phone as its page reported it ("iPhone", "Android phone"…); just "phone" until one connects.
 const phoneName = computed(() => s.value.phone ?? "phone");
@@ -156,8 +165,10 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
           <!-- No network a phone could use -->
           <div v-else-if="s.phase === 'noNetwork'" class="flex flex-1 flex-col items-center justify-center gap-3 py-8 text-center">
             <WifiOff :size="24" class="text-muted" />
-            <p class="text-[14px] text-body">Connect this PC to your Wi-Fi (or a network cable) to use Tugboat.</p>
-            <p class="text-[12px] text-muted-soft">The code appears here as soon as it is.</p>
+            <p class="text-[14px] text-body">Connect this PC to your home or office Wi-Fi (or a network cable) to use Tugboat.</p>
+            <p class="text-[12px] text-muted-soft">
+              Tugboat needs a network with IPv4 that your phone is on too. The code appears here as soon as there is one.
+            </p>
           </div>
 
           <!-- Connected: the phone, with the code tucked away -->
@@ -193,8 +204,13 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
             <div v-if="help" class="mt-4 rounded-lg bg-surface-soft px-3.5 py-3 text-[13px] text-body" role="status">
               <p class="font-medium text-ink">Can't connect?</p>
               <ul class="mt-1.5 list-disc space-y-1 pl-4">
-                <li>Make sure your phone is on the same Wi-Fi as this PC.</li>
+                <li>Make sure your phone is on the same home or office Wi-Fi as this PC.</li>
                 <li>If Windows asked about tug, allow it on Private networks.</li>
+                <li v-if="!isAdmin">That question may need an administrator of this PC to answer it.</li>
+                <li>
+                  If Windows calls this network Public, switch it to Private: Settings › Network &amp; internet › Wi-Fi (or
+                  Ethernet) › your network › Private network.
+                </li>
                 <li>Guest Wi-Fi, a VPN on the phone, or iCloud Private Relay on an iPhone can block it.</li>
               </ul>
             </div>
