@@ -20,6 +20,11 @@ export const useWeatherStore = defineStore("weather", () => {
   const loading = ref(false);
   const error = ref<string | null>(null);
   const ready = ref(false);
+  /**
+   * A coarse clock for things that change by the part of the day (the Feed's greeting): moved on by
+   * the refresh clock below and whenever tug is shown again, so it costs no timer of its own.
+   */
+  const now = ref(Date.now());
   let timer: number | undefined;
 
   function readCache(p: Place) {
@@ -46,6 +51,7 @@ export const useWeatherStore = defineStore("weather", () => {
    * the card from the cache for nothing. Later calls refresh a stale forecast; the clock runs once.
    */
   async function init() {
+    now.value = Date.now();
     if (ready.value) {
       void refresh();
       startClock();
@@ -68,7 +74,9 @@ export const useWeatherStore = defineStore("weather", () => {
   // Coming back to tug (from the tray or another window) refreshes a forecast that's gone stale:
   // a hidden window's timers can be throttled, so the clock alone isn't enough.
   const onShow = () => {
-    if (document.visibilityState === "visible") void refresh();
+    if (document.visibilityState !== "visible") return;
+    now.value = Date.now();
+    void refresh();
   };
 
   /**
@@ -77,7 +85,10 @@ export const useWeatherStore = defineStore("weather", () => {
    */
   function startClock() {
     if (timer !== undefined) return;
-    timer = window.setInterval(() => void refresh(), REFRESH_MS);
+    timer = window.setInterval(() => {
+      now.value = Date.now();
+      void refresh();
+    }, REFRESH_MS);
     document.addEventListener("visibilitychange", onShow);
     window.addEventListener("focus", onShow);
   }
@@ -174,5 +185,5 @@ export const useWeatherStore = defineStore("weather", () => {
     window.removeEventListener("focus", onShow);
   }
 
-  return { place, unit, forecast, loading, error, ready, init, refresh, setPlace, findMyPlace, useMyLocation, hide, reset, toggleUnit, dispose };
+  return { place, unit, forecast, loading, error, ready, now, init, refresh, setPlace, findMyPlace, useMyLocation, hide, reset, toggleUnit, dispose };
 });

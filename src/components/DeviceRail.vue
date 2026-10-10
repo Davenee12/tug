@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, QrCode } from "lucide-vue-next";
 import { connectionBusy, connectionLabel as connectionLabelFor } from "../lib/connectionStatus";
 import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
 import { phoneModel } from "../lib/phoneModel";
+import { canWiggle, shouldTug } from "../lib/logoTricks";
+import { logoSpins } from "../lib/logoSpin";
 import NowPlayingCard from "./NowPlayingCard.vue";
 import PhoneArt from "./PhoneArt.vue";
 import ToggleRow from "./ToggleRow.vue";
@@ -25,6 +27,36 @@ const onResize = () => (vh.value = window.innerHeight);
 onMounted(() => window.addEventListener("resize", onResize));
 onUnmounted(() => window.removeEventListener("resize", onResize));
 const compact = computed(() => vh.value < 800);
+
+// The logo's one-shot moments: a tug on the rope when the iPhone connects (each time, not on a
+// status refresh that changes nothing), a wiggle on hover (at most every couple of seconds) and a
+// spin from search. One short CSS animation each, removed when it ends: nothing runs in between.
+// With reduced motion, none of them play.
+type Trick = "tug" | "wiggle" | "spin";
+const TRICK_CLASS: Record<Trick, string> = { tug: "animate-logo-tug", wiggle: "animate-logo-wiggle", spin: "animate-logo-spin" };
+const trick = ref<Trick | null>(null);
+/** Keys the logo, so each play is a fresh element and the same animation can start over. */
+const plays = ref(0);
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+function play(kind: Trick) {
+  if (reducedMotion.matches) return;
+  if (trick.value === "spin" && kind === "wiggle") return; // let the big one finish
+  trick.value = kind;
+  plays.value++;
+}
+watch(
+  () => (tug.statusKnown ? s.value.connection : null),
+  (next, prev) => {
+    if (shouldTug(prev ?? null, next)) play("tug");
+  },
+);
+let wiggledAt: number | null = null;
+function onLogoHover() {
+  if (trick.value || !canWiggle(wiggledAt, Date.now())) return;
+  wiggledAt = Date.now();
+  play("wiggle");
+}
+watch(logoSpins, () => play("spin"));
 
 // The phone card pictures the user's exact iPhone (model read over Bluetooth, kept while it's away).
 // The model line only shows for a model tug knows; otherwise the picture is a generic iPhone.
@@ -68,7 +100,9 @@ const dnd = computed({
 <template>
   <aside :class="['flex h-full flex-col overflow-hidden bg-surface-dark px-4 text-on-dark', compact ? 'py-4' : 'py-6']">
     <div class="flex items-center gap-2.5 px-2">
-      <TugMark :size="30" class="text-on-dark" />
+      <span :key="plays" :class="['inline-flex', trick && TRICK_CLASS[trick]]" @mouseenter="onLogoHover" @animationend="trick = null">
+        <TugMark :size="30" class="text-on-dark" />
+      </span>
       <span class="font-display text-[30px] leading-none text-on-dark" style="letter-spacing: -0.03em">tug</span>
     </div>
 

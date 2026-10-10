@@ -20,6 +20,8 @@ import {
   threadKey,
 } from "../lib/format";
 import type { Contact, PhoneNotification, SearchResults, SmsMessage } from "../types/protocol";
+import { isTugChant } from "../lib/logoTricks";
+import { logoSpins } from "../lib/logoSpin";
 import AppAvatar from "./AppAvatar.vue";
 
 const tug = useTugStore();
@@ -50,6 +52,12 @@ watch(query, (q) => {
   active.value = 0;
   chose.value = false;
   window.clearTimeout(timer);
+  // A little secret for anyone who says the name five times: the logo spins. Not a search.
+  if (isTugChant(q)) {
+    logoSpins.value++;
+    close();
+    return;
+  }
   if (!q.trim()) {
     results.value = null;
     searching.value = false;

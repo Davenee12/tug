@@ -120,7 +120,8 @@ export function describe(code: number): { label: string; sky: Sky } {
   return { label: "—", sky: "cloudy" };
 }
 
-const wet = (code: number) => ["drizzle", "rain", "snow", "storm"].includes(describe(code).sky);
+/** Rain, drizzle, snow or storms. */
+export const wet = (code: number) => ["drizzle", "rain", "snow", "storm"].includes(describe(code).sky);
 
 /** "7 AM", "Noon" from a place-local ISO time. */
 export function hourLabel(iso: string): string {
