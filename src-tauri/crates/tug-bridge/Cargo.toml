@@ -1,6 +1,6 @@
 [package]
 name = "tug-bridge"
-version = "0.5.13"
+version = "0.5.14"
 description = "The local bridge between the running tug app and the tug command / MCP server"
 authors = ["tug contributors"]
 license = "MIT"
