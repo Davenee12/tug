@@ -9,6 +9,7 @@ use crate::ams::{NowPlaying, RemoteCommand, RepeatMode};
 use crate::ble::{BleHandle, Command};
 use crate::map::calls::CallRecord;
 use crate::messages::{Contact, StoredMessage};
+use crate::pc_audio::{PcAudio, PcAudioStatus};
 use crate::spotify::{
     AlbumDetail, Artist, ArtistDetail, Device, Playlist, Queue, Spotify, SpotifyPlayer, SpotifySearch, SpotifyStatus,
     Track,
@@ -25,6 +26,7 @@ pub struct AppState {
     pub spotify: Arc<Spotify>,
     pub tugboat: TugboatService,
     pub devtools: Arc<crate::devtools::DevTools>,
+    pub pc_audio: Arc<PcAudio>,
 }
 
 type Result<T> = std::result::Result<T, String>;
@@ -164,7 +166,28 @@ pub async fn use_device(state: State<'_, AppState>, id: String) -> Result<()> {
 
 #[tauri::command]
 pub async fn forget_device(state: State<'_, AppState>) -> Result<()> {
+    // Let go of the phone's audio before its pairing goes.
+    state.pc_audio.forget();
     state.ble.request(|reply| Command::Forget { reply }).await
+}
+
+/// "Play iPhone audio on this PC": whether it's on, and why not when it couldn't be.
+#[tauri::command]
+pub fn pc_audio_status(state: State<'_, AppState>) -> PcAudioStatus {
+    state.pc_audio.status()
+}
+
+/// "Play on this PC" (`on: true`) and "Stop". Turning on answers with Connecting at once; the
+/// outcome arrives as a `pc-audio` event.
+#[tauri::command]
+pub fn pc_audio_set(state: State<'_, AppState>, on: bool) -> PcAudioStatus {
+    state.pc_audio.set(on)
+}
+
+/// "Turn on automatically when my iPhone connects", for the phone tug uses now.
+#[tauri::command]
+pub fn pc_audio_set_auto(state: State<'_, AppState>, on: bool) -> Result<PcAudioStatus> {
+    state.pc_audio.set_auto(on)
 }
 
 /// Pair the iPhone's Classic (texts) side from inside tug (setup's Texts step). The PIN shows in

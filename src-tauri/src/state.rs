@@ -52,6 +52,9 @@ pub mod keys {
     /// Unix ms of the last successful text sync, so a catch-up after time away can tell it may
     /// have missed texts (see `map::service`), and the very first sync doesn't claim a gap.
     pub const LAST_TEXT_SYNC: &str = "last_text_sync";
+    /// The phone (its device id) "Turn on automatically when my iPhone connects" is on for, if
+    /// any (see `pc_audio`). Off unless the owner switches it on; cleared on Forget.
+    pub const PC_AUDIO_AUTO_DEVICE: &str = "pc_audio_auto_device";
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -237,7 +240,11 @@ pub struct Shared {
     watching_until: Mutex<Option<std::time::Instant>>,
     /// Called after every Now Playing change (Windows' media controls follow it).
     now_playing_hook: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// Called after every status change, with the new status (PC audio follows the connection).
+    status_hook: OnceLock<StatusHook>,
 }
+
+type StatusHook = Box<dyn Fn(&DeviceStatus) + Send + Sync>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -265,6 +272,7 @@ impl Shared {
             map: OnceLock::new(),
             watching_until: Mutex::new(None),
             now_playing_hook: OnceLock::new(),
+            status_hook: OnceLock::new(),
         }
     }
 
@@ -310,7 +318,18 @@ impl Shared {
             (*s != before).then(|| s.clone())
         };
         if let Some(s) = snapshot {
-            self.emit(events::DEVICE_STATUS, s);
+            self.emit(events::DEVICE_STATUS, &s);
+            // After the lock is released: the hook may read the status itself.
+            if let Some(hook) = self.status_hook.get() {
+                hook(&s);
+            }
+        }
+    }
+
+    /// Set once at startup: run `hook` after every status change.
+    pub fn set_status_hook(&self, hook: StatusHook) {
+        if self.status_hook.set(hook).is_err() {
+            log::warn!("status hook already set");
         }
     }
 

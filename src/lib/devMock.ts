@@ -44,11 +44,16 @@
 //   http://localhost:1420/?devconfirm the "wants to text" confirmation card an AI tool's send_text shows
 //   http://localhost:1420/?heavy      a long history for performance work: ~2,000 texts in ~60 conversations,
 //                                     ~500 notifications, 120 calls, Spotify playing, the weather card on
+//   http://localhost:1420/?pcaudio    the iPhone's audio already playing on this PC (Now Playing says so,
+//                                     with Stop). Without it, "Play on this PC" connects after ~1 s.
+//   http://localhost:1420/?pcaudiofail   "Play on this PC" times out: the calm sentence and Try again
+//   http://localhost:1420/?pcaudiodrop   it turns on, then the phone drops it 6 s later: Reconnect
+//   http://localhost:1420/?pcaudioold    Windows too old for it: no button, Settings says so
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { RELEASE_NOTES } from "./whatsNew";
-import type { CallRecord, Contact, DevToolsStatus, DeviceStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
+import type { CallRecord, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -738,10 +743,56 @@ if (params.has("devconfirm")) {
   }, 900);
 }
 
+// Play iPhone audio on this PC (?pcaudio, ?pcaudiofail, ?pcaudiodrop, ?pcaudioold).
+const pcAudio: PcAudioStatus = {
+  supported: !params.has("pcaudioold"),
+  state: params.has("pcaudio") && !noPhone ? "on" : "off",
+  problem: null,
+  auto: false,
+};
+let pcAttempt = 0;
+const sendPc = () => {
+  const copy = { ...pcAudio };
+  void emit("pc-audio", copy);
+  return copy;
+};
+function setPcAudio(on: boolean): PcAudioStatus {
+  if (!on) {
+    pcAttempt++;
+    Object.assign(pcAudio, { state: "off", problem: null });
+    return sendPc();
+  }
+  if (!pcAudio.supported || pcAudio.state !== "off") return { ...pcAudio };
+  const attempt = ++pcAttempt;
+  Object.assign(pcAudio, { state: "connecting", problem: null });
+  setTimeout(() => {
+    if (attempt !== pcAttempt) return; // stopped meanwhile
+    if (params.has("pcaudiofail")) Object.assign(pcAudio, { state: "off", problem: "timedOut" });
+    else pcAudio.state = "on";
+    sendPc();
+    if (params.has("pcaudiodrop") && pcAudio.state === "on") {
+      setTimeout(() => {
+        if (attempt !== pcAttempt) return;
+        Object.assign(pcAudio, { state: "off", problem: "dropped" });
+        sendPc();
+      }, 6000);
+    }
+  }, params.has("pcaudiofail") ? 1500 : 1100);
+  return sendPc();
+}
+
 mockIPC(
   (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (cmd) {
+      case "pc_audio_status":
+        return { ...pcAudio };
+      case "pc_audio_set":
+        return setPcAudio(a.on === true);
+      case "pc_audio_set_auto":
+        if (!status.device) throw "Connect your iPhone first.";
+        pcAudio.auto = a.on === true;
+        return sendPc();
       // getVersion() from @tauri-apps/api/app, so Settings › About and the "What's new" card read
       // a real version in the browser preview (unmocked, it rejects and both fall back to "dev").
       case "plugin:app|version":
@@ -985,6 +1036,10 @@ mockIPC(
         status.textsPairing = "missing";
         status.textsDevice = null;
         void emit("device-status", { ...status, services: { ...status.services } });
+        // Forget lets go of the phone's audio and its automatic switch too.
+        pcAttempt++;
+        Object.assign(pcAudio, { state: "off", problem: null, auto: false });
+        sendPc();
         return null;
       case "pair_device":
         // Like Windows: the PIN shows on both screens; the call returns once it's answered.

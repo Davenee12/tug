@@ -4,6 +4,7 @@ import { CircleAlert, Upload } from "lucide-vue-next";
 import { useTugStore } from "./stores/tug";
 import { useTugboatStore } from "./stores/tugboat";
 import { useDevToolsStore } from "./stores/devtools";
+import { usePcAudioStore } from "./stores/pcAudio";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import ConnectPanel from "./components/ConnectPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
@@ -24,6 +25,7 @@ import { skippedMessage } from "./lib/tugboat";
 const tug = useTugStore();
 const tugboat = useTugboatStore();
 const devtools = useDevToolsStore();
+const pcAudio = usePcAudioStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
 // show the Connection panel beside the feed; everything else (and narrow windows) uses
@@ -120,6 +122,8 @@ onMounted(async () => {
   });
   // Developer tools: only listens for the confirmation card (a text an AI tool wants to send).
   void devtools.init();
+  // Play iPhone audio on this PC: the Now Playing button and Settings › iPhone read this.
+  void pcAudio.init();
   try {
     await tug.init();
   } catch (e) {
@@ -133,6 +137,7 @@ onUnmounted(() => {
   tug.dispose();
   tugboat.dispose();
   devtools.dispose();
+  pcAudio.dispose();
 });
 </script>
 

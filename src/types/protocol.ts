@@ -738,3 +738,21 @@ export interface DevToolsStatus {
   bridgeRunning: boolean;
   pending: DevToolsConfirm | null;
 }
+
+// ---- Play iPhone audio on this PC (`pc_audio/policy.rs`) ----
+
+/** Whether the iPhone's audio is playing on this PC (`PcAudioState`). */
+export type PcAudioState = "off" | "connecting" | "on";
+
+/** Why it's off when it was wanted on (`PcAudioProblem`). */
+export type PcAudioProblem = "notFound" | "denied" | "timedOut" | "failed" | "dropped";
+
+/** Everything the PC audio button and Settings row show (`PcAudioStatus`). */
+export interface PcAudioStatus {
+  /** This version of Windows can do it (Windows 10 version 2004 and later). */
+  supported: boolean;
+  state: PcAudioState;
+  problem: PcAudioProblem | null;
+  /** "Turn on automatically when my iPhone connects", for the phone tug uses now. */
+  auto: boolean;
+}

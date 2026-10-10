@@ -19,6 +19,7 @@ import type {
   MediaCommand,
   NowPlaying,
   PairingRequest,
+  PcAudioStatus,
   PhoneNotification,
   RepeatMode,
   SpotifyAlbumDetail,
@@ -56,6 +57,12 @@ export const api = {
   confirmPairing: (accept: boolean) => invoke<void>("confirm_pairing", { accept }),
   useDevice: (id: string) => invoke<void>("use_device", { id }),
   forgetDevice: () => invoke<void>("forget_device"),
+  // --- Play iPhone audio on this PC ---
+  pcAudioStatus: () => invoke<PcAudioStatus>("pc_audio_status"),
+  /** Play on this PC (true) or Stop. Turning on answers "connecting"; the outcome comes as `pc-audio`. */
+  pcAudioSet: (on: boolean) => invoke<PcAudioStatus>("pc_audio_set", { on }),
+  /** "Turn on automatically when my iPhone connects", for the phone tug uses now. */
+  pcAudioSetAuto: (on: boolean) => invoke<PcAudioStatus>("pc_audio_set_auto", { on }),
   /** Pair the iPhone's Classic (texts) side from inside tug; the PIN shows via pairing-request. */
   pairTexts: () => invoke<void>("pair_texts"),
   setAdvertising: (enabled: boolean) => invoke<void>("set_advertising", { enabled }),
@@ -186,6 +193,7 @@ interface EventPayloads {
   /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */
   "tugboat-dropped": TugboatSkipped[];
   "devtools-status": DevToolsStatus;
+  "pc-audio": PcAudioStatus;
   /** A text an AI tool (or `tug text`) wants to send; null once it's answered or gone. */
   "devtools-confirm": DevToolsConfirm | null;
 }

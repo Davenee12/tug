@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from "vue";
-import { FastForward, Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, Rewind, RotateCcw, Shuffle, SkipBack, SkipForward, ThumbsDown, ThumbsUp, Volume1, Volume2 } from "lucide-vue-next";
+import { FastForward, Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, Rewind, RotateCcw, Shuffle, SkipBack, SkipForward, Speaker, Square, ThumbsDown, ThumbsUp, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { usePcAudioStore } from "../stores/pcAudio";
 import {
   canRestart,
   createHoldRepeater,
@@ -33,9 +34,17 @@ const artistLine = computed(() => {
   const line = [track.value.artist, track.value.album].filter(Boolean).join(" — ");
   return line || (track.value.hint ? null : "Unknown artist");
 });
-const heading = computed(() =>
-  available.value ? [np.value.player ?? "Now playing", tug.playingOn].filter(Boolean).join(" ") : "Now playing",
-);
+// Play iPhone audio on this PC. While it's on (or connecting) the header says so in place of the
+// player name, with Stop right beside it: the phone's sound is coming out of this PC, so that has
+// to be obvious and one click to undo. It lives in the header so the card never grows taller.
+const pcAudio = usePcAudioStore();
+const pc = computed(() => pcAudio.view);
+// The button shows words (Stop, Cancel, Reconnect, Try again) rather than just its icon.
+const pcWords = computed(() => pc.value.show && (pc.value.active || !!pc.value.problem));
+const heading = computed(() => {
+  if (pc.value.active) return pc.value.busy ? "Connecting to this PC…" : "Playing on this PC";
+  return available.value ? [np.value.player ?? "Now playing", tug.playingOn].filter(Boolean).join(" ") : "Now playing";
+});
 
 // Spotify augmentation: only when connected and Spotify is the AMS player (see the store).
 const sp = computed(() => (tug.spotifyActive ? tug.spotifyPlayer : null));
@@ -143,9 +152,11 @@ function restart() {
 <template>
   <section class="rounded-xl bg-surface-dark-elevated p-4">
     <div class="caption-upper mb-2.5 flex items-center gap-2 text-on-dark-soft">
-      <Music2 :size="13" />
-      <span class="min-w-0 flex-1 truncate">{{ heading }}</span>
-      <template v-if="available">
+      <Speaker v-if="pc.active" :size="13" class="text-on-dark" />
+      <Music2 v-else :size="13" />
+      <span class="min-w-0 flex-1 truncate" :class="pc.active ? 'text-[12px] font-medium tracking-normal normal-case text-on-dark' : ''">{{ heading }}</span>
+      <!-- Restart and Spotify make room for the PC audio button's words while it shows any. -->
+      <template v-if="available && !pcWords">
         <button
           class="rounded-full p-1.5 normal-case text-on-dark-soft active:text-on-dark"
           :disabled="!can('previousTrack')"
@@ -157,7 +168,7 @@ function restart() {
         </button>
       </template>
       <button
-        v-if="tug.spotify.connected"
+        v-if="tug.spotify.connected && !pcWords"
         class="rounded-full p-1.5 normal-case text-on-dark-soft active:text-on-dark"
         aria-label="Open Spotify"
         title="Search and play on Spotify"
@@ -165,6 +176,37 @@ function restart() {
       >
         <ListMusic :size="15" />
       </button>
+      <template v-if="pc.show">
+        <!-- On or connecting: Stop / Cancel, unmissable. -->
+        <button
+          v-if="pc.active"
+          class="flex shrink-0 items-center gap-1 rounded-full bg-on-dark px-2.5 py-1 text-[12px] font-medium normal-case text-surface-dark active:bg-on-dark-soft"
+          :aria-label="pc.title"
+          :title="pc.title"
+          @click="pcAudio.press()"
+        >
+          <Square :size="10" fill="currentColor" /> {{ pc.label }}
+        </button>
+        <!-- It dropped or didn't connect: Reconnect / Try again (the sentence was shown as it happened). -->
+        <button
+          v-else-if="pc.problem"
+          class="flex shrink-0 items-center gap-1 rounded-full bg-surface-dark-soft px-2.5 py-1 text-[12px] font-medium normal-case text-on-dark active:text-on-dark-soft"
+          :aria-label="`${pc.label}: play on this PC`"
+          :title="pc.problem"
+          @click="pcAudio.press()"
+        >
+          <Speaker :size="13" /> {{ pc.label }}
+        </button>
+        <button
+          v-else
+          class="rounded-full p-1.5 normal-case text-on-dark-soft active:text-on-dark"
+          aria-label="Play on this PC"
+          :title="pc.title"
+          @click="pcAudio.press()"
+        >
+          <Speaker :size="15" />
+        </button>
+      </template>
     </div>
 
     <template v-if="available">

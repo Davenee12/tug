@@ -5,6 +5,7 @@ import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Mi
 import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
+import { usePcAudioStore } from "../stores/pcAudio";
 import { connectionHealth, errorAge, type HealthLink, type LinkState } from "../lib/health";
 import { stepZoom } from "../lib/zoom";
 import { escClosesSettings } from "../lib/escape";
@@ -19,6 +20,9 @@ import SettingsSwitch from "./SettingsSwitch.vue";
 
 const tug = useTugStore();
 const weather = useWeatherStore();
+// Settings › iPhone › Audio: play the iPhone's sound through this PC (words from lib/pcAudio).
+const pcAudio = usePcAudioStore();
+const pcView = computed(() => pcAudio.view);
 
 const SECTIONS: Array<{ id: SettingsSection; label: string; icon: Component }> = [
   { id: "general", label: "General", icon: SlidersHorizontal },
@@ -383,6 +387,40 @@ async function clearHistory() {
               <SettingsSwitch v-model="advertise" label="Visible to iPhone" />
             </SettingsRow>
           </div>
+
+          <template v-if="pcAudio.status">
+            <p class="caption-upper mb-2 px-1 text-muted">Audio</p>
+            <div class="mb-6 divide-y divide-hairline-soft rounded-xl bg-surface-card">
+              <SettingsRow label="Play iPhone audio on this PC" :description="pcView.line">
+                <template v-if="pcAudio.status.supported" #below>
+                  <p class="mt-1 text-[12px] text-muted-soft">
+                    While it's on, your iPhone's sound comes out of this PC's speakers instead of the phone.
+                  </p>
+                </template>
+                <button
+                  v-if="pcAudio.status.supported"
+                  class="btn-secondary btn-sm"
+                  :disabled="!pcView.action"
+                  :aria-label="pcView.title"
+                  @click="pcAudio.press()"
+                >
+                  {{ pcView.label }}
+                </button>
+              </SettingsRow>
+              <SettingsRow
+                v-if="pcAudio.status.supported"
+                label="Turn on automatically when my iPhone connects"
+                description="Just for this iPhone. Off unless you turn it on."
+              >
+                <SettingsSwitch
+                  :model-value="pcAudio.status.auto"
+                  label="Turn on automatically when my iPhone connects"
+                  :disabled="!tug.status.device"
+                  @update:model-value="pcAudio.setAuto"
+                />
+              </SettingsRow>
+            </div>
+          </template>
 
           <p class="caption-upper mb-2 px-1 text-muted">Calls</p>
           <div class="mb-6 divide-y divide-hairline-soft rounded-xl bg-surface-card">

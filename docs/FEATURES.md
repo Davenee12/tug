@@ -135,6 +135,11 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - Your keyboard's **media keys** and the **Windows media flyout** control the iPhone's music while
   it's playing.
 - One press is one command, even when the phone is slow to answer.
+- **Play iPhone audio on this PC** (the speaker button on Now Playing, or Settings › iPhone ›
+  Audio): this PC becomes a Bluetooth speaker for your iPhone, so its sound comes out of the PC's
+  speakers. While it's on, Now Playing says "Playing on this PC" with Stop beside it. Off by default;
+  "Turn on automatically when my iPhone connects" is a separate switch, off unless you turn it on.
+  Needs Windows 10 version 2004 or later.
 - **Spotify connector** (Settings › Connectors) adds album art, Like, shuffle, repeat and
   drag-to-seek while Spotify is playing on your iPhone.
 - The **Spotify panel**: search songs, artists, albums and playlists (each song once), your

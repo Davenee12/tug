@@ -19,6 +19,7 @@ there is no tug server.
 | MAP + MNS (Message Access / Notification) | Classic Bluetooth, OBEX over RFCOMM | Texts in, texts out, live text events | `map/` |
 | PBAP (Phonebook Access) | Classic Bluetooth, OBEX | Contacts, photos, recent calls | `map/vcard.rs`, `map/calls.rs`, `map/service.rs` |
 | HFP (hands-free, experimental) | Classic Bluetooth | Calls check / dial | `hfp/` |
+| A2DP (the PC as the phone's speaker) | Classic Bluetooth, via Windows' AudioPlaybackConnection | The iPhone's audio through the PC's speakers, when asked for | `pc_audio/` |
 
 **Connection model.** The PC advertises a connectable GATT service and the iPhone connects to it,
 so the PC is the GAP *peripheral*. Over that same link the PC is the GATT *client* of the iPhone's
@@ -65,6 +66,7 @@ Inside `tug.exe`:
 | Tugboat | `tugboat/` | An HTTP server, a 2 s supervisor (idle stop after 10 minutes, network changes) and per-connection tasks; exists only while the panel is open. |
 | Toasts, tray | `toast/`, `tray.rs` | Toast activations arrive on a pool thread and are handed to the async runtime; the tray runs on the main thread. |
 | Spotify, location | `commands.rs`, `spotify/`, `location.rs` | No background task: each command runs on `spawn_blocking`. The UI reads Spotify's player when the song changes. |
+| PC audio | `pc_audio/` | No thread of its own: AudioPlaybackConnection is agile, so `PcAudio` keeps the open connection behind a mutex and each Windows call runs on a time-limited helper (`off_thread`). Follows the connection through a status hook on `Shared` (stop on a phone switch; the opt-in automatic switch). Closed on Stop, Forget and exit. |
 
 **Talking between them.** `BleHandle` and `MapHandle` are unbounded mpsc senders of commands, with
 oneshot replies. `Shared` (`state.rs`) is the one `Arc` everything holds; `update_status` and
@@ -74,7 +76,7 @@ oneshot replies. `Shared` (`state.rs`) is the one `Arc` everything holds; `updat
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
 `pairing-request-closed`, `message`, `contacts`, `calls`, `open-latest-conversation`,
 `open-settings`, `toast-pressed` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`
-(`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`). The typed listener
+(`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`). The typed listener
 map is `EventPayloads` in `src/lib/ipc.ts`.
 
 ## Startup
@@ -179,6 +181,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
+| `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
 
 Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attention`
 (is the window really visible), `battery`, `coalesce` (one render per frame for bursts of
@@ -186,7 +189,7 @@ updates), `codeFeed`, `codes`, `commands` (Ctrl+K verbs),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),
 `devtools`, `errorReport`, `escape`, `format` (conversation grouping and display), `health`,
 `locating`, `media` (which controls show, skip routing), `messageSync`, `messageType`, `pairings`,
-`permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
+`pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
 (unknown-sender filter), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `threadWindow` (long conversations render their newest texts first),
@@ -201,7 +204,8 @@ handshake over a real named pipe (including a low-integrity impostor). Hardware 
 
 Everything the backend sends to the UI or takes from it is a serde type in Rust **mirrored by hand**
 in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messages.rs`,
-`map/calls.rs`, `map/health.rs`, `toast/`, `spotify/`, `tugboat/`, `bt_inventory/` and `devtools/`.
+`map/calls.rs`, `map/health.rs`, `toast/`, `spotify/`, `tugboat/`, `bt_inventory/`, `devtools/` and
+`pc_audio/policy.rs`.
 
 - App-facing types use `#[serde(rename_all = "camelCase")]` (fields and enum variants), so
   `contacts_off` in Rust is `contactsOff` in TypeScript.
@@ -250,6 +254,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?speaker`, `/?spotifyoff` | Spotify on a Connect speaker / Spotify not connected |
 | `/?tugboat` (`&android`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring / waiting for a phone / no usable network |
 | `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
+| `/?pcaudio`, `/?pcaudiofail`, `/?pcaudiodrop`, `/?pcaudioold` | iPhone audio playing on this PC / Play on this PC times out / it drops after 6 s (Reconnect) / Windows too old for it |
 | `/?whatsnew` | The What's new card for the newest release |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 

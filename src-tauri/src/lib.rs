@@ -21,6 +21,7 @@ mod location;
 pub mod map;
 mod media_keys;
 mod messages;
+mod pc_audio;
 #[cfg(test)]
 mod perf;
 mod spotify;
@@ -122,12 +123,16 @@ pub fn run() {
             // connection (no thread, no polling); while off it answers "off" and nothing else.
             let devtools = devtools::DevTools::new(app.handle().clone(), shared.clone(), ble.clone(), tugboat.clone());
             devtools.start();
+            // Play iPhone audio on this PC: off until asked for (or the owner's automatic switch).
+            let pc_audio = pc_audio::PcAudio::new(shared.clone());
+            pc_audio.start();
             app.manage(AppState {
                 shared,
                 ble,
                 spotify,
                 tugboat,
                 devtools,
+                pc_audio,
             });
             // Keep the purely-cached image folders (album art/covers, app icons) from growing without
             // limit: drop the least-recently-used beyond the cap. Off the main thread so a big folder
@@ -223,6 +228,9 @@ pub fn run() {
             commands::confirm_pairing,
             commands::use_device,
             commands::forget_device,
+            commands::pc_audio_status,
+            commands::pc_audio_set,
+            commands::pc_audio_set_auto,
             commands::pair_texts,
             commands::set_advertising,
             commands::get_settings,
@@ -316,6 +324,9 @@ pub fn run() {
             // Tugboat never outlives tug: stop listening and remove unfinished uploads.
             if let Some(state) = app.try_state::<AppState>() {
                 state.tugboat.shutdown_now();
+                // Hand the phone's audio back to the phone rather than leave it routed to a PC
+                // that stopped listening.
+                state.pc_audio.shutdown_now();
             }
         }
     });
