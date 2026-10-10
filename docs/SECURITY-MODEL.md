@@ -25,9 +25,11 @@ of scope (see SECURITY.md).
 the bound phone may `POST /api/pad`, under exactly Tugboat's rules: the same secret, a MAC on every
 request, the first phone binds, replays refused, the body sealed to its request. On top of that:
 inputs are refused unless the game has the channel open (and again the moment it closes); they're
-rate limited (45 a second sustained, a burst of 15; a phone sends at most ~30); the body is read
-only up to 104 bytes; and the plaintext must be exactly `{"steer": -100..=100, "boost": bool}`, with
-any other field, type or range refused. An input that lands after a newer one is ignored. The only
+rate limited (90 a second sustained, a burst of 30; a phone sends at most ~60); the body is read
+only up to 104 bytes; and the plaintext must be exactly `{"steer": -100..=100, "boost": bool}`, plus
+an optional latency probe (`"age"` and `"rtt"`, whole milliseconds 0–10000, only ever summarised
+once per session in a debug log line), with any other field, type or range refused. An input that
+lands after a newer one is ignored (the phone may have two in flight). The only
 thing an input can change is the steering and boost the game reads (`tugboat/pad.rs`): it never
 reaches files, the clipboard, the panel or anything else, and an integration test checks that. A
 quiet phone (700 ms without an input) is treated as gone and the boat goes back to the keyboard,

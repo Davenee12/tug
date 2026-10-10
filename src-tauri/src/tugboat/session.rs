@@ -500,6 +500,10 @@ impl Session {
         let was = self.state().pad.take();
         if let Some(p) = was {
             log::info!("tugboat: game controller off");
+            // The latency probe, once per session (never per input).
+            if let Some(s) = p.latency().summary() {
+                log::debug!("tugboat: controller touch-to-PC latency: {s}");
+            }
             if p.connected() {
                 self.sink.pad(PadEvent {
                     connected: false,
@@ -531,13 +535,13 @@ impl Session {
             .keys
             .open(&ad::request(&req.client, req.seq), body)
             .ok_or(ApiError::BadRequest)?;
-        let input = pad::decode(&plain).map_err(|e| match e {
+        let decoded = pad::decode(&plain).map_err(|e| match e {
             pad::PadError::TooBig => ApiError::TooBig,
             pad::PadError::Malformed | pad::PadError::OutOfRange => ApiError::BadRequest,
         })?;
         let mut st = self.state();
         let pad = st.pad.as_mut().ok_or(ApiError::NoGame)?;
-        let event = pad.input(req.seq, input, Instant::now());
+        let event = pad.input(req.seq, decoded, Instant::now());
         let reply = pad.reply();
         drop(st);
         if let Some(e) = event {
@@ -566,6 +570,12 @@ impl Session {
         if let Some(p) = self.state().pad.as_mut() {
             p.set_reply(reply);
         }
+    }
+
+    /// The latency probe's summary so far (for the manual test harness).
+    #[cfg(test)]
+    pub fn pad_latency(&self) -> Option<String> {
+        self.state().pad.as_ref().and_then(|p| p.latency().summary())
     }
 
     /// The controller as the game should show it now.
