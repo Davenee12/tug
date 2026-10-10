@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
+import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Heart, Info, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
 import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
@@ -215,6 +215,12 @@ async function clearHistory() {
   tug.messages = [];
   tug.calls = [];
   tug.notify("info", "History cleared");
+}
+
+/** GitHub Sponsors for tug's maintainer, opened in the browser. */
+const SPONSOR_URL = "https://github.com/sponsors/Davenee12";
+function openSponsor() {
+  void api.openUrl(SPONSOR_URL).catch((e) => tug.notify("error", errorMessage(e)));
 }
 </script>
 
@@ -653,6 +659,14 @@ async function clearHistory() {
             <SettingsRow label="What's new" description="See what changed in this and earlier updates.">
               <button class="btn-secondary btn-sm" @click="tug.openWhatsNew()">
                 <Sparkles :size="14" /> What's new
+              </button>
+            </SettingsRow>
+            <SettingsRow
+              label="Support tug"
+              description="tug is free and open source. Sponsoring helps pay for code signing and keeps it going."
+            >
+              <button class="btn-secondary btn-sm" @click="openSponsor">
+                <Heart :size="14" /> Sponsor
               </button>
             </SettingsRow>
             <SettingsRow
