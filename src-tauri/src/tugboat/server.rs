@@ -45,6 +45,7 @@ fn router(session: Arc<Session>, body_timeout: Duration) -> Router {
         .route("/api/up/{id}/{index}", put(put_chunk))
         .route("/api/finish/{id}", post(finish_upload))
         .route("/api/down/{id}/{index}", get(get_chunk))
+        .route("/api/pad", post(pad_input))
         .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(axum::Extension(BodyTimeout(body_timeout)))
@@ -173,13 +174,42 @@ async fn authorize_then_read(s: &Session, req: Request) -> Result<(Authorized, B
         .extensions()
         .get::<BodyTimeout>()
         .map_or(Limits::default().body_timeout, |t| t.0);
+    let bytes = read_body(req, BODY_LIMIT, limit).await?;
+    Ok((ok, bytes))
+}
+
+/// Read a body of at most `max` bytes. A body that stalls (the phone left the Wi-Fi mid-chunk)
+/// gives up after `timeout` instead of waiting forever; one that says it's bigger isn't read.
+async fn read_body(req: Request, max: usize, timeout: Duration) -> Result<Bytes, ApiError> {
+    let declared = req
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    if declared.is_some_and(|n| n > max as u64) {
+        return Err(ApiError::TooBig);
+    }
     let body: Body = req.into_body();
-    // A body that stalls (the phone left the Wi-Fi mid-chunk) gives up instead of waiting forever.
-    let bytes = tokio::time::timeout(limit, to_bytes(body, BODY_LIMIT))
+    tokio::time::timeout(timeout, to_bytes(body, max))
         .await
         .map_err(|_| ApiError::BadRequest)?
-        .map_err(|_| ApiError::BadRequest)?;
-    Ok((ok, bytes))
+        .map_err(|_| ApiError::BadRequest)
+}
+
+/// A controller input should arrive in one go; it's tiny.
+const PAD_BODY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// One game controller input (see `pad.rs`): signed and sealed like everything else, refused
+/// unless tug's game asked for a controller, rate limited, and a few dozen bytes at most.
+async fn pad_input(State(s): Shared, req: Request) -> Response {
+    let run = async {
+        let ok = authorize(&s, req.method(), req.uri(), req.headers())?;
+        s.pad_admit()?;
+        let body = read_body(req, super::pad::MAX_BODY, PAD_BODY_TIMEOUT).await?;
+        let reply = s.pad_input(&ok, &body)?;
+        Ok(sealed(s.seal_json(&ok, &reply)))
+    };
+    run.await.unwrap_or_else(error)
 }
 
 /// Run file work and crypto off the async threads.

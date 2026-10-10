@@ -109,6 +109,7 @@ const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tu
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
 const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) => void tug.setAutostart(v) });
 const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
+const showGames = computed({ get: () => tug.settings.showGames, set: (v) => void tug.setSetting("showGames", v) });
 const filterUnknown = computed({ get: () => tug.settings.filterUnknown, set: (v) => void tug.setSetting("filterUnknown", v) });
 const advertise = computed({ get: () => tug.advertiseEnabled, set: (v) => void tug.setAdvertising(v) });
 const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
@@ -319,6 +320,9 @@ async function clearHistory() {
                   <Plus :size="14" />
                 </button>
               </div>
+            </SettingsRow>
+            <SettingsRow class="bg-surface-card" label="Show games" description="A Play button in the sidebar for Tugboat Run, a little boat game, and “game” in Ctrl+K.">
+              <SettingsSwitch v-model="showGames" label="Show games" />
             </SettingsRow>
           </div>
 

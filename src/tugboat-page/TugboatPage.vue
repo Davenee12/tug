@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // The page the iPhone opens from tug's QR code. Phone → PC: photos, videos, files and text.
 // PC → phone: files dragged onto tug, and text to copy. Plain words, big targets, light/dark.
-import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
-import { Check, Copy, Download, FileUp, Image as ImageIcon, LoaderCircle, Send, WifiOff, X } from "lucide-vue-next";
+// When tug's game asks, the page becomes its controller (Controller.vue) until the game closes.
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { Check, Copy, Download, FileUp, Gamepad2, Image as ImageIcon, LoaderCircle, Send, WifiOff, X } from "lucide-vue-next";
 import TugMark from "../components/TugMark.vue";
+import Controller from "./Controller.vue";
 import { TugboatError, type TugboatApi, type PageOffer, type PageState } from "./client";
 import { MAX_DOWNLOAD, MAX_UPLOAD, canRetryUpload, formatSize, isFatal, messageFor } from "./chunks";
 import { copyText } from "./copy";
@@ -32,6 +34,9 @@ async function poll() {
     forgetWithdrawn(s.offers);
     if (s.text?.id !== pcText.value?.id) copied.value = false;
     pcText.value = s.text;
+    game.value = s.game;
+    // The game closed: next time it asks, the controller opens again by itself.
+    if (!s.game) padDismissed.value = false;
     connection.value = "ok";
   } catch (e) {
     const code = e instanceof TugboatError ? e.code : "network";
@@ -45,8 +50,24 @@ async function poll() {
 
 function schedule() {
   window.clearTimeout(pollTimer);
-  // Only while the page is on screen; Safari would pause it in the background anyway.
-  if (document.visibilityState === "visible" && !fatal.value) pollTimer = window.setTimeout(poll, POLL_MS);
+  // Only while the page is on screen (Safari would pause it in the background anyway), and not
+  // while it's a controller: the controller's own replies say when the game closes.
+  if (document.visibilityState === "visible" && !fatal.value && !controller.value) pollTimer = window.setTimeout(poll, POLL_MS);
+}
+
+// --- tug's game wants a controller ---
+const game = ref(false);
+/** "Stop using as a controller" was tapped: stay on this page until the game asks again. */
+const padDismissed = ref(false);
+const controller = computed(() => props.api !== null && game.value && !padDismissed.value && !fatal.value);
+watch(controller, (on) => {
+  if (on) window.clearTimeout(pollTimer);
+  else void poll();
+});
+function leftController(code: string | null) {
+  if (code === null) padDismissed.value = true;
+  else if (code === "no-game") game.value = false;
+  else fatal.value = code;
 }
 
 function onVisibility() {
@@ -207,7 +228,8 @@ const fatalMessage = computed(() =>
 </script>
 
 <template>
-  <div class="mx-auto flex min-h-dvh max-w-[560px] flex-col px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+  <Controller v-if="controller && api" :api="api" @leave="leftController" />
+  <div v-else class="mx-auto flex min-h-dvh max-w-[560px] flex-col px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
     <header class="flex items-center gap-2.5">
       <TugMark :size="30" class="text-ink" />
       <h1 class="headline text-[30px] leading-none">Tugboat</h1>
@@ -237,6 +259,13 @@ const fatalMessage = computed(() =>
       <p v-if="connection === 'network'" class="mt-4 rounded-xl bg-error/10 px-4 py-3 text-[15px] text-ink" role="alert">
         {{ messageFor("network") }}
       </p>
+
+      <!-- tug's game is asking, but the controller was put away. -->
+      <div v-if="game && padDismissed" class="card mt-5 flex items-center gap-3">
+        <Gamepad2 :size="22" class="shrink-0 text-primary" />
+        <p class="flex-1 text-[15px] text-ink">Tugboat Run is open on your PC.</p>
+        <button class="btn-primary btn-sm shrink-0" @click="padDismissed = false">Use as controller</button>
+      </div>
 
       <!-- Phone → PC -->
       <section class="mt-6" aria-labelledby="send-title">

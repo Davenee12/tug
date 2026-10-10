@@ -41,7 +41,7 @@ Inside `tug.exe`:
                     └───────────▲ Tauri events (device-status, notification, message, …)  │ invoke ─┘
                                 │                                                         ▼
   ┌──────────────┐  Shared (Arc: status, now playing, calls, store, MapHandle) ┌──────────────────────┐
-  │ tug-ble      │◄────────────── commands.rs (80 Tauri commands) ────────────►│ tug-map              │
+  │ tug-ble      │◄────────────── commands.rs (92 Tauri commands) ────────────►│ tug-map              │
   │ BLE actor    │  BleHandle (mpsc + oneshot replies)    MapHandle (mpsc)     │ MAP worker           │
   │ 1 s tick     │                                                             │ MAP/MNS/PBAP/HFP     │
   └──┬───────┬───┘                                                             └──┬───────────────────┘
@@ -63,7 +63,7 @@ Inside `tug.exe`:
 | `tug-photos` | `map/service.rs` | Contact photos, at most once a day, serialized with other PBAP users. |
 | `tug-media-keys` | `media_keys.rs` | Keeps the Windows media flyout in step with Now Playing; flyout buttons and media keys send commands to the actor. |
 | Developer bridge | `devtools/mod.rs`, `crates/tug-bridge/src/server.rs` | A named-pipe accept loop for the app's lifetime (at most 8 connections); answers "off" while switched off. |
-| Tugboat | `tugboat/` | An HTTP server, a 2 s supervisor (idle stop after 10 minutes, network changes) and per-connection tasks; exists only while the panel is open. |
+| Tugboat | `tugboat/` | An HTTP server, a 2 s supervisor (idle stop after 10 minutes, network changes) and per-connection tasks; exists only while the panel is open (or Tugboat Run asked for the phone as a controller). While the game's controller channel is open, a 150 ms watch notices a phone that went quiet. |
 | `tug-hotkey` | `code_fill/win.rs` (logic in `code_fill/mod.rs`) | Owns the type-the-code shortcut (RegisterHotKey belongs to the registering thread); each press types the newest code with SendInput on a short-lived `tug-code-fill` thread. |
 | Toasts, tray | `toast/`, `tray.rs` | Toast activations arrive on a pool thread and are handed to the async runtime; the tray runs on the main thread. |
 | Spotify, location | `commands.rs`, `spotify/`, `location.rs` | No background task: each command runs on `spawn_blocking`. The UI reads Spotify's player when the song changes. |
@@ -76,8 +76,8 @@ oneshot replies. `Shared` (`state.rs`) is the one `Arc` everything holds; `updat
 **Events to the UI** (Rust → Vue): `device-status`, `now-playing`, `notification`,
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
 `pairing-request-closed`, `message`, `contacts`, `calls`, `open-latest-conversation`,
-`open-settings`, `toast-pressed`, `code-filled` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`
-(`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`). The typed listener
+`open-settings`, `toast-pressed`, `code-filled` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`,
+`game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`). The typed listener
 map is `EventPayloads` in `src/lib/ipc.ts`.
 
 ## Startup
@@ -160,6 +160,26 @@ phone page ─POST /api/up─► PUT chunks (XChaCha20-Poly1305, keys from HKDF 
   ─► emit "tugboat-status"
 ```
 
+**A game controller input (Tugboat Run)**
+
+```
+game: "Use your phone as a controller" ─► invoke game_pad_open ─► Tugboat starts if off; Session::pad_open
+phone page polls GET /api/state ─► { game: true } ─► Controller.vue (pad + Boost)
+  POST /api/pad, ~30/s while the input changes, a heartbeat every 200 ms, one in flight, newest wins
+  signed like every request (same secret, MAC, replay window, first phone binds); body sealed to it
+  ─► authorize ─► channel open? (else 409 no-game) ─► rate limit (else 429 busy) ─► ≤ 104-byte body
+  ─► pad::decode: exactly {"steer": -100..=100, "boost": bool} ─► older sequence numbers ignored
+  ─► Pad state changed? emit "game-pad" ─► TugboatRun.vue (the loop reads the latest state)
+  reply (sealed): { paused, hits } from game_pad_feedback, so the phone shows Paused and buzzes
+150 ms watch: no input for 700 ms ─► emit "game-pad" { connected: false } (the keyboard has it)
+game closes ─► game_pad_close ─► inputs get 409 ─► the page goes back to Tugboat
+```
+
+The input channel is a small POST endpoint rather than a WebSocket: it reuses Tugboat's
+authentication, sealing, connection limits and timeouts unchanged, needs no new dependency or
+connection upgrade, and on a home network one request per input (kept alive) is well inside the
+100 ms target. An input can only change the one `PadInput` the game reads.
+
 ## Where the testable logic lives
 
 Bluetooth can't run in CI, so decisions live in **pure modules** that take plain values and return
@@ -180,6 +200,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `crates/tug-bridge` (`auth`, `protocol`, `framing`, `paths`, `time`) | Bridge protocol and handshake; the whole exchange is also tested over a real pipe |
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
+| `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
@@ -195,7 +216,10 @@ updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `co
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
 (unknown-sender filter), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `threadWindow` (long conversations render their newest texts first),
-`toastLimiter`, `toastSpec`, `tugboat`, `vips`, `weather`, `weblinks`, `whatsNew`. Components and
+`toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: seeded spawning, collisions,
+scoring, the speed curve, inertia, merging the controls), `vips`, `weather`, `weblinks`, `whatsNew`.
+The phone page has its own: `tugboat-page/chunks`, `crypto` and `pad` (the controller's wire format,
+pacing and errors). Components and
 stores should call these rather than grow logic of their own.
 
 Integration tests: `tugboat/tests.rs` plays the phone over a real socket; `tug-bridge` tests run the
@@ -256,6 +280,8 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?speaker`, `/?spotifyoff` | Spotify on a Connect speaker / Spotify not connected |
 | `/?novolume` | A player that doesn't report its volume: no volume bar |
 | `/?tugboat` (`&android`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring / waiting for a phone / no usable network |
+| `/?game` | Tugboat Run, ready to start |
+| `/?gamephone` | Tugboat Run with the phone controller: Tugboat's code, a phone scanning it, then the phone starting the run and steering |
 | `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
 | `/?pcaudio`, `/?pcaudiofail`, `/?pcaudiodrop`, `/?pcaudioold` | iPhone audio playing on this PC / Play on this PC times out / it drops after 6 s (Reconnect) / Windows too old for it |
 | `/?whatsnew` | The What's new card for the newest release |
@@ -263,7 +289,9 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then
-`http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`).
+`http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`, `&game` for the controller). To drive the
+real page against a real server (real signing and sealing), see `manual_page` in `tugboat/tests.rs`
+(`TUGBOAT_GAME=1` opens the controller channel and prints each input).
 
 ## Adding a feature safely
 

@@ -992,6 +992,29 @@ pub fn tugboat_open_folder(state: State<'_, AppState>, path: Option<String>) -> 
     state.tugboat.open_folder(path.as_deref())
 }
 
+// --- Tugboat Run's phone controller (tugboat/pad.rs) ---
+
+/// "Use your phone as a controller": open Tugboat if needed and the controller channel. Returns
+/// Tugboat's status, whose QR code the game shows.
+#[tauri::command]
+pub async fn game_pad_open(state: State<'_, AppState>) -> Result<TugboatStatus> {
+    state.tugboat.pad_open().await
+}
+
+/// The game closed: the phone's inputs are refused again.
+#[tauri::command]
+pub fn game_pad_close(state: State<'_, AppState>) {
+    state.tugboat.pad_close();
+}
+
+/// What the phone's controller shows next: paused or not, and hits this run (it buzzes on one).
+#[tauri::command]
+pub fn game_pad_feedback(state: State<'_, AppState>, paused: bool, hits: u32) {
+    state
+        .tugboat
+        .pad_feedback(crate::tugboat::pad::PadReply { paused, hits });
+}
+
 // --- Developer tools (the bridge for AI tools and the `tug` command; see devtools/mod.rs) ---
 
 use crate::devtools::DevToolsStatus;

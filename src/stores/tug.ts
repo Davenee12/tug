@@ -201,6 +201,7 @@ export const useTugStore = defineStore("tug", () => {
     autoCopyCodes: true,
     typeCodeHotkey: true,
     typeCodeKeys: DEFAULT_CODE_HOTKEY,
+    showGames: true,
   });
   /** The type-the-code shortcut as the backend registered it (Settings shows "in use" from this). */
   const codeHotkey = ref<CodeHotkeyStatus>({ state: "off", keys: DEFAULT_CODE_HOTKEY });
@@ -1175,6 +1176,7 @@ export const useTugStore = defineStore("tug", () => {
       autoCopyCodes: raw["ui.autoCopyCodes"] !== "false",
       typeCodeHotkey: raw["ui.typeCodeHotkey"] !== "false",
       typeCodeKeys: knownHotkey(raw["ui.typeCodeKeys"]),
+      showGames: raw["ui.showGames"] !== "false",
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
     // A missing key is a fresh install: null (not ""), so the first launch records the version

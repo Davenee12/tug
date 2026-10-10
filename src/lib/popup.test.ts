@@ -19,6 +19,7 @@ const baseSettings: UiSettings = {
   autoCopyCodes: true,
   typeCodeHotkey: true,
   typeCodeKeys: "ctrl+shift+v",
+  showGames: true,
 };
 const settings = (over: Partial<UiSettings> = {}): UiSettings => ({ ...baseSettings, ...over });
 const quiet = (over: Partial<QuietHours> = {}): QuietHours => ({ enabled: true, start: "22:00", end: "07:00", days: [], ...over });
