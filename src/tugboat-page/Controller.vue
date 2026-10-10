@@ -1,14 +1,29 @@
 <script setup lang="ts">
-// The phone as Tugboat Run's controller, while tug's game on the PC asks for one: a big steering
-// pad (touch further from the middle to turn harder) and a Boost button. Inputs go to the PC one
-// at a time, the newest state each time, ~30 a second while they change and a heartbeat every
-// 200 ms while they don't. Hidden, the page stops sending and the PC hands the boat back to the
-// keyboard. Haptics where the browser has them (iPhone's Safari doesn't).
+// The phone as Tugboat Run's controller, while tug's game on the PC asks for one: a slider pad
+// (the boat goes where the knob is, and the knob stays where you let go) and a Boost button.
+//
+// Inputs go out the moment something changes: a touch, a slide, Boost pressed or let go. Changes
+// are coalesced to at most one every 16 ms (~60 a second) and up to two requests are in flight,
+// so a slow reply never holds up the next input; the PC keeps only the newest. While nothing
+// changes, a heartbeat every 200 ms tells the PC the phone is still here. Hidden, the page stops
+// sending and the PC hands the boat back to the keyboard. Haptics where the browser has them
+// (iPhone's Safari doesn't).
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { ChevronLeft, ChevronRight, X } from "lucide-vue-next";
 import TugMark from "../components/TugMark.vue";
 import { TugboatError, type TugboatApi } from "./client";
-import { BUSY_BACKOFF_MS, encodePad, nextSendDelay, padErrorAction, samePad, steerFromTouch, tiltSupport, type PadInput } from "./pad";
+import {
+  BUSY_BACKOFF_MS,
+  MAX_IN_FLIGHT,
+  encodePad,
+  nextSendDelay,
+  padErrorAction,
+  positionFromTouch,
+  probe,
+  samePad,
+  tiltSupport,
+  type PadInput,
+} from "./pad";
 
 const props = defineProps<{ api: TugboatApi }>();
 const emit = defineEmits<{
@@ -16,6 +31,7 @@ const emit = defineEmits<{
   leave: [code: string | null];
 }>();
 
+/** Where the slider sits, -1 (full left) to 1 (full right). */
 const steer = ref(0);
 const boost = ref(false);
 const status = ref<"connecting" | "ok" | "network">("connecting");
@@ -39,14 +55,14 @@ function capture(el: Element | null, id: number) {
   }
 }
 
-// --- Steering pad ---
+// --- Slider pad ---
 const pad = ref<HTMLElement | null>(null);
 let steerPointer: number | null = null;
 function steerAt(e: PointerEvent) {
   const el = pad.value;
   if (!el) return;
   const r = el.getBoundingClientRect();
-  setSteer(steerFromTouch(e.clientX - r.left, r.width));
+  setSteer(positionFromTouch(e.clientX - r.left, r.width));
 }
 function onPadDown(e: PointerEvent) {
   if (steerPointer !== null) return;
@@ -58,9 +74,8 @@ function onPadMove(e: PointerEvent) {
   if (e.pointerId === steerPointer) steerAt(e);
 }
 function onPadUp(e: PointerEvent) {
-  if (e.pointerId !== steerPointer) return;
-  steerPointer = null;
-  setSteer(0);
+  // The knob stays where it was let go, and so does the boat.
+  if (e.pointerId === steerPointer) steerPointer = null;
 }
 function setSteer(v: number) {
   if (v === steer.value) return;
@@ -68,7 +83,7 @@ function setSteer(v: number) {
   kick();
 }
 
-// --- Boost ---
+// --- Boost: on the press itself, not the release ---
 let boostPointer: number | null = null;
 function onBoostDown(e: PointerEvent) {
   boostPointer = e.pointerId;
@@ -87,12 +102,20 @@ function onBoostUp(e: PointerEvent) {
 
 // --- Sending ---
 let timer: number | undefined;
-let inFlight = false;
-let lastSentAt = 0;
-let lastSent: PadInput | null = null;
+let inFlight = 0;
+let lastSentAt = Number.NEGATIVE_INFINITY;
+/** The last input sent (or being sent): what "changed" compares against. */
+let lastQueued: PadInput | null = null;
+/** When the oldest change not yet sent happened, for the latency probe. */
+let dirtySince: number | null = null;
+/** The last round trip, for the latency probe. */
+let lastRtt = 0;
 let lastHits: number | null = null;
+/** Replies can come back out of order with two in flight: only the newest one's news counts. */
+let sentCount = 0;
+let appliedReply = 0;
 let stopped = false;
-let backoff = 0;
+let backoffUntil = 0;
 /** A Boost press not yet sent. Only the newest state goes out, so a quick tap (down and up between
  * two sends) would otherwise never reach the PC: the press is held until one send carries it, and
  * the release follows in the next. */
@@ -100,33 +123,47 @@ let pressPending = false;
 
 const current = () => encodePad(steer.value, boost.value || pressPending);
 
-/** Something changed: send it as soon as the pacing allows. */
+/** Something changed: send it now if the pacing allows, or at the next 16 ms mark. */
 function kick() {
-  schedule();
+  dirtySince ??= performance.now();
+  pump();
 }
 
-function schedule() {
+function pump() {
   window.clearTimeout(timer);
-  if (stopped || inFlight || document.visibilityState !== "visible") return;
-  const changed = !samePad(lastSent, current());
-  const wait = Math.max(backoff, nextSendDelay(performance.now() - lastSentAt, changed));
-  timer = window.setTimeout(send, wait);
+  timer = undefined;
+  // A request finishing calls pump again; so does the page coming back on screen.
+  if (stopped || inFlight >= MAX_IN_FLIGHT || document.visibilityState !== "visible") return;
+  const now = performance.now();
+  const changed = !samePad(lastQueued, current());
+  const wait = Math.max(backoffUntil - now, nextSendDelay(now - lastSentAt, changed));
+  if (wait <= 0) void send();
+  else timer = window.setTimeout(pump, wait);
 }
 
 async function send() {
-  if (stopped || inFlight) return;
-  inFlight = true;
-  backoff = 0;
+  inFlight++;
+  const id = ++sentCount;
   const input = current();
-  lastSentAt = performance.now();
+  const started = performance.now();
+  // Only an input carrying a new touch says how long that touch waited (heartbeats don't).
+  const p = dirtySince === null ? undefined : probe(started - dirtySince, lastRtt);
+  dirtySince = null;
+  lastSentAt = started;
+  lastQueued = input;
+  if (input.boost) pressPending = false;
+  // Ready for the next change straight away (up to two in flight).
+  pump();
   try {
-    const reply = await props.api.pad(input);
-    lastSent = input;
-    if (input.boost) pressPending = false;
+    const reply = await props.api.pad(input, p);
+    lastRtt = performance.now() - started;
     status.value = "ok";
-    paused.value = reply.paused;
-    if (lastHits !== null && reply.hits > lastHits) buzz(120);
-    lastHits = reply.hits;
+    if (id > appliedReply) {
+      appliedReply = id;
+      paused.value = reply.paused;
+      if (lastHits !== null && reply.hits > lastHits) buzz(120);
+      lastHits = reply.hits;
+    }
   } catch (e) {
     const code = e instanceof TugboatError ? e.code : "error";
     const action = padErrorAction(code);
@@ -135,27 +172,29 @@ async function send() {
       emit("leave", code);
       return;
     }
-    if (action === "slow") backoff = BUSY_BACKOFF_MS;
+    // Not delivered: send the state again, and a lost tap again.
+    lastQueued = null;
+    if (input.boost && !boost.value) pressPending = true;
+    if (action === "slow") backoffUntil = performance.now() + BUSY_BACKOFF_MS;
     else {
       if (code === "network") status.value = "network";
-      backoff = 500;
+      backoffUntil = performance.now() + 500;
     }
   } finally {
-    inFlight = false;
+    inFlight--;
   }
-  schedule();
+  pump();
 }
 
 function onVisibility() {
   if (document.visibilityState === "visible") {
-    schedule();
+    pump();
     return;
   }
-  // Hidden (locked, another app): let go of everything and stop. The PC notices the silence and
-  // hands the boat back to the keyboard.
+  // Hidden (locked, another app): let go of Boost and stop. The PC notices the silence and hands
+  // the boat back to the keyboard. The slider keeps its place for when you come back.
   window.clearTimeout(timer);
   steerPointer = boostPointer = null;
-  steer.value = 0;
   boost.value = false;
   pressPending = false;
 }
@@ -163,14 +202,12 @@ function onVisibility() {
 function done() {
   stopped = true;
   window.clearTimeout(timer);
-  // Let go of the boat on the way out (best effort; the PC notices the silence anyway).
-  if (!inFlight) void props.api.pad(encodePad(0, false)).catch(() => undefined);
   emit("leave", null);
 }
 
 onMounted(() => {
   document.addEventListener("visibilitychange", onVisibility);
-  void send();
+  pump();
 });
 onUnmounted(() => {
   stopped = true;
@@ -181,9 +218,8 @@ onUnmounted(() => {
 const statusText = computed(() =>
   status.value === "network" ? "Can't reach PC" : status.value === "connecting" ? "Connecting…" : paused.value ? "Paused on your PC" : "Connected",
 );
-/** Where the knob sits on the pad: 0% full left, 100% full right. */
-const knob = computed(() => `${50 + steer.value * 42}%`);
-</script>
+/** Where the knob sits on the pad, matching `positionFromTouch` (6% margin each side). */
+const knob = computed(() => `${6 + (steer.value + 1) * 44}%`);</script>
 
 <template>
   <div
@@ -229,7 +265,7 @@ const knob = computed(() => `${50 + steer.value * 42}%`);
           :style="{ left: knob }"
           aria-hidden="true"
         />
-        <p class="pointer-events-none absolute inset-x-0 bottom-3 text-center text-[13px] text-muted">Hold and slide to steer</p>
+        <p class="pointer-events-none absolute inset-x-0 bottom-3 text-center text-[13px] text-muted">Slide: the boat follows</p>
       </div>
 
       <button

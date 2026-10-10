@@ -48,10 +48,10 @@ export function mockApi(): TugboatApi {
       }
       return new Blob(["Tugboat preview"], { type: offer.type });
     },
-    async pad(input) {
+    async pad(input, probe) {
       await sleep(15);
       if (!state.game) throw new TugboatError("no-game");
-      console.debug("[mock] pad", input);
+      console.debug("[mock] pad", input, probe);
       return { paused: false, hits: Math.floor((Date.now() - started) / 5000) };
     },
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HEARTBEAT_MS, MIN_GAP_MS, encodePad, nextSendDelay, padErrorAction, samePad, steerFromTouch, tiltSupport } from "./pad";
+import { HEARTBEAT_MS, MAX_IN_FLIGHT, MIN_GAP_MS, encodePad, nextSendDelay, padErrorAction, positionFromTouch, probe, samePad, tiltSupport } from "./pad";
 
 describe("encodePad", () => {
   it("sends whole-number steering from -100 to 100 and a real boolean", () => {
@@ -26,27 +26,45 @@ describe("encodePad", () => {
   });
 });
 
-describe("steerFromTouch", () => {
-  it("goes straight in the middle and reaches full lock before the edge", () => {
-    expect(steerFromTouch(200, 400)).toBe(0);
-    expect(steerFromTouch(210, 400)).toBe(0); // inside the dead zone
-    expect(steerFromTouch(400, 400)).toBe(1);
-    expect(steerFromTouch(0, 400)).toBe(-1);
-    expect(steerFromTouch(380, 400)).toBe(1);
-    const half = steerFromTouch(300, 400);
-    expect(half).toBeGreaterThan(0.4);
-    expect(half).toBeLessThan(0.7);
-    expect(steerFromTouch(100, 400)).toBeCloseTo(-half);
+describe("positionFromTouch", () => {
+  it("maps straight across the pad, with easy full left and full right", () => {
+    expect(positionFromTouch(200, 400)).toBe(0);
+    expect(positionFromTouch(300, 400)).toBeCloseTo(0.5 / 0.88);
+    expect(positionFromTouch(100, 400)).toBeCloseTo(-0.5 / 0.88);
+    // The thin margins at the edges are full lock.
+    expect(positionFromTouch(395, 400)).toBe(1);
+    expect(positionFromTouch(4, 400)).toBe(-1);
+    // Off the pad (a finger that slid past the edge) stays at full lock.
+    expect(positionFromTouch(-30, 400)).toBe(-1);
+    expect(positionFromTouch(480, 400)).toBe(1);
+  });
+
+  it("moves in proportion to the finger: no dead zone", () => {
+    const a = positionFromTouch(210, 400);
+    const b = positionFromTouch(220, 400);
+    expect(a).toBeGreaterThan(0);
+    expect(b - a).toBeCloseTo(a - positionFromTouch(200, 400));
   });
 
   it("is safe with odd sizes", () => {
-    expect(steerFromTouch(10, 0)).toBe(0);
-    expect(steerFromTouch(Number.NaN, 400)).toBe(0);
+    expect(positionFromTouch(10, 0)).toBe(0);
+    expect(positionFromTouch(Number.NaN, 400)).toBe(0);
   });
 });
 
+describe("probe", () => {
+  it("sends whole milliseconds the PC accepts", () => {
+    expect(probe(3.4, 12.6)).toEqual({ age: 3, rtt: 13 });
+    expect(probe(-5, 99_999)).toEqual({ age: 0, rtt: 10_000 });
+    expect(probe(Number.NaN, Number.POSITIVE_INFINITY)).toEqual({ age: 0, rtt: 0 });
+  });
+});
 describe("pacing", () => {
-  it("sends a change at most ~30 times a second, and a heartbeat when nothing changes", () => {
+  it("sends a change at once, at most ~60 times a second, and a heartbeat when nothing changes", () => {
+    expect(MIN_GAP_MS).toBeLessThanOrEqual(17);
+    expect(MAX_IN_FLIGHT).toBe(2);
+    // The first change after a pause goes straight out.
+    expect(nextSendDelay(Number.POSITIVE_INFINITY, true)).toBe(0);
     expect(nextSendDelay(0, true)).toBe(MIN_GAP_MS);
     expect(nextSendDelay(MIN_GAP_MS + 5, true)).toBe(0);
     expect(nextSendDelay(50, false)).toBe(HEARTBEAT_MS - 50);
