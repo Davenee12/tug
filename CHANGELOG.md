@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.14 — 2026-10-10
+
+A little more life in tug. Merged as #106.
+
+### New
+- **A greeting that matches the moment** at the top of the Feed: the time of day plus your
+  weather and a light suggestion ("Good morning ☀️ 84° and sunny. Pool weather.").
+- **The rope logo gives a little tug** whenever your iPhone connects or reconnects.
+- A couple of small surprises for the curious. Animations play once and skip entirely when
+  Windows' reduce-motion setting is on, so tug stays just as light on your PC.
+
 ## v0.5.13 — 2026-10-09
 
 A faster, steadier tug that works on more people's PCs. Merged as #103 and #104.

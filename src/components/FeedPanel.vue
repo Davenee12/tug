@@ -10,6 +10,7 @@ import { reuseUnchanged, sameFeedEntry } from "../lib/stableList";
 import CallsPanel from "./CallsPanel.vue";
 import CodeFeedRow from "./CodeFeedRow.vue";
 import FeedEntryRow from "./FeedEntryRow.vue";
+import FeedGreeting from "./FeedGreeting.vue";
 import MessageThreads from "./MessageThreads.vue";
 import WeatherCard from "./WeatherCard.vue";
 import { useWeatherStore } from "../stores/weather";
@@ -167,8 +168,11 @@ const nudgeDismissed = ref(false);
     <CallsPanel v-else-if="tug.view === 'calls'" />
 
     <div v-else ref="feedScroller" class="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-10">
-      <div v-if="weather.place !== 'off'" class="mx-auto w-full max-w-3xl px-3 pt-5">
-        <WeatherCard />
+      <div class="mx-auto w-full max-w-3xl px-3 pt-4">
+        <FeedGreeting />
+        <div v-if="weather.place !== 'off'" class="mt-2">
+          <WeatherCard />
+        </div>
       </div>
 
       <div v-if="entryGroups.length === 0" class="flex flex-1 items-center justify-center py-10">

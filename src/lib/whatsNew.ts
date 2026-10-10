@@ -21,6 +21,15 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.14",
+    title: "A little more life",
+    highlights: [
+      "A greeting at the top of your Feed that matches the time of day and the weather.",
+      "The rope logo gives a little tug whenever your iPhone connects.",
+      "A couple of small surprises for the curious.",
+    ],
+  },
+  {
     version: "0.5.13",
     title: "Faster and steadier",
     highlights: [

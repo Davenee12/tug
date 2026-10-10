@@ -18,7 +18,7 @@ your PC.
 > Screenshots are coming. Until then, `npm run dev` shows the whole UI with sample data (see
 > [Build from source](#build-from-source)).
 
-**Current release: v0.5.13** · [What's changed](CHANGELOG.md) · [Everything tug can do](docs/FEATURES.md) · [Roadmap](ROADMAP.md)
+**Current release: v0.5.14** · [What's changed](CHANGELOG.md) · [Everything tug can do](docs/FEATURES.md) · [Roadmap](ROADMAP.md)
 
 ## Download
 
