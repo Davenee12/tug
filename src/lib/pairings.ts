@@ -158,6 +158,9 @@ export type BondHint = "forgotten" | "maybe" | null;
 
 export function bondHint(s: DeviceStatus): BondHint {
   if (s.pairingStale) return "forgotten";
+  // Locked (or just restarted): the bond is fine, the phone only needs unlocking. Never suggest
+  // removing the pairing then; a MAP error at that moment ("isn't offering this service") is the lock.
+  if (s.awaitingUnlock) return null;
   if (s.device && s.connection !== "connected" && !s.services.notifications && !!s.messagesError) {
     return "maybe";
   }

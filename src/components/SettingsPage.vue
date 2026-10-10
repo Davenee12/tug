@@ -211,6 +211,9 @@ async function clearHistory() {
   }
   confirmClear.value = false;
   await tug.clearHistory();
+  // The store clears notifications; texts and recent calls went too.
+  tug.messages = [];
+  tug.calls = [];
   tug.notify("info", "History cleared");
 }
 </script>
@@ -420,7 +423,9 @@ async function clearHistory() {
             <SettingsRow label="Quiet hours" description="Hold Windows pop-ups on a schedule. Notifications still collect in the Feed. People you always let through still get through.">
               <SettingsSwitch v-model="quietEnabled" label="Quiet hours" :disabled="!tug.settings.toasts" />
             </SettingsRow>
-            <SettingsRow class="border-t border-hairline-soft" label="Mute calls" description="Calls are held during quiet hours and Do not disturb too.">
+            <SettingsRow class="border-t border-hairline-soft" label="Mute calls"
+              description="No pop-up for incoming calls at any time, except from people you always let through. With this off, calls ring through quiet hours and Do not disturb."
+            >
               <SettingsSwitch v-model="muteCalls" label="Mute calls" :disabled="!tug.settings.toasts" />
             </SettingsRow>
             <div v-if="qh.enabled" class="flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-hairline-soft px-5 py-4">
@@ -627,7 +632,10 @@ async function clearHistory() {
             >
               <SettingsSwitch v-model="appIcons" label="App icons" />
             </SettingsRow>
-            <SettingsRow label="Clear history" description="Deletes tug's copy of everything. Your iPhone keeps its own.">
+            <SettingsRow
+              label="Clear history"
+              description="Deletes tug's copy of your notifications, texts and recent calls. Cleared texts stay cleared; recent calls and notifications still on your iPhone show again when it next syncs. Your iPhone keeps its own, and your settings, pairing and contacts stay."
+            >
               <button
                 :class="['btn-secondary btn-sm', confirmClear ? 'text-error' : '']"
                 @click="clearHistory"

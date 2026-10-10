@@ -19,6 +19,7 @@ impl Actor {
             s.awaiting_phone_allow = false;
             // No link, so nothing is "connected but locked" any more (Forget, relink, device switch).
             s.awaiting_unlock = false;
+            s.phone_restarted = false;
             // Set again by `restart_link` when tug is rebuilding the link on its own.
             s.reconnecting = false;
             s.services = Services {
@@ -144,6 +145,7 @@ impl Actor {
                 self.last_poke = None;
                 self.connected_since_adopt = true;
                 self.adopt_timeouts = 0;
+                self.had_session = true;
                 if let Some(l) = self.link.as_mut() {
                     l.connected = true;
                 }
@@ -155,6 +157,7 @@ impl Actor {
                     s.last_error = None;
                     s.pairing_stale = false;
                     s.awaiting_unlock = false;
+                    s.phone_restarted = false;
                     s.reconnecting = false;
                     s.away = false;
                 });
@@ -229,6 +232,12 @@ impl Actor {
             away: self.away_since.is_some(),
             failures: self.connect_failures,
             reconnecting: status.reconnecting,
+            had_session: self.had_session,
+            adopt_grace: link_policy::in_adopt_grace(
+                self.connected_since_adopt,
+                self.connect_failures,
+                self.adopted_at.map(|t| t.elapsed()),
+            ),
         };
         let after = link_policy::after_failure(before, e.failure());
         // The iPhone is connected but isn't offering ANCS — it's locked after a restart, or
@@ -248,13 +257,18 @@ impl Actor {
             link_policy::Backoff::Connected => (RETRY_CONNECTED_SECS, MAX_RETRY_SECS),
             link_policy::Backoff::Idle => (RETRY_IDLE_SECS, MAX_RETRY_SECS),
         };
-        self.retry_in = retry_delay(base, self.connect_failures, cap);
+        // A phone away for a long time is poked every few minutes (a link-up still reconnects at once).
+        self.retry_in = link_policy::away_retry_secs(
+            retry_delay(base, self.connect_failures, cap),
+            self.away_since.map(|t| t.elapsed()),
+        );
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Disconnected;
             if after.publish_error || s.last_error.is_none() {
                 s.last_error = Some(message);
             }
             s.awaiting_unlock = after.awaiting_unlock;
+            s.phone_restarted = after.phone_restarted;
             s.reconnecting = after.reconnecting;
             s.away = after.away;
         });

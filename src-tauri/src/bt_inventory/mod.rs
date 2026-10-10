@@ -537,6 +537,11 @@ pub fn last_report() -> Option<BtInventory> {
     state().last_report.clone()
 }
 
+/// Forget the newest report (Clear history), so Copy diagnostics doesn't carry an old one.
+pub fn clear_last_report() {
+    state().last_report = None;
+}
+
 /// Whether the inventory's own PBAP probe should run now: never yet, or the last attempt found
 /// nothing and was at least `retry_ms` ago (so fav/spd aren't retried over and over).
 pub fn pbap_probe_due(now_ms: i64, retry_ms: i64) -> bool {

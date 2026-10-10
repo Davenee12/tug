@@ -92,4 +92,12 @@ describe("shouldPopUp", () => {
     // A VIP still rings even when calls are muted.
     expect(shouldPopUp(event({ isCall: true, isVip: true }), muted, at("2026-10-05T12:00"))).toBe(true);
   });
+
+  it("mutes calls at any time, not just in quiet hours or DND (as Settings says)", () => {
+    const muted = settings({ muteCalls: true });
+    expect(shouldPopUp(event({ isCall: true }), muted, at("2026-10-05T12:00"))).toBe(false);
+    expect(shouldPopUp(event({ isCall: true, isVip: true }), muted, at("2026-10-05T12:00"))).toBe(true);
+    // Texts are unaffected by Mute calls.
+    expect(shouldPopUp(event(), muted, at("2026-10-05T12:00"))).toBe(true);
+  });
 });

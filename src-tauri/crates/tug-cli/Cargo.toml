@@ -19,3 +19,18 @@ rmcp = { version = "3.5", default-features = false, features = ["server", "trans
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "rt", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# `tug boat <name>`: Windows Search's index (Windows.Storage.Search) and the real known folders
+# (which may be redirected to OneDrive) to find the file a bare name means.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Foundation",
+  "Foundation_Collections",
+  "Storage",
+  "Storage_Search",
+  "Storage_Streams",
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_UI_Shell",
+] }

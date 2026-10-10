@@ -6,10 +6,56 @@ use super::*;
 const CALL_LOG_SETTLE: Duration = Duration::from_secs(3);
 
 impl Actor {
+    /// For a phone with no ANCS: is there positive evidence it isn't an Apple device? Reads the
+    /// Device Information manufacturer and model and looks for Apple-only services. Anything
+    /// missing or failing is "can't tell", which keeps the usual "unlock your iPhone".
+    async fn probe_not_an_iphone(&self, device: &BluetoothLEDevice) -> bool {
+        use crate::device_info::{
+            APPLE_ONLY_SERVICES, DEVICE_INFORMATION_SERVICE, MANUFACTURER_NAME_STRING, MODEL_NUMBER_STRING,
+        };
+        let mut apple_service = false;
+        for uuid in APPLE_ONLY_SERVICES {
+            if let Ok(Some(_)) = winrt::service(device, guid(*uuid)).await {
+                apple_service = true;
+            }
+        }
+        if apple_service {
+            return false;
+        }
+        let Ok(Some(dis)) = winrt::service(device, winrt::sig_uuid(DEVICE_INFORMATION_SERVICE)).await else {
+            return false;
+        };
+        let read_text = |uuid: u16, name: &'static str| {
+            let dis = dis.clone();
+            async move {
+                let ch = winrt::characteristic(&dis, winrt::sig_uuid(uuid), name).await.ok()?;
+                let raw = winrt::read(&ch).await.ok()?;
+                Some(String::from_utf8_lossy(&raw).trim_matches('\0').to_string())
+            }
+        };
+        let manufacturer = read_text(MANUFACTURER_NAME_STRING, "manufacturer name").await;
+        // The model read now, else the last one this phone reported (an iPhone's, if ever).
+        let model = match read_text(MODEL_NUMBER_STRING, "model number").await {
+            Some(m) => Some(m),
+            None => self.shared.status().device.and_then(|d| d.model),
+        };
+        crate::device_info::not_an_iphone(model.as_deref(), manufacturer.as_deref(), apple_service)
+    }
+
     pub(super) async fn setup_ancs(&mut self, device: &BluetoothLEDevice, gen: u64) -> Result<Ancs, BleError> {
-        let svc = winrt::service(device, guid(ancs::SERVICE))
-            .await?
-            .ok_or(BleError::NotFound("Notification service (ANCS)"))?;
+        let Some(svc) = winrt::service(device, guid(ancs::SERVICE)).await? else {
+            // A locked iPhone withholds ANCS; a phone that isn't an iPhone never has it. Tell
+            // them apart so an Android phone isn't told to "unlock your iPhone" forever.
+            let not_iphone = self.probe_not_an_iphone(device).await;
+            self.shared.update_status(|s| s.not_iphone = not_iphone);
+            return Err(if not_iphone {
+                log::info!("the paired phone offers no ANCS and doesn't look like an Apple device");
+                BleError::NotAnIphone
+            } else {
+                BleError::NotFound("Notification service (ANCS)")
+            });
+        };
+        self.shared.update_status(|s| s.not_iphone = false);
         let control_point = winrt::characteristic(&svc, guid(ancs::CONTROL_POINT), "ANCS control point").await?;
         let ns = winrt::characteristic(&svc, guid(ancs::NOTIFICATION_SOURCE), "ANCS notification source").await?;
         let ds = winrt::characteristic(&svc, guid(ancs::DATA_SOURCE), "ANCS data source").await?;

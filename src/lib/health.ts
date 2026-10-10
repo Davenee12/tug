@@ -6,6 +6,7 @@
 // "Contacts: 214 synced" while the Sync Contacts switch says off.
 
 import type { DeviceStatus } from "../types/protocol";
+import { textsDownNote } from "./availability";
 import { connectionSentence } from "./connectionStatus";
 import { CHECKING_MAX_MS, phoneSwitches, type PhoneSwitch, type SwitchContext } from "./phoneSwitches";
 
@@ -141,6 +142,10 @@ function textsLink(s: DeviceStatus, x: PhoneSwitch): HealthLink {
   // The phone's own reason, already plain English (e.g. "turn on Show Notifications").
   if (x.state === "off") return { ...base, state: "off", detail: capitalise(s.messagesError ?? x.note) };
   if (x.state === "on") return { ...base, state: "ok", detail: "Reading and sending texts works." };
+  // Texts worked with this phone and dropped: a reconnect, not a setup problem.
+  if (s.textsWereConnected && s.connection === "connected") {
+    return { ...base, state: "waiting", detail: textsDownNote(s) };
+  }
   if (x.state === "checking") return { ...base, state: "waiting", detail: "Waiting for message access to open." };
   return { ...base, state: "unavailable", detail: "Your iPhone hasn't opened message access yet. tug keeps trying." };
 }

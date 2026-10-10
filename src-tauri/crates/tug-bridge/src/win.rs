@@ -165,7 +165,40 @@ pub fn owner_and_integrity(sddl: &str) -> (Option<String>, u32) {
 /// made, not another user's or a sandboxed process's.
 pub fn trusted_owner(sddl: &str, user_sid: &str) -> bool {
     let (owner, integrity) = owner_and_integrity(sddl);
-    owner.as_deref() == Some(user_sid) && integrity >= MEDIUM_INTEGRITY
+    owner.is_some_and(|o| same_sid(&o, user_sid)) && integrity >= MEDIUM_INTEGRITY
+}
+
+/// Whether two SIDs as SDDL writes them are the same account. SDDL abbreviates well-known
+/// accounts: the built-in Administrator (RID 500, which is who CI runners and some home PCs run
+/// as) comes back as `LA`, not `S-1-5-21-…-500`, so a plain string compare would refuse the
+/// user's own pipe and token file. Both sides go through Windows' own parser to compare.
+pub fn same_sid(a: &str, b: &str) -> bool {
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    a == b || matches!((canonical_sid(a), canonical_sid(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// A SID string (full or an SDDL alias like `LA`) in its full `S-1-…` form, via Windows.
+fn canonical_sid(s: &str) -> Option<String> {
+    use windows::Win32::Foundation::HLOCAL;
+    use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
+    use windows::Win32::Security::PSID;
+    if s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return None;
+    }
+    // SAFETY: plain FFI; the SID and the string are freed with LocalFree.
+    unsafe {
+        let mut sid = PSID::default();
+        ConvertStringSidToSidW(&HSTRING::from(s), &mut sid).ok()?;
+        let mut out = PWSTR::null();
+        let converted = ConvertSidToStringSidW(sid, &mut out);
+        let _ = LocalFree(Some(HLOCAL(sid.0)));
+        converted.ok()?;
+        let text = out.to_string().ok();
+        let _ = LocalFree(Some(HLOCAL(out.0 as *mut c_void)));
+        text
+    }
 }
 
 fn object_sddl(handle: HANDLE, kind: SE_OBJECT_TYPE) -> io::Result<String> {
@@ -290,6 +323,18 @@ mod tests {
     }
 
     #[test]
+    fn sddl_aliases_compare_as_the_account_they_name() {
+        // SDDL writes well-known accounts as aliases (BA = Administrators, SY = LocalSystem).
+        assert!(same_sid("BA", "S-1-5-32-544"));
+        assert!(same_sid("SY", "S-1-5-18"));
+        assert!(!same_sid("BA", "S-1-5-18"));
+        assert!(!same_sid("BA", ME));
+        assert!(same_sid(ME, ME));
+        assert!(!same_sid("", ""));
+        assert!(trusted_owner("O:S-1-5-32-544", "BA"));
+    }
+
+    #[test]
     fn writes_and_replaces_a_private_labelled_file() {
         let dir = std::env::temp_dir().join(format!("tug-bridge-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -301,7 +346,10 @@ mod tests {
         // Owned by this user, labelled medium with no-read-up.
         let sddl = file_sddl_of(&path).unwrap();
         let sid = current_user_sid().unwrap();
-        assert_eq!(owner_and_integrity(&sddl), (Some(sid), MEDIUM_INTEGRITY), "{sddl}");
+        let (owner, integrity) = owner_and_integrity(&sddl);
+        assert!(owner.is_some_and(|o| same_sid(&o, &sid)), "{sddl}");
+        assert_eq!(integrity, MEDIUM_INTEGRITY, "{sddl}");
+        assert!(trusted_owner(&sddl, &sid), "{sddl}");
         assert!(sddl.contains("NR"), "no-read-up missing: {sddl}");
         std::fs::remove_dir_all(&dir).unwrap();
     }

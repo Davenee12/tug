@@ -282,6 +282,18 @@ describe("bondHint", () => {
     expect(bondHint(s)).toBe("maybe");
   });
 
+  it("never suggests removing the pairing while the phone is locked or just restarted", () => {
+    // 22:27 on the owner's PC: right after a restart, MAP "isn't offering this service" and no ANCS.
+    const s = status({
+      connection: "disconnected",
+      awaitingUnlock: true,
+      phoneRestarted: true,
+      services: { notifications: false, media: false, battery: false, messages: false },
+      messagesError: "the iPhone isn't offering this service",
+    });
+    expect(bondHint(s)).toBeNull();
+  });
+
   it("does not cry forgotten when it's just Show Notifications off (LE fine)", () => {
     // Connected, notifications flowing, only the texts switch off: that's not a forgotten bond.
     const s = status({

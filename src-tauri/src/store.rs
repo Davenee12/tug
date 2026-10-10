@@ -153,9 +153,10 @@ const MIGRATIONS: &[&str] = &[
     "#,
     // v10: aliases learned from group-text notifications ("Sam & Alex", "Sam, Alex & 2 others")
     // could retitle every notification from that group as one contact. The learners skip those
-    // now; drop any already learned.
+    // now; drop any already learned. Frozen to the test as v0.5.12 shipped it (`group_like_v10`),
+    // so a database upgraded later doesn't lose more than one upgraded then.
     r#"
-    DELETE FROM contact_aliases WHERE group_like(alias);
+    DELETE FROM contact_aliases WHERE group_like_v10(alias);
     "#,
     // v11: the last 10 digits of a contact's number (`match_key`), so a text from the same number
     // in another format (national "07700 900123" vs the contact's "+44 7700 900123") still shows
@@ -175,6 +176,9 @@ pub(crate) fn clean_name(name: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
+    // TODO(localization): iOS rewrites an inline reply's title in the phone's language too, but
+    // the exact localized phrases aren't confirmed, so only English is stripped (as in format.ts
+    // `IOS_REPLY_SUFFIX`). Add a language here once a real iPhone shows its wording.
     for suffix in [" replied to your message", " replied to you"] {
         let cut = name.len().wrapping_sub(suffix.len());
         if name.len() >= suffix.len() && name.is_char_boundary(cut) && name[cut..].eq_ignore_ascii_case(suffix) {
@@ -189,8 +193,45 @@ pub(crate) fn clean_name(name: &str) -> String {
 /// SQL as `group_like`.
 pub(crate) fn looks_like_group(title: &str) -> bool {
     let t = clean_name(title).to_lowercase();
-    t.contains('&') || t.contains(',') || t.contains(" others")
+    if t.contains('&') || t.contains(',') || t.contains(" others") {
+        return true;
+    }
+    let words: Vec<&str> = t.split_whitespace().collect();
+    // "Sam y 2 más", "Sam et 2 autres", "Sam und 2 weitere", "Sam e altri 2": a count and "others".
+    let has_count = words.iter().any(|w| w.chars().all(|c| c.is_ascii_digit()));
+    if has_count && words.iter().any(|w| OTHERS_WORDS.contains(w)) {
+        return true;
+    }
+    // "Sam y Alex", "Sam et Alex", "Sam und Alex": two single names joined, nothing else. Kept to
+    // one word each side so a name with a joiner in it ("José Ortega y Gasset") stays a name.
+    matches!(words.as_slice(), [_, joiner, _] if GROUP_JOINERS.contains(joiner))
 }
+
+/// "and" in the iPhone's major languages, as a two-person group title joins the names.
+const GROUP_JOINERS: &[&str] = &["and", "y", "et", "und", "e", "en", "och", "og", "i", "ve"];
+/// "others"/"more" as a group title counts the rest ("Sam & 2 others").
+const OTHERS_WORDS: &[&str] = &[
+    "others",
+    "more",
+    "más",
+    "mas",
+    "autres",
+    "weitere",
+    "weiteren",
+    "andere",
+    "anderen",
+    "altri",
+    "outros",
+    "outras",
+    "mais",
+    "andra",
+    "andre",
+    "innych",
+    "inne",
+    "kişi",
+    "другие",
+    "других",
+];
 
 /// The key that matches one phone number across formats: its last 10 digits, when it has at least
 /// 10 (emails and short codes have none, and only match exactly). Also callable from SQL.
@@ -224,6 +265,14 @@ fn register_functions(conn: &Connection) -> Result<()> {
     })?;
     conn.create_scalar_function("group_like", 1, flags, |ctx| {
         Ok(ctx.get::<Option<String>>(0)?.is_some_and(|s| looks_like_group(&s)))
+    })?;
+    // The v10 migration's test, frozen as it shipped: `looks_like_group` has since learned more
+    // languages, and a migration must do the same thing whenever it runs.
+    conn.create_scalar_function("group_like_v10", 1, flags, |ctx| {
+        Ok(ctx.get::<Option<String>>(0)?.is_some_and(|s| {
+            let t = clean_name(&s).to_lowercase();
+            t.contains('&') || t.contains(',') || t.contains(" others")
+        }))
     })?;
     conn.create_scalar_function("strip_invisible", 1, flags, |ctx| {
         Ok(ctx.get::<Option<String>>(0)?.map(|s| crate::text::strip_invisible(&s)))
@@ -566,10 +615,33 @@ impl Store {
         Ok(())
     }
 
+    /// Settings › Data & privacy › Clear history: everything tug copied from the phone's activity
+    /// (notifications, texts and their search index, the recent-calls list, names learned from
+    /// notifications) goes. Texts stay cleared: each is kept as a blank, hidden placeholder (no body,
+    /// sender or address) so the phone's next listing can't bring it back. Recent calls and
+    /// notifications still on the phone return at its next sync. Settings, the pairing and the
+    /// phone's contacts stay; the iPhone keeps its own.
     pub fn clear_history(&self) -> Result<()> {
-        self.conn().execute_batch(
-            "DELETE FROM notifications; INSERT INTO notifications_fts (notifications_fts) VALUES ('rebuild');",
-        )
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        // Texts stay as blank, hidden rows (tombstones), keyed by the phone's handle: the phone
+        // re-lists its recent texts at every sync, and a row that's gone would come straight back.
+        // Blanking the body and rebuilding the index means nothing is readable or searchable.
+        tx.execute(
+            "UPDATE messages SET body = '', sender_name = NULL, address = '', hidden_at = COALESCE(hidden_at, ?1)",
+            params![crate::state::now_ms()],
+        )?;
+        tx.execute_batch(
+            "DELETE FROM notifications;
+             INSERT INTO notifications_fts (notifications_fts) VALUES ('rebuild');
+             INSERT INTO messages_fts (messages_fts) VALUES ('rebuild');
+             DELETE FROM contact_aliases;",
+        )?;
+        tx.execute(
+            "DELETE FROM settings WHERE key = ?1",
+            params![crate::map::calls::RECENT_CALLS],
+        )?;
+        tx.commit()
     }
 
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
@@ -689,6 +761,116 @@ mod tests {
             "a bare phrase isn't a suffix"
         );
         assert_eq!(clean_name(""), "");
+        // Localized reply suffixes aren't guessed at (see the TODO in clean_name): left as sent.
+        assert_eq!(clean_name("Zoé a répondu"), "Zoé a répondu");
+    }
+
+    #[test]
+    fn clear_history_clears_what_it_promises_and_keeps_the_rest() {
+        let s = Store::in_memory().unwrap();
+        insert(
+            &s,
+            "s1",
+            1,
+            EventFlags::default(),
+            &attrs("com.apple.MobileSMS", "Jane", "running late"),
+        );
+        s.conn()
+            .execute_batch(
+                "INSERT INTO messages (source, handle, direction, address, body, received_at, status)
+                     VALUES ('iphone-map', 'h1', 'in', '+15550100001', 'see you at noon', 1, 'received');
+                 INSERT INTO contacts (address, name) VALUES ('+15550100001', 'Jane Doe');
+                 INSERT INTO contact_aliases (address, alias) VALUES ('+15550100001', 'Janey');",
+            )
+            .unwrap();
+        s.set_setting(crate::map::calls::RECENT_CALLS, "[]").unwrap();
+        s.set_setting(crate::state::keys::LAST_TEXT_SYNC, "1").unwrap();
+        s.set_setting(crate::state::keys::DEVICE_ID, "phone").unwrap();
+        s.set_setting("toasts", "false").unwrap();
+
+        s.clear_history().unwrap();
+
+        let count = |sql: &str| s.conn().query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(count("SELECT count(*) FROM notifications"), 0);
+        // Texts are blank, hidden tombstones, so the phone's next listing can't bring them back.
+        assert_eq!(
+            count("SELECT count(*) FROM messages WHERE hidden_at IS NULL OR body <> ''"),
+            0
+        );
+        let resync = crate::messages::IncomingMessage {
+            source: "iphone-map",
+            handle: "h1",
+            address: "+15550100001",
+            sender_name: None,
+            body: "see you at noon",
+            sent_at: None,
+            received_at: 1,
+            unread_on_phone: false,
+            msg_type: None,
+        };
+        assert!(
+            s.insert_incoming(&resync).unwrap().is_none(),
+            "a re-synced text stays cleared"
+        );
+        assert!(s.recent_messages(10).unwrap().is_empty());
+        assert!(s.search_messages("noon", 10).unwrap().is_empty());
+        assert_eq!(
+            count("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'noon'"),
+            0
+        );
+        assert_eq!(
+            count("SELECT count(*) FROM notifications_fts WHERE notifications_fts MATCH 'late'"),
+            0
+        );
+        assert_eq!(count("SELECT count(*) FROM contact_aliases"), 0);
+        assert_eq!(s.setting(crate::map::calls::RECENT_CALLS).unwrap(), None);
+        // Kept, so the next sync isn't treated as a first one.
+        assert_eq!(
+            s.setting(crate::state::keys::LAST_TEXT_SYNC).unwrap().as_deref(),
+            Some("1")
+        );
+        // Kept: the phone's contacts, the pairing and settings.
+        assert_eq!(count("SELECT count(*) FROM contacts"), 1);
+        assert_eq!(
+            s.setting(crate::state::keys::DEVICE_ID).unwrap().as_deref(),
+            Some("phone")
+        );
+        assert_eq!(s.setting("toasts").unwrap().as_deref(), Some("false"));
+    }
+
+    #[test]
+    fn group_titles_in_other_languages() {
+        for title in [
+            "Sam & Alex",
+            "Sam, Alex & Jo",
+            "Sam & 2 others",
+            "Sam y Alex",
+            "Sam et Alex",
+            "Sam und Alex",
+            "Sam e Alex",
+            "Sam en Alex",
+            "Sam and Alex",
+            "Sam y 2 más",
+            "Sam et 2 autres",
+            "Sam und 2 weitere",
+            "Sam e altri 2",
+            "Sam e mais 2",
+            "Sam en 2 anderen",
+        ] {
+            assert!(looks_like_group(title), "{title}");
+        }
+        for name in [
+            "Sam",
+            "Sam Lee",
+            "José Ortega y Gasset",
+            "Mary Ann",
+            "Elena 2",
+            "Yves",
+            "Sam e",
+            "Y Alex",
+        ] {
+            assert!(!looks_like_group(name), "{name}");
+        }
     }
 
     #[test]

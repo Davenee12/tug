@@ -55,6 +55,7 @@ const panelInline = computed(() =>
     hasDevice: tug.status.device != null,
     pairingStale: tug.status.pairingStale,
     reconnecting: showsReconnecting(tug.status),
+    awaitingUnlock: tug.status.awaitingUnlock,
     downSince: downSince.value,
     now: now.value,
   }),

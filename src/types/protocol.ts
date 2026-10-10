@@ -38,6 +38,22 @@ export interface DeviceStatus {
   awaitingPhoneAllow: boolean;
   /** The iPhone is connected but locked (no ANCS yet): tell the user to unlock it to reconnect. */
   awaitingUnlock: boolean;
+  /**
+   * The paired phone has no notification service and doesn't look like an Apple device (an
+   * Android phone): tug says it works with iPhone instead of "Unlock your iPhone". Optional only
+   * so the store's initial status needn't name it.
+   */
+  notIphone?: boolean;
+  /** With awaitingUnlock: the phone restarted after working this run (unlock and tug reconnects). */
+  phoneRestarted?: boolean;
+  /**
+   * Message access has worked with this phone since it was set up (or tug started), so texts
+   * being down now is a reconnect, not a setup problem. Optional only so the store's initial
+   * status needn't name it.
+   */
+  textsWereConnected?: boolean;
+  /** Message access has failed several times in a row ("Can't reach your texts right now"). */
+  textsUnreachable?: boolean;
   /** tug is rebuilding the link on its own (Bluetooth stalled, the PC woke): say "Reconnecting…", not "Waiting". */
   reconnecting: boolean;
   /** The iPhone is away (out of range): steady until it connects again, not flipping with each retry. */

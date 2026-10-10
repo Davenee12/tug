@@ -42,7 +42,7 @@ pub struct CallRecord {
 
 /// Settings key for the last recent-calls list, so Recents isn't empty after every launch until the
 /// phone answers again.
-const RECENT_CALLS: &str = "recent_calls";
+pub const RECENT_CALLS: &str = "recent_calls";
 
 /// The recent calls saved by `save`; empty if none (or unreadable).
 pub fn load(store: &crate::store::Store) -> Vec<CallRecord> {

@@ -7,7 +7,9 @@
 //! (`net.rs`). It stops when the panel closes, when tug quits, when tug's window hides to the tray
 //! (once any transfer in progress finishes), or after 10 minutes without a request; the secret is
 //! useless after that. Unfinished uploads are removed on start and stop.
-//! tug never touches Windows Firewall: Windows asks the user the first time on its own.
+//! tug never touches Windows Firewall: Windows asks the user the first time on its own (an account
+//! that isn't an administrator may need one to answer). It needs an IPv4 home or office network
+//! the phone is also on; on a network Windows calls Public, inbound connections are blocked.
 //!
 //! The pure parts (keys and sealing, auth, file names, adapter ranking, chunk bookkeeping) are
 //! unit-tested in their modules; `tests.rs` runs a whole session over a real socket.
@@ -51,6 +53,48 @@ const TICK: Duration = Duration::from_secs(2);
 const NET_EVERY: u32 = 3;
 /// Progress events are coalesced to at most one per this long.
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+
+/// Whether this Windows account is an administrator (elevated or not). The panel's help says the
+/// firewall prompt may need an administrator when it isn't. Errs towards true (no extra line).
+#[cfg(windows)]
+pub fn user_is_admin() -> bool {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{
+        GetTokenInformation, TokenElevationType, TokenElevationTypeFull, TokenElevationTypeLimited,
+        TOKEN_ELEVATION_TYPE, TOKEN_QUERY,
+    };
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows::Win32::UI::Shell::IsUserAnAdmin;
+    // SAFETY: plain FFI on this process's own token, closed before returning.
+    unsafe {
+        let mut token = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return true;
+        }
+        let mut kind = TOKEN_ELEVATION_TYPE::default();
+        let mut len = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevationType,
+            Some(&mut kind as *mut _ as *mut core::ffi::c_void),
+            std::mem::size_of::<TOKEN_ELEVATION_TYPE>() as u32,
+            &mut len,
+        )
+        .is_ok();
+        let _ = CloseHandle(token);
+        // Limited: an administrator running without elevation (UAC's split token). Full: elevated.
+        // Default: no split token, so either a standard user or UAC is off; ask directly.
+        if ok && (kind == TokenElevationTypeLimited || kind == TokenElevationTypeFull) {
+            return true;
+        }
+        IsUserAnAdmin().as_bool()
+    }
+}
+
+#[cfg(not(windows))]
+pub fn user_is_admin() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

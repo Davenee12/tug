@@ -65,6 +65,10 @@ describe("nextDownSince", () => {
     expect(since).toBe(T0);
   });
 
+  it("stays away while the phone only needs unlocking (locked or just restarted)", () => {
+    expect(showConnectionPanel({ ...base, connection: "disconnected", awaitingUnlock: true, now: T0 + RECONNECT_GRACE_MS * 10 })).toBe(false);
+  });
+
   it("clears once connected, so the next drop starts a fresh grace period", () => {
     expect(nextDownSince(T0, true, T0 + 3000)).toBeNull();
     expect(nextDownSince(null, false, T0 + 60_000)).toBe(T0 + 60_000);
