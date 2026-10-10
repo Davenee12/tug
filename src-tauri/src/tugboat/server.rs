@@ -113,6 +113,9 @@ pub async fn serve_with(
             tokio::time::sleep(Duration::from_millis(50)).await;
             continue;
         };
+        // Replies are small and latency matters (the game controller): send each at once rather
+        // than waiting to batch it with more.
+        let _ = stream.set_nodelay(true);
         let Ok(slot) = slots.clone().try_acquire_owned() else {
             log::debug!("tugboat: too many connections, closing one");
             drop(stream);
@@ -121,8 +124,12 @@ pub async fn serve_with(
         let service = TowerToHyperService::new(app.clone());
         connections.spawn(async move {
             let _slot = slot;
+            // Keep-alive, so the phone reuses its connections. The header timeout also bounds how
+            // long a kept-alive connection may sit idle waiting for its next request: it restarts
+            // with every request, so a controller sending every 200 ms or faster never meets it.
             let conn = http1::Builder::new()
                 .timer(TokioTimer::new())
+                .keep_alive(true)
                 .header_read_timeout(limits.header_timeout)
                 .max_buf_size(MAX_BUF)
                 .serve_connection(TokioIo::new(stream), service);
@@ -204,8 +211,10 @@ const PAD_BODY_TIMEOUT: Duration = Duration::from_secs(2);
 async fn pad_input(State(s): Shared, req: Request) -> Response {
     let run = async {
         let ok = authorize(&s, req.method(), req.uri(), req.headers())?;
-        s.pad_admit()?;
+        // Read the (at most 104-byte) body before saying no to it: a reply that leaves a body
+        // unread closes the connection, and the phone would pay for a new one on its next input.
         let body = read_body(req, super::pad::MAX_BODY, PAD_BODY_TIMEOUT).await?;
+        s.pad_admit()?;
         let reply = s.pad_input(&ok, &body)?;
         Ok(sealed(s.seal_json(&ok, &reply)))
     };

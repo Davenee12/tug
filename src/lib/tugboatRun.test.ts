@@ -11,10 +11,13 @@ import {
   MIN_GAP,
   SPEED_MAX,
   SPEED_START,
+  FOLLOW_TAU,
   advance,
+  follow,
   layout,
   mergeInput,
   newRun,
+  padTarget,
   random,
   score,
   spawnGap,
@@ -333,15 +336,58 @@ function dodge(run: Run): number {
   return goLeft ? -1 : 1;
 }
 
+describe("the phone's slider", () => {
+  it("puts the boat anywhere across the open water", () => {
+    expect(padTarget(0)).toBe(FIELD_W / 2);
+    expect(padTarget(-1)).toBe(MARGIN);
+    expect(padTarget(1)).toBe(FIELD_W - MARGIN);
+    expect(padTarget(7)).toBe(FIELD_W - MARGIN);
+    expect(padTarget(Number.NaN)).toBe(FIELD_W / 2);
+  });
+
+  it("is followed quickly and without overshoot, at any frame rate", () => {
+    const run = (fps: number, seconds: number) => {
+      let x = 20;
+      let v = 0;
+      let peak = x;
+      for (let i = 0; i < Math.round(seconds * fps); i++) {
+        [x, v] = follow(x, v, 80, 1 / fps);
+        peak = Math.max(peak, x);
+      }
+      return { x, peak };
+    };
+    // Most of the way there in a few time constants (~0.15 s), all the way soon after.
+    expect(run(60, 3 * FOLLOW_TAU).x).toBeGreaterThan(20 + 0.75 * 60);
+    expect(run(60, 0.3).x).toBeGreaterThan(78.5);
+    expect(run(60, 0.5).x).toBeCloseTo(80, 1);
+    // Critically damped: never past the target.
+    expect(run(120, 1).peak).toBeLessThanOrEqual(80 + 1e-9);
+    // The same at 30, 60 and 120 frames a second.
+    expect(run(30, 0.1).x).toBeCloseTo(run(120, 0.1).x, 6);
+  });
+
+  it("moves the boat much more directly than the keyboard's helm", () => {
+    const pad = quiet();
+    const keys = quiet();
+    for (let i = 0; i < 6; i++) {
+      step(pad, { steer: 0, boost: false, target: FIELD_W - MARGIN }, 1 / 60);
+      step(keys, { steer: 1, boost: false }, 1 / 60);
+    }
+    // A tenth of a second in: the slider has the boat well on its way; the helm is still building.
+    expect(pad.x - FIELD_W / 2).toBeGreaterThan(2.5 * (keys.x - FIELD_W / 2));
+    // And it settles exactly where the knob is.
+    for (let i = 0; i < 60; i++) step(pad, { steer: 0, boost: false, target: 30 }, 1 / 60);
+    expect(pad.x).toBeCloseTo(30, 3);
+  });
+});
+
 describe("controls", () => {
-  const none: Controls = { keyLeft: false, keyRight: false, keyBoost: false, pointerX: null, pointerBoost: false, pad: null };
+  const none: Controls = { keyLeft: false, keyRight: false, keyBoost: false, pointerX: null, pointerBoost: false, pad: null, padLeads: false };
+  const pad = { connected: true, steer: 0.5, boost: false };
 
   it("the keyboard wins whenever a key is held", () => {
-    const pad = { connected: true, steer: 0.8, boost: false };
-    expect(mergeInput({ ...none, keyLeft: true, pad }, 50).steer).toBe(-1);
+    expect(mergeInput({ ...none, keyLeft: true, pad, padLeads: true }, 50)).toEqual({ steer: -1, boost: false });
     expect(mergeInput({ ...none, keyLeft: true, pointerX: 90 }, 50).steer).toBe(-1);
-    // Both arrows held cancel out, so the next control gets its say.
-    expect(mergeInput({ ...none, keyLeft: true, keyRight: true, pad }, 50).steer).toBe(0.8);
   });
 
   it("a mouse drag steers towards the pointer, gently near the boat", () => {
@@ -349,13 +395,18 @@ describe("controls", () => {
     expect(mergeInput({ ...none, pointerX: 45 }, 50).steer).toBeCloseTo(-0.5);
   });
 
-  it("the phone steers only while connected", () => {
-    expect(mergeInput({ ...none, pad: { connected: true, steer: -0.3, boost: true } }, 50)).toEqual({ steer: -0.3, boost: true });
-    expect(mergeInput({ ...none, pad: { connected: false, steer: -0.3, boost: true } }, 50)).toEqual({ steer: 0, boost: false });
-    expect(mergeInput({ ...none, pad: { connected: true, steer: 9, boost: false } }, 50).steer).toBe(1);
+  it("the phone's slider sets where the boat goes, once it has moved last", () => {
+    expect(mergeInput({ ...none, pad, padLeads: true }, 50)).toEqual({ steer: 0, boost: false, target: padTarget(0.5) });
+    // The keys were used after the slider last moved: the slider waits its turn.
+    expect(mergeInput({ ...none, pad, padLeads: false }, 50)).toEqual({ steer: 0, boost: false });
+    // Not connected: nothing from the phone at all.
+    expect(mergeInput({ ...none, pad: { connected: false, steer: 1, boost: true }, padLeads: true }, 50)).toEqual({ steer: 0, boost: false });
+  });
+
+  it("Boost from the phone hops whoever has the helm", () => {
+    expect(mergeInput({ ...none, keyRight: true, pad: { ...pad, boost: true } }, 50)).toEqual({ steer: 1, boost: true });
   });
 });
-
 describe("layout", () => {
   it("fits the field in the panel, centred, and maps the pointer back", () => {
     const wide = layout(1200, 640);

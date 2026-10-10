@@ -1,18 +1,37 @@
-// The phone as Tugboat Run's controller: the pure parts. What an input says (steering and boost,
-// nothing else), where a finger on the pad steers, how often to send, what to do about an error,
-// and whether tilt steering can work on this page.
+// The phone as Tugboat Run's controller: the pure parts. What an input says (where the slider
+// sits and whether Boost is held, plus an optional latency probe), where a finger on the pad puts
+// the slider, how often to send, what to do about an error, and whether tilt steering can work.
 
-/** Send at most this often while the input is changing (~30 a second). */
-export const MIN_GAP_MS = 33;
+/** Send at most this often while the input is changing (~60 a second): a change goes out at once
+ * unless one went less than this long ago, then at this mark. */
+export const MIN_GAP_MS = 16;
+/** Requests in flight at once. Two, so a slow reply doesn't hold up the next input; the PC keeps
+ * only the newest (by sequence number) if they land out of order. */
+export const MAX_IN_FLIGHT = 2;
 /** Send a heartbeat this often while nothing changes, so the PC knows the phone is still here. */
 export const HEARTBEAT_MS = 200;
 /** After "busy" from the PC, wait this long before the next input. */
 export const BUSY_BACKOFF_MS = 250;
 
 export interface PadInput {
-  /** -100 (full left) to 100 (full right), a whole number: exactly what the PC accepts. */
+  /** Where the slider sits: -100 (full left) to 100 (full right), a whole number, exactly what the
+   * PC accepts. */
   steer: number;
   boost: boolean;
+}
+
+/** The latency probe sent with an input that carries a new touch (milliseconds, whole, 0–10000). */
+export interface PadProbe {
+  /** How long the newest touch waited on the phone before this input went out. */
+  age: number;
+  /** The last round trip to the PC. */
+  rtt: number;
+}
+
+/** A probe the PC will accept: whole milliseconds, 0 to 10 s. */
+export function probe(ageMs: number, rttMs: number): PadProbe {
+  const ms = (v: number) => (Number.isFinite(v) ? Math.min(10_000, Math.max(0, Math.round(v))) : 0);
+  return { age: ms(ageMs), rtt: ms(rttMs) };
 }
 
 /** Steering in [-1, 1] → what goes on the wire. Out of range or not a number becomes safe. */
@@ -27,17 +46,14 @@ export function samePad(a: PadInput | null, b: PadInput): boolean {
 }
 
 /**
- * Where a finger on the steering pad steers: its distance from the middle, as a share of half the
- * pad's width, with a small dead zone so a resting thumb goes straight, reaching full lock a bit
- * before the edge.
+ * Where a finger on the pad puts the slider: straight across, left edge to right edge, with a thin
+ * margin at each side so full left and full right are easy to reach. The slider stays where it was
+ * let go, like a real one, and the boat follows it.
  */
-export function steerFromTouch(x: number, width: number, deadZone = 0.08): number {
+export function positionFromTouch(x: number, width: number, margin = 0.06): number {
   if (!(width > 0) || !Number.isFinite(x)) return 0;
-  const offset = (x - width / 2) / (width / 2);
-  const mag = Math.abs(offset);
-  if (mag <= deadZone) return 0;
-  const scaled = Math.min(1, (mag - deadZone) / (0.85 - deadZone));
-  return Math.sign(offset) * scaled;
+  const t = (x / width - margin) / (1 - 2 * margin);
+  return Math.max(-1, Math.min(1, t * 2 - 1));
 }
 
 /** How long to wait before the next send: soon when the input changed, a heartbeat otherwise. */

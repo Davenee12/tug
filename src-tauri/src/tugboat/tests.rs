@@ -565,6 +565,59 @@ async fn game_controller_inputs_only_steer_the_game() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// The phone's controller keeps reusing one kept-alive connection, even across a refusal (a reply
+/// that left the body unread would close it and cost the phone a new connection).
+#[tokio::test]
+async fn controller_inputs_reuse_one_connection() {
+    let root = temp_dir();
+    let secret = crypto::new_secret();
+    let session = Arc::new(Session::new(
+        &secret,
+        root.join("Tugboat"),
+        root.join("incoming"),
+        Arc::new(TestSink::default()),
+    ));
+    let (addr, stop, server) = start_server(session.clone(), server::Limits::default()).await;
+    let keys = Keys::derive(&secret);
+    let client = "phoneAAAAAAAAAAAAAAAAA";
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .unwrap();
+    let conn = tokio::spawn(conn);
+    let mut seq = 1_790_000_000_000u64 * 1024;
+    let mut statuses = Vec::new();
+    for i in 0..6 {
+        // The game opens the controller after the first (refused) input.
+        if i == 1 {
+            session.pad_open();
+        }
+        seq += 1;
+        let body = keys.seal(
+            &ad::request(client, seq),
+            format!(r#"{{"steer":{},"boost":false,"age":1,"rtt":2}}"#, i * 10).as_bytes(),
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/pad")
+            .header("host", addr.to_string())
+            .header("authorization", auth::header(&keys, client, seq, "POST", "/api/pad"))
+            .body(Full::new(Bytes::from(body)))
+            .unwrap();
+        sender.ready().await.expect("the connection is still open");
+        let res = sender.send_request(req).await.unwrap();
+        statuses.push(res.status().as_u16());
+        res.into_body().collect().await.unwrap();
+    }
+    assert_eq!(statuses, vec![409, 200, 200, 200, 200, 200]);
+    assert!(!conn.is_finished(), "one connection carried every input");
+    assert!(session.pad_latency().unwrap().starts_with("n=5,"));
+    drop(sender);
+    let _ = stop.send(());
+    server.await.unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// Closing the channel while a phone is steering tells the game at once.
 #[test]
 fn closing_the_controller_tells_the_game_the_phone_is_gone() {
@@ -645,6 +698,11 @@ async fn manual_page() {
                 let events = pads.pads.lock().unwrap().clone();
                 for e in &events[shown..] {
                     println!("controller: {e:?}");
+                }
+                if events.len() != shown {
+                    if let Some(l) = watched.pad_latency() {
+                        println!("controller latency (touch to PC): {l}");
+                    }
                 }
                 shown = events.len();
             }

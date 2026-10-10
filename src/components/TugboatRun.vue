@@ -48,6 +48,8 @@ let pointerBoost = false;
 let pointerDown: { at: number; x: number; y: number } | null = null;
 /** The phone, as the last `game-pad` event said (read by the loop; not reactive). */
 const pad = { connected: false, steer: 0, boost: false };
+/** The phone's slider moved more recently than the keys or mouse were used: the boat follows it. */
+let padLeads = false;
 const padConnected = ref(false);
 
 // --- Phone controller (through Tugboat) ---
@@ -117,7 +119,7 @@ function frame(now: number) {
   run.events = [];
   // A tap (mouse or phone) that came and went since the last frame still counts as a press.
   const tapped = pointerBoost || padPress;
-  advance(run, mergeInput({ keyLeft: keys.left, keyRight: keys.right, keyBoost: keys.boost, pointerX, pointerBoost: tapped, pad }, run.x), dt);
+  advance(run, mergeInput({ keyLeft: keys.left, keyRight: keys.right, keyBoost: keys.boost, pointerX, pointerBoost: tapped, pad, padLeads }, run.x), dt);
   pointerBoost = false;
   padPress = false;
   shake = Math.max(0, shake - dt);
@@ -226,9 +228,12 @@ const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && t.closes
 function onKey(e: KeyboardEvent, down: boolean) {
   if (e.ctrlKey || e.metaKey || e.altKey || blocked.value || isTyping(e.target)) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  if (k === "ArrowLeft" || k === "a") keys.left = down;
-  else if (k === "ArrowRight" || k === "d") keys.right = down;
-  else if (k === " " || k === "ArrowUp" || k === "w") {
+  if (k === "ArrowLeft" || k === "a" || k === "ArrowRight" || k === "d") {
+    if (k === "ArrowLeft" || k === "a") keys.left = down;
+    else keys.right = down;
+    // The keyboard takes the helm back from the phone's slider until the slider moves again.
+    if (down) padLeads = false;
+  } else if (k === " " || k === "ArrowUp" || k === "w") {
     keys.boost = down;
     if (down && !e.repeat && phase.value !== "playing") primary();
   } else if (k === "p") {
@@ -254,6 +259,7 @@ function onPointerDown(e: PointerEvent) {
     /* the pointer already went */
   }
   pointerX = toFieldX(e.offsetX, fit);
+  padLeads = false;
   pointerDown = { at: performance.now(), x: e.clientX, y: e.clientY };
 }
 function onPointerMove(e: PointerEvent) {
@@ -282,6 +288,9 @@ let padBoostWas = false;
 /** A Boost press from the phone since the last frame (its release may arrive before the frame). */
 let padPress = false;
 function onPad(e: { connected: boolean; steer: number; boost: boolean }) {
+  // The slider moved: the boat follows it from the next frame.
+  if (e.connected && pad.connected && e.steer !== pad.steer) padLeads = true;
+  if (!e.connected) padLeads = false;
   Object.assign(pad, e);
   padConnected.value = e.connected;
   if (e.connected && e.boost && !padBoostWas && phase.value === "playing") padPress = true;

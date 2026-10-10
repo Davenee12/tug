@@ -190,8 +190,8 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   other boats), or drag with the mouse to steer and click to hop. P or Esc pauses; it also pauses
   by itself when tug loses focus or hides, or when a call or confirmation card comes up.
 - **Your phone as a controller:** "Use your phone as a controller" shows Tugboat's code (the same
-  code, encryption and rules as Tugboat). The phone's Tugboat page turns into a pad: slide to
-  steer, Boost to hop, and it buzzes on a hit where the browser can (iPhone's Safari can't). The
+  code, encryption and rules as Tugboat). The phone's Tugboat page turns into a pad: a slider the
+  boat follows closely (it goes where the knob is), Boost to hop the moment you press it, and it buzzes on a hit where the browser can (iPhone's Safari can't). The
   keyboard always works too and takes over the moment the phone drops. Tilt steering isn't
   offered: phone browsers only allow it on a secure (HTTPS) page, and Tugboat's page is plain HTTP
   on your Wi-Fi.
