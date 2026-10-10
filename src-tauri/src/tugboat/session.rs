@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::auth::{Auth, Authorized, Rejected};
 use super::crypto::{self, ad, Keys};
 use super::names;
+use super::pad::{self, Pad, PadEvent, PadReply};
 use super::upload::{Plan, PlanError, Received};
 
 /// Largest file the PC offers to the phone: the page assembles it in memory before saving.
@@ -43,6 +44,9 @@ pub trait Sink: Send + Sync {
     fn changed(&self, urgent: bool);
     /// The phone sent text: it goes on the PC clipboard.
     fn text(&self, text: &str);
+    /// The game controller changed (steering, boost, the phone arriving or going). Only the game
+    /// listens; nothing else acts on it.
+    fn pad(&self, event: PadEvent);
 }
 
 /// Why an API request failed. Mapped to an HTTP status and a short code (never content).
@@ -66,6 +70,10 @@ pub enum ApiError {
     Stale,
     /// A file on offer changed or vanished on the PC.
     Changed,
+    /// A controller input, but tug's game isn't asking for one (closed, or never opened).
+    NoGame,
+    /// Controller inputs faster than any real phone sends them.
+    Busy,
     Io,
 }
 
@@ -79,7 +87,8 @@ impl ApiError {
             ApiError::BadRequest | ApiError::BadChunk => 400,
             ApiError::TooBig => 413,
             ApiError::NoSpace => 507,
-            ApiError::Incomplete | ApiError::Changed | ApiError::Stale => 409,
+            ApiError::Incomplete | ApiError::Changed | ApiError::Stale | ApiError::NoGame => 409,
+            ApiError::Busy => 429,
             ApiError::Io => 500,
         }
     }
@@ -97,6 +106,8 @@ impl ApiError {
             ApiError::Incomplete => "incomplete",
             ApiError::Stale => "stale",
             ApiError::Changed => "changed",
+            ApiError::NoGame => "no-game",
+            ApiError::Busy => "busy",
             ApiError::Io => "io",
         }
     }
@@ -165,6 +176,8 @@ pub struct PageText {
 pub struct StateReply {
     pub offers: Vec<PageOffer>,
     pub text: Option<PageText>,
+    /// tug's game wants this phone as its controller: the page offers the controller.
+    pub game: bool,
 }
 
 // --- What the Tugboat panel shows (mirrored in src/types/protocol.ts) ---
@@ -271,6 +284,8 @@ struct State {
     texts: Vec<TugboatText>,
     pc_text: Option<PageText>,
     next_text_id: u32,
+    /// The game controller channel, while tug's game asks for one.
+    pad: Option<Pad>,
 }
 
 pub struct Session {
@@ -312,6 +327,7 @@ impl Session {
                 texts: Vec::new(),
                 pc_text: None,
                 next_text_id: 1,
+                pad: None,
             }),
             closed: AtomicBool::new(false),
             sink,
@@ -352,6 +368,9 @@ impl Session {
         st.auth.unbind();
         st.phone = None;
         st.last_seen = None;
+        if let Some(p) = st.pad.as_mut() {
+            p.rebound();
+        }
         drop(st);
         self.sink.changed(true);
     }
@@ -456,7 +475,102 @@ impl Session {
                 id: t.id,
                 text: t.text.clone(),
             }),
+            game: st.pad.is_some(),
         }
+    }
+
+    // --- The game controller (see pad.rs) ---
+
+    /// tug's game wants a controller: the phone page offers it at its next check-in. Returns
+    /// whether the channel was newly opened (the caller starts watching it).
+    pub fn pad_open(&self) -> bool {
+        let mut st = self.state();
+        st.last_activity = Instant::now();
+        if st.pad.is_some() {
+            return false;
+        }
+        st.pad = Some(Pad::new(Instant::now()));
+        drop(st);
+        log::info!("tugboat: game controller on");
+        true
+    }
+
+    /// The game closed: inputs are refused from now on, and the game hears the phone has gone.
+    pub fn pad_close(&self) {
+        let was = self.state().pad.take();
+        if let Some(p) = was {
+            log::info!("tugboat: game controller off");
+            if p.connected() {
+                self.sink.pad(PadEvent {
+                    connected: false,
+                    steer: 0.0,
+                    boost: false,
+                });
+            }
+        }
+    }
+
+    /// Check the channel is open and the phone isn't flooding it, before its body is read.
+    pub fn pad_admit(&self) -> Result<(), ApiError> {
+        let mut st = self.state();
+        let pad = st.pad.as_mut().ok_or(ApiError::NoGame)?;
+        if pad.admit(Instant::now()) {
+            Ok(())
+        } else {
+            Err(ApiError::Busy)
+        }
+    }
+
+    /// One controller input from the bound phone: open it, check it, and hand the game the new
+    /// state. It can't do anything else: no files, no clipboard, no panel.
+    pub fn pad_input(&self, req: &Authorized, body: &[u8]) -> Result<PadReply, ApiError> {
+        if body.len() > pad::MAX_BODY {
+            return Err(ApiError::TooBig);
+        }
+        let plain = self
+            .keys
+            .open(&ad::request(&req.client, req.seq), body)
+            .ok_or(ApiError::BadRequest)?;
+        let input = pad::decode(&plain).map_err(|e| match e {
+            pad::PadError::TooBig => ApiError::TooBig,
+            pad::PadError::Malformed | pad::PadError::OutOfRange => ApiError::BadRequest,
+        })?;
+        let mut st = self.state();
+        let pad = st.pad.as_mut().ok_or(ApiError::NoGame)?;
+        let event = pad.input(req.seq, input, Instant::now());
+        let reply = pad.reply();
+        drop(st);
+        if let Some(e) = event {
+            self.sink.pad(e);
+        }
+        Ok(reply)
+    }
+
+    /// Look for a phone that went quiet. `false` once the channel is closed (stop watching).
+    pub fn pad_tick(&self) -> bool {
+        let mut st = self.state();
+        let Some(pad) = st.pad.as_mut() else {
+            return false;
+        };
+        let event = pad.tick(Instant::now());
+        drop(st);
+        if let Some(e) = event {
+            log::info!("tugboat: game controller went quiet");
+            self.sink.pad(e);
+        }
+        true
+    }
+
+    /// What the next replies tell the phone (paused, and hits so far for a buzz).
+    pub fn pad_feedback(&self, reply: PadReply) {
+        if let Some(p) = self.state().pad.as_mut() {
+            p.set_reply(reply);
+        }
+    }
+
+    /// The controller as the game should show it now.
+    pub fn pad_event(&self) -> Option<PadEvent> {
+        self.state().pad.as_ref().map(Pad::event)
     }
 
     /// Start (or resume) receiving a file. Idempotent: asking again for the same id reports
