@@ -1079,7 +1079,13 @@ mod worker {
                     self.device_id = None;
                     self.set_state(false, None);
                 }
-                self.shared.update_status(|s| s.texts_were_connected = false);
+                // Nothing about the old phone's texts carries over to the next one.
+                self.connect_failures = 0;
+                self.session_synced = false;
+                self.shared.update_status(|s| {
+                    s.texts_were_connected = false;
+                    s.texts_unreachable = false;
+                });
                 // Forgotten (or never chosen): nothing about Sync Contacts carries over.
                 if self.contacts != ContactsWatch::default() {
                     self.contacts.forget();

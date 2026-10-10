@@ -617,8 +617,10 @@ impl Store {
 
     /// Settings › Data & privacy › Clear history: everything tug copied from the phone's activity
     /// (notifications, texts and their search index, the recent-calls list, names learned from
-    /// notifications) goes, and texts don't come back from the phone's next listing. Settings, the
-    /// pairing and the phone's contacts stay; the iPhone keeps its own.
+    /// notifications) goes. Texts stay cleared: each is kept as a blank, hidden placeholder (no body,
+    /// sender or address) so the phone's next listing can't bring it back. Recent calls and
+    /// notifications still on the phone return at its next sync. Settings, the pairing and the
+    /// phone's contacts stay; the iPhone keeps its own.
     pub fn clear_history(&self) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -626,7 +628,7 @@ impl Store {
         // re-lists its recent texts at every sync, and a row that's gone would come straight back.
         // Blanking the body and rebuilding the index means nothing is readable or searchable.
         tx.execute(
-            "UPDATE messages SET body = '', sender_name = NULL, hidden_at = COALESCE(hidden_at, ?1)",
+            "UPDATE messages SET body = '', sender_name = NULL, address = '', hidden_at = COALESCE(hidden_at, ?1)",
             params![crate::state::now_ms()],
         )?;
         tx.execute_batch(
