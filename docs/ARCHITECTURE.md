@@ -248,6 +248,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?nodial` | Settings › iPhone › Calls check fails |
 | `/?applemusic`, `/?norepeat`, `/?repeatignored` | Apple Music controls and repeat edge cases |
 | `/?speaker`, `/?spotifyoff` | Spotify on a Connect speaker / Spotify not connected |
+| `/?novolume` | A player that doesn't report its volume: no volume bar |
 | `/?tugboat` (`&android`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring / waiting for a phone / no usable network |
 | `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
 | `/?whatsnew` | The What's new card for the newest release |

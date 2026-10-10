@@ -128,7 +128,10 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 - **Now Playing** shows the song, artist, album and progress from your iPhone, with Previous,
   Play/Pause, Next and Restart song.
-- **Volume** buttons repeat when you press and hold.
+- **Volume bar** showing your iPhone's volume: click or drag it to a level, scroll over it or use
+  the arrow keys, and the buttons either side repeat when you press and hold. It shows whenever
+  the player reports its volume (including a Spotify Connect speaker, when the phone passes it on);
+  on a very short window there's only room for the buttons.
 - **Skip back / forward** when the player supports it; the buttons only say 15 seconds when the
   jump really is 15 seconds.
 - **Like / Dislike** in Apple Music, when the player offers it.
