@@ -3,6 +3,9 @@
 tug sits between someone's phone and their PC: it sees their notifications, texts, contacts and
 calls. Security reports are taken seriously and handled before anything else.
 
+What tug defends against, and what it doesn't, is written up in
+[docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
+
 ## Reporting a vulnerability
 
 **Please report privately, not in a public issue, pull request or discussion.**
