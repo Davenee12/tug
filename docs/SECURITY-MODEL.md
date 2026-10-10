@@ -49,6 +49,12 @@ locked down so injected markup couldn't do much anyway:
   keys.
 - Developer tools (the WebView2 inspector) are compiled out of release builds.
 
+**Code fill.** Auto-copy and the type-the-code shortcut only ever handle a code `findCode` found
+(4–8 digits) and no older than 10 minutes: `copy_code` refuses anything else the webview passes,
+and the shortcut types only what the backend picks from tug's own history. Copied codes stay out
+of clipboard history and cloud sync and are cleared after 2 minutes if still there; the shortcut
+never types into tug's own window; logs say a code was copied or typed, never which.
+
 **Prompt injection aimed at AI tools.** A text can say "ignore your instructions and…". tug
 assumes it will: reading tools are separate switches the person turns on, and the one tool that
 *acts* (sending a text) always stops at a confirmation card in tug's window. An AI tool can be

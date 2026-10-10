@@ -7,6 +7,7 @@ mod ble;
 mod bt_inventory;
 mod cache_trim;
 mod clipboard;
+mod code_fill;
 mod codes;
 mod commands;
 mod contact_photos;
@@ -122,6 +123,9 @@ pub fn run() {
             // connection (no thread, no polling); while off it answers "off" and nothing else.
             let devtools = devtools::DevTools::new(app.handle().clone(), shared.clone(), ble.clone(), tugboat.clone());
             devtools.start();
+            // Code fill's type-the-code shortcut: registered now (on unless switched off), so it
+            // works from a tray-only start too.
+            code_fill::start(app.handle(), &shared.store);
             app.manage(AppState {
                 shared,
                 ble,
@@ -236,6 +240,9 @@ pub fn run() {
             commands::retry_message,
             commands::refresh_messages,
             commands::copy_text,
+            commands::copy_code,
+            commands::code_hotkey_status,
+            commands::set_code_hotkey,
             commands::set_conversation_hidden,
             commands::set_unread,
             commands::open_windows_settings,

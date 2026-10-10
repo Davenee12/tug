@@ -81,6 +81,11 @@ windows = { version = "0.62", features = [
   "Win32_Foundation",
   # The PC's region (GetUserDefaultGeoName): whether a bare 10-digit number is a +1 number.
   "Win32_Globalization",
+  # Code fill: clearing an auto-copied code (only if it's still on the clipboard), the
+  # type-the-code shortcut (RegisterHotKey) and its Unicode keystrokes (SendInput).
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_UI_Input_KeyboardAndMouse",
   "Win32_NetworkManagement_IpHelper",
   "Win32_NetworkManagement_Ndis",
   "Win32_Networking_WinSock",

@@ -22,7 +22,7 @@ use crate::store::{Store, StoredNotification};
 use crate::tugboat::session::SkipReason;
 
 /// Codes older than this aren't handed out (the Feed's Ctrl+Shift+C uses the same window).
-const CODE_MAX_AGE_MS: i64 = 10 * 60 * 1000;
+const CODE_MAX_AGE_MS: i64 = crate::code_fill::MAX_AGE_MS;
 /// How much recent history the code and developer-notification tools look through.
 const SCAN: u32 = 500;
 const MEDIA_TIMEOUT: Duration = Duration::from_secs(10);
@@ -137,25 +137,23 @@ async fn on_store<T: Send + 'static>(
 type Found = (i64, String, String, String);
 
 fn newest_code(store: &Store, live: Option<&str>, since: i64) -> Result<Option<Found>, BridgeError> {
-    let mut best: Option<(i64, String, String, String)> = None;
-    let mut consider = |at: i64, text: &str, from: String, app: String| {
-        if at < since || best.as_ref().is_some_and(|b| b.0 >= at) {
-            return;
-        }
-        if let Some(found) = crate::codes::find_code(text) {
-            best = Some((at, found.code, from, app));
-        }
-    };
-    for n in store.recent(SCAN, None, live).map_err(internal)? {
-        let text = if n.message.is_empty() { &n.subtitle } else { &n.message };
-        consider(n.received_at, text, n.title.clone(), notification_app(&n));
-    }
-    for m in store.recent_messages(SCAN).map_err(internal)? {
-        if m.direction == Direction::In {
-            consider(m.received_at, &m.body, message_from(&m), "Messages".into());
-        }
-    }
-    Ok(best)
+    let notifications = store.recent(SCAN, None, live).map_err(internal)?;
+    let messages = store.recent_messages(SCAN).map_err(internal)?;
+    // The same choice as the type-the-code shortcut (`code_fill::newest`): newest code wins.
+    let items = notifications
+        .iter()
+        .map(|n| {
+            let text = if n.message.is_empty() { &n.subtitle } else { &n.message };
+            (n.received_at, text.as_str(), (n.title.clone(), notification_app(n)))
+        })
+        .chain(messages.iter().filter(|m| m.direction == Direction::In).map(|m| {
+            (
+                m.received_at,
+                m.body.as_str(),
+                (message_from(m), "Messages".to_string()),
+            )
+        }));
+    Ok(crate::code_fill::newest(items, since).map(|(at, code, (from, app))| (at, code, from, app)))
 }
 
 async fn latest_code(dt: &DevTools, copy: bool) -> Result<serde_json::Value, BridgeError> {

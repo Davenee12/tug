@@ -63,6 +63,7 @@ Inside `tug.exe`:
 | `tug-media-keys` | `media_keys.rs` | Keeps the Windows media flyout in step with Now Playing; flyout buttons and media keys send commands to the actor. |
 | Developer bridge | `devtools/mod.rs`, `crates/tug-bridge/src/server.rs` | A named-pipe accept loop for the app's lifetime (at most 8 connections); answers "off" while switched off. |
 | Tugboat | `tugboat/` | An HTTP server, a 2 s supervisor (idle stop after 10 minutes, network changes) and per-connection tasks; exists only while the panel is open. |
+| `tug-hotkey` | `code_fill/win.rs` (logic in `code_fill/mod.rs`) | Owns the type-the-code shortcut (RegisterHotKey belongs to the registering thread); each press types the newest code with SendInput on a short-lived `tug-code-fill` thread. |
 | Toasts, tray | `toast/`, `tray.rs` | Toast activations arrive on a pool thread and are handed to the async runtime; the tray runs on the main thread. |
 | Spotify, location | `commands.rs`, `spotify/`, `location.rs` | No background task: each command runs on `spawn_blocking`. The UI reads Spotify's player when the song changes. |
 
@@ -73,7 +74,7 @@ oneshot replies. `Shared` (`state.rs`) is the one `Arc` everything holds; `updat
 **Events to the UI** (Rust → Vue): `device-status`, `now-playing`, `notification`,
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
 `pairing-request-closed`, `message`, `contacts`, `calls`, `open-latest-conversation`,
-`open-settings`, `toast-pressed` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`
+`open-settings`, `toast-pressed`, `code-filled` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`
 (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`). The typed listener
 map is `EventPayloads` in `src/lib/ipc.ts`.
 
@@ -178,11 +179,12 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
+| `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
 
 Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attention`
 (is the window really visible), `battery`, `coalesce` (one render per frame for bursts of
-updates), `codeFeed`, `codes`, `commands` (Ctrl+K verbs),
+updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),
 `devtools`, `errorReport`, `escape`, `format` (conversation grouping and display), `health`,
 `locating`, `media` (which controls show, skip routing), `messageSync`, `messageType`, `pairings`,
@@ -201,7 +203,7 @@ handshake over a real named pipe (including a low-integrity impostor). Hardware 
 
 Everything the backend sends to the UI or takes from it is a serde type in Rust **mirrored by hand**
 in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messages.rs`,
-`map/calls.rs`, `map/health.rs`, `toast/`, `spotify/`, `tugboat/`, `bt_inventory/` and `devtools/`.
+`map/calls.rs`, `map/health.rs`, `toast/`, `code_fill/`, `spotify/`, `tugboat/`, `bt_inventory/` and `devtools/`.
 
 - App-facing types use `#[serde(rename_all = "camelCase")]` (fields and enum variants), so
   `contacts_off` in Rust is `contactsOff` in TypeScript.
@@ -251,6 +253,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?tugboat` (`&android`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring / waiting for a phone / no usable network |
 | `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
 | `/?whatsnew` | The What's new card for the newest release |
+| `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then
