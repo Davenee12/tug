@@ -27,6 +27,9 @@ const onResize = () => (vh.value = window.innerHeight);
 onMounted(() => window.addEventListener("resize", onResize));
 onUnmounted(() => window.removeEventListener("resize", onResize));
 const compact = computed(() => vh.value < 800);
+// Below this even the compact card has no room for the volume bar's row (at the 600 px minimum the
+// one-row card only just fits), so the card keeps its volume buttons in the transport row instead.
+const tight = computed(() => vh.value < 640);
 
 // The logo's one-shot moments: a tug on the rope when the iPhone connects (each time, not on a
 // status refresh that changes nothing), a wiggle on hover (at most every couple of seconds) and a
@@ -172,7 +175,7 @@ const dnd = computed({
     </section>
 
     <div :class="compact ? 'mt-auto pt-4' : 'mt-auto pt-6'">
-      <NowPlayingCard :compact="compact" />
+      <NowPlayingCard :compact="compact" :tight="tight" />
     </div>
   </aside>
 </template>

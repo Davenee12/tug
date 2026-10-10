@@ -254,6 +254,8 @@ const appleMusic = params.has("applemusic");
 // ?speaker: Spotify on the phone is playing on a Spotify Connect speaker. The phone then reports the
 // title as "Song • Artist" and the artist as "Listening on <speaker>" (seen on a real iPhone).
 const onSpeaker = params.has("speaker") && !appleMusic;
+// ?novolume: a player that doesn't report its volume, so the Now Playing volume bar stays hidden.
+const noVolume = params.has("novolume");
 const nowPlaying: NowPlaying = noPhone || forgotten
   ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, repeat: null, available: [] }
   : {
@@ -262,7 +264,8 @@ const nowPlaying: NowPlaying = noPhone || forgotten
       rate: 1,
       elapsed: 74,
       elapsedAt: now,
-      volume: 0.6,
+      // On the phone's 1/16 grid, like the values a real iPhone reports ("0.625").
+      volume: noVolume ? null : 0.625,
       title: onSpeaker ? "Teardrop • Massive Attack" : "Teardrop",
       artist: onSpeaker ? "Listening on Kitchen speaker" : "Massive Attack",
       album: onSpeaker ? null : "Mezzanine",
@@ -968,12 +971,18 @@ mockIPC(
           Object.assign(nowPlaying, { elapsed: 0, elapsedAt: Date.now() });
           void emit("now-playing", { ...nowPlaying });
         }
-        // One AMS VolumeUp/VolumeDown is one phone step; iOS reports volume as a 0–1 fraction,
-        // ~16 steps. Clamp at the ends so press-and-hold stops there, as it would on hardware.
-        if (a.command === "volumeUp" || a.command === "volumeDown") {
+        // One AMS VolumeUp/VolumeDown is one phone step of 1/16 (as seen on a real iPhone), reported
+        // a moment after the write, as the phone does. At an end nothing changes and nothing is
+        // reported, so press-and-hold and the volume bar stop there as they would on hardware. A
+        // player that doesn't report volume (?novolume) still takes the steps, silently.
+        if ((a.command === "volumeUp" || a.command === "volumeDown") && nowPlaying.volume != null) {
           const step = (a.command === "volumeUp" ? 1 : -1) / 16;
-          nowPlaying.volume = Math.min(1, Math.max(0, (nowPlaying.volume ?? 0.5) + step));
-          void emit("now-playing", { ...nowPlaying });
+          const next = Math.min(1, Math.max(0, nowPlaying.volume + step));
+          if (next !== nowPlaying.volume) {
+            nowPlaying.volume = next;
+            const report = { ...nowPlaying };
+            window.setTimeout(() => void emit("now-playing", report), 120);
+          }
         }
         return null;
       case "open_url":
