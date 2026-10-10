@@ -42,6 +42,11 @@
 //   http://localhost:1420/?tugboatnonet  the Tugboat panel with no network a phone could use
 //   http://localhost:1420/?devtools   Settings › Developer tools, switched on, with two connected tools
 //   http://localhost:1420/?devconfirm the "wants to text" confirmation card an AI tool's send_text shows
+//   http://localhost:1420/?codefill   code fill: a bank's code arrives 1.5 s after load (as a notification and
+//                                     as a text) and is copied once (logged in the console), then the
+//                                     type-the-code shortcut is "pressed" at 4 s (typed) and at 6 s (tug in
+//                                     front). Add &hotkeybusy for Ctrl+Shift+V taken by another app
+//                                     (Settings › Notifications offers the others)
 //   http://localhost:1420/?heavy      a long history for performance work: ~2,000 texts in ~60 conversations,
 //                                     ~500 notifications, 120 calls, Spotify playing, the weather card on
 //   http://localhost:1420/?pcaudio    the iPhone's audio already playing on this PC (Now Playing says so,
@@ -53,7 +58,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { RELEASE_NOTES } from "./whatsNew";
-import type { CallRecord, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
+import type { CallRecord, CodeHotkeyStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -783,6 +788,8 @@ function setPcAudio(on: boolean): PcAudioStatus {
   }, params.has("pcaudiofail") ? 1500 : 1100);
   return sendPc();
 }
+// The type-the-code shortcut as the backend registered it at startup (default on, Ctrl+Shift+V).
+const codeHotkey: CodeHotkeyStatus = { state: params.has("hotkeybusy") ? "inUse" : "on", keys: "ctrl+shift+v" };
 
 mockIPC(
   (cmd, args) => {
@@ -1077,6 +1084,19 @@ mockIPC(
         }
         return null;
       }
+      // Code fill (code_fill/ in Rust). The backend refuses anything but a 4–8 digit code.
+      case "copy_code":
+        if (!/^\d{4,8}$/.test(String(a.code))) return Promise.reject("That isn't a verification code");
+        console.info("[devMock] code copied privately; cleared in 2 minutes if still there");
+        return null;
+      case "code_hotkey_status":
+        return { ...codeHotkey };
+      case "set_code_hotkey": {
+        const keys = String(a.keys);
+        const taken = params.has("hotkeybusy") && keys === "ctrl+shift+v";
+        Object.assign(codeHotkey, { keys, state: !a.enabled ? "off" : taken ? "inUse" : "on" });
+        return { ...codeHotkey };
+      }
       // Windows pop-ups don't exist in a browser; log what tug would have shown.
       case "show_toast":
         console.info("[devMock] pop-up", a.spec);
@@ -1268,4 +1288,23 @@ if (params.has("call")) {
     history.unshift(missed);
     void emit("notification", missed);
   }, 31500);
+}
+
+// ?codefill: a verification code arrives as an ANCS notification and as a MAP text (as a bank's
+// does); code fill copies it once. Then the shortcut is pressed twice, the way code_fill/win.rs
+// reports presses: typed into another app, then refused because tug itself was in front.
+if (params.has("codefill")) {
+  const body = "Chase: Your one-time code is 482193. It expires in 10 minutes.";
+  const note = n("com.apple.MobileSMS", "Messages", "Chase", body, 0);
+  note.id = 620;
+  const text = sms("in", body, 0, "24273", "Chase", null);
+  setTimeout(() => {
+    note.receivedAt = text.receivedAt = Date.now();
+    history.unshift(note);
+    messages.push(text);
+    void emit("notification", note);
+    void emit("message", text);
+  }, 1500);
+  setTimeout(() => void emit("code-filled", { outcome: "typed", from: "Chase" }), 4000);
+  setTimeout(() => void emit("code-filled", { outcome: "noTarget", from: null }), 6000);
 }

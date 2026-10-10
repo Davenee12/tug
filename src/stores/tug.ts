@@ -25,6 +25,15 @@ import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
 import { findCode } from "../lib/codes";
 import { codeEntries, codeToastForMessage, newestCode, type CodeEntry } from "../lib/codeFeed";
+import {
+  CODE_LIVE_MS,
+  DEFAULT_CODE_HOTKEY,
+  copiedToastSpec,
+  fillFeedback,
+  knownHotkey,
+  rememberCopied,
+  shouldAutoCopy,
+} from "../lib/codeFill";
 import { MESSAGES_APP } from "../lib/format";
 import { batteryAlert } from "../lib/battery";
 import { copyText } from "../lib/clipboard";
@@ -37,6 +46,8 @@ import type { ToastSpec } from "../types/protocol";
 import { isKnownConversation, outgoingAddresses, senderIndex, senderMayToast, threadCounts } from "../lib/senders";
 import type {
   CallRecord,
+  CodeFilled,
+  CodeHotkeyStatus,
   Contact,
   DeviceStatus,
   SmsMessage,
@@ -112,6 +123,8 @@ const BATTERY_TOAST_ID = 2_000_000_000;
 const OVERFLOW_TOAST_ID = 2_000_000_001;
 /** The "arrived while your iPhone was reconnecting" summary pop-up: likewise, a press opens tug. */
 const GAP_TOAST_ID = 2_000_000_002;
+/** The type-the-code shortcut's small confirmation: one at a time (a new one replaces it); a press opens tug. */
+const CODE_FILL_TOAST_ID = 2_000_000_003;
 
 const EMPTY_STATUS: DeviceStatus = {
   radio: "unknown",
@@ -185,7 +198,12 @@ export const useTugStore = defineStore("tug", () => {
     dialing: false,
     filterUnknown: true,
     knownSenders: [],
+    autoCopyCodes: true,
+    typeCodeHotkey: true,
+    typeCodeKeys: DEFAULT_CODE_HOTKEY,
   });
+  /** The type-the-code shortcut as the backend registered it (Settings shows "in use" from this). */
+  const codeHotkey = ref<CodeHotkeyStatus>({ state: "off", keys: DEFAULT_CODE_HOTKEY });
 
   /** Who is a VIP (always let through), rebuilt when the list or the contacts change. */
   const vips = computed(() => vipIndex(settings.value.vips, contacts.value));
@@ -664,6 +682,50 @@ export const useTugStore = defineStore("tug", () => {
     for (const [c, at] of codeToastedAt) if (now - at > CODE_TOAST_WINDOW_MS) codeToastedAt.delete(c);
   }
 
+  // Code fill: codes put on the clipboard automatically, so the same code (notification, then
+  // text) is copied once and never clobbers what the person copied in between (lib/codeFill).
+  const codesCopiedAt = new Map<string, number>();
+  /**
+   * Put a freshly arrived code on the clipboard if Settings › Notifications › Copy codes
+   * automatically is on and the code qualifies (live, fresh, not copied yet). The backend keeps
+   * it out of clipboard history and clears it after 2 minutes. True if it's now on the clipboard.
+   * Independent of the pop-up policy: Do not disturb holds the pop-up, not the copy.
+   */
+  async function autoCopyCode(code: string | null, receivedAt: number, opts: { replayed?: boolean; liveMs?: number } = {}) {
+    if (!settings.value.autoCopyCodes || code === null) return false;
+    const now = Date.now();
+    if (!shouldAutoCopy({ code, receivedAt, now, replayed: opts.replayed ?? false, copied: codesCopiedAt, liveMs: opts.liveMs })) return false;
+    // Claimed before the await, so the notification and the text for one code can't both copy it.
+    rememberCopied(codesCopiedAt, code, now);
+    try {
+      // Native only: the webview's clipboard would put the code in Win+V history.
+      await api.copyCodePrivately(code);
+      return true;
+    } catch {
+      codesCopiedAt.delete(code);
+      return false;
+    }
+  }
+
+  /** The type-the-code shortcut was pressed: a small pop-up says what happened (never the code). */
+  function onCodeFilled(e: CodeFilled) {
+    // Feedback for a key the person just pressed, so Do not disturb doesn't hold it; turning
+    // Windows pop-ups off does.
+    if (!settings.value.toasts) return;
+    const { title, body } = fillFeedback(e, codeHotkey.value.keys);
+    void hasToastPermission().then((ok) => ok && showInfoToast(CODE_FILL_TOAST_ID, title, body));
+  }
+
+  /** Settings › Notifications: turn the shortcut on or off, or pick another; the backend says if it's taken. */
+  async function setCodeHotkey(enabled: boolean, keys: string) {
+    const id = knownHotkey(keys);
+    settings.value = { ...settings.value, typeCodeHotkey: enabled, typeCodeKeys: id };
+    await attempt(() => api.setSetting("ui.typeCodeHotkey", JSON.stringify(enabled)));
+    await attempt(() => api.setSetting("ui.typeCodeKeys", id));
+    const s = await attempt(() => api.setCodeHotkey(enabled, id));
+    if (s) codeHotkey.value = s;
+  }
+
   /** Calls always ring through; everything else is rate-limited and the overflow summed up once. */
   function admitToast(isCall: boolean): boolean {
     if (isCall || toasts.admit(Date.now())) return true;
@@ -723,9 +785,12 @@ export const useTugStore = defineStore("tug", () => {
     await ready;
     // Pre-existing is backlog, except a gap arrival replayed after a reconnect (queueGapPopup).
     if (n.flags.preExisting && !replayed) return;
+    const code = findCode(n.message || n.subtitle)?.code ?? null;
+    // Code fill copies before the pop-up policy: Do not disturb and muted apps hold pop-ups only.
+    // A replay (reconnect backlog) is never copied.
+    const copied = await autoCopyCode(code, n.receivedAt, { replayed });
     if (!popupEligible(n)) return;
     const event = popupEventFor(n);
-    const code = findCode(n.message || n.subtitle)?.code ?? null;
     if (code !== null && recentlyCodeToasted(code)) return; // a text pop-up already carried this code
     // Claim the code before awaiting: the notification and the text for one code can arrive in the
     // same tick, and both would pass the check above if the claim came after the await.
@@ -734,7 +799,9 @@ export const useTugStore = defineStore("tug", () => {
     if (!admitToast(event.isCall)) return;
     // With buttons for what applies (reply, mark read, copy code, call back, clear); the
     // backend falls back to a plain pop-up itself if Windows won't take that one.
-    const spec = toastSpec(n, messages.value, contacts.value);
+    let spec = toastSpec(n, messages.value, contacts.value);
+    // Already on the clipboard: "482193 copied, from Chase", no Copy button.
+    if (copied && code !== null) spec = copiedToastSpec(spec, code, spec.name || appLabel(n));
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
     void api.showToast(spec).catch(() => undefined);
   }
@@ -747,6 +814,10 @@ export const useTugStore = defineStore("tug", () => {
    */
   async function maybeToastMessage(m: SmsMessage) {
     await ready;
+    // Code fill: a live text's code goes on the clipboard even if a notification already showed it
+    // (the copy is de-duped by code, so it's never copied twice).
+    const found = m.direction === "in" ? (findCode(m.body)?.code ?? null) : null;
+    const copied = await autoCopyCode(found, m.receivedAt, { liveMs: CODE_LIVE_MS });
     const code = codeToastForMessage(m, notifications.value, { contacts: contacts.value });
     if (code === null || recentlyCodeToasted(code)) return;
     // A code text obeys the same policy as a notification carrying a code (Messages app, no call).
@@ -757,7 +828,7 @@ export const useTugStore = defineStore("tug", () => {
     if (!admitToast(false)) return;
     const known = m.contactName ?? contacts.value.find((c) => c.address === m.address)?.name;
     const name = known && !isAddressLike(known) ? cleanName(known) : formatAddress(m.address);
-    const spec: ToastSpec = {
+    const plain: ToastSpec = {
       id: CODE_TEXT_TOAST_BASE + m.id,
       title: ["Messages", name].filter(Boolean).join(" · "),
       body: m.body,
@@ -768,6 +839,7 @@ export const useTugStore = defineStore("tug", () => {
       callBack: false,
       clear: false,
     };
+    const spec = copied && code === found ? copiedToastSpec(plain, code, name) : plain;
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
     void api.showToast(spec).catch(() => undefined);
   }
@@ -1100,6 +1172,9 @@ export const useTugStore = defineStore("tug", () => {
       dialing: raw["ui.dialing"] === "true",
       filterUnknown: raw["ui.filterUnknown"] !== "false",
       knownSenders: raw["ui.knownSenders"] ? (JSON.parse(raw["ui.knownSenders"]) as string[]) : [],
+      autoCopyCodes: raw["ui.autoCopyCodes"] !== "false",
+      typeCodeHotkey: raw["ui.typeCodeHotkey"] !== "false",
+      typeCodeKeys: knownHotkey(raw["ui.typeCodeKeys"]),
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
     // A missing key is a fresh install: null (not ""), so the first launch records the version
@@ -1241,6 +1316,7 @@ export const useTugStore = defineStore("tug", () => {
         on("open-latest-conversation", openLatestConversation),
         on("open-settings", () => openSettings()),
         on("toast-pressed", onToastPressed),
+        on("code-filled", onCodeFilled),
       ])),
     );
     const [s, np, first, msgs, people, recent] = await Promise.all([
@@ -1270,6 +1346,9 @@ export const useTugStore = defineStore("tug", () => {
       if (!document.hidden) clock.value = Date.now();
     }, 60_000);
     await attempt(loadSettings);
+    // The backend registered the type-the-code shortcut at startup; Settings shows how that went.
+    const hotkey = await attempt(api.codeHotkeyStatus);
+    if (hotkey) codeHotkey.value = hotkey;
     // Settings and contacts are in: pop-ups held since the listeners went in can be judged now.
     markReady();
     // Settings are in (so lastSeenVersion is known): decide whether to greet with "What's new".
@@ -1815,6 +1894,8 @@ export const useTugStore = defineStore("tug", () => {
     loadMore,
     searchAll,
     setSetting,
+    codeHotkey,
+    setCodeHotkey,
     toggleMuted,
     addVip,
     removeVip,

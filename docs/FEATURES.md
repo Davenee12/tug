@@ -97,6 +97,11 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - **Verification codes** in texts and notifications get a **Copy code** button, a code text with no
   notification gets its own Feed row, and **Ctrl+Shift+C** copies the latest code.
 - Copying a code clears its notification on the phone.
+- **Code fill** (Settings › Notifications, both on by default): a new code goes **straight on the
+  clipboard** ("482193 copied, from Chase"), kept out of clipboard history and cleared after 2
+  minutes unless you've copied something else since; and **Ctrl+Shift+V** (or another shortcut
+  from a short list) **types the newest code** from the last 10 minutes into the box you're in.
+  Do not disturb holds the pop-up, not the copy.
 
 ## Contacts
 

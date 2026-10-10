@@ -7,6 +7,7 @@ mod ble;
 mod bt_inventory;
 mod cache_trim;
 mod clipboard;
+mod code_fill;
 mod codes;
 mod commands;
 mod contact_photos;
@@ -126,6 +127,9 @@ pub fn run() {
             // Play iPhone audio on this PC: off until asked for (or the owner's automatic switch).
             let pc_audio = pc_audio::PcAudio::new(shared.clone());
             pc_audio.start();
+            // Code fill's type-the-code shortcut: registered now (on unless switched off), so it
+            // works from a tray-only start too.
+            code_fill::start(app.handle(), &shared.store);
             app.manage(AppState {
                 shared,
                 ble,
@@ -244,6 +248,9 @@ pub fn run() {
             commands::retry_message,
             commands::refresh_messages,
             commands::copy_text,
+            commands::copy_code,
+            commands::code_hotkey_status,
+            commands::set_code_hotkey,
             commands::set_conversation_hidden,
             commands::set_unread,
             commands::open_windows_settings,

@@ -479,6 +479,36 @@ pub fn copy_text(text: String) -> Result<()> {
     crate::clipboard::set_text(&text)
 }
 
+/// Code fill: put a just-arrived verification code on the clipboard, kept out of Win+V history
+/// and cloud sync, and take it off again after 2 minutes if it's still there. Only a code's shape
+/// (4–8 digits, as `findCode` gives) is accepted, so the webview can't put free text here. Sync
+/// for the same STA reason as `copy_text`.
+#[tauri::command]
+pub fn copy_code(code: String) -> Result<()> {
+    if !crate::code_fill::is_code(&code) {
+        return Err("That isn't a verification code".into());
+    }
+    crate::clipboard::set_text_private(&code)?;
+    log::info!("code copied automatically");
+    crate::code_fill::clear_later(code);
+    Ok(())
+}
+
+/// The type-the-code shortcut's state, for Settings.
+#[tauri::command]
+pub fn code_hotkey_status() -> crate::code_fill::HotkeyStatus {
+    crate::code_fill::status()
+}
+
+/// Turn the type-the-code shortcut on (as one of the offered shortcuts) or off. Says whether
+/// another app already holds it. Off the main thread: it waits for the hotkey thread.
+#[tauri::command]
+pub async fn set_code_hotkey(enabled: bool, keys: String) -> Result<crate::code_fill::HotkeyStatus> {
+    tauri::async_runtime::spawn_blocking(move || crate::code_fill::apply(enabled, &keys))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Settings safe to print in a support report: scalar on/off flags, never the "seen"
 /// conversation map (its keys embed contact names) or anything carrying message content.
 const DIAGNOSTIC_SETTINGS: &[&str] = &[
@@ -488,6 +518,9 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.closeToTray",
     "ui.appIcons",
     "ui.dialing",
+    "ui.autoCopyCodes",
+    "ui.typeCodeHotkey",
+    "ui.typeCodeKeys",
     "ui.zoom",
     "ui.onboarded",
     "ui.seenSince",

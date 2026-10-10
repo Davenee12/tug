@@ -33,6 +33,8 @@ pub mod events {
     pub const CALLS: &str = "calls";
     /// A pop-up's body or button was pressed and carried out (see `toast`).
     pub const TOAST_PRESSED: &str = "toast-pressed";
+    /// The type-the-code shortcut was pressed: what it did (see `code_fill`), never the code.
+    pub const CODE_FILLED: &str = "code-filled";
 }
 
 /// Settings keys stored in SQLite.

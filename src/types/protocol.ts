@@ -282,6 +282,12 @@ export interface UiSettings {
   filterUnknown: boolean;
   /** Numbers/emails moved to conversations by hand ("Move to conversations"), normalised. */
   knownSenders: string[];
+  /** Code fill: a newly arrived verification code goes on the clipboard (privately, cleared after 2 min). On by default. */
+  autoCopyCodes: boolean;
+  /** Code fill: a global shortcut types the latest code (read by the backend too, `code_fill/`). On by default. */
+  typeCodeHotkey: boolean;
+  /** Which shortcut, one of `src/lib/codeHotkeys.json` (read by the backend too). */
+  typeCodeKeys: string;
 }
 
 /**
@@ -313,6 +319,24 @@ export interface ToastPressed {
   id: number;
   /** A reply: the text as stored (same row as its `message` events); null for other presses. */
   message: SmsMessage | null;
+}
+
+// --- Code fill (mirrors src-tauri/src/code_fill/mod.rs) ---
+
+/** What a press of the type-the-code shortcut did (`code-filled`). The code itself is never sent. */
+export interface CodeFilled {
+  /** typed; noCode (none in the last 10 minutes); noTarget (tug's own window, or nothing, in front); failed. */
+  outcome: "typed" | "noCode" | "noTarget" | "failed";
+  /** Who the typed code came from; null unless typed. */
+  from: string | null;
+}
+
+/** The type-the-code shortcut (`code_hotkey_status`, `set_code_hotkey`). */
+export interface CodeHotkeyStatus {
+  /** off (switched off, or not on this PC); on (registered); inUse (another app holds it). */
+  state: "off" | "on" | "inUse";
+  /** The shortcut it's about, e.g. "ctrl+shift+v". */
+  keys: string;
 }
 
 // --- Spotify connector (mirrors src-tauri/src/spotify/{mod,model}.rs) ---
