@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { replyUnavailable, TEXTS_RECONNECTING } from "./availability";
+import { replyUnavailable, TEXTS_RECONNECTING, TEXTS_UNREACHABLE } from "./availability";
 import type { DeviceStatus } from "../types/protocol";
 
 const UP: DeviceStatus = {
@@ -35,6 +35,10 @@ describe("replyUnavailable", () => {
 
   it("calls a drop after texts worked a reconnect (the iPhone closes message access now and then)", () => {
     expect(replyUnavailable({ ...textsDown, textsWereConnected: true }, ctx)).toBe(TEXTS_RECONNECTING);
+  });
+
+  it("says plainly when texts stay unreachable after several tries", () => {
+    expect(replyUnavailable({ ...textsDown, textsWereConnected: true, textsUnreachable: true }, ctx)).toBe(TEXTS_UNREACHABLE);
   });
 
   it("keeps the setup wording only before texts have ever connected with this phone", () => {

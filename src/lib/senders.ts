@@ -101,5 +101,5 @@ export function threadCounts(t: Pick<Thread, "appId" | "items">, index: SenderIn
  */
 export function senderMayToast(n: PhoneNotification, index: SenderIndex): boolean {
   if (n.appId !== MESSAGES_APP || !isConversation(n) || isKnownTo(index, n.title)) return true;
-  return findCode(n.message || n.subtitle, n.title) !== null;
+  return findCode(n.message || n.subtitle) !== null;
 }

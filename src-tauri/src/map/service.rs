@@ -276,6 +276,14 @@ mod worker {
     /// minute; a quick first try usually finds it back.
     const MAP_QUICK_RETRY: Duration = Duration::from_secs(2);
 
+    /// More than this many failed attempts in a row and the UI stops saying "Reconnecting…" and
+    /// says plainly that texts can't be reached right now (several minutes into the backoff).
+    const TEXTS_UNREACHABLE_AFTER: u32 = 5;
+
+    fn texts_unreachable(failures: u32) -> bool {
+        failures > TEXTS_UNREACHABLE_AFTER
+    }
+
     /// After a failed attempt: the failure count to keep and how long to wait. The first failure
     /// right after a working session (`session_was_up`, nothing failed before it) retries in
     /// `MAP_QUICK_RETRY` and doesn't count, so if that misses the usual backoff starts from its
@@ -347,6 +355,9 @@ mod worker {
         /// A quick retry after the phone closed a working session, which wakes the loop sooner than
         /// the ordinary poll would (taken once by the loop).
         quick_retry: Option<Instant>,
+        /// The open session completed a sync (so it was really working); only then does its
+        /// closing earn the quick retry.
+        session_synced: bool,
         /// Messages read in tug while the phone couldn't be reached, to mark read on the phone
         /// after the next successful sync instead of dropping the request.
         queued_reads: Vec<i64>,
@@ -388,6 +399,7 @@ mod worker {
             connect_failures: 0,
             next_retry: None,
             quick_retry: None,
+            session_synced: false,
             queued_reads: Vec::new(),
             fetch_tries: FetchTries::default(),
             text_sync_saved: None,
@@ -666,11 +678,13 @@ mod worker {
         fn fail(&mut self, e: &MapError) {
             if self.session.take().is_some() {
                 log::info!("message access dropped: {e}");
-                // A working session closed (here or mid-send): reconnect soon, not after a poll.
-                if self.connect_failures == 0 {
+                // A working session (one that completed a sync) closed, here or mid-send:
+                // reconnect soon, not after a poll.
+                if self.connect_failures == 0 && self.session_synced {
                     self.quick_retry.get_or_insert(Instant::now() + MAP_QUICK_RETRY);
                 }
             }
+            self.session_synced = false;
             // What the phone shares is per connection; ask again on the next one, and treat its
             // first phonebook as new (saved, and the photo pass started) rather than "unchanged".
             self.contacts.connection_dropped();
@@ -722,6 +736,7 @@ mod worker {
                     log::info!("live texts: the iPhone dropped the notification link; reopening message access");
                     self.mns_reopened_at = Some(Instant::now());
                     self.session = None;
+                    self.session_synced = false;
                     self.reset_photo_pass();
                     self.stop_live_texts();
                     self.refresh().await;
@@ -1109,15 +1124,22 @@ mod worker {
         fn note_sync_ok(&mut self) {
             self.connect_failures = 0;
             self.next_retry = None;
+            self.session_synced = self.session.is_some();
+            self.shared.update_status(|s| s.texts_unreachable = false);
         }
 
         /// Message access failed (phone reachable but not offering it, or the connection dropped):
         /// back off progressively and log the first few, then a periodic summary, instead of a line
         /// every poll all night.
         fn note_sync_failure(&mut self, e: &MapError) {
-            // Called before `fail` drops the session, so a session here was working until now.
-            let (failures, wait) = after_failure(self.connect_failures, self.session.is_some());
+            // Called before `fail` drops the session. Only a session that completed a sync was
+            // working: one that connected but failed its first listing gets the ordinary backoff,
+            // or a phone that accepts the connection and then fails could be retried every 2 s.
+            let synced = self.session.is_some() && self.session_synced;
+            let (failures, wait) = after_failure(self.connect_failures, synced);
             self.connect_failures = failures;
+            let unreachable = texts_unreachable(failures);
+            self.shared.update_status(|s| s.texts_unreachable = unreachable);
             if failures == 0 {
                 log::info!(
                     "message access closed by the iPhone ({e}); retrying in {}s",
@@ -1578,7 +1600,7 @@ mod worker {
     mod tests {
         use super::{
             after_failure, after_push_failure, map_retry_delay, may_have_missed, photo_sync_due, queue_reads,
-            FetchTries, PushOutcome, MAP_RETRY_CAP, QUEUED_READS_MAX,
+            texts_unreachable, FetchTries, PushOutcome, MAP_RETRY_CAP, QUEUED_READS_MAX,
         };
         use crate::map::session::MapError;
         use std::time::Duration;
@@ -1612,6 +1634,28 @@ mod worker {
             // A phone that was never connected (or already failing) gets no quick retry.
             assert_eq!(after_failure(0, false), (1, Duration::from_secs(30)));
             assert_eq!(after_failure(3, true), (4, Duration::from_secs(240)));
+        }
+
+        #[test]
+        fn a_session_that_connects_but_never_syncs_gets_the_ordinary_backoff() {
+            // Connect works, the first listing fails, again and again: the session never completed
+            // a sync, so the caller passes `false` and it's 30, 60, 120... never a 2 s loop.
+            let mut failures = 0;
+            let mut waits = Vec::new();
+            for _ in 0..4 {
+                let synced = false;
+                let (f, wait) = after_failure(failures, synced);
+                failures = f;
+                waits.push(wait.as_secs());
+            }
+            assert_eq!(waits, vec![30, 60, 120, 240]);
+        }
+
+        #[test]
+        fn texts_read_as_unreachable_only_after_several_failures() {
+            assert!(!texts_unreachable(0));
+            assert!(!texts_unreachable(5));
+            assert!(texts_unreachable(6));
         }
 
         #[test]

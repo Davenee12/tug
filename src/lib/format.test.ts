@@ -298,6 +298,10 @@ describe("canClear", () => {
     for (const label of ["Beenden", "Auflegen", "Raccrocher", "Terminer l’appel", "Colgar", "Rechazar", "Encerrar", "Ophangen", "終了", "挂断", "종료", "Завершить"]) {
       expect(canClear({ ...active, negativeLabel: label }), label).toBe(false);
     }
+    // Unknown labels (an app's own call or room actions) get no Clear: an allow-list, not a guess.
+    for (const label of ["Avböj", "Bitir", "Rozłącz", "Сбросить", "Disconnect", "Leave", "Ignore", "Mute", "Snooze"]) {
+      expect(canClear({ ...active, negativeLabel: label }), label).toBe(false);
+    }
     // No negative action at all: nothing to send.
     expect(canClear(note("Zoe", "hey", 0, { flags: { silent: false, important: false, preExisting: false, positiveAction: false, negativeAction: false } }))).toBe(false);
   });

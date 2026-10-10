@@ -92,6 +92,8 @@ pub fn search_all(state: State<'_, AppState>, query: String, limit: u32) -> Resu
 #[tauri::command]
 pub fn clear_history(state: State<'_, AppState>) -> Result<()> {
     state.shared.store.clear_history().map_err(|e| e.to_string())?;
+    // The in-memory recent calls too (emits the empty list to the window).
+    state.shared.set_calls(Vec::new());
     crate::bt_inventory::clear_last_report();
     Ok(())
 }

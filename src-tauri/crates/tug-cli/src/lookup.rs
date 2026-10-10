@@ -58,14 +58,35 @@ pub fn name_fits(name: &str, file: &str) -> bool {
     }
 }
 
-/// The Windows Search (AQS) filter for files whose name starts with `name`, or None for a name
-/// that could change the query's meaning. `is_bare_name` already rules out `"`, `*`, `?`, `:`
-/// and `\`; anything else inside the quotes is literal text to AQS.
+/// The Windows Search (AQS) filter for files named exactly `name`, or, when it has no extension,
+/// `name` with any extension (`name.` prefix); None for a name that could change the query's
+/// meaning. `is_bare_name` already rules out `"`, `*`, `?`, `:` and `\`; anything else inside the
+/// quotes is literal text to AQS. Exact names only, so similar newer files can't fill the page and
+/// hide a second real match.
 pub fn index_filter(name: &str) -> Option<String> {
     if !is_bare_name(name) || name.chars().any(char::is_control) {
         return None;
     }
-    Some(format!("System.FileName:~<\"{}\"", name.trim()))
+    let name = name.trim();
+    let exact = format!("System.FileName:=\"{name}\"");
+    Some(if Path::new(name).extension().is_some() {
+        exact
+    } else {
+        format!("{exact} OR System.FileName:~<\"{name}.\"")
+    })
+}
+
+/// The most files the index query asks for. A full page means there may be more than were
+/// seen, so it never counts as "exactly one".
+pub const INDEX_PAGE: u32 = 50;
+
+/// The index's answer as a result: a full page is never `One` (another match may be beyond it).
+pub fn decide_indexed(name: &str, hits: Vec<PathBuf>) -> Found {
+    let full_page = hits.len() >= INDEX_PAGE as usize;
+    match decide(name, hits) {
+        Found::One(p) if full_page => Found::Many(vec![p]),
+        other => other,
+    }
 }
 
 fn modified(path: &Path) -> SystemTime {
@@ -139,13 +160,37 @@ fn walkable(entry: &std::fs::DirEntry) -> bool {
         const HIDDEN: u32 = 0x2;
         const SYSTEM: u32 = 0x4;
         const REPARSE_POINT: u32 = 0x400;
-        match entry.metadata() {
-            Ok(m) => m.file_attributes() & (HIDDEN | SYSTEM | REPARSE_POINT) == 0,
-            Err(_) => false,
+        let Ok(m) = entry.metadata() else { return false };
+        let attrs = m.file_attributes();
+        if attrs & (HIDDEN | SYSTEM) != 0 {
+            return false;
         }
+        // A reparse point is walked only when it's a cloud-files placeholder (OneDrive's folders);
+        // junctions and symlinks (already refused above) and anything else are skipped.
+        attrs & REPARSE_POINT == 0 || reparse_tag(&entry.path()).is_some_and(is_cloud_tag)
     }
     #[cfg(not(windows))]
     true
+}
+
+/// Cloud-files reparse tags: IO_REPARSE_TAG_CLOUD and CLOUD_1..CLOUD_F (0x9000_x01A).
+pub fn is_cloud_tag(tag: u32) -> bool {
+    tag & 0xFFFF_0FFF == 0x9000_001A
+}
+
+/// The reparse tag of `path` (from its directory entry), when it is a reparse point.
+#[cfg(windows)]
+fn reparse_tag(path: &Path) -> Option<u32> {
+    use windows::core::HSTRING;
+    use windows::Win32::Storage::FileSystem::{FindClose, FindFirstFileW, WIN32_FIND_DATAW};
+    let mut data = WIN32_FIND_DATAW::default();
+    // SAFETY: plain FFI with an owned output struct; the search handle is closed right away.
+    unsafe {
+        let handle = FindFirstFileW(&HSTRING::from(path.as_os_str()), &mut data).ok()?;
+        let _ = FindClose(handle);
+    }
+    // dwReserved0 holds the reparse tag when FILE_ATTRIBUTE_REPARSE_POINT is set.
+    (data.dwFileAttributes & 0x400 != 0).then_some(data.dwReserved0)
 }
 
 /// Walk `roots` breadth-first within `limits`, collecting files whose name fits `name`.
@@ -186,7 +231,7 @@ pub fn find(name: &str, cwd: Option<&Path>) -> Found {
         }
     }
     if let Some(hits) = index_search(name) {
-        let found = decide(name, hits);
+        let found = decide_indexed(name, hits);
         if found != Found::None {
             return found;
         }
@@ -243,8 +288,8 @@ fn known_folder(id: &windows::core::GUID) -> Option<PathBuf> {
     }
 }
 
-/// Files under the user's profile whose name starts with `name`, from the Windows Search index
-/// only (never a slow crawl), newest first, at most 10. None when the index can't answer in
+/// Files under the user's profile named `name` (see `index_filter`), from the Windows Search index
+/// only (never a slow crawl), newest first, at most `INDEX_PAGE`. None when the index can't answer in
 /// time (Windows Search off, or the query failed).
 #[cfg(windows)]
 pub fn index_search(name: &str) -> Option<Vec<PathBuf>> {
@@ -275,7 +320,7 @@ fn query_index(root: &Path, filter: &str) -> windows::core::Result<Vec<PathBuf>>
     })?;
     let files = folder
         .CreateFileQueryWithOptions(&options)?
-        .GetFilesAsync(0, 10)?
+        .GetFilesAsync(0, INDEX_PAGE)?
         .join()?;
     let mut out = Vec::new();
     for i in 0..files.Size()? {
@@ -338,14 +383,36 @@ mod tests {
     }
 
     #[test]
+    fn a_full_page_from_the_index_is_never_taken_as_the_one_match() {
+        let dir = TempDir::new("page");
+        let one = dir.file("IMG_6060.jpeg");
+        // A page with one fitting file: that's the one.
+        assert_eq!(decide_indexed("img_6060", vec![one.clone()]), Found::One(one.clone()));
+        // A full page (the index may hold more beyond it), even if only one fits: listed, not picked.
+        let mut page = vec![one.clone()];
+        page.extend((1..INDEX_PAGE).map(|i| dir.0.join(format!("other{i}.jpeg"))));
+        assert_eq!(decide_indexed("img_6060", page), Found::Many(vec![one]));
+    }
+
+    #[test]
+    fn only_cloud_reparse_tags_are_walked() {
+        assert!(is_cloud_tag(0x9000_001A)); // IO_REPARSE_TAG_CLOUD
+        assert!(is_cloud_tag(0x9000_601A)); // IO_REPARSE_TAG_CLOUD_6 (OneDrive)
+        assert!(!is_cloud_tag(0xA000_0003)); // junction
+        assert!(!is_cloud_tag(0xA000_000C)); // symlink
+        assert!(!is_cloud_tag(0x8000_0013)); // dedup
+    }
+
+    #[test]
     fn the_index_filter_quotes_a_plain_name_and_refuses_anything_else() {
+        // Exact names only: the name itself, or with an extension when none was typed.
         assert_eq!(
             index_filter("img_6060").as_deref(),
-            Some("System.FileName:~<\"img_6060\"")
+            Some("System.FileName:=\"img_6060\" OR System.FileName:~<\"img_6060.\"")
         );
         assert_eq!(
             index_filter("IMG 6060 (1).jpeg").as_deref(),
-            Some("System.FileName:~<\"IMG 6060 (1).jpeg\"")
+            Some("System.FileName:=\"IMG 6060 (1).jpeg\"")
         );
         // Nothing that could close the quotes, add a wildcard or name another property.
         for bad in [

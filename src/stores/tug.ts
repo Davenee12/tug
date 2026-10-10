@@ -720,7 +720,7 @@ export const useTugStore = defineStore("tug", () => {
     if (n.flags.preExisting && !replayed) return;
     if (!popupEligible(n)) return;
     const event = popupEventFor(n);
-    const code = findCode(n.message || n.subtitle, n.title)?.code ?? null;
+    const code = findCode(n.message || n.subtitle)?.code ?? null;
     if (code !== null && recentlyCodeToasted(code)) return; // a text pop-up already carried this code
     // Claim the code before awaiting: the notification and the text for one code can arrive in the
     // same tick, and both would pass the check above if the claim came after the await.

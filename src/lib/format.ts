@@ -513,7 +513,25 @@ const CALL_WORDS = new Set([
   "weigeren", "weiger", "ophangen", "beëindigen", "beëindig", "oproep",
   // ru, uk, tr, pl, sv
   "отклонить", "завершить", "відхилити", "завершити", "reddet", "sonlandır", "odrzuć", "zakończ", "avvisa", "avsluta",
+  "avböj", "bitir", "rozłącz", "сбросить", "disconnect", "leave", "ignore",
 ]);
+
+/**
+ * iOS's Clear / Dismiss / Delete in the iPhone's major languages (whole label, lower-cased). Only
+ * these, the English dismiss labels and an empty label count as a clear: an unknown label could be
+ * an app's call action (Decline, Leave, Disconnect...) and is never sent by Clear.
+ */
+const CLEAR_WORDS = new Set([
+  "löschen", "entfernen", "effacer", "supprimer", "borrar", "eliminar", "cancella", "elimina", "apagar", "limpar",
+  "wissen", "verwijderen", "rensa", "radera", "slet", "ryd", "slett", "fjern", "tyhjennä", "poista", "wyczyść",
+  "usuń", "очистить", "удалить", "очистити", "sil", "temizle", "vymazat", "smazat", "törlés", "șterge", "διαγραφή",
+  "清除", "删除", "刪除", "消去", "削除", "지우기", "삭제", "ล้าง", "hapus", "xóa", "مسح", "נקה",
+]);
+
+/** Whether a negative-action label is a plain clear, in English or another major language. */
+export function isClearLabel(label: string): boolean {
+  return isDismissLabel(label) || CLEAR_WORDS.has(label.trim().toLowerCase());
+}
 const CALL_SUBSTRINGS = ["拒否", "終了", "拒绝", "拒絕", "挂断", "掛斷", "结束", "結束", "거절", "종료", "通話", "通话"];
 
 /** Whether a negative-action label belongs to a call (Decline, End Call, Raccrocher, 拒否, ...). */
@@ -525,15 +543,14 @@ export function isCallLabel(label: string): boolean {
 }
 
 /**
- * Can tug clear this notification on the phone? Only while it's still there and iOS offers a
- * negative action that isn't about a call. Decided from ANCS itself (the negative-action flag, and
- * never an incoming call) so a Clear labelled "Löschen", "Effacer" or "清除" counts; the label only
- * rules out a call's Decline / End Call (in the major languages), which tug sends only from its own
- * buttons. An English dismiss label is always a clear.
+ * Can tug clear this notification on the phone? Only while it's still there, never an incoming
+ * call, and only when the negative action is labelled as a clear (an allow-list, in the iPhone's
+ * major languages, so "Löschen" or "清除" counts) and isn't a call word. An unknown label gets no
+ * Clear: opening a thread clears quietly, and it must never Decline or End someone's call.
  */
 export function canClear(n: PhoneNotification): boolean {
   if (!n.live || n.removedAt != null || !n.flags.negativeAction || n.category === "incomingCall") return false;
-  return isDismissLabel(n.negativeLabel) || !isCallLabel(n.negativeLabel);
+  return isClearLabel(n.negativeLabel) && !isCallLabel(n.negativeLabel);
 }
 
 const lastDigits = (s: string | null | undefined) => (s ?? "").replace(/\D/g, "").slice(-10);

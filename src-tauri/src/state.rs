@@ -135,6 +135,9 @@ pub struct DeviceStatus {
     /// is a reconnect ("Reconnecting to your texts…"), not a setup problem. Cleared on Forget and
     /// when another phone is adopted.
     pub texts_were_connected: bool,
+    /// Message access has failed several times in a row: the UI says it can't reach texts right
+    /// now instead of "Reconnecting…". Cleared by the next working sync.
+    pub texts_unreachable: bool,
     /// tug is rebuilding the link on its own (Bluetooth stopped responding, the PC woke, Windows
     /// closed tug's Bluetooth objects): the phone doesn't need the user, so the UI says
     /// "Reconnecting…" rather than "Waiting for iPhone". Cleared once connected, or after a few

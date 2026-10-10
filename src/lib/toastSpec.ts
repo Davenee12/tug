@@ -50,7 +50,7 @@ export function toastSpec(n: PhoneNotification, messages: SmsMessage[], contacts
     name: cleanName(n.title),
     replyTo: ringing ? null : replyAddress(n, messages, contacts),
     markRead: conversation && !ringing,
-    code: findCode(n.message || n.subtitle, n.title)?.code ?? null,
+    code: findCode(n.message || n.subtitle)?.code ?? null,
     callBack: n.category === "missedCall" && n.live && n.removedAt == null && n.flags.positiveAction,
     clear: canClear(n),
   };

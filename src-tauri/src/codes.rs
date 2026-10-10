@@ -71,9 +71,6 @@ static CUE: LazyLock<Regex> = LazyLock::new(|| {
 static CUE_ANYWHERE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"コード|验证码|驗證碼|校验码|认证码|인증\s?번호|인증\s?코드").expect("compiles"));
 
-/// A short-code sender (3–6 digits, as banks and services text from).
-static SHORT_CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9]{3,6}$").expect("compiles"));
-
 /// 4–8 digits, optionally split once by a dash or space (482-913), or a provider prefix like
 /// G-482913. Not part of a longer number, a price, a time or a phone number.
 static CANDIDATE: LazyLock<Regex> = LazyLock::new(|| {
@@ -100,26 +97,10 @@ pub struct FoundCode {
 }
 
 /// The one code in `text`, or `None` (no cue word, no candidate, or several different numbers).
+/// Always needs a cue word: a bare number is as likely an order number, a price or a time.
 pub fn find_code(text: &str) -> Option<FoundCode> {
-    find_code_from(text, None)
-}
-
-/// [`find_code`], also accepting a text from a short-code `sender` ("72975") that holds exactly
-/// one 4–8 digit number, whatever language it's in.
-pub fn find_code_from(text: &str, sender: Option<&str>) -> Option<FoundCode> {
-    if text.is_empty() {
-        return None;
-    }
     let cued = CUE.is_match(text).unwrap_or(false) || CUE_ANYWHERE.is_match(text).unwrap_or(false);
-    let short_code = sender.is_some_and(|s| {
-        // iOS wraps numbers in notification titles in invisible direction marks.
-        let s: String = crate::text::strip_invisible(s)
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
-        SHORT_CODE.is_match(&s).unwrap_or(false)
-    });
-    if !cued && !short_code {
+    if text.is_empty() || !cued {
         return None;
     }
     let phones: Vec<(usize, usize)> = PHONE.find_iter(text).flatten().map(|m| (m.start(), m.end())).collect();
@@ -146,11 +127,7 @@ pub fn find_code_from(text: &str, sender: Option<&str>) -> Option<FoundCode> {
             shown: whole.as_str().to_string(),
         });
     }
-    // Several numbers and nothing to tell them apart: don't guess. Without a cue word, only a text
-    // with exactly one number counts.
-    if !cued && found.len() != 1 {
-        return None;
-    }
+    // Several numbers and nothing to tell them apart: don't guess.
     let first = found.first()?;
     found.iter().all(|f| f.code == first.code).then(|| first.clone())
 }
@@ -167,7 +144,7 @@ mod tests {
         assert!(cases.len() >= 20);
         for c in cases {
             let text = c["text"].as_str().unwrap();
-            let found = find_code_from(text, c.get("sender").and_then(|s| s.as_str()));
+            let found = find_code(text);
             assert_eq!(found.as_ref().map(|f| f.code.as_str()), c["code"].as_str(), "{text}");
             if let Some(shown) = c.get("shown").and_then(|s| s.as_str()) {
                 assert_eq!(found.unwrap().shown, shown, "{text}");

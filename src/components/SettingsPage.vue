@@ -634,7 +634,7 @@ async function clearHistory() {
             </SettingsRow>
             <SettingsRow
               label="Clear history"
-              description="Deletes the notifications, texts and recent calls tug copied from your iPhone. Your iPhone keeps its own, and your settings, pairing and contacts stay."
+              description="Deletes tug's copy of your notifications, texts and recent calls; they won't come back from your phone. Your iPhone keeps its own, and your settings, pairing and contacts stay."
             >
               <button
                 :class="['btn-secondary btn-sm', confirmClear ? 'text-error' : '']"

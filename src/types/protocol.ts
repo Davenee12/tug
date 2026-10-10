@@ -50,6 +50,8 @@ export interface DeviceStatus {
    * status needn't name it.
    */
   textsWereConnected?: boolean;
+  /** Message access has failed several times in a row ("Can't reach your texts right now"). */
+  textsUnreachable?: boolean;
   /** tug is rebuilding the link on its own (Bluetooth stalled, the PC woke): say "Reconnecting…", not "Waiting". */
   reconnecting: boolean;
   /** The iPhone is away (out of range): steady until it connects again, not flipping with each retry. */

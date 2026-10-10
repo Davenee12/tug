@@ -166,7 +166,7 @@ function bubbleClass(i: ConversationItem): string {
   const bg = tint === "imessage" ? "bg-imessage text-on-dark" : tint === "sms" ? "bg-sms text-on-dark" : "bg-surface-card text-ink";
   return `rounded-bl-sm ${bg}`;
 }
-const codeIn = (i: ConversationItem) => findCode(i.body, i.kind === "message" ? i.m.address : i.n.title);
+const codeIn = (i: ConversationItem) => findCode(i.body);
 const statusLabel = (i: ConversationItem) => {
   if (i.kind !== "message" || i.m.direction !== "out") return "";
   // "accepted" (the iPhone took it) and "sent" (a MAP SendingSuccess event confirmed it, when

@@ -115,12 +115,14 @@ rate limited) · `2` typed wrong · `3` couldn't reach tug (not running, AI tool
 **Naming files for `tug boat`.** A full or relative path is used exactly as given. A bare name
 that isn't a file in the current folder (`tug boat img_6060`) is looked up: same name in any
 case, and with any extension when you didn't type one. tug looks in the current folder first,
-then asks Windows Search's index (files under your user folder, newest first, at most 3 seconds),
-and if the index can't answer, takes a quick bounded look (4 folders deep, up to 3 seconds) through
-Desktop, Downloads, Documents, Pictures (Pictures\Tugboat first) and OneDrive, wherever Windows
-keeps them. Hidden and system folders and junctions are skipped. One match is used, and tug says
-which (`Using C:\…\IMG_6060.jpeg`); several are listed, newest first, and nothing is sent (exit
-`2`); none says so. Names with `\`, `/`, `:`, wildcards or quotes are never looked up, and the
+then asks Windows Search's index for files with exactly that name under your user folder
+(newest first, up to 50, at most 3 seconds), and if the index can't answer, takes a quick bounded
+look (4 folders deep, up to 3 seconds) through Desktop, Downloads, Documents, Pictures
+(Pictures\Tugboat first) and OneDrive, wherever Windows keeps them. Hidden and system folders,
+junctions and symbolic links are skipped; OneDrive's cloud folders are looked through. One match
+is used, and tug says which (`Using C:\…\IMG_6060.jpeg`); several are listed, newest first, and
+nothing is sent (exit `2`), as is a full page of 50 from the index, since there may be more; none
+says so. Names with `\`, `/`, `:`, wildcards or quotes are never looked up, and the
 lookup never leaves your PC.
 
 **Getting `tug` on your PATH.** The installer doesn't touch PATH. Settings › Developer tools ›

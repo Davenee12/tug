@@ -29,9 +29,6 @@ const CUE = new RegExp(`(?<!${W})(?:${CUE_WORDS.join("|")})(?!${W})`, "iu");
 /** Scripts without spaces between words: matched anywhere (ja, zh, ko). */
 const CUE_ANYWHERE = /コード|验证码|驗證碼|校验码|认证码|인증\s?번호|인증\s?코드/u;
 
-/** A short code sender (3–6 digits, as banks and services text from). */
-const SHORT_CODE = /^\d{3,6}$/;
-
 /**
  * Candidate codes: 4–8 digits, optionally split once by a dash or space (482-913), or a
  * provider prefix like G-482913. Not part of a longer number, a price, a time or a phone
@@ -50,15 +47,11 @@ export interface FoundCode {
 }
 
 /**
- * The one code in `text`, or null. Needs a cue word; or, from a short-code `sender` (a text from
- * "72975"), a text holding exactly one 4–8 digit number, whatever language it's in.
+ * The one code in `text`, or null. Always needs a cue word: a bare number from a short code is as
+ * likely an order number, a price or a time, and a wrong "Copy code" is worse than none.
  */
-export function findCode(text: string | null | undefined, sender?: string | null): FoundCode | null {
-  if (!text) return null;
-  const cued = CUE.test(text) || CUE_ANYWHERE.test(text);
-  // iOS wraps numbers in notification titles in invisible direction marks.
-  const from = (sender ?? "").replace(/[\s‎‏‪-‮⁦-⁩]/g, "");
-  if (!cued && !SHORT_CODE.test(from)) return null;
+export function findCode(text: string | null | undefined): FoundCode | null {
+  if (!text || !(CUE.test(text) || CUE_ANYWHERE.test(text))) return null;
   const phones = [...text.matchAll(PHONE)].map((m) => [m.index!, m.index! + m[0].length] as const);
   const inPhone = (i: number) => phones.some(([a, b]) => i >= a && i < b);
   const found: FoundCode[] = [];
@@ -70,9 +63,7 @@ export function findCode(text: string | null | undefined, sender?: string | null
     if (digits.length === 4 && /^(19|20)\d\d$/.test(digits) && !/code|pin/i.test(text)) continue;
     found.push({ code: digits, shown: m[0] });
   }
-  // Several numbers and nothing to tell them apart: don't guess. Without a cue word, only a text
-  // with exactly one number counts.
-  if (!cued && found.length !== 1) return null;
+  // Several numbers and nothing to tell them apart: don't guess.
   const distinct = new Set(found.map((f) => f.code));
   return distinct.size === 1 ? found[0] : null;
 }

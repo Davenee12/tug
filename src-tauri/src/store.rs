@@ -153,9 +153,10 @@ const MIGRATIONS: &[&str] = &[
     "#,
     // v10: aliases learned from group-text notifications ("Sam & Alex", "Sam, Alex & 2 others")
     // could retitle every notification from that group as one contact. The learners skip those
-    // now; drop any already learned.
+    // now; drop any already learned. Frozen to the test as v0.5.12 shipped it (`group_like_v10`),
+    // so a database upgraded later doesn't lose more than one upgraded then.
     r#"
-    DELETE FROM contact_aliases WHERE group_like(alias);
+    DELETE FROM contact_aliases WHERE group_like_v10(alias);
     "#,
     // v11: the last 10 digits of a contact's number (`match_key`), so a text from the same number
     // in another format (national "07700 900123" vs the contact's "+44 7700 900123") still shows
@@ -264,6 +265,14 @@ fn register_functions(conn: &Connection) -> Result<()> {
     })?;
     conn.create_scalar_function("group_like", 1, flags, |ctx| {
         Ok(ctx.get::<Option<String>>(0)?.is_some_and(|s| looks_like_group(&s)))
+    })?;
+    // The v10 migration's test, frozen as it shipped: `looks_like_group` has since learned more
+    // languages, and a migration must do the same thing whenever it runs.
+    conn.create_scalar_function("group_like_v10", 1, flags, |ctx| {
+        Ok(ctx.get::<Option<String>>(0)?.is_some_and(|s| {
+            let t = clean_name(&s).to_lowercase();
+            t.contains('&') || t.contains(',') || t.contains(" others")
+        }))
     })?;
     conn.create_scalar_function("strip_invisible", 1, flags, |ctx| {
         Ok(ctx.get::<Option<String>>(0)?.map(|s| crate::text::strip_invisible(&s)))
@@ -608,21 +617,27 @@ impl Store {
 
     /// Settings › Data & privacy › Clear history: everything tug copied from the phone's activity
     /// (notifications, texts and their search index, the recent-calls list, names learned from
-    /// notifications) goes. Settings, the pairing and the phone's contacts stay; the iPhone keeps
-    /// its own. Texts the phone still lists come back at the next sync, as on a fresh install.
+    /// notifications) goes, and texts don't come back from the phone's next listing. Settings, the
+    /// pairing and the phone's contacts stay; the iPhone keeps its own.
     pub fn clear_history(&self) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
+        // Texts stay as blank, hidden rows (tombstones), keyed by the phone's handle: the phone
+        // re-lists its recent texts at every sync, and a row that's gone would come straight back.
+        // Blanking the body and rebuilding the index means nothing is readable or searchable.
+        tx.execute(
+            "UPDATE messages SET body = '', sender_name = NULL, hidden_at = COALESCE(hidden_at, ?1)",
+            params![crate::state::now_ms()],
+        )?;
         tx.execute_batch(
             "DELETE FROM notifications;
              INSERT INTO notifications_fts (notifications_fts) VALUES ('rebuild');
-             DELETE FROM messages;
              INSERT INTO messages_fts (messages_fts) VALUES ('rebuild');
              DELETE FROM contact_aliases;",
         )?;
         tx.execute(
-            "DELETE FROM settings WHERE key IN (?1, ?2)",
-            params![crate::map::calls::RECENT_CALLS, crate::state::keys::LAST_TEXT_SYNC],
+            "DELETE FROM settings WHERE key = ?1",
+            params![crate::map::calls::RECENT_CALLS],
         )?;
         tx.commit()
     }
@@ -775,7 +790,28 @@ mod tests {
 
         let count = |sql: &str| s.conn().query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
         assert_eq!(count("SELECT count(*) FROM notifications"), 0);
-        assert_eq!(count("SELECT count(*) FROM messages"), 0);
+        // Texts are blank, hidden tombstones, so the phone's next listing can't bring them back.
+        assert_eq!(
+            count("SELECT count(*) FROM messages WHERE hidden_at IS NULL OR body <> ''"),
+            0
+        );
+        let resync = crate::messages::IncomingMessage {
+            source: "iphone-map",
+            handle: "h1",
+            address: "+15550100001",
+            sender_name: None,
+            body: "see you at noon",
+            sent_at: None,
+            received_at: 1,
+            unread_on_phone: false,
+            msg_type: None,
+        };
+        assert!(
+            s.insert_incoming(&resync).unwrap().is_none(),
+            "a re-synced text stays cleared"
+        );
+        assert!(s.recent_messages(10).unwrap().is_empty());
+        assert!(s.search_messages("noon", 10).unwrap().is_empty());
         assert_eq!(
             count("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'noon'"),
             0
@@ -786,7 +822,11 @@ mod tests {
         );
         assert_eq!(count("SELECT count(*) FROM contact_aliases"), 0);
         assert_eq!(s.setting(crate::map::calls::RECENT_CALLS).unwrap(), None);
-        assert_eq!(s.setting(crate::state::keys::LAST_TEXT_SYNC).unwrap(), None);
+        // Kept, so the next sync isn't treated as a first one.
+        assert_eq!(
+            s.setting(crate::state::keys::LAST_TEXT_SYNC).unwrap().as_deref(),
+            Some("1")
+        );
         // Kept: the phone's contacts, the pairing and settings.
         assert_eq!(count("SELECT count(*) FROM contacts"), 1);
         assert_eq!(

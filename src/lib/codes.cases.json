@@ -1,5 +1,5 @@
 {
-  "about": "Shared cases for findCode (src/lib/codes.ts) and its Rust port (src-tauri/src/codes.rs): both test suites read this file, so the two can't drift. code null = no code. sender (optional) = who sent it, for the short-code rule.",
+  "about": "Shared cases for findCode (src/lib/codes.ts) and its Rust port (src-tauri/src/codes.rs): both test suites read this file, so the two can't drift. code null = no code.",
   "cases": [
     { "text": "Your code is 482913. Don't share it with anyone.", "code": "482913" },
     { "text": "G-482913 is your Google verification code.", "code": "482913", "shown": "G-482913" },
@@ -36,10 +36,10 @@
     { "text": "인증번호 [482913]", "code": "482913" },
     { "text": "My postcode is 2031", "code": null },
     { "text": "482913 ist dein Zugang", "code": null },
-    { "text": "482913 ist dein Zugang", "sender": "72975", "code": "482913" },
-    { "text": "Accès : 482913", "sender": "‪38 800‬", "code": "482913" },
-    { "text": "482913 ist dein Zugang", "sender": "+44 7700 900123", "code": null },
-    { "text": "Saldo 1250, Karte 4417", "sender": "72975", "code": null },
-    { "text": "Treffen um 18:30, Tisch 12", "sender": "72975", "code": null }
+    { "text": "Your order is ready at store 4417. Reply STOP to opt out", "code": null },
+    { "text": "Your order 48213 has shipped", "code": null },
+    { "text": "Saldo disponible 1250 EUR", "code": null },
+    { "text": "Delivery window 1400-1600 tomorrow", "code": null },
+    { "text": "Get 5000 bonus points this weekend", "code": null }
   ]
 }
