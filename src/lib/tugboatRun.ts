@@ -26,6 +26,9 @@ export const HOP_COOLDOWN_S = 1.1;
 /** Steering: top sideways speed, and how quickly the boat answers the helm (per second). */
 export const MAX_VX = 75;
 export const RESPONSE = 7;
+/** The phone's slider: the boat follows the knob's position with a critically damped spring this
+ * quick (seconds), so it feels direct without jumping. */
+export const FOLLOW_TAU = 0.05;
 /** Water speed (field units a second): starts gentle, approaches the top speed. */
 export const SPEED_START = 36;
 export const SPEED_MAX = 100;
@@ -90,9 +93,11 @@ export interface Run {
 }
 
 export interface Input {
-  /** -1 (full left) to 1 (full right). */
+  /** -1 (full left) to 1 (full right): the helm (keyboard, mouse), eased by the boat's inertia. */
   steer: number;
   boost: boolean;
+  /** Where the boat should be (field units), from the phone's slider. Overrides `steer`. */
+  target?: number | null;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -153,6 +158,25 @@ export function spawnGap(t: number): number {
 export function steerVelocity(vx: number, steer: number, dt: number): number {
   const target = clamp(Number.isFinite(steer) ? steer : 0, -1, 1) * MAX_VX;
   return vx + (target - vx) * (1 - Math.exp(-RESPONSE * dt));
+}
+
+/** Where the phone's slider puts the boat: full left to full right across the open water. */
+export function padTarget(position: number): number {
+  const p = Number.isFinite(position) ? clamp(position, -1, 1) : 0;
+  return MARGIN + ((p + 1) / 2) * (FIELD_W - 2 * MARGIN);
+}
+
+/**
+ * Follow a target position with a critically damped spring (time constant `FOLLOW_TAU`): it gets
+ * there fast and never overshoots. Solved exactly, so it behaves the same at any frame rate.
+ * Returns the new position and velocity.
+ */
+export function follow(x: number, vx: number, target: number, dt: number): [number, number] {
+  const w = 1 / FOLLOW_TAU;
+  const e = x - target;
+  const k = vx + w * e;
+  const decay = Math.exp(-w * dt);
+  return [target + (e + k * dt) * decay, (vx - w * k * dt) * decay];
 }
 
 /** Whether something round or square at (thing) touches the boat at `x`. */
@@ -268,9 +292,14 @@ export function step(run: Run, input: Input, dt: number): Run {
   const dy = run.speed * dt;
   run.distance += dy;
 
-  // The helm, with inertia; the banks stop the boat.
-  run.vx = steerVelocity(run.vx, input.steer, dt);
-  run.x += run.vx * dt;
+  // The phone's slider: follow its position closely. The helm (keyboard, mouse): with inertia.
+  // Either way the banks stop the boat.
+  if (input.target != null && Number.isFinite(input.target)) {
+    [run.x, run.vx] = follow(run.x, run.vx, clamp(input.target, MARGIN, FIELD_W - MARGIN), dt);
+  } else {
+    run.vx = steerVelocity(run.vx, input.steer, dt);
+    run.x += run.vx * dt;
+  }
   if (run.x < MARGIN) {
     run.x = MARGIN;
     run.vx = Math.max(0, run.vx);
@@ -358,23 +387,25 @@ export interface Controls {
   /** Where the mouse is held, in field units; null when not dragging. */
   pointerX: number | null;
   pointerBoost: boolean;
-  /** The phone controller, when one is connected. */
+  /** The phone controller, when one is connected. Its `steer` is where its slider sits. */
   pad: { connected: boolean; steer: number; boost: boolean } | null;
+  /** The phone's slider moved more recently than the keys or mouse were used, so it has the boat. */
+  padLeads: boolean;
 }
 
 /**
  * One input from every control: the keyboard wins whenever a key is held (so it takes over the
  * instant the phone drops or misbehaves), then a mouse drag (steer towards the pointer), then the
- * phone. Boost from any of them hops.
+ * phone's slider, if it moved last (the boat goes where the knob is). Boost from any of them hops.
  */
 export function mergeInput(c: Controls, boatX: number): Input {
   const keys = (c.keyRight ? 1 : 0) - (c.keyLeft ? 1 : 0);
   const pad = c.pad?.connected ? c.pad : null;
-  let steer = 0;
-  if (keys !== 0) steer = keys;
-  else if (c.pointerX !== null) steer = clamp((c.pointerX - boatX) / 10, -1, 1);
-  else if (pad) steer = clamp(Number.isFinite(pad.steer) ? pad.steer : 0, -1, 1);
-  return { steer, boost: c.keyBoost || c.pointerBoost || (pad?.boost ?? false) };
+  const boost = c.keyBoost || c.pointerBoost || (pad?.boost ?? false);
+  if (keys !== 0) return { steer: keys, boost };
+  if (c.pointerX !== null) return { steer: clamp((c.pointerX - boatX) / 10, -1, 1), boost };
+  if (pad && c.padLeads) return { steer: 0, boost, target: padTarget(pad.steer) };
+  return { steer: 0, boost };
 }
 
 // --- Layout (the field scaled into the panel) ---

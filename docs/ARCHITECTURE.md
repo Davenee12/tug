@@ -161,12 +161,15 @@ phone page ─POST /api/up─► PUT chunks (XChaCha20-Poly1305, keys from HKDF 
 
 ```
 game: "Use your phone as a controller" ─► invoke game_pad_open ─► Tugboat starts if off; Session::pad_open
-phone page polls GET /api/state ─► { game: true } ─► Controller.vue (pad + Boost)
-  POST /api/pad, ~30/s while the input changes, a heartbeat every 200 ms, one in flight, newest wins
+phone page polls GET /api/state ─► { game: true } ─► Controller.vue (slider pad + Boost)
+  POST /api/pad the moment the input changes (touch, slide, Boost down/up), coalesced to one per
+  16 ms (~60/s), up to two in flight, newest wins; a heartbeat every 200 ms while nothing changes
   signed like every request (same secret, MAC, replay window, first phone binds); body sealed to it
-  ─► authorize ─► channel open? (else 409 no-game) ─► rate limit (else 429 busy) ─► ≤ 104-byte body
-  ─► pad::decode: exactly {"steer": -100..=100, "boost": bool} ─► older sequence numbers ignored
-  ─► Pad state changed? emit "game-pad" ─► TugboatRun.vue (the loop reads the latest state)
+  ─► authorize ─► ≤ 104-byte body ─► channel open? (else 409 no-game) ─► rate limit (else 429 busy)
+  ─► pad::decode: exactly {"steer": -100..=100, "boost": bool} (+ optional "age"/"rtt" probe)
+  ─► older sequence numbers ignored
+  ─► Pad state changed? emit "game-pad" ─► TugboatRun.vue applies it on the next frame: the slider
+     position is the boat's target (critically damped follow, τ 50 ms); the keyboard keeps inertia
   reply (sealed): { paused, hits } from game_pad_feedback, so the phone shows Paused and buzzes
 150 ms watch: no input for 700 ms ─► emit "game-pad" { connected: false } (the keyboard has it)
 game closes ─► game_pad_close ─► inputs get 409 ─► the page goes back to Tugboat
@@ -176,6 +179,14 @@ The input channel is a small POST endpoint rather than a WebSocket: it reuses Tu
 authentication, sealing, connection limits and timeouts unchanged, needs no new dependency or
 connection upgrade, and on a home network one request per input (kept alive) is well inside the
 100 ms target. An input can only change the one `PadInput` the game reads.
+
+Latency: the body is read before any refusal (a reply that leaves a body unread would close the
+connection), accepted sockets set `TCP_NODELAY`, and connections are kept alive. Hyper's header
+timeout (10 s) doubles as the idle limit for a kept-alive connection; it restarts with each
+request, so an active controller never meets it, and only connections left idle are closed. The
+phone's probe (`age` = how long the newest touch waited before going out, `rtt` = its last round
+trip) gives a touch-to-PC estimate of `age + rtt/2`, logged as one summary line at debug level
+when the controller closes.
 
 ## Where the testable logic lives
 
