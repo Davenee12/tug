@@ -37,7 +37,7 @@ jobs:
           - language: rust
             os: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Both languages support build-mode none: CodeQL reads the source without compiling it,
       # so there's no Tauri/WinRT build to set up here (`check` already builds everything).
