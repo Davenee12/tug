@@ -16,6 +16,7 @@ import type {
   TugboatStatus,
   TugboatTextArrived,
   DiscoveredDevice,
+  GamePad,
   MediaCommand,
   NowPlaying,
   PairingRequest,
@@ -153,6 +154,13 @@ export const api = {
   tugboatSendText: (text: string) => invoke<void>("tugboat_send_text", { text }),
   /** Open the Tugboat folder, or select a file Tugboat saved. */
   tugboatOpenFolder: (path: string | null) => invoke<void>("tugboat_open_folder", { path }),
+  // --- Tugboat Run's phone controller ---
+  /** Open Tugboat if needed and the controller channel; Tugboat's status carries the QR code. */
+  gamePadOpen: () => invoke<TugboatStatus>("game_pad_open"),
+  /** The game closed: the phone's inputs are refused again. */
+  gamePadClose: () => invoke<void>("game_pad_close"),
+  /** What the phone's controller shows: paused, and hits this run (it buzzes on a new one). */
+  gamePadFeedback: (paused: boolean, hits: number) => invoke<void>("game_pad_feedback", { paused, hits }),
   // --- Developer tools ---
   devtoolsStatus: () => invoke<DevToolsStatus>("devtools_status"),
   /** "Let AI tools use tug". */
@@ -185,6 +193,8 @@ interface EventPayloads {
   "tugboat-text": TugboatTextArrived;
   /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */
   "tugboat-dropped": TugboatSkipped[];
+  /** The phone controller changed (Tugboat Run only). */
+  "game-pad": GamePad;
   "devtools-status": DevToolsStatus;
   /** A text an AI tool (or `tug text`) wants to send; null once it's answered or gone. */
   "devtools-confirm": DevToolsConfirm | null;

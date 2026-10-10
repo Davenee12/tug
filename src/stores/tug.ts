@@ -185,6 +185,7 @@ export const useTugStore = defineStore("tug", () => {
     dialing: false,
     filterUnknown: true,
     knownSenders: [],
+    showGames: true,
   });
 
   /** Who is a VIP (always let through), rebuilt when the list or the contacts change. */
@@ -1100,6 +1101,7 @@ export const useTugStore = defineStore("tug", () => {
       dialing: raw["ui.dialing"] === "true",
       filterUnknown: raw["ui.filterUnknown"] !== "false",
       knownSenders: raw["ui.knownSenders"] ? (JSON.parse(raw["ui.knownSenders"]) as string[]) : [],
+      showGames: raw["ui.showGames"] !== "false",
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
     // A missing key is a fresh install: null (not ""), so the first launch records the version

@@ -168,6 +168,24 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - Tugboat needs an IPv4 home or office network set to **Private** in Windows; tug never changes
   your firewall.
 
+## Games
+
+- **Tugboat Run**, a little endless runner: steer a tugboat through the harbor, dodge buoys, logs
+  and other boats, collect coins, and catch a life ring to win back a life. Three lives with a short
+  grace after each hit; the water speeds up, so a run lasts a minute or three. Restart instantly.
+- **Controls:** ← → or A and D steer (with a little inertia), Space hops over buoys and logs (not
+  other boats), or drag with the mouse to steer and click to hop. P or Esc pauses; it also pauses
+  by itself when tug loses focus or hides, or when a call or confirmation card comes up.
+- **Your phone as a controller:** "Use your phone as a controller" shows Tugboat's code (the same
+  code, encryption and rules as Tugboat). The phone's Tugboat page turns into a pad: slide to
+  steer, Boost to hop, and it buzzes on a hit where the browser can (iPhone's Safari can't). The
+  keyboard always works too and takes over the moment the phone drops. Tilt steering isn't
+  offered: phone browsers only allow it on a secure (HTTPS) page, and Tugboat's page is plain HTTP
+  on your Wi-Fi.
+- Best score is kept on this PC only. Nothing runs while the game is closed or paused.
+- Open it from the **Play** button beside tug's name, or Ctrl+K "game" / "tugboat run". Turn
+  **Show games** off in Settings › General to hide both.
+
 ## Weather, battery & the phone card
 
 - An optional **weather card** on the Feed: now, feels like, high and low, the next 24 hours, 7
@@ -189,7 +207,7 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   - `play <song or playlist>` and `queue <song>` with Spotify connected;
   - `copy code`, `clear all`, `mark all read`, `dnd on` / `dnd off`;
   - an app's name to show its notifications;
-  - `new message`, `settings`, `spotify`, `tugboat` to open them.
+  - `new message`, `settings`, `spotify`, `tugboat` to open them, and `game` for Tugboat Run.
 - If a name matches several people, tug lists them and waits for you to pick.
 
 **Other shortcuts:** Ctrl+N new message · Ctrl+Shift+C copy the latest code · Ctrl+, Settings ·
@@ -219,7 +237,7 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
 ## Settings
 
 - **General:** Windows pop-ups, Pop-up sound, Do not disturb, Low phone battery, Keep running when
-  closed, Start with Windows (starts in the tray), Zoom, and the keyboard shortcuts.
+  closed, Start with Windows (starts in the tray), Zoom, Show games, and the keyboard shortcuts.
 - **iPhone:** connection health, Copy diagnostics, Open logs folder, help for the texts pairing,
   Visible to iPhone, Call from tug, and your iPhone's Connect panel.
 - **Notifications:** Filter unknown senders, Quiet hours, Mute calls, Always let through, and

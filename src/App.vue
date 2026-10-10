@@ -4,10 +4,12 @@ import { CircleAlert, Upload } from "lucide-vue-next";
 import { useTugStore } from "./stores/tug";
 import { useTugboatStore } from "./stores/tugboat";
 import { useDevToolsStore } from "./stores/devtools";
+import { useGameStore } from "./stores/game";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import ConnectPanel from "./components/ConnectPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
 import TugboatPanel from "./components/TugboatPanel.vue";
+import TugboatRun from "./components/TugboatRun.vue";
 import FeedPanel from "./components/FeedPanel.vue";
 import IncomingCall from "./components/IncomingCall.vue";
 import NewConversation from "./components/NewConversation.vue";
@@ -24,6 +26,7 @@ import { skippedMessage } from "./lib/tugboat";
 const tug = useTugStore();
 const tugboat = useTugboatStore();
 const devtools = useDevToolsStore();
+const game = useGameStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
 // show the Connection panel beside the feed; everything else (and narrow windows) uses
@@ -83,8 +86,9 @@ function onShortcut(e: KeyboardEvent) {
     else tug.notify("info", "No code in the last 10 minutes");
     return;
   }
-  // A ringing call has the keyboard (Enter answers, Esc declines) until it's dealt with.
-  if (tug.ringing) return;
+  // A ringing call has the keyboard (Enter answers, Esc declines) until it's dealt with, and
+  // Tugboat Run has it while it's open.
+  if (tug.ringing || game.open) return;
   const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable]") !== null;
   if (key === "k") {
     e.preventDefault();
@@ -156,6 +160,8 @@ onUnmounted(() => {
     <SearchPalette v-if="tug.searchOpen" />
     <SpotifyPanel v-if="tug.spotifyPanelOpen" />
     <WhatsNew v-if="tug.whatsNewOpen" />
+    <!-- The game covers the window; a call, a confirmation card or a pairing PIN still come up over it (and pause it). -->
+    <TugboatRun v-if="game.open" />
     <TugboatPanel v-if="tugboat.open" />
     <!-- A text an AI tool (or `tug text`) wants to send: nothing goes without Send here. -->
     <ToolConfirmCard v-if="devtools.confirm" :key="devtools.confirm.id" :request="devtools.confirm" />

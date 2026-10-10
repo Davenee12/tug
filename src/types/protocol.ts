@@ -282,6 +282,8 @@ export interface UiSettings {
   filterUnknown: boolean;
   /** Numbers/emails moved to conversations by hand ("Move to conversations"), normalised. */
   knownSenders: string[];
+  /** The sidebar's Play button and the Ctrl+K "Tugboat Run" command (on by default). */
+  showGames: boolean;
 }
 
 /**
@@ -516,6 +518,17 @@ export interface TugboatStatus {
 /** "tugboat-text": text from the phone went (or failed to go) onto the PC clipboard. */
 export interface TugboatTextArrived {
   ok: boolean;
+}
+
+/**
+ * The phone as Tugboat Run's controller (`game-pad` event, `tugboat/pad.rs` `PadEvent`). Sent when
+ * steering or boost changes, and when the phone arrives or goes quiet.
+ */
+export interface GamePad {
+  connected: boolean;
+  /** -1 (full left) to 1 (full right); 0 whenever not connected. */
+  steer: number;
+  boost: boolean;
 }
 
 /** A file that couldn't be offered to the phone, and why. */

@@ -40,6 +40,9 @@
 //   http://localhost:1420/?tugboatwait   the Tugboat panel showing its QR code, no phone yet ("Can't
 //                                     connect?" help appears after 30 s)
 //   http://localhost:1420/?tugboatnonet  the Tugboat panel with no network a phone could use
+//   http://localhost:1420/?game       Tugboat Run open, ready to start
+//   http://localhost:1420/?gamephone  Tugboat Run with a phone controller: the code, a phone scanning
+//                                     it, then the phone starting the run and steering
 //   http://localhost:1420/?devtools   Settings › Developer tools, switched on, with two connected tools
 //   http://localhost:1420/?devconfirm the "wants to text" confirmation card an AI tool's send_text shows
 //   http://localhost:1420/?heavy      a long history for performance work: ~2,000 texts in ~60 conversations,
@@ -687,6 +690,56 @@ if (dropOn || dropWait || dropNoNet) {
   }, 400);
 }
 
+// --- Tugboat Run (?game, ?gamephone) ---
+// ?game opens the game. ?gamephone also opens "Use your phone as a controller": Tugboat shows its
+// code, a phone scans it 1.5 s later, its controller connects a second after that, presses Boost
+// (which starts the run) and steers in slow S-bends until the game closes the channel.
+let padOpen = false;
+let padScript: number | undefined;
+const padTimers: number[] = [];
+function gamePadOpen() {
+  if (padOpen) return;
+  padOpen = true;
+  startDrop();
+  sendDrop();
+  if (!params.has("gamephone")) return;
+  padTimers.push(
+    window.setTimeout(() => {
+      Object.assign(dropState, { phase: "connected", phone: "iPhone", phoneActive: true });
+      sendDrop();
+    }, 1500),
+    window.setTimeout(() => {
+      const t0 = performance.now();
+      let tick = 0;
+      padScript = window.setInterval(() => {
+        const t = (performance.now() - t0) / 1000;
+        tick++;
+        // Boost for a moment at the start (starts the run) and every few seconds after.
+        const boost = tick % 30 < 3;
+        void emit("game-pad", { connected: true, steer: Math.round(Math.sin(t * 1.3) * 80) / 100, boost });
+      }, 100);
+    }, 2500),
+  );
+}
+function gamePadClose() {
+  padOpen = false;
+  for (const t of padTimers.splice(0)) window.clearTimeout(t);
+  window.clearInterval(padScript);
+  padScript = undefined;
+  void emit("game-pad", { connected: false, steer: 0, boost: false });
+}
+if (params.has("game") || params.has("gamephone")) {
+  setTimeout(async () => {
+    const { useGameStore } = await import("../stores/game");
+    await useGameStore().show();
+    if (!params.has("gamephone")) return;
+    setTimeout(() => {
+      const button = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes("Use your phone as a controller"));
+      button?.click();
+    }, 300);
+  }, 400);
+}
+
 // --- Developer tools (?devtools, ?devconfirm) ---
 const DEV_LABELS: Array<[DevToolsStatus["permissions"][number]["key"], string, boolean]> = [
   ["codes", "Verification codes", false],
@@ -868,6 +921,14 @@ mockIPC(
         return null;
       case "tugboat_open_folder":
         console.log("[devMock] open Tugboat folder", a.path ?? dropFolder);
+        return null;
+      case "game_pad_open":
+        gamePadOpen();
+        return structuredClone(dropState);
+      case "game_pad_close":
+        gamePadClose();
+        return null;
+      case "game_pad_feedback":
         return null;
       case "devtools_status":
         return structuredClone(devState);
