@@ -1,0 +1,51 @@
+# CodeQL static analysis of the frontend (TypeScript/Vue) and the Rust backend. Results land in
+# the repository's Security › Code scanning tab. Informational: not a required status.
+name: codeql
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, so new queries run against code that hasn't changed.
+    - cron: "17 6 * * 1"
+
+# Read-only by default; the analyze job adds only what uploading results needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    # Rust on Windows so the `cfg(windows)` code (all of the Bluetooth and WinRT layer) is what
+    # gets analysed; JS/TS doesn't care which OS it runs on.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            os: ubuntu-latest
+          - language: rust
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both languages support build-mode none: CodeQL reads the source without compiling it,
+      # so there's no Tauri/WinRT build to set up here (`check` already builds everything).
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: /language:${{ matrix.language }}
