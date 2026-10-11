@@ -45,7 +45,7 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
-hmac = "0.12"
+hmac = "0.13"
 sha2 = "0.10"
 qrcode = { version = "0.14", default-features = false }
 tauri-plugin-dialog = "2"
