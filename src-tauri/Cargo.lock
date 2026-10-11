@@ -4638,7 +4638,7 @@ dependencies = [
 name = "tug-bridge"
 version = "0.5.16"
 dependencies = [
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "hmac",
  "log",
  "serde",
