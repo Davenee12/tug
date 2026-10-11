@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { quoteArg } from "./shell-args.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const home = os.homedir();
@@ -47,7 +48,14 @@ if (!cmd || cmd === "--print") {
 
 const env = { ...process.env, CARGO_ENCODED_RUSTFLAGS: encoded };
 delete env.RUSTFLAGS;
-// shell: true so npm's .cmd shims (tauri.cmd) resolve on Windows.
-const quoted = args.map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a));
-const r = spawnSync([cmd, ...quoted].join(" "), { stdio: "inherit", env, shell: true });
+// shell: true so npm's .cmd shims (tauri.cmd) resolve on Windows; quoteArg keeps each argument
+// whole through cmd.exe and refuses ones it can't pass on unchanged.
+let line;
+try {
+  line = [cmd, ...args].map(quoteArg).join(" ");
+} catch (e) {
+  console.error(`remap-paths: ${e.message}`);
+  process.exit(1);
+}
+const r = spawnSync(line, { stdio: "inherit", env, shell: true });
 process.exit(r.status ?? 1);

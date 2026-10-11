@@ -27,7 +27,8 @@ npm run tauri dev    # the real app, with Bluetooth
 npm run check        # everything CI runs; must pass before you push
 ```
 
-`npm run check` builds the Tugboat phone page, then runs `vue-tsc`, Vitest, `cargo fmt --check`,
+`npm run check` builds the Tugboat phone page, then runs `vue-tsc`, Vitest, the build scripts'
+tests (`node --test`), `cargo fmt --check`,
 `cargo clippy -D warnings` and `cargo test` across the Rust workspace. If the Rust build fails
 with an `RC.EXE` error, install the Windows SDK from the Build Tools installer, or run
 `cargo clean -p tug --manifest-path src-tauri/Cargo.toml` and try again.
