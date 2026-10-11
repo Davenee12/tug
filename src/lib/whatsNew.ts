@@ -21,6 +21,17 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.16",
+    title: "Play, listen and sign in faster",
+    highlights: [
+      "Tugboat Run: a quick harbor game, and your iPhone can be the controller.",
+      "Play your iPhone's audio through this PC's speakers.",
+      "A volume bar for your phone on the music card.",
+      "Verification codes copy themselves, and Ctrl+Shift+V types the latest one.",
+      "Stronger security checks behind the scenes.",
+    ],
+  },
+  {
     version: "0.5.14",
     title: "A little more life",
     highlights: [

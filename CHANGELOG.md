@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.5.16 — 2026-10-10
+
+Play, listen and sign in faster. Merged as #116, #117, #118 and #119, together with v0.5.15's security work (#107).
+
+### New
+- **Tugboat Run:** a quick harbor game. Steer a tugboat past buoys, logs and boats, collect
+  coins, and beat your best score. Play with the keyboard, or scan the code and **use your
+  iPhone as the controller** (slide to steer, tap Boost to hop). Open it with the Play button
+  next to tug's name, or search "game" in Ctrl+K. Settings › General can hide games.
+- **Play iPhone audio on this PC:** a speaker button on the music card turns your PC into a
+  Bluetooth speaker for your iPhone; Stop hands the sound back. Optional: turn on automatically
+  when your iPhone connects.
+- **Phone volume bar** on the music card: click, drag, scroll or use the arrow keys; tug steps
+  your iPhone's volume one notch at a time.
+- **Code fill:** new verification codes copy themselves (kept out of clipboard history and
+  cleared after 2 minutes), and Ctrl+Shift+V types the latest code into the box you're in.
+  Both can be turned off, and the shortcut changed, in Settings › Notifications.
+
+## v0.5.15 — security (not released on its own; included in v0.5.16)
+
+- Automatic dependency, licence and code scanning (cargo-deny, npm audit, CodeQL) on every
+  change; weekly dependency updates.
+- The window can only use the permissions it needs, under a stricter content security policy.
+  docs/SECURITY-MODEL.md explains what tug protects against.
+
 ## v0.5.14 — 2026-10-10
 
 A little more life in tug. Merged as #106.
