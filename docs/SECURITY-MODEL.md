@@ -15,7 +15,8 @@ malformed input must fail safely rather than crash or hang tug.
 
 **Other devices on the same Wi-Fi (Tugboat).** Tugboat listens only while its panel is open (or Tugboat
 Run asked for the phone as a controller), on the PC's private LAN address. The QR code carries a secret after `#` that is never sent over the
-network; every request is MAC'd with keys derived from it, the first phone to connect binds the
+network; the page takes it out of the address bar at once and keeps it only in memory (never in
+web storage, so reloading the page means scanning again); every request is MAC'd with keys derived from it, the first phone to connect binds the
 session, replays are refused, and file contents are sealed with XChaCha20-Poly1305. Received files
 get safe names, land only in `Pictures\Tugboat`, and carry the Mark-of-the-Web. Plain HTTP means an
 *active* attacker on the network could tamper with the first page load; that's documented and out

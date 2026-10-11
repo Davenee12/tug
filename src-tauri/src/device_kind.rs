@@ -68,6 +68,21 @@ fn is_generic_name(name: &str) -> bool {
     name.is_empty() || name.eq_ignore_ascii_case("iphone") || name.eq_ignore_ascii_case("unnamed device")
 }
 
+/// How a device seen during discovery or pairing is named in the log: a short tag that stays the
+/// same for that device, so it can be followed from "added" to "paired" to "removed", instead of
+/// its name. Nearby devices are often named after their owners ("Sam's AirPods"), and those
+/// names aren't the user's to keep in a log or send with a support report.
+pub fn log_tag(device_id: &str) -> String {
+    // FNV-1a, so a device keeps its tag across runs and Rust versions (std's hasher doesn't
+    // promise that). Only 16 bits: enough to tell a handful of nearby devices apart, too few
+    // to say anything about the device's address.
+    let mut hash: u32 = 0x811c_9dc5;
+    for b in device_id.bytes() {
+        hash = (hash ^ u32::from(b)).wrapping_mul(0x0100_0193);
+    }
+    format!("device #{:04x}", hash & 0xffff)
+}
+
 pub fn classify(name: &str, appearance: Option<u16>, cod_major: Option<u32>) -> DeviceKind {
     let name = name.to_lowercase();
     let category = appearance.map(|a| a >> 6).filter(|&c| c != 0);
@@ -88,6 +103,21 @@ pub fn classify(name: &str, appearance: Option<u16>, cod_major: Option<u32>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_tags_are_stable_and_carry_no_name_or_address() {
+        let id = "Bluetooth#Bluetooth00:11:22:33:44:55-aa:bb:cc:dd:ee:ff";
+        let tag = log_tag(id);
+        assert_eq!(tag, log_tag(id), "the same device keeps its tag");
+        assert_ne!(tag, log_tag("Bluetooth#Bluetooth00:11:22:33:44:55-aa:bb:cc:dd:ee:fe"));
+        assert!(
+            tag.starts_with("device #") && tag.len() == "device #".len() + 4,
+            "{tag}"
+        );
+        assert!(!tag.contains(':'), "{tag}");
+        // Pinned, so a tag in an old log still matches the same device in a new one.
+        assert_eq!(log_tag(""), "device #9dc5");
+    }
 
     #[test]
     fn a_keyboard_is_never_the_phone() {

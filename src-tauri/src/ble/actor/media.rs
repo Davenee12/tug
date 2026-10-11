@@ -64,9 +64,9 @@ impl Actor {
             match read_attribute(attr, entity, attribute).await {
                 Ok(value) => {
                     log::debug!(
-                        "AMS read {} = {:?}",
+                        "AMS read {} = {}",
                         ams::attribute_name(entity, attribute),
-                        String::from_utf8_lossy(&value)
+                        ams::loggable_value(entity, attribute, &value)
                     );
                     self.shared
                         .update_now_playing(|np| np.apply_attribute(entity, attribute, &value, now_ms()));

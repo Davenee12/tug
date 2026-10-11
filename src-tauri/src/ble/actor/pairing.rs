@@ -199,7 +199,8 @@ impl Actor {
         let info = d.info.clone();
         let transport = d.transport;
         let name = info.Name().map(|n| n.to_string()).unwrap_or_default();
-        log::info!("pairing started: {name:?} ({transport:?})");
+        // By the same tag as its discovery lines, not its name (see device_kind::log_tag).
+        log::info!("pairing started: {} ({transport:?})", device_kind::log_tag(&id));
         let shared = self.shared.clone();
         let tx = self.tx.clone();
         tokio::task::spawn_local(async move {
@@ -451,7 +452,8 @@ impl Actor {
                 .to_string()
         })?;
         let id = pick.id.clone();
-        log::info!("pairing for texts: {} ({id})", pick.name);
+        // By the same tag as the inquiry lines, so the log shows which candidate was picked.
+        log::info!("pairing for texts: {}", device_kind::log_tag(&id));
         let op =
             DeviceInformation::CreateFromIdAsync(&HSTRING::from(id.as_str())).map_err(|e| e.message().to_string())?;
         let info = winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op)
@@ -495,7 +497,9 @@ async fn discover_unpaired_classic() -> std::result::Result<Vec<crate::map::pick
         let Ok(id) = info.Id() else { continue };
         let name = info.Name().map(|n| n.to_string()).unwrap_or_default();
         let kind = device_kind::classify(&name, None, uint_property(&info, PROP_COD_MAJOR));
-        log::info!("texts inquiry: {name:?} ({kind:?})");
+        // Everything discoverable nearby shows up here, named after its owner more often than
+        // not: log a tag and what tug takes it for, never the name.
+        log::info!("texts inquiry: {} ({kind:?})", device_kind::log_tag(&id.to_string()));
         out.push(UnpairedDevice {
             id: id.to_string(),
             name,

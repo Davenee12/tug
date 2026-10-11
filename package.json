@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "build:release": "node scripts/remap-paths.mjs node scripts/build-cli.mjs --release && node scripts/remap-paths.mjs tauri build",
-    "check": "npm run build:tugboat && vue-tsc --noEmit && vitest run --dir src && cargo fmt --manifest-path src-tauri/Cargo.toml --all --check && cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml --workspace",
+    "check": "npm run build:tugboat && vue-tsc --noEmit && vitest run --dir src && node --test scripts/shell-args.test.mjs && cargo fmt --manifest-path src-tauri/Cargo.toml --all --check && cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml --workspace",
     "test": "vitest run --dir src",
     "build:cli": "node scripts/build-cli.mjs"
   },

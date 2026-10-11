@@ -238,13 +238,35 @@ impl<'a> EntityUpdate<'a> {
     }
 }
 
+/// An attribute's value as it may appear in the log. What the player is doing (its app name,
+/// playback state, volume, queue position, shuffle, repeat, track length) is kept, since media
+/// problems are diagnosed from it; what's playing (artist, album, title, or anything tug doesn't
+/// know) is reduced to its length, because what someone listens to is personal.
+pub fn loggable_value(entity: u8, attribute: u8, value: &[u8]) -> String {
+    let shown = matches!(
+        (entity, attribute),
+        (ENTITY_PLAYER, PLAYER_NAME | PLAYER_PLAYBACK_INFO | PLAYER_VOLUME)
+            | (
+                ENTITY_QUEUE,
+                QUEUE_INDEX | QUEUE_COUNT | QUEUE_SHUFFLE_MODE | QUEUE_REPEAT_MODE
+            )
+            | (ENTITY_TRACK, TRACK_DURATION)
+    );
+    if shown {
+        format!("{:?}", String::from_utf8_lossy(value))
+    } else {
+        format!("({} chars)", String::from_utf8_lossy(value).chars().count())
+    }
+}
+
 impl fmt::Display for EntityUpdate<'_> {
+    /// For the log: see [`loggable_value`].
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} = {:?}",
+            "{} = {}",
             attribute_name(self.entity, self.attribute),
-            String::from_utf8_lossy(self.value)
+            loggable_value(self.entity, self.attribute, self.value)
         )?;
         if self.truncated {
             f.write_str(" (truncated)")?;
@@ -656,6 +678,28 @@ mod tests {
     }
 
     #[test]
+    fn the_log_shows_player_state_but_not_what_is_playing() {
+        assert_eq!(loggable_value(ENTITY_PLAYER, PLAYER_NAME, b"Music"), r#""Music""#);
+        assert_eq!(
+            loggable_value(ENTITY_PLAYER, PLAYER_PLAYBACK_INFO, b"1,1.0,12.5"),
+            r#""1,1.0,12.5""#
+        );
+        assert_eq!(loggable_value(ENTITY_QUEUE, QUEUE_REPEAT_MODE, b"2"), r#""2""#);
+        assert_eq!(loggable_value(ENTITY_TRACK, TRACK_DURATION, b"201.3"), r#""201.3""#);
+        for attribute in [TRACK_ARTIST, TRACK_ALBUM, TRACK_TITLE, 9] {
+            let logged = loggable_value(ENTITY_TRACK, attribute, "Café Song".as_bytes());
+            assert_eq!(logged, "(9 chars)");
+        }
+        assert_eq!(
+            loggable_value(7, 0, b"anything"),
+            "(8 chars)",
+            "unknown entities say nothing"
+        );
+        let u = EntityUpdate::parse(&[2, 0, 0, b'J', b'o']).unwrap();
+        assert_eq!(u.to_string(), "track/artist = (2 chars)");
+    }
+
+    #[test]
     fn parses_entity_update_header_and_truncation_flag() {
         let u = EntityUpdate::parse(&[1, 3, 0, b'2']).unwrap();
         assert_eq!((u.entity, u.attribute, u.truncated, u.value), (1, 3, false, &b"2"[..]));
@@ -663,7 +707,7 @@ mod tests {
 
         let u = EntityUpdate::parse(&[2, 2, 1, b'L', b'o']).unwrap();
         assert!(u.truncated);
-        assert_eq!(u.to_string(), r#"track/title = "Lo" (truncated)"#);
+        assert_eq!(u.to_string(), r#"track/title = (2 chars) (truncated)"#);
         // Other flag bits are reserved and don't mean truncated.
         assert!(!EntityUpdate::parse(&[2, 2, 0b10]).unwrap().truncated);
 
