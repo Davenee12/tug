@@ -119,15 +119,18 @@ const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
 const qh = computed(() => tug.settings.quietHours);
 const setQuiet = (patch: Partial<typeof tug.settings.quietHours>) => void tug.setSetting("quietHours", { ...tug.settings.quietHours, ...patch });
 const quietEnabled = computed({ get: () => qh.value.enabled, set: (v) => setQuiet({ enabled: v }) });
-const DAYS: Array<[string, number, string]> = [
-  ["S", 0, "Sunday"],
-  ["M", 1, "Monday"],
-  ["T", 2, "Tuesday"],
-  ["W", 3, "Wednesday"],
-  ["T", 4, "Thursday"],
-  ["F", 5, "Friday"],
-  ["S", 6, "Saturday"],
+// Plain objects and script-side handlers keep the template free of destructuring and
+// TypeScript casts, which CodeQL's Vue extractor can't parse (it skipped this whole file).
+const DAYS: Array<{ letter: string; d: number; name: string }> = [
+  { letter: "S", d: 0, name: "Sunday" },
+  { letter: "M", d: 1, name: "Monday" },
+  { letter: "T", d: 2, name: "Tuesday" },
+  { letter: "W", d: 3, name: "Wednesday" },
+  { letter: "T", d: 4, name: "Thursday" },
+  { letter: "F", d: 5, name: "Friday" },
+  { letter: "S", d: 6, name: "Saturday" },
 ];
+const onQuietTime = (which: "start" | "end", e: Event) => setQuiet({ [which]: (e.target as HTMLInputElement).value });
 const dayOn = (d: number) => qh.value.days.length === 0 || qh.value.days.includes(d);
 function toggleDay(d: number) {
   const current = qh.value.days.length ? qh.value.days : [0, 1, 2, 3, 4, 5, 6];
@@ -189,13 +192,15 @@ function addVip(c: { address: string }) {
   vipQuery.value = "";
 }
 
-const SHORTCUTS: Array<[string, string[]]> = [
-  ["Search, or type an action", ["Ctrl", "K"]],
-  ["New message", ["Ctrl", "N"]],
-  ["Copy the latest code", ["Ctrl", "Shift", "C"]],
-  ["Settings", ["Ctrl", ","]],
-  ["Zoom in · out · reset", ["Ctrl", "+  −  0"]],
+const SHORTCUTS: Array<{ what: string; keys: string[] }> = [
+  { what: "Search, or type an action", keys: ["Ctrl", "K"] },
+  { what: "New message", keys: ["Ctrl", "N"] },
+  { what: "Copy the latest code", keys: ["Ctrl", "Shift", "C"] },
+  { what: "Settings", keys: ["Ctrl", ","] },
+  { what: "Zoom in · out · reset", keys: ["Ctrl", "+  −  0"] },
 ];
+
+const UNITS = ["f", "c"] as const;
 
 // ---- iPhone: experimental calling, on only after the hands-free check passes ----
 const checkingCalls = ref(false);
@@ -328,10 +333,10 @@ async function clearHistory() {
 
           <p class="caption-upper mt-6 mb-2 px-1 text-muted">Keyboard</p>
           <div class="grid grid-cols-1 gap-px overflow-hidden rounded-xl bg-hairline-soft lg:grid-cols-2">
-            <div v-for="[what, keys] in SHORTCUTS" :key="what" class="flex items-center bg-surface-card px-5 py-2.5 text-[14px] text-ink">
-              {{ what }}
+            <div v-for="sc in SHORTCUTS" :key="sc.what" class="flex items-center bg-surface-card px-5 py-2.5 text-[14px] text-ink">
+              {{ sc.what }}
               <span class="ml-auto flex gap-1">
-                <kbd v-for="k in keys" :key="k" class="rounded border border-hairline bg-canvas px-1.5 font-mono text-[12px] text-body">{{ k }}</kbd>
+                <kbd v-for="k in sc.keys" :key="k" class="rounded border border-hairline bg-canvas px-1.5 font-mono text-[12px] text-body">{{ k }}</kbd>
               </span>
             </div>
           </div>
@@ -537,31 +542,31 @@ async function clearHistory() {
                   type="time"
                   :value="qh.start"
                   class="rounded-md border border-hairline bg-canvas px-2 py-1 font-mono text-[13px] text-ink"
-                  @change="setQuiet({ start: ($event.target as HTMLInputElement).value })"
+                  @change="onQuietTime('start', $event)"
                 />
                 to
                 <input
                   type="time"
                   :value="qh.end"
                   class="rounded-md border border-hairline bg-canvas px-2 py-1 font-mono text-[13px] text-ink"
-                  @change="setQuiet({ end: ($event.target as HTMLInputElement).value })"
+                  @change="onQuietTime('end', $event)"
                 />
               </label>
               <div class="flex items-center gap-1.5">
                 <button
-                  v-for="([letter, d, dayName], i) in DAYS"
-                  :key="i"
+                  v-for="day in DAYS"
+                  :key="day.d"
                   type="button"
                   :class="[
                     'size-7 rounded-full text-[12px] font-medium transition-colors',
-                    dayOn(d) ? 'bg-ink text-on-dark' : 'bg-canvas text-muted active:bg-surface-cream-strong',
+                    dayOn(day.d) ? 'bg-ink text-on-dark' : 'bg-canvas text-muted active:bg-surface-cream-strong',
                   ]"
-                  :aria-pressed="dayOn(d)"
-                  :aria-label="`${dayName}: ${dayOn(d) ? 'on' : 'off'}`"
-                  :title="`${dayName}: ${dayOn(d) ? 'on' : 'off'}`"
-                  @click="toggleDay(d)"
+                  :aria-pressed="dayOn(day.d)"
+                  :aria-label="`${day.name}: ${dayOn(day.d) ? 'on' : 'off'}`"
+                  :title="`${day.name}: ${dayOn(day.d) ? 'on' : 'off'}`"
+                  @click="toggleDay(day.d)"
                 >
-                  {{ letter }}
+                  {{ day.letter }}
                 </button>
               </div>
             </div>
@@ -691,7 +696,7 @@ async function clearHistory() {
             <SettingsRow label="Units" description="Also switchable right on the card.">
               <div class="flex rounded-lg bg-canvas p-0.5">
                 <button
-                  v-for="u in ['f', 'c'] as const"
+                  v-for="u in UNITS"
                   :key="u"
                   :class="['rounded-md px-3 py-1 text-[13px]', weather.unit === u ? 'bg-surface-cream-strong font-medium text-ink' : 'text-muted']"
                   :aria-pressed="weather.unit === u"
