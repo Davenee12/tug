@@ -341,6 +341,13 @@ mod tests {
     use super::*;
     use crate::ancs::parse_notification_source;
 
+    /// The serialized tally must carry none of the made-up personal text a fixture put in.
+    fn assert_omits(json: &str, fixture_text: &[&str]) {
+        for text in fixture_text {
+            assert!(!json.contains(text), "fixture text {text:?} reached the tally: {json}");
+        }
+    }
+
     #[test]
     fn tallies_categories_flags_and_events() {
         let mut t = AncsTally::with_all_categories();
@@ -386,9 +393,7 @@ mod tests {
             vec!["Clear", "Mark as Read"]
         );
         let json = serde_json::to_string(&t).unwrap();
-        for secret in ["Jane", "Family", "3025550142", "MobileSMS"] {
-            assert!(!json.contains(secret), "{secret} leaked: {json}");
-        }
+        assert_omits(&json, &["Jane", "Family", "3025550142", "MobileSMS"]);
     }
 
     #[test]
@@ -432,9 +437,10 @@ mod tests {
         assert_eq!(c.tel_types["HOME"], 1);
         assert_eq!(c.tel_types["VOICE"], 2);
         let json = serde_json::to_string(&c).unwrap();
-        for secret in ["Jane", "3025550142", "example.com", "Main St", "1990", "John", "park"] {
-            assert!(!json.contains(secret), "{secret} leaked: {json}");
-        }
+        assert_omits(
+            &json,
+            &["Jane", "3025550142", "example.com", "Main St", "1990", "John", "park"],
+        );
     }
 
     #[test]
@@ -457,9 +463,7 @@ mod tests {
         );
         assert_eq!(c.fields["custom"], 1, "made-up names count once per contact, as custom");
         let json = serde_json::to_string(&c).unwrap();
-        for secret in ["JANEDOE", "SECRETCLUB", "Mobile"] {
-            assert!(!json.contains(secret), "{secret} leaked: {json}");
-        }
+        assert_omits(&json, &["JANEDOE", "SECRETCLUB", "Mobile"]);
     }
 
     #[test]
@@ -479,9 +483,7 @@ mod tests {
             vec!["CELL", "HOME", "custom"]
         );
         let json = serde_json::to_string(&c).unwrap();
-        for secret in ["GRANDMA", "Grandma", "Mum", "BESTFRIEND"] {
-            assert!(!json.contains(secret), "{secret} leaked: {json}");
-        }
+        assert_omits(&json, &["GRANDMA", "Grandma", "Mum", "BESTFRIEND"]);
     }
 
     #[test]

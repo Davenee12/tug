@@ -643,18 +643,21 @@ impl Actor {
             }
             Event::DeviceAdded(info, transport) => {
                 if let Ok(id) = info.Id() {
-                    // Discovery was effectively silent in the logs; name the candidates so a phone
-                    // that appears and vanishes mid-pairing can be diagnosed.
+                    // Discovery was effectively silent in the logs. Log each candidate and what tug
+                    // takes it for, so a discoverable Classic iPhone (and a phone that appears then
+                    // vanishes mid-pairing) is clear in the log; by tag, not name, since nearby
+                    // devices are named after other people.
                     let name = info.Name().map(|n| n.to_string()).unwrap_or_default();
                     let connected = pairing::bool_property(&info, PROP_IS_CONNECTED);
-                    // Name the candidate and what tug takes it for, so a discoverable Classic iPhone
-                    // (and a phone that appears then vanishes mid-pairing) is clear in the log.
                     let kind = crate::device_kind::classify(
                         &name,
                         pairing::uint_property(&info, pairing::PROP_LE_APPEARANCE).and_then(|a| u16::try_from(a).ok()),
                         pairing::uint_property(&info, pairing::PROP_COD_MAJOR),
                     );
-                    log::info!("discovery: added {transport:?} {name:?} ({kind:?}, connected={connected})");
+                    log::info!(
+                        "discovery: added {transport:?} {} ({kind:?}, connected={connected})",
+                        crate::device_kind::log_tag(&id.to_string())
+                    );
                     self.discovered.insert(id.to_string(), Discovered { info, transport });
                     self.discovered_dirty = true;
                 }
@@ -666,17 +669,19 @@ impl Actor {
                         let _ = d.info.Update(&update);
                         let now = pairing::bool_property(&d.info, PROP_IS_CONNECTED);
                         if was != now {
-                            let name = d.info.Name().map(|n| n.to_string()).unwrap_or_default();
-                            log::info!("discovery: {name:?} {}", if now { "connected" } else { "disconnected" });
+                            log::info!(
+                                "discovery: {} {}",
+                                crate::device_kind::log_tag(&id.to_string()),
+                                if now { "connected" } else { "disconnected" }
+                            );
                         }
                         self.discovered_dirty = true;
                     }
                 }
             }
             Event::DeviceRemoved(id) => {
-                if let Some(d) = self.discovered.get(&id) {
-                    let name = d.info.Name().map(|n| n.to_string()).unwrap_or_default();
-                    log::info!("discovery: removed {name:?}");
+                if self.discovered.contains_key(&id) {
+                    log::info!("discovery: removed {}", crate::device_kind::log_tag(&id));
                 }
                 self.discovered.remove(&id);
                 self.discovered_dirty = true;

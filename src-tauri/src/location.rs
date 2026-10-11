@@ -89,13 +89,14 @@ pub fn place_lookup(_latitude: f64, _longitude: f64) -> Result<String, String> {
 
 #[cfg(all(test, windows))]
 mod tests {
-    /// Hardware check: `cargo test --lib location -- --ignored --nocapture`
+    /// Hardware check: `cargo test --lib location -- --ignored`. It checks the fix is a real
+    /// place without printing it: test output gets pasted into issues, and where you are is
+    /// personal.
     #[test]
     #[ignore]
     fn locate_on_this_pc() {
-        match super::locate() {
-            Ok(p) => println!("located: {:.2}, {:.2}", p.latitude, p.longitude),
-            Err(e) => panic!("locate failed: {e}"),
-        }
+        let p = super::locate().unwrap_or_else(|e| panic!("locate failed: {e}"));
+        assert!((-90.0..=90.0).contains(&p.latitude), "latitude out of range");
+        assert!((-180.0..=180.0).contains(&p.longitude), "longitude out of range");
     }
 }

@@ -108,6 +108,40 @@ pub fn parse_reply(line: &str) -> Reply {
     Reply::Other(line.to_string())
 }
 
+/// An AT line as it may appear in the log. tug's own setup commands and the phone's status
+/// replies are kept whole (they're what a hands-free problem is diagnosed from); anything else is
+/// cut to its command name, because a dial string (`ATD…`), caller ID (`+CLIP`), call list
+/// (`+CLCC`), subscriber number (`+CNUM`) or phonebook entry carries phone numbers and names.
+pub fn loggable(line: &str) -> String {
+    const WHOLE: [&str; 7] = ["OK", "ERROR", "RING", "BUSY", "NO CARRIER", "NO ANSWER", "NO DIALTONE"];
+    const WHOLE_PREFIXES: [&str; 7] = [
+        "AT+BRSF",
+        "AT+CIND",
+        "AT+CMER",
+        "+BRSF:",
+        "+CIND:",
+        "+CIEV:",
+        "+CME ERROR:",
+    ];
+    let line = line.trim();
+    if WHOLE.contains(&line) || WHOLE_PREFIXES.iter().any(|p| line.starts_with(p)) {
+        return line.to_string();
+    }
+    let prefix = ["AT+", "AT", "+"]
+        .into_iter()
+        .find(|p| line.starts_with(p))
+        .unwrap_or("");
+    let letters = line[prefix.len()..].bytes().take_while(u8::is_ascii_uppercase).count();
+    let name = &line[..prefix.len() + letters];
+    if name.len() == line.len() {
+        name.to_string()
+    } else if name.is_empty() {
+        "[hidden]".to_string()
+    } else {
+        format!("{name} [hidden]")
+    }
+}
+
 /// Every `"…"` in order.
 fn quoted(s: &str) -> Vec<String> {
     s.split('"').skip(1).step_by(2).map(str::to_string).collect()
@@ -291,6 +325,50 @@ mod tests {
         assert_eq!(parse_reply("+CIEV: 3,2"), Reply::Ciev { index: 3, value: 2 });
         assert_eq!(parse_reply("RING"), Reply::Other("RING".into()));
         assert_eq!(parse_reply("+CIEV: x"), Reply::Other("+CIEV: x".into()));
+    }
+
+    #[test]
+    fn the_log_keeps_setup_traffic_and_hides_numbers() {
+        // What a setup problem is diagnosed from stays whole.
+        for line in [
+            "AT+BRSF=0",
+            "AT+CIND=?",
+            "AT+CIND?",
+            "AT+CMER=3,0,0,1",
+            "+BRSF: 3943",
+            r#"+CIND: ("service",(0,1)),("call",(0,1))"#,
+            "+CIND: 1,0,0",
+            "+CIEV: 3,2",
+            "+CME ERROR: 30",
+            "OK",
+            "ERROR",
+            "RING",
+            "NO CARRIER",
+        ] {
+            assert_eq!(loggable(line), line);
+        }
+        assert_eq!(loggable("AT+BRSF=0\r"), "AT+BRSF=0", "line endings trimmed");
+        // Anything that can carry a number or a name is cut to its command.
+        let hidden = [
+            (dial("+1 (302) 555-0142").unwrap(), "ATD [hidden]"),
+            (
+                r#"+CLIP: "+13025550142",145,,,"Jane Doe""#.to_string(),
+                "+CLIP [hidden]",
+            ),
+            (r#"+CLCC: 1,1,4,0,0,"3025550142",129"#.to_string(), "+CLCC [hidden]"),
+            (r#"+CNUM: ,"+13025550199",145,,4"#.to_string(), "+CNUM [hidden]"),
+            (r#"+CCWA: "3025550142",129,1"#.to_string(), "+CCWA [hidden]"),
+            (r#"+BINP: "3025550142""#.to_string(), "+BINP [hidden]"),
+            ("3025550142".to_string(), "[hidden]"),
+        ];
+        for (line, want) in hidden {
+            let got = loggable(&line);
+            assert_eq!(got, want);
+            assert!(!got.contains("555"), "{got}");
+            assert!(!got.contains("Jane"), "{got}");
+        }
+        // A bare command with nothing after it has nothing to hide.
+        assert_eq!(loggable("AT+CLCC"), "AT+CLCC");
     }
 
     #[test]

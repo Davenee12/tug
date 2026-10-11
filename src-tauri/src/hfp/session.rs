@@ -105,7 +105,7 @@ impl Link {
     }
 
     async fn send(&mut self, command: &str) -> Result<(), HfpError> {
-        log::debug!("HFP > {}", command.trim_end());
+        log::debug!("HFP > {}", at::loggable(command));
         self.writer.WriteBytes(command.as_bytes())?;
         self.writer.StoreAsync()?.await?;
         Ok(())
@@ -118,7 +118,7 @@ impl Link {
                 let lines = at::take_lines(&mut self.buf);
                 if !lines.is_empty() {
                     for l in &lines {
-                        log::debug!("HFP < {l}");
+                        log::debug!("HFP < {}", at::loggable(l));
                     }
                     return Ok(lines);
                 }
