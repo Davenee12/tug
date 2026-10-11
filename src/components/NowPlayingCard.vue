@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
-import { FastForward, Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, Rewind, RotateCcw, Shuffle, SkipBack, SkipForward, ThumbsDown, ThumbsUp, Volume1, Volume2 } from "lucide-vue-next";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { FastForward, Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, Rewind, RotateCcw, Shuffle, SkipBack, SkipForward, Speaker, Square, ThumbsDown, ThumbsUp, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { usePcAudioStore } from "../stores/pcAudio";
 import {
   canRestart,
   createHoldRepeater,
@@ -14,12 +15,15 @@ import {
   supportsDislike,
   supportsLike,
 } from "../lib/media";
+import { volumeShown } from "../lib/volume";
 import NowPlayingProgress from "./NowPlayingProgress.vue";
+import NowPlayingVolume from "./NowPlayingVolume.vue";
 
 // `compact` (from the sidebar, on short windows) drops the card's second row of extra controls and
 // tucks them into rows that are there anyway, so the card keeps its one-row height and still fits
-// without scrolling (see showExtraRow).
-const props = defineProps<{ compact?: boolean }>();
+// without scrolling (see showExtraRow). `tight` (the shortest windows) also leaves out the volume
+// bar's row; the volume buttons then sit in the transport row as they did before the bar.
+const props = defineProps<{ compact?: boolean; tight?: boolean }>();
 
 const tug = useTugStore();
 const np = computed(() => tug.nowPlaying);
@@ -33,9 +37,17 @@ const artistLine = computed(() => {
   const line = [track.value.artist, track.value.album].filter(Boolean).join(" — ");
   return line || (track.value.hint ? null : "Unknown artist");
 });
-const heading = computed(() =>
-  available.value ? [np.value.player ?? "Now playing", tug.playingOn].filter(Boolean).join(" ") : "Now playing",
-);
+// Play iPhone audio on this PC. While it's on (or connecting) the header says so in place of the
+// player name, with Stop right beside it: the phone's sound is coming out of this PC, so that has
+// to be obvious and one click to undo. It lives in the header so the card never grows taller.
+const pcAudio = usePcAudioStore();
+const pc = computed(() => pcAudio.view);
+// The button shows words (Stop, Cancel, Reconnect, Try again) rather than just its icon.
+const pcWords = computed(() => pc.value.show && (pc.value.active || !!pc.value.problem));
+const heading = computed(() => {
+  if (pc.value.active) return pc.value.busy ? "Connecting to this PC…" : "Playing on this PC";
+  return available.value ? [np.value.player ?? "Now playing", tug.playingOn].filter(Boolean).join(" ") : "Now playing";
+});
 
 // Spotify augmentation: only when connected and Spotify is the AMS player (see the store).
 const sp = computed(() => (tug.spotifyActive ? tug.spotifyPlayer : null));
@@ -62,8 +74,16 @@ const holdUp = createHoldRepeater(timers);
 const holdDown = createHoldRepeater(timers);
 const atMax = () => (np.value.volume ?? 0) >= 1;
 const atMin = () => (np.value.volume ?? 1) <= 0;
-const pressUp = () => holdUp.start(() => tug.media("volumeUp"), atMax);
-const pressDown = () => holdDown.start(() => tug.media("volumeDown"), atMin);
+// A − or + press takes over from a click/drag on the volume bar that's still stepping.
+const volumeBar = ref<InstanceType<typeof NowPlayingVolume> | null>(null);
+const pressUp = () => {
+  volumeBar.value?.cancel();
+  holdUp.start(() => tug.media("volumeUp"), atMax);
+};
+const pressDown = () => {
+  volumeBar.value?.cancel();
+  holdDown.start(() => tug.media("volumeDown"), atMin);
+};
 
 // Space/Enter held on a focused button: ignore the OS key-repeat and let our own timer set the
 // pace; preventDefault stops the synthetic click (and Space scrolling the page).
@@ -72,6 +92,26 @@ function holdKey(e: KeyboardEvent, press: () => void) {
   e.preventDefault();
   press();
 }
+
+// The − and + buttons sit in the transport row or beside the volume bar; one set of handlers for both.
+const downEvents = {
+  pointerdown: pressDown,
+  pointerup: holdDown.stop,
+  pointercancel: holdDown.stop,
+  pointerleave: holdDown.stop,
+  blur: holdDown.stop,
+  keydown: (e: KeyboardEvent) => holdKey(e, pressDown),
+  keyup: holdDown.stop,
+};
+const upEvents = {
+  pointerdown: pressUp,
+  pointerup: holdUp.stop,
+  pointercancel: holdUp.stop,
+  pointerleave: holdUp.stop,
+  blur: holdUp.stop,
+  keydown: (e: KeyboardEvent) => holdKey(e, pressUp),
+  keyup: holdUp.stop,
+};
 
 function stopHolds() {
   holdUp.stop();
@@ -92,6 +132,11 @@ onUnmounted(() => {
 });
 
 const can = (c: string) => np.value.available.length === 0 || np.value.available.includes(c as never);
+
+// The phone volume bar: only while connected and the player reports a volume (a Spotify Connect
+// speaker included, when the phone passes its volume on). It gets its own slim row with − and +
+// beside it, except on the shortest windows (see `tight`).
+const showVolumeBar = computed(() => !props.tight && volumeShown(np.value, tug.connected, available.value));
 
 // Extra AMS controls, shown only when the current player lists them (see lib/media). Skip ±15 s is
 // offered by Apple Music and Spotify; Like/Dislike by Apple Music. Spotify keeps its own Web API
@@ -143,9 +188,11 @@ function restart() {
 <template>
   <section class="rounded-xl bg-surface-dark-elevated p-4">
     <div class="caption-upper mb-2.5 flex items-center gap-2 text-on-dark-soft">
-      <Music2 :size="13" />
-      <span class="min-w-0 flex-1 truncate">{{ heading }}</span>
-      <template v-if="available">
+      <Speaker v-if="pc.active" :size="13" class="text-on-dark" />
+      <Music2 v-else :size="13" />
+      <span class="min-w-0 flex-1 truncate" :class="pc.active ? 'text-[12px] font-medium tracking-normal normal-case text-on-dark' : ''">{{ heading }}</span>
+      <!-- Restart and Spotify make room for the PC audio button's words while it shows any. -->
+      <template v-if="available && !pcWords">
         <button
           class="rounded-full p-1.5 normal-case text-on-dark-soft active:text-on-dark"
           :disabled="!can('previousTrack')"
@@ -157,7 +204,7 @@ function restart() {
         </button>
       </template>
       <button
-        v-if="tug.spotify.connected"
+        v-if="tug.spotify.connected && !pcWords"
         class="rounded-full p-1.5 normal-case text-on-dark-soft active:text-on-dark"
         aria-label="Open Spotify"
         title="Search and play on Spotify"
@@ -165,6 +212,37 @@ function restart() {
       >
         <ListMusic :size="15" />
       </button>
+      <template v-if="pc.show">
+        <!-- On or connecting: Stop / Cancel, unmissable. -->
+        <button
+          v-if="pc.active"
+          class="flex shrink-0 items-center gap-1 rounded-full bg-on-dark px-2.5 py-1 text-[12px] font-medium normal-case text-surface-dark active:bg-on-dark-soft"
+          :aria-label="pc.title"
+          :title="pc.title"
+          @click="pcAudio.press()"
+        >
+          <Square :size="10" fill="currentColor" /> {{ pc.label }}
+        </button>
+        <!-- It dropped or didn't connect: Reconnect / Try again (the sentence was shown as it happened). -->
+        <button
+          v-else-if="pc.problem"
+          class="flex shrink-0 items-center gap-1 rounded-full bg-surface-dark-soft px-2.5 py-1 text-[12px] font-medium normal-case text-on-dark active:text-on-dark-soft"
+          :aria-label="`${pc.label}: play on this PC`"
+          :title="pc.problem"
+          @click="pcAudio.press()"
+        >
+          <Speaker :size="13" /> {{ pc.label }}
+        </button>
+        <button
+          v-else
+          class="rounded-full p-1.5 normal-case text-on-dark-soft active:text-on-dark"
+          aria-label="Play on this PC"
+          :title="pc.title"
+          @click="pcAudio.press()"
+        >
+          <Speaker :size="15" />
+        </button>
+      </template>
     </div>
 
     <template v-if="available">
@@ -256,17 +334,12 @@ function restart() {
             <Shuffle :size="16" />
           </button>
           <button
+            v-if="!showVolumeBar"
             class="rounded-full p-1.5 text-on-dark-soft active:text-on-dark"
             :disabled="!can('volumeDown')"
             aria-label="Volume down"
             title="Hold to keep changing"
-            @pointerdown="pressDown"
-            @pointerup="holdDown.stop"
-            @pointercancel="holdDown.stop"
-            @pointerleave="holdDown.stop"
-            @blur="holdDown.stop"
-            @keydown="holdKey($event, pressDown)"
-            @keyup="holdDown.stop"
+            v-on="downEvents"
           >
             <Volume1 :size="17" />
           </button>
@@ -289,17 +362,12 @@ function restart() {
         </div>
         <div class="flex items-center gap-0.5">
           <button
+            v-if="!showVolumeBar"
             class="rounded-full p-1.5 text-on-dark-soft active:text-on-dark"
             :disabled="!can('volumeUp')"
             aria-label="Volume up"
             title="Hold to keep changing"
-            @pointerdown="pressUp"
-            @pointerup="holdUp.stop"
-            @pointercancel="holdUp.stop"
-            @pointerleave="holdUp.stop"
-            @blur="holdUp.stop"
-            @keydown="holdKey($event, pressUp)"
-            @keyup="holdUp.stop"
+            v-on="upEvents"
           >
             <Volume2 :size="17" />
           </button>
@@ -315,6 +383,31 @@ function restart() {
             <Repeat v-else :size="16" />
           </button>
         </div>
+      </div>
+
+      <!-- The phone's volume: − and + (hold to keep changing) either side of the bar (click, drag,
+           wheel or arrow keys). Negative margins keep the row only as tall as the bar's spacing, so
+           the roomy card still fits at an 800 px window and the compact one at 1366×768. -->
+      <div v-if="showVolumeBar" class="mt-2.5 flex items-center gap-1.5">
+        <button
+          class="-my-1.5 rounded-full p-1 text-on-dark-soft active:text-on-dark"
+          :disabled="!can('volumeDown')"
+          aria-label="Volume down"
+          title="Hold to keep changing"
+          v-on="downEvents"
+        >
+          <Volume1 :size="15" />
+        </button>
+        <NowPlayingVolume ref="volumeBar" :volume="np.volume ?? 0" :adjustable="can('volumeUp') && can('volumeDown')" />
+        <button
+          class="-my-1.5 rounded-full p-1 text-on-dark-soft active:text-on-dark"
+          :disabled="!can('volumeUp')"
+          aria-label="Volume up"
+          title="Hold to keep changing"
+          v-on="upEvents"
+        >
+          <Volume2 :size="15" />
+        </button>
       </div>
 
       <!-- Extra controls the player supports over AMS: skip ±15 s and (Apple Music) Like/Dislike.

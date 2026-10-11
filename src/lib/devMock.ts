@@ -40,15 +40,28 @@
 //   http://localhost:1420/?tugboatwait   the Tugboat panel showing its QR code, no phone yet ("Can't
 //                                     connect?" help appears after 30 s)
 //   http://localhost:1420/?tugboatnonet  the Tugboat panel with no network a phone could use
+//   http://localhost:1420/?game       Tugboat Run open, ready to start
+//   http://localhost:1420/?gamephone  Tugboat Run with a phone controller: the code, a phone scanning
+//                                     it, then the phone starting the run and steering
 //   http://localhost:1420/?devtools   Settings › Developer tools, switched on, with two connected tools
 //   http://localhost:1420/?devconfirm the "wants to text" confirmation card an AI tool's send_text shows
+//   http://localhost:1420/?codefill   code fill: a bank's code arrives 1.5 s after load (as a notification and
+//                                     as a text) and is copied once (logged in the console), then the
+//                                     type-the-code shortcut is "pressed" at 4 s (typed) and at 6 s (tug in
+//                                     front). Add &hotkeybusy for Ctrl+Shift+V taken by another app
+//                                     (Settings › Notifications offers the others)
 //   http://localhost:1420/?heavy      a long history for performance work: ~2,000 texts in ~60 conversations,
 //                                     ~500 notifications, 120 calls, Spotify playing, the weather card on
+//   http://localhost:1420/?pcaudio    the iPhone's audio already playing on this PC (Now Playing says so,
+//                                     with Stop). Without it, "Play on this PC" connects after ~1 s.
+//   http://localhost:1420/?pcaudiofail   "Play on this PC" times out: the calm sentence and Try again
+//   http://localhost:1420/?pcaudiodrop   it turns on, then the phone drops it 6 s later: Reconnect
+//   http://localhost:1420/?pcaudioold    Windows too old for it: no button, Settings says so
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { RELEASE_NOTES } from "./whatsNew";
-import type { CallRecord, Contact, DevToolsStatus, DeviceStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
+import type { CallRecord, CodeHotkeyStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -249,6 +262,8 @@ const appleMusic = params.has("applemusic");
 // ?speaker: Spotify on the phone is playing on a Spotify Connect speaker. The phone then reports the
 // title as "Song • Artist" and the artist as "Listening on <speaker>" (seen on a real iPhone).
 const onSpeaker = params.has("speaker") && !appleMusic;
+// ?novolume: a player that doesn't report its volume, so the Now Playing volume bar stays hidden.
+const noVolume = params.has("novolume");
 const nowPlaying: NowPlaying = noPhone || forgotten
   ? { player: null, state: "unknown", rate: null, elapsed: null, elapsedAt: null, volume: null, title: null, artist: null, album: null, duration: null, repeat: null, available: [] }
   : {
@@ -257,7 +272,8 @@ const nowPlaying: NowPlaying = noPhone || forgotten
       rate: 1,
       elapsed: 74,
       elapsedAt: now,
-      volume: 0.6,
+      // On the phone's 1/16 grid, like the values a real iPhone reports ("0.625").
+      volume: noVolume ? null : 0.625,
       title: onSpeaker ? "Teardrop • Massive Attack" : "Teardrop",
       artist: onSpeaker ? "Listening on Kitchen speaker" : "Massive Attack",
       album: onSpeaker ? null : "Mezzanine",
@@ -687,6 +703,56 @@ if (dropOn || dropWait || dropNoNet) {
   }, 400);
 }
 
+// --- Tugboat Run (?game, ?gamephone) ---
+// ?game opens the game. ?gamephone also opens "Use your phone as a controller": Tugboat shows its
+// code, a phone scans it 1.5 s later, its controller connects a second after that, presses Boost
+// (which starts the run) and steers in slow S-bends until the game closes the channel.
+let padOpen = false;
+let padScript: number | undefined;
+const padTimers: number[] = [];
+function gamePadOpen() {
+  if (padOpen) return;
+  padOpen = true;
+  startDrop();
+  sendDrop();
+  if (!params.has("gamephone")) return;
+  padTimers.push(
+    window.setTimeout(() => {
+      Object.assign(dropState, { phase: "connected", phone: "iPhone", phoneActive: true });
+      sendDrop();
+    }, 1500),
+    window.setTimeout(() => {
+      const t0 = performance.now();
+      let tick = 0;
+      padScript = window.setInterval(() => {
+        const t = (performance.now() - t0) / 1000;
+        tick++;
+        // Boost for a moment at the start (starts the run) and every few seconds after.
+        const boost = tick % 30 < 3;
+        void emit("game-pad", { connected: true, steer: Math.round(Math.sin(t * 1.3) * 80) / 100, boost });
+      }, 100);
+    }, 2500),
+  );
+}
+function gamePadClose() {
+  padOpen = false;
+  for (const t of padTimers.splice(0)) window.clearTimeout(t);
+  window.clearInterval(padScript);
+  padScript = undefined;
+  void emit("game-pad", { connected: false, steer: 0, boost: false });
+}
+if (params.has("game") || params.has("gamephone")) {
+  setTimeout(async () => {
+    const { useGameStore } = await import("../stores/game");
+    await useGameStore().show();
+    if (!params.has("gamephone")) return;
+    setTimeout(() => {
+      const button = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes("Use your phone as a controller"));
+      button?.click();
+    }, 300);
+  }, 400);
+}
+
 // --- Developer tools (?devtools, ?devconfirm) ---
 const DEV_LABELS: Array<[DevToolsStatus["permissions"][number]["key"], string, boolean]> = [
   ["codes", "Verification codes", false],
@@ -738,10 +804,58 @@ if (params.has("devconfirm")) {
   }, 900);
 }
 
+// Play iPhone audio on this PC (?pcaudio, ?pcaudiofail, ?pcaudiodrop, ?pcaudioold).
+const pcAudio: PcAudioStatus = {
+  supported: !params.has("pcaudioold"),
+  state: params.has("pcaudio") && !noPhone ? "on" : "off",
+  problem: null,
+  auto: false,
+};
+let pcAttempt = 0;
+const sendPc = () => {
+  const copy = { ...pcAudio };
+  void emit("pc-audio", copy);
+  return copy;
+};
+function setPcAudio(on: boolean): PcAudioStatus {
+  if (!on) {
+    pcAttempt++;
+    Object.assign(pcAudio, { state: "off", problem: null });
+    return sendPc();
+  }
+  if (!pcAudio.supported || pcAudio.state !== "off") return { ...pcAudio };
+  const attempt = ++pcAttempt;
+  Object.assign(pcAudio, { state: "connecting", problem: null });
+  setTimeout(() => {
+    if (attempt !== pcAttempt) return; // stopped meanwhile
+    if (params.has("pcaudiofail")) Object.assign(pcAudio, { state: "off", problem: "timedOut" });
+    else pcAudio.state = "on";
+    sendPc();
+    if (params.has("pcaudiodrop") && pcAudio.state === "on") {
+      setTimeout(() => {
+        if (attempt !== pcAttempt) return;
+        Object.assign(pcAudio, { state: "off", problem: "dropped" });
+        sendPc();
+      }, 6000);
+    }
+  }, params.has("pcaudiofail") ? 1500 : 1100);
+  return sendPc();
+}
+// The type-the-code shortcut as the backend registered it at startup (default on, Ctrl+Shift+V).
+const codeHotkey: CodeHotkeyStatus = { state: params.has("hotkeybusy") ? "inUse" : "on", keys: "ctrl+shift+v" };
+
 mockIPC(
   (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (cmd) {
+      case "pc_audio_status":
+        return { ...pcAudio };
+      case "pc_audio_set":
+        return setPcAudio(a.on === true);
+      case "pc_audio_set_auto":
+        if (!status.device) throw "Connect your iPhone first.";
+        pcAudio.auto = a.on === true;
+        return sendPc();
       // getVersion() from @tauri-apps/api/app, so Settings › About and the "What's new" card read
       // a real version in the browser preview (unmocked, it rejects and both fall back to "dev").
       case "plugin:app|version":
@@ -869,6 +983,14 @@ mockIPC(
       case "tugboat_open_folder":
         console.log("[devMock] open Tugboat folder", a.path ?? dropFolder);
         return null;
+      case "game_pad_open":
+        gamePadOpen();
+        return structuredClone(dropState);
+      case "game_pad_close":
+        gamePadClose();
+        return null;
+      case "game_pad_feedback":
+        return null;
       case "devtools_status":
         return structuredClone(devState);
       case "devtools_set_enabled":
@@ -917,12 +1039,18 @@ mockIPC(
           Object.assign(nowPlaying, { elapsed: 0, elapsedAt: Date.now() });
           void emit("now-playing", { ...nowPlaying });
         }
-        // One AMS VolumeUp/VolumeDown is one phone step; iOS reports volume as a 0–1 fraction,
-        // ~16 steps. Clamp at the ends so press-and-hold stops there, as it would on hardware.
-        if (a.command === "volumeUp" || a.command === "volumeDown") {
+        // One AMS VolumeUp/VolumeDown is one phone step of 1/16 (as seen on a real iPhone), reported
+        // a moment after the write, as the phone does. At an end nothing changes and nothing is
+        // reported, so press-and-hold and the volume bar stop there as they would on hardware. A
+        // player that doesn't report volume (?novolume) still takes the steps, silently.
+        if ((a.command === "volumeUp" || a.command === "volumeDown") && nowPlaying.volume != null) {
           const step = (a.command === "volumeUp" ? 1 : -1) / 16;
-          nowPlaying.volume = Math.min(1, Math.max(0, (nowPlaying.volume ?? 0.5) + step));
-          void emit("now-playing", { ...nowPlaying });
+          const next = Math.min(1, Math.max(0, nowPlaying.volume + step));
+          if (next !== nowPlaying.volume) {
+            nowPlaying.volume = next;
+            const report = { ...nowPlaying };
+            window.setTimeout(() => void emit("now-playing", report), 120);
+          }
         }
         return null;
       case "open_url":
@@ -985,6 +1113,10 @@ mockIPC(
         status.textsPairing = "missing";
         status.textsDevice = null;
         void emit("device-status", { ...status, services: { ...status.services } });
+        // Forget lets go of the phone's audio and its automatic switch too.
+        pcAttempt++;
+        Object.assign(pcAudio, { state: "off", problem: null, auto: false });
+        sendPc();
         return null;
       case "pair_device":
         // Like Windows: the PIN shows on both screens; the call returns once it's answered.
@@ -1012,6 +1144,19 @@ mockIPC(
           setTimeout(() => void emit("notification-removed", a.id), 150);
         }
         return null;
+      }
+      // Code fill (code_fill/ in Rust). The backend refuses anything but a 4–8 digit code.
+      case "copy_code":
+        if (!/^\d{4,8}$/.test(String(a.code))) return Promise.reject("That isn't a verification code");
+        console.info("[devMock] code copied privately; cleared in 2 minutes if still there");
+        return null;
+      case "code_hotkey_status":
+        return { ...codeHotkey };
+      case "set_code_hotkey": {
+        const keys = String(a.keys);
+        const taken = params.has("hotkeybusy") && keys === "ctrl+shift+v";
+        Object.assign(codeHotkey, { keys, state: !a.enabled ? "off" : taken ? "inUse" : "on" });
+        return { ...codeHotkey };
       }
       // Windows pop-ups don't exist in a browser; log what tug would have shown.
       case "show_toast":
@@ -1204,4 +1349,23 @@ if (params.has("call")) {
     history.unshift(missed);
     void emit("notification", missed);
   }, 31500);
+}
+
+// ?codefill: a verification code arrives as an ANCS notification and as a MAP text (as a bank's
+// does); code fill copies it once. Then the shortcut is pressed twice, the way code_fill/win.rs
+// reports presses: typed into another app, then refused because tug itself was in front.
+if (params.has("codefill")) {
+  const body = "Chase: Your one-time code is 482193. It expires in 10 minutes.";
+  const note = n("com.apple.MobileSMS", "Messages", "Chase", body, 0);
+  note.id = 620;
+  const text = sms("in", body, 0, "24273", "Chase", null);
+  setTimeout(() => {
+    note.receivedAt = text.receivedAt = Date.now();
+    history.unshift(note);
+    messages.push(text);
+    void emit("notification", note);
+    void emit("message", text);
+  }, 1500);
+  setTimeout(() => void emit("code-filled", { outcome: "typed", from: "Chase" }), 4000);
+  setTimeout(() => void emit("code-filled", { outcome: "noTarget", from: null }), 6000);
 }

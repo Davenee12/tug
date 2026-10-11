@@ -79,6 +79,21 @@ describe("parseActions", () => {
     expect(parseActions("dropbox invoice", people)).toEqual([]);
   });
 
+  it("opens Tugboat Run from its words, never from 'play', and only while games are shown", () => {
+    const games = { showGames: true };
+    for (const words of ["game", "Games", "tugboat run", "boat game"]) {
+      expect(parseActions(words, people, games)).toEqual([{ kind: "open", target: "game", label: "Tugboat Run" }]);
+    }
+    // "play" is music's word: it never opens the game.
+    expect(parseActions("play", people, games).some((a) => a.kind === "open")).toBe(false);
+    expect(parseActions("play game", people, { ...games, spotifyConnected: true }).some((a) => a.kind === "open")).toBe(false);
+    // "tugboat" alone is still Tugboat.
+    expect(parseActions("tugboat", people, games)).toEqual([{ kind: "open", target: "tugboat", label: "Tugboat" }]);
+    // Settings › General › Show games off: no command.
+    expect(parseActions("game", people, { showGames: false })).toEqual([]);
+    expect(parseActions("game", people)).toEqual([]);
+  });
+
   it("stays out of the way of ordinary searches", () => {
     expect(parseActions("dinner", people)).toEqual([]);
     expect(parseActions("text", people)).toEqual([]);

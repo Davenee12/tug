@@ -13,13 +13,28 @@ only talks to the paired device it chose, and treats everything the phone sends 
 OBEX/MAP/PBAP) as untrusted input. The parsers are pure, bounds-checked modules with tests, and
 malformed input must fail safely rather than crash or hang tug.
 
-**Other devices on the same Wi-Fi (Tugboat).** Tugboat listens only while its panel is open, on the
-PC's private LAN address. The QR code carries a secret after `#` that is never sent over the
+**Other devices on the same Wi-Fi (Tugboat).** Tugboat listens only while its panel is open (or Tugboat
+Run asked for the phone as a controller), on the PC's private LAN address. The QR code carries a secret after `#` that is never sent over the
 network; every request is MAC'd with keys derived from it, the first phone to connect binds the
 session, replays are refused, and file contents are sealed with XChaCha20-Poly1305. Received files
 get safe names, land only in `Pictures\Tugboat`, and carry the Mark-of-the-Web. Plain HTTP means an
 *active* attacker on the network could tamper with the first page load; that's documented and out
 of scope (see SECURITY.md).
+
+**The game controller channel (Tugboat Run).** When the game asks for the phone as a controller,
+the bound phone may `POST /api/pad`, under exactly Tugboat's rules: the same secret, a MAC on every
+request, the first phone binds, replays refused, the body sealed to its request. On top of that:
+inputs are refused unless the game has the channel open (and again the moment it closes); they're
+rate limited (90 a second sustained, a burst of 30; a phone sends at most ~60); the body is read
+only up to 104 bytes; and the plaintext must be exactly `{"steer": -100..=100, "boost": bool}`, plus
+an optional latency probe (`"age"` and `"rtt"`, whole milliseconds 0–10000, only ever summarised
+once per session in a debug log line), with any other field, type or range refused. An input that
+lands after a newer one is ignored (the phone may have two in flight). The only
+thing an input can change is the steering and boost the game reads (`tugboat/pad.rs`): it never
+reaches files, the clipboard, the panel or anything else, and an integration test checks that. A
+quiet phone (700 ms without an input) is treated as gone and the boat goes back to the keyboard,
+which always works and always wins. The same honest limit applies: an active attacker who
+tampered with the first page load could steer the boat.
 
 **Other local users and sandboxed processes (developer bridge).** The `tug` command and MCP server
 reach tug over a named pipe that only the current user can open; low-integrity processes and
@@ -48,6 +63,12 @@ locked down so injected markup couldn't do much anyway:
   IDs are checked before they touch a path, and UI settings can't write Bluetooth or developer-tool
   keys.
 - Developer tools (the WebView2 inspector) are compiled out of release builds.
+
+**Code fill.** Auto-copy and the type-the-code shortcut only ever handle a code `findCode` found
+(4–8 digits) and no older than 10 minutes: `copy_code` refuses anything else the webview passes,
+and the shortcut types only what the backend picks from tug's own history. Copied codes stay out
+of clipboard history and cloud sync and are cleared after 2 minutes if still there; the shortcut
+never types into tug's own window; logs say a code was copied or typed, never which.
 
 **Prompt injection aimed at AI tools.** A text can say "ignore your instructions and…". tug
 assumes it will: reading tools are separate switches the person turns on, and the one tool that

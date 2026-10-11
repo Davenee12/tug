@@ -9,6 +9,7 @@ use crate::ams::{NowPlaying, RemoteCommand, RepeatMode};
 use crate::ble::{BleHandle, Command};
 use crate::map::calls::CallRecord;
 use crate::messages::{Contact, StoredMessage};
+use crate::pc_audio::{PcAudio, PcAudioStatus};
 use crate::spotify::{
     AlbumDetail, Artist, ArtistDetail, Device, Playlist, Queue, Spotify, SpotifyPlayer, SpotifySearch, SpotifyStatus,
     Track,
@@ -25,6 +26,7 @@ pub struct AppState {
     pub spotify: Arc<Spotify>,
     pub tugboat: TugboatService,
     pub devtools: Arc<crate::devtools::DevTools>,
+    pub pc_audio: Arc<PcAudio>,
 }
 
 type Result<T> = std::result::Result<T, String>;
@@ -164,7 +166,28 @@ pub async fn use_device(state: State<'_, AppState>, id: String) -> Result<()> {
 
 #[tauri::command]
 pub async fn forget_device(state: State<'_, AppState>) -> Result<()> {
+    // Let go of the phone's audio before its pairing goes.
+    state.pc_audio.forget();
     state.ble.request(|reply| Command::Forget { reply }).await
+}
+
+/// "Play iPhone audio on this PC": whether it's on, and why not when it couldn't be.
+#[tauri::command]
+pub fn pc_audio_status(state: State<'_, AppState>) -> PcAudioStatus {
+    state.pc_audio.status()
+}
+
+/// "Play on this PC" (`on: true`) and "Stop". Turning on answers with Connecting at once; the
+/// outcome arrives as a `pc-audio` event.
+#[tauri::command]
+pub fn pc_audio_set(state: State<'_, AppState>, on: bool) -> PcAudioStatus {
+    state.pc_audio.set(on)
+}
+
+/// "Turn on automatically when my iPhone connects", for the phone tug uses now.
+#[tauri::command]
+pub fn pc_audio_set_auto(state: State<'_, AppState>, on: bool) -> Result<PcAudioStatus> {
+    state.pc_audio.set_auto(on)
 }
 
 /// Pair the iPhone's Classic (texts) side from inside tug (setup's Texts step). The PIN shows in
@@ -456,6 +479,36 @@ pub fn copy_text(text: String) -> Result<()> {
     crate::clipboard::set_text(&text)
 }
 
+/// Code fill: put a just-arrived verification code on the clipboard, kept out of Win+V history
+/// and cloud sync, and take it off again after 2 minutes if it's still there. Only a code's shape
+/// (4–8 digits, as `findCode` gives) is accepted, so the webview can't put free text here. Sync
+/// for the same STA reason as `copy_text`.
+#[tauri::command]
+pub fn copy_code(code: String) -> Result<()> {
+    if !crate::code_fill::is_code(&code) {
+        return Err("That isn't a verification code".into());
+    }
+    crate::clipboard::set_text_private(&code)?;
+    log::info!("code copied automatically");
+    crate::code_fill::clear_later(code);
+    Ok(())
+}
+
+/// The type-the-code shortcut's state, for Settings.
+#[tauri::command]
+pub fn code_hotkey_status() -> crate::code_fill::HotkeyStatus {
+    crate::code_fill::status()
+}
+
+/// Turn the type-the-code shortcut on (as one of the offered shortcuts) or off. Says whether
+/// another app already holds it. Off the main thread: it waits for the hotkey thread.
+#[tauri::command]
+pub async fn set_code_hotkey(enabled: bool, keys: String) -> Result<crate::code_fill::HotkeyStatus> {
+    tauri::async_runtime::spawn_blocking(move || crate::code_fill::apply(enabled, &keys))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Settings safe to print in a support report: scalar on/off flags, never the "seen"
 /// conversation map (its keys embed contact names) or anything carrying message content.
 const DIAGNOSTIC_SETTINGS: &[&str] = &[
@@ -465,6 +518,9 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.closeToTray",
     "ui.appIcons",
     "ui.dialing",
+    "ui.autoCopyCodes",
+    "ui.typeCodeHotkey",
+    "ui.typeCodeKeys",
     "ui.zoom",
     "ui.onboarded",
     "ui.seenSince",
@@ -934,6 +990,29 @@ pub fn tugboat_send_text(state: State<'_, AppState>, text: String) -> Result<()>
 #[tauri::command]
 pub fn tugboat_open_folder(state: State<'_, AppState>, path: Option<String>) -> Result<()> {
     state.tugboat.open_folder(path.as_deref())
+}
+
+// --- Tugboat Run's phone controller (tugboat/pad.rs) ---
+
+/// "Use your phone as a controller": open Tugboat if needed and the controller channel. Returns
+/// Tugboat's status, whose QR code the game shows.
+#[tauri::command]
+pub async fn game_pad_open(state: State<'_, AppState>) -> Result<TugboatStatus> {
+    state.tugboat.pad_open().await
+}
+
+/// The game closed: the phone's inputs are refused again.
+#[tauri::command]
+pub fn game_pad_close(state: State<'_, AppState>) {
+    state.tugboat.pad_close();
+}
+
+/// What the phone's controller shows next: paused or not, and hits this run (it buzzes on one).
+#[tauri::command]
+pub fn game_pad_feedback(state: State<'_, AppState>, paused: bool, hits: u32) {
+    state
+        .tugboat
+        .pad_feedback(crate::tugboat::pad::PadReply { paused, hits });
 }
 
 // --- Developer tools (the bridge for AI tools and the `tug` command; see devtools/mod.rs) ---

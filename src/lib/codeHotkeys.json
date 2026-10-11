@@ -1,0 +1,4 @@
+{
+  "about": "The shortcuts Settings › Notifications offers for typing the latest code (src/lib/codeFill.ts) and the ones the backend will register (src-tauri/src/code_fill/mod.rs). Both test suites read this file, so the two lists can't drift. First is the default.",
+  "hotkeys": ["ctrl+shift+v", "ctrl+alt+v", "ctrl+shift+alt+v", "ctrl+alt+c"]
+}

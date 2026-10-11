@@ -282,6 +282,14 @@ export interface UiSettings {
   filterUnknown: boolean;
   /** Numbers/emails moved to conversations by hand ("Move to conversations"), normalised. */
   knownSenders: string[];
+  /** Code fill: a newly arrived verification code goes on the clipboard (privately, cleared after 2 min). On by default. */
+  autoCopyCodes: boolean;
+  /** Code fill: a global shortcut types the latest code (read by the backend too, `code_fill/`). On by default. */
+  typeCodeHotkey: boolean;
+  /** Which shortcut, one of `src/lib/codeHotkeys.json` (read by the backend too). */
+  typeCodeKeys: string;
+  /** The sidebar's Play button and the Ctrl+K "Tugboat Run" command (on by default). */
+  showGames: boolean;
 }
 
 /**
@@ -313,6 +321,24 @@ export interface ToastPressed {
   id: number;
   /** A reply: the text as stored (same row as its `message` events); null for other presses. */
   message: SmsMessage | null;
+}
+
+// --- Code fill (mirrors src-tauri/src/code_fill/mod.rs) ---
+
+/** What a press of the type-the-code shortcut did (`code-filled`). The code itself is never sent. */
+export interface CodeFilled {
+  /** typed; noCode (none in the last 10 minutes); noTarget (tug's own window, or nothing, in front); failed. */
+  outcome: "typed" | "noCode" | "noTarget" | "failed";
+  /** Who the typed code came from; null unless typed. */
+  from: string | null;
+}
+
+/** The type-the-code shortcut (`code_hotkey_status`, `set_code_hotkey`). */
+export interface CodeHotkeyStatus {
+  /** off (switched off, or not on this PC); on (registered); inUse (another app holds it). */
+  state: "off" | "on" | "inUse";
+  /** The shortcut it's about, e.g. "ctrl+shift+v". */
+  keys: string;
 }
 
 // --- Spotify connector (mirrors src-tauri/src/spotify/{mod,model}.rs) ---
@@ -516,6 +542,17 @@ export interface TugboatStatus {
 /** "tugboat-text": text from the phone went (or failed to go) onto the PC clipboard. */
 export interface TugboatTextArrived {
   ok: boolean;
+}
+
+/**
+ * The phone as Tugboat Run's controller (`game-pad` event, `tugboat/pad.rs` `PadEvent`). Sent when
+ * steering or boost changes, and when the phone arrives or goes quiet.
+ */
+export interface GamePad {
+  connected: boolean;
+  /** -1 (full left) to 1 (full right); 0 whenever not connected. */
+  steer: number;
+  boost: boolean;
 }
 
 /** A file that couldn't be offered to the phone, and why. */
@@ -737,4 +774,22 @@ export interface DevToolsStatus {
   onPath: boolean;
   bridgeRunning: boolean;
   pending: DevToolsConfirm | null;
+}
+
+// ---- Play iPhone audio on this PC (`pc_audio/policy.rs`) ----
+
+/** Whether the iPhone's audio is playing on this PC (`PcAudioState`). */
+export type PcAudioState = "off" | "connecting" | "on";
+
+/** Why it's off when it was wanted on (`PcAudioProblem`). */
+export type PcAudioProblem = "notFound" | "denied" | "timedOut" | "failed" | "dropped";
+
+/** Everything the PC audio button and Settings row show (`PcAudioStatus`). */
+export interface PcAudioStatus {
+  /** This version of Windows can do it (Windows 10 version 2004 and later). */
+  supported: boolean;
+  state: PcAudioState;
+  problem: PcAudioProblem | null;
+  /** "Turn on automatically when my iPhone connects", for the phone tug uses now. */
+  auto: boolean;
 }

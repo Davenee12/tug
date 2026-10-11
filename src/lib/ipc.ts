@@ -6,6 +6,8 @@ import type {
   AppName,
   BtInventory,
   CallRecord,
+  CodeFilled,
+  CodeHotkeyStatus,
   Contact,
   SearchResults,
   SmsMessage,
@@ -16,9 +18,11 @@ import type {
   TugboatStatus,
   TugboatTextArrived,
   DiscoveredDevice,
+  GamePad,
   MediaCommand,
   NowPlaying,
   PairingRequest,
+  PcAudioStatus,
   PhoneNotification,
   RepeatMode,
   SpotifyAlbumDetail,
@@ -56,6 +60,12 @@ export const api = {
   confirmPairing: (accept: boolean) => invoke<void>("confirm_pairing", { accept }),
   useDevice: (id: string) => invoke<void>("use_device", { id }),
   forgetDevice: () => invoke<void>("forget_device"),
+  // --- Play iPhone audio on this PC ---
+  pcAudioStatus: () => invoke<PcAudioStatus>("pc_audio_status"),
+  /** Play on this PC (true) or Stop. Turning on answers "connecting"; the outcome comes as `pc-audio`. */
+  pcAudioSet: (on: boolean) => invoke<PcAudioStatus>("pc_audio_set", { on }),
+  /** "Turn on automatically when my iPhone connects", for the phone tug uses now. */
+  pcAudioSetAuto: (on: boolean) => invoke<PcAudioStatus>("pc_audio_set_auto", { on }),
   /** Pair the iPhone's Classic (texts) side from inside tug; the PIN shows via pairing-request. */
   pairTexts: () => invoke<void>("pair_texts"),
   setAdvertising: (enabled: boolean) => invoke<void>("set_advertising", { enabled }),
@@ -72,6 +82,11 @@ export const api = {
   retryMessage: (id: number) => invoke<SmsMessage>("retry_message", { id }),
   refreshMessages: () => invoke<void>("refresh_messages"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
+  /** Code fill: a verification code (digits only) onto the clipboard, out of history and sync, cleared after 2 minutes. */
+  copyCodePrivately: (code: string) => invoke<void>("copy_code", { code }),
+  codeHotkeyStatus: () => invoke<CodeHotkeyStatus>("code_hotkey_status"),
+  /** Register the type-the-code shortcut (or unregister it); says if another app holds it. */
+  setCodeHotkey: (enabled: boolean, keys: string) => invoke<CodeHotkeyStatus>("set_code_hotkey", { enabled, keys }),
   /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */
   copyDiagnostics: () => invoke<string>("copy_diagnostics"),
   /** The Bluetooth inventory: what the iPhone exposes to tug (runs it now; privacy-safe). */
@@ -153,6 +168,13 @@ export const api = {
   tugboatSendText: (text: string) => invoke<void>("tugboat_send_text", { text }),
   /** Open the Tugboat folder, or select a file Tugboat saved. */
   tugboatOpenFolder: (path: string | null) => invoke<void>("tugboat_open_folder", { path }),
+  // --- Tugboat Run's phone controller ---
+  /** Open Tugboat if needed and the controller channel; Tugboat's status carries the QR code. */
+  gamePadOpen: () => invoke<TugboatStatus>("game_pad_open"),
+  /** The game closed: the phone's inputs are refused again. */
+  gamePadClose: () => invoke<void>("game_pad_close"),
+  /** What the phone's controller shows: paused, and hits this run (it buzzes on a new one). */
+  gamePadFeedback: (paused: boolean, hits: number) => invoke<void>("game_pad_feedback", { paused, hits }),
   // --- Developer tools ---
   devtoolsStatus: () => invoke<DevToolsStatus>("devtools_status"),
   /** "Let AI tools use tug". */
@@ -181,11 +203,16 @@ interface EventPayloads {
   "open-settings": null;
   calls: CallRecord[];
   "toast-pressed": ToastPressed;
+  /** The type-the-code shortcut was pressed (from Rust, `code_fill`): what happened, never the code. */
+  "code-filled": CodeFilled;
   "tugboat-status": TugboatStatus;
   "tugboat-text": TugboatTextArrived;
   /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */
   "tugboat-dropped": TugboatSkipped[];
+  /** The phone controller changed (Tugboat Run only). */
+  "game-pad": GamePad;
   "devtools-status": DevToolsStatus;
+  "pc-audio": PcAudioStatus;
   /** A text an AI tool (or `tug text`) wants to send; null once it's answered or gone. */
   "devtools-confirm": DevToolsConfirm | null;
 }

@@ -6,7 +6,8 @@
 //! Lifetime: the server runs only while Tugboat is open, on the one address the phone can reach
 //! (`net.rs`). It stops when the panel closes, when tug quits, when tug's window hides to the tray
 //! (once any transfer in progress finishes), or after 10 minutes without a request; the secret is
-//! useless after that. Unfinished uploads are removed on start and stop.
+//! useless after that. Unfinished uploads are removed on start and stop. Tugboat Run can also start
+//! it, to use the phone as a game controller (`pad.rs`); the same rules then apply.
 //! tug never touches Windows Firewall: Windows asks the user the first time on its own (an account
 //! that isn't an administrator may need one to answer). It needs an IPv4 home or office network
 //! the phone is also on; on a network Windows calls Public, inbound connections are blocked.
@@ -18,6 +19,7 @@ pub mod auth;
 pub mod crypto;
 mod names;
 pub mod net;
+pub mod pad;
 mod page;
 pub mod qr;
 pub mod server;
@@ -53,6 +55,11 @@ const TICK: Duration = Duration::from_secs(2);
 const NET_EVERY: u32 = 3;
 /// Progress events are coalesced to at most one per this long.
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+/// The game controller changed: `pad::PadEvent`. Only Tugboat Run listens.
+pub const PAD_EVENT: &str = "game-pad";
+/// How often an open controller channel looks for a phone that went quiet. The watch exists only
+/// while the game has the channel open.
+const PAD_TICK: Duration = Duration::from_millis(150);
 
 /// Whether this Windows account is an administrator (elevated or not). The panel's help says the
 /// firewall prompt may need an administrator when it isn't. Errs towards true (no extra line).
@@ -244,6 +251,13 @@ impl Sink for PanelSink {
             };
             let _ = app.emit(TEXT_EVENT, TextArrived { ok });
         });
+    }
+
+    fn pad(&self, event: pad::PadEvent) {
+        let Some(inner) = self.0.upgrade() else { return };
+        if let Err(e) = inner.app.emit(PAD_EVENT, event) {
+            log::warn!("emit {PAD_EVENT} failed: {e}");
+        }
     }
 }
 
@@ -455,6 +469,8 @@ impl TugboatService {
     pub async fn stop(&self, ended: Option<Ended>) {
         let running = lock(&self.inner.running).take();
         if let Some(r) = running {
+            // The game hears its controller went with Tugboat.
+            r.session.pad_close();
             r.session.close();
             if let Some(e) = r.endpoint {
                 e.close();
@@ -645,6 +661,45 @@ impl TugboatService {
 
     pub fn send_text(&self, text: &str) -> Result<(), String> {
         self.session().ok_or("Tugboat isn't open.")?.set_pc_text(text)
+    }
+
+    /// Tugboat Run wants the phone as a controller: open Tugboat if it's off (same session, same
+    /// code, same rules), open the controller channel, and watch it for a phone that goes quiet.
+    pub async fn pad_open(&self) -> Result<TugboatStatus, String> {
+        if self.session().is_none() {
+            self.start().await?;
+        }
+        let session = self.session().ok_or("Tugboat isn't open.")?;
+        if session.pad_open() {
+            let watched = session.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(PAD_TICK).await;
+                    if watched.is_closed() || !watched.pad_tick() {
+                        return;
+                    }
+                }
+            });
+        }
+        if let Some(e) = session.pad_event() {
+            let _ = self.inner.app.emit(PAD_EVENT, e);
+        }
+        Ok(self.status())
+    }
+
+    /// The game closed: refuse controller inputs again. Tugboat itself carries on under its
+    /// usual rules (closing the panel, hiding tug, or 10 minutes unused).
+    pub fn pad_close(&self) {
+        if let Some(s) = self.session() {
+            s.pad_close();
+        }
+    }
+
+    /// What the phone's controller shows: paused, and hits so far (it buzzes on a new one).
+    pub fn pad_feedback(&self, reply: pad::PadReply) {
+        if let Some(s) = self.session() {
+            s.pad_feedback(reply);
+        }
     }
 
     /// Open the Tugboat folder in Explorer, or select one file this session saved.

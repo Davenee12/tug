@@ -41,6 +41,8 @@ export interface ActionContext {
   playlists?: SpotifyPlaylist[];
   /** Spotify is connected, so "play <song>", "queue <song>" and "spotify" are offered. */
   spotifyConnected?: boolean;
+  /** Settings › General › Show games is on, so "game" offers Tugboat Run. */
+  showGames?: boolean;
 }
 
 export type Action =
@@ -63,7 +65,7 @@ export type Action =
   | { kind: "open"; target: OpenTarget; label: string };
 
 /** Panels and screens Ctrl+K can open by name. */
-export type OpenTarget = "new-message" | "settings" | "spotify" | "tugboat";
+export type OpenTarget = "new-message" | "settings" | "spotify" | "tugboat" | "game";
 
 const MEDIA: Array<[string[], MediaCommand, string]> = [
   [["play", "resume"], "play", "Play"],
@@ -80,6 +82,8 @@ const OPEN: Array<[string[], OpenTarget, string]> = [
   [["spotify", "music"], "spotify", "Open Spotify"],
   // Tugboat: files and text to and from the phone over Wi-Fi.
   [["tugboat", "tug boat", "drop", "send files", "send file", "send to phone", "send to iphone", "send to android"], "tugboat", "Tugboat"],
+  // Tugboat Run, the little game. Never "play": that word is for music.
+  [["game", "games", "tugboat run", "boat game"], "game", "Tugboat Run"],
 ];
 
 // Exact phrases only, so "clear" or "code" inside a longer search never fire a one-off action.
@@ -121,6 +125,7 @@ export function parseActions(query: string, people: Person[], ctx: ActionContext
   for (const [words, target, label] of OPEN) {
     if (!words.includes(lower)) continue;
     if (target === "spotify" && !ctx.spotifyConnected) continue;
+    if (target === "game" && !ctx.showGames) continue;
     out.push({ kind: "open", target, label });
   }
 

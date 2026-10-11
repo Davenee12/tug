@@ -4,6 +4,7 @@
 
 import { ad, authHeader, fileId, open, seal, type Keys } from "./crypto";
 import { CHUNK, MAX_DOWNLOAD, PARALLEL, chunkBounds, isFatal, missing, nextSeq, receivedBytes, retryDelay } from "./chunks";
+import type { PadInput, PadProbe } from "./pad";
 
 export interface PageOffer {
   id: string;
@@ -17,6 +18,15 @@ export interface PageOffer {
 export interface PageState {
   offers: PageOffer[];
   text: { id: number; text: string } | null;
+  /** tug's game on the PC wants this phone as its controller. */
+  game: boolean;
+}
+
+/** What the PC answers each controller input with. */
+export interface PadReply {
+  paused: boolean;
+  /** Times the boat was hit this run: the phone buzzes when it goes up. */
+  hits: number;
 }
 
 interface UploadReply {
@@ -42,6 +52,8 @@ export interface TugboatApi {
   cancel(file: File): Promise<void>;
   /** Fetch and decrypt a file on offer. */
   download(offer: PageOffer, onProgress: (got: number) => void): Promise<Blob>;
+  /** One controller input for tug's game (signed and sealed like everything else). */
+  pad(input: PadInput, probe?: PadProbe): Promise<PadReply>;
 }
 
 /** Small persistent values (client id, last sequence number); in memory if storage is blocked. */
@@ -134,6 +146,14 @@ export class TugboatClient implements TugboatApi {
 
   async sendText(text: string): Promise<void> {
     await this.call("POST", "/api/text", { text });
+  }
+
+  pad(input: PadInput, probe?: PadProbe): Promise<PadReply> {
+    // Only the fields the PC accepts, whatever else the objects carry. The browser keeps the
+    // connection alive between inputs on its own (HTTP/1.1); fetch's `keepalive` flag is a
+    // different thing (for requests that outlive the page) and isn't wanted here.
+    const body = probe ? { steer: input.steer, boost: input.boost, age: probe.age, rtt: probe.rtt } : { steer: input.steer, boost: input.boost };
+    return this.call<PadReply>("POST", "/api/pad", body);
   }
 
   private idFor(file: File): string {

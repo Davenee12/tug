@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, QrCode } from "lucide-vue-next";
+import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, Gamepad2, QrCode } from "lucide-vue-next";
 import { connectionBusy, connectionLabel as connectionLabelFor } from "../lib/connectionStatus";
 import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
+import { useGameStore } from "../stores/game";
 import { phoneModel } from "../lib/phoneModel";
 import { canWiggle, shouldTug } from "../lib/logoTricks";
 import { logoSpins } from "../lib/logoSpin";
@@ -14,6 +15,7 @@ import TugMark from "./TugMark.vue";
 
 const tug = useTugStore();
 const tugboat = useTugboatStore();
+const game = useGameStore();
 const s = computed(() => tug.status);
 
 // The sidebar never scrolls. On a short window, tighten the section gaps, drop the Quick toggles'
@@ -27,6 +29,9 @@ const onResize = () => (vh.value = window.innerHeight);
 onMounted(() => window.addEventListener("resize", onResize));
 onUnmounted(() => window.removeEventListener("resize", onResize));
 const compact = computed(() => vh.value < 800);
+// Below this even the compact card has no room for the volume bar's row (at the 600 px minimum the
+// one-row card only just fits), so the card keeps its volume buttons in the transport row instead.
+const tight = computed(() => vh.value < 640);
 
 // The logo's one-shot moments: a tug on the rope when the iPhone connects (each time, not on a
 // status refresh that changes nothing), a wiggle on hover (at most every couple of seconds) and a
@@ -104,6 +109,16 @@ const dnd = computed({
         <TugMark :size="30" class="text-on-dark" />
       </span>
       <span class="font-display text-[30px] leading-none text-on-dark" style="letter-spacing: -0.03em">tug</span>
+      <!-- Tugboat Run. Beside the name, so the sidebar (which never scrolls) doesn't grow. -->
+      <button
+        v-if="tug.settings.showGames"
+        class="ml-auto inline-flex items-center gap-1.5 rounded-full border border-on-dark-soft/30 px-2.5 py-0.5 text-[12px] font-medium text-on-dark transition-colors active:bg-surface-dark-elevated"
+        title="Tugboat Run: a little boat game"
+        @click="game.show()"
+      >
+        <Gamepad2 :size="13" class="text-primary" />
+        Play
+      </button>
     </div>
 
     <!-- Phone card, like a device card: the phone pictured on the left; its name, model, connection
@@ -172,7 +187,7 @@ const dnd = computed({
     </section>
 
     <div :class="compact ? 'mt-auto pt-4' : 'mt-auto pt-6'">
-      <NowPlayingCard :compact="compact" />
+      <NowPlayingCard :compact="compact" :tight="tight" />
     </div>
   </aside>
 </template>

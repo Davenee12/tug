@@ -1,5 +1,6 @@
-//! Put text on the Windows clipboard (one-time codes). Done natively because the
-//! webview's Clipboard API can be refused depending on focus and permissions.
+//! Put text on the Windows clipboard (one-time codes), and take an auto-copied code off it
+//! again. Done natively because the webview's Clipboard API can be refused depending on focus
+//! and permissions.
 
 #[cfg(windows)]
 pub fn set_text(text: &str) -> Result<(), String> {
@@ -33,6 +34,77 @@ pub fn set_text_private(text: &str) -> Result<(), String> {
     } else {
         Err("Windows didn't accept the clipboard content".into())
     }
+}
+
+/// Take an auto-copied code off the clipboard, but only if the clipboard still holds it
+/// (`code_fill::should_clear`): something the person copied since is theirs. True if cleared.
+///
+/// Win32 rather than WinRT: it can run off the main thread (reading the text may ask tug's own
+/// main thread to render it, which only works if that thread isn't the one waiting). Only the
+/// first few characters are read: anything longer isn't a code.
+#[cfg(windows)]
+pub fn clear_if_holds(code: &str) -> Result<bool, String> {
+    use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard};
+
+    let err = |e: windows::core::Error| e.message().to_string();
+    // Another app may have the clipboard open for a moment.
+    let mut opened = Err(String::new());
+    for _ in 0..10 {
+        // SAFETY: no owner window; closed below on every path.
+        opened = unsafe { OpenClipboard(None) }.map_err(err);
+        if opened.is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    opened?;
+    let result = (|| {
+        if !crate::code_fill::should_clear(clipboard_text_start().as_deref(), code) {
+            return Ok(false);
+        }
+        // SAFETY: the clipboard is open on this thread.
+        unsafe { EmptyClipboard() }.map_err(err)?;
+        Ok(true)
+    })();
+    // SAFETY: opened above on this thread.
+    let _ = unsafe { CloseClipboard() };
+    result
+}
+
+/// The clipboard's text, if it's short (at most 32 UTF-16 units); a longer text comes back as
+/// an empty string (not a code), no text as `None`. The clipboard must be open on this thread.
+#[cfg(windows)]
+fn clipboard_text_start() -> Option<String> {
+    use windows::Win32::Foundation::HGLOBAL;
+    use windows::Win32::System::DataExchange::{GetClipboardData, IsClipboardFormatAvailable};
+    use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+
+    const CF_UNICODETEXT: u32 = 13;
+    const MAX_UNITS: usize = 32;
+    // SAFETY: the handle comes from the open clipboard; reads stay within GlobalSize and stop at
+    // the terminator; the memory is unlocked before returning.
+    unsafe {
+        IsClipboardFormatAvailable(CF_UNICODETEXT).ok()?;
+        let handle = GetClipboardData(CF_UNICODETEXT).ok()?;
+        let memory = HGLOBAL(handle.0);
+        let units = (GlobalSize(memory) / 2).min(MAX_UNITS + 1);
+        let ptr = GlobalLock(memory) as *const u16;
+        if ptr.is_null() {
+            return None;
+        }
+        let slice = std::slice::from_raw_parts(ptr, units);
+        let text = match slice.iter().position(|&u| u == 0) {
+            Some(end) => String::from_utf16_lossy(&slice[..end]),
+            None => String::new(),
+        };
+        let _ = GlobalUnlock(memory);
+        Some(text)
+    }
+}
+
+#[cfg(not(windows))]
+pub fn clear_if_holds(_code: &str) -> Result<bool, String> {
+    Err("The clipboard is only supported on Windows".into())
 }
 
 #[cfg(not(windows))]

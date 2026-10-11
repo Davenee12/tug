@@ -5,12 +5,14 @@ import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Mi
 import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
+import { usePcAudioStore } from "../stores/pcAudio";
 import { connectionHealth, errorAge, type HealthLink, type LinkState } from "../lib/health";
 import { stepZoom } from "../lib/zoom";
 import { escClosesSettings } from "../lib/escape";
 import { formatAddress } from "../lib/format";
 import { normalizeAddress } from "../lib/address";
 import { SPOTIFY_BETA_LABEL, SPOTIFY_BETA_NOTE, SPOTIFY_RECONNECT } from "../lib/spotify";
+import { CODE_HOTKEYS, hotkeyAlternatives, hotkeyLabel } from "../lib/codeFill";
 import AppAvatar from "./AppAvatar.vue";
 import ConnectPanel from "./ConnectPanel.vue";
 import DeveloperSettings from "./DeveloperSettings.vue";
@@ -19,6 +21,9 @@ import SettingsSwitch from "./SettingsSwitch.vue";
 
 const tug = useTugStore();
 const weather = useWeatherStore();
+// Settings › iPhone › Audio: play the iPhone's sound through this PC (words from lib/pcAudio).
+const pcAudio = usePcAudioStore();
+const pcView = computed(() => pcAudio.view);
 
 const SECTIONS: Array<{ id: SettingsSection; label: string; icon: Component }> = [
   { id: "general", label: "General", icon: SlidersHorizontal },
@@ -104,6 +109,7 @@ const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tu
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
 const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) => void tug.setAutostart(v) });
 const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
+const showGames = computed({ get: () => tug.settings.showGames, set: (v) => void tug.setSetting("showGames", v) });
 const filterUnknown = computed({ get: () => tug.settings.filterUnknown, set: (v) => void tug.setSetting("filterUnknown", v) });
 const advertise = computed({ get: () => tug.advertiseEnabled, set: (v) => void tug.setAdvertising(v) });
 const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
@@ -129,6 +135,19 @@ function toggleDay(d: number) {
   setQuiet({ days: next.length === 7 ? [] : next });
 }
 const muteCalls = computed({ get: () => tug.settings.muteCalls, set: (v) => void tug.setSetting("muteCalls", v) });
+
+// Code fill: copy new codes automatically, and a shortcut that types the latest one (lib/codeFill).
+const autoCopyCodes = computed({ get: () => tug.settings.autoCopyCodes, set: (v) => void tug.setSetting("autoCopyCodes", v) });
+const typeCodeHotkey = computed({
+  get: () => tug.settings.typeCodeHotkey,
+  set: (v) => void tug.setCodeHotkey(v, tug.settings.typeCodeKeys),
+});
+const typeCodeKeys = computed({
+  get: () => tug.settings.typeCodeKeys,
+  set: (v) => void tug.setCodeHotkey(true, v),
+});
+/** The chosen shortcut is on but another app registered it first. */
+const hotkeyInUse = computed(() => tug.settings.typeCodeHotkey && tug.codeHotkey.state === "inUse");
 
 // Mute pop-ups per app: every app tug has seen in the Feed, with a toggle each.
 const seenApps = computed(() => {
@@ -302,6 +321,9 @@ async function clearHistory() {
                 </button>
               </div>
             </SettingsRow>
+            <SettingsRow class="bg-surface-card" label="Show games" description="A Play button in the sidebar for Tugboat Run, a little boat game, and “game” in Ctrl+K.">
+              <SettingsSwitch v-model="showGames" label="Show games" />
+            </SettingsRow>
           </div>
 
           <p class="caption-upper mt-6 mb-2 px-1 text-muted">Keyboard</p>
@@ -384,6 +406,40 @@ async function clearHistory() {
             </SettingsRow>
           </div>
 
+          <template v-if="pcAudio.status">
+            <p class="caption-upper mb-2 px-1 text-muted">Audio</p>
+            <div class="mb-6 divide-y divide-hairline-soft rounded-xl bg-surface-card">
+              <SettingsRow label="Play iPhone audio on this PC" :description="pcView.line">
+                <template v-if="pcAudio.status.supported" #below>
+                  <p class="mt-1 text-[12px] text-muted-soft">
+                    While it's on, your iPhone's sound comes out of this PC's speakers instead of the phone.
+                  </p>
+                </template>
+                <button
+                  v-if="pcAudio.status.supported"
+                  class="btn-secondary btn-sm"
+                  :disabled="!pcView.action"
+                  :aria-label="pcView.title"
+                  @click="pcAudio.press()"
+                >
+                  {{ pcView.label }}
+                </button>
+              </SettingsRow>
+              <SettingsRow
+                v-if="pcAudio.status.supported"
+                label="Turn on automatically when my iPhone connects"
+                description="Just for this iPhone. Off unless you turn it on."
+              >
+                <SettingsSwitch
+                  :model-value="pcAudio.status.auto"
+                  label="Turn on automatically when my iPhone connects"
+                  :disabled="!tug.status.device"
+                  @update:model-value="pcAudio.setAuto"
+                />
+              </SettingsRow>
+            </div>
+          </template>
+
           <p class="caption-upper mb-2 px-1 text-muted">Calls</p>
           <div class="mb-6 divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow
@@ -416,6 +472,52 @@ async function clearHistory() {
             >
               <SettingsSwitch v-model="filterUnknown" label="Filter unknown senders" />
             </SettingsRow>
+          </div>
+
+          <!-- Code fill: new codes go on the clipboard; a shortcut types the latest one. -->
+          <div class="mb-4 rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Copy codes automatically"
+              description="When a verification code arrives, it goes straight on the clipboard, ready to paste. It stays out of clipboard history and is cleared after 2 minutes, unless you've copied something else since."
+            >
+              <SettingsSwitch v-model="autoCopyCodes" label="Copy codes automatically" />
+            </SettingsRow>
+            <SettingsRow
+              class="border-t border-hairline-soft"
+              label="Type the latest code"
+              :description="`Click a sign-in box and press ${hotkeyLabel(tug.settings.typeCodeKeys)}: tug types the newest code from the last 10 minutes.`"
+            >
+              <SettingsSwitch v-model="typeCodeHotkey" label="Type the latest code" />
+            </SettingsRow>
+            <div v-if="tug.settings.typeCodeHotkey" class="border-t border-hairline-soft px-5 py-3">
+              <label class="flex items-center gap-2 text-[13px] text-body">
+                Shortcut
+                <select
+                  v-model="typeCodeKeys"
+                  class="rounded-md border border-hairline bg-canvas px-2 py-1 font-mono text-[13px] text-ink"
+                >
+                  <option v-for="h in CODE_HOTKEYS" :key="h" :value="h">{{ hotkeyLabel(h) }}</option>
+                </select>
+              </label>
+              <div v-if="hotkeyInUse" class="mt-3 flex items-start gap-2.5 text-[13px]" role="alert">
+                <CircleAlert :size="16" class="mt-0.5 shrink-0 text-error" />
+                <div class="min-w-0 flex-1">
+                  <p class="font-medium text-body-strong">That shortcut is in use by another app</p>
+                  <p class="mt-0.5 text-muted">Pick another one:</p>
+                  <div class="mt-2 flex flex-wrap gap-1.5">
+                    <button
+                      v-for="h in hotkeyAlternatives(tug.settings.typeCodeKeys)"
+                      :key="h"
+                      class="btn-secondary btn-sm"
+                      :aria-label="`Use ${hotkeyLabel(h)}`"
+                      @click="typeCodeKeys = h"
+                    >
+                      <span class="font-mono text-[12px]">{{ hotkeyLabel(h) }}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Quiet hours: a schedule that holds pop-ups, like Do not disturb. -->
