@@ -9,15 +9,16 @@
 //! Honest limits: this stops anyone passively listening on the Wi-Fi. The page itself is served
 //! over plain HTTP, so an active attacker who tampers with the first page load could still win.
 //! The secret also lives, for that session only, wherever the link went: the phone's browser
-//! history may keep the first URL (the page strips the `#` right away, but the history entry can
-//! remain), and "Copy link" puts it on the PC clipboard (kept out of clipboard history and sync).
+//! history may keep the first URL (the page strips the `#` right away and keeps the secret only in
+//! memory, never in web storage, but the history entry can remain), and "Copy link" puts it on the
+//! PC clipboard (kept out of clipboard history and sync).
 //! Never call it end-to-end secure.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chacha20poly1305::aead::rand_core::RngCore;
-use chacha20poly1305::aead::{Aead, KeyInit, OsRng, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
+use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -34,38 +35,49 @@ pub const MAC_LEN: usize = 16;
 
 /// The two keys derived from one Tugboat session's secret.
 pub struct Keys {
-    enc: [u8; 32],
-    auth: [u8; 32],
+    enc: Key,
+    auth: Key,
+}
+
+/// One 32-byte key from the session's HKDF, for `info` ("encrypt" or "authenticate"). It starts
+/// as the key type's empty value and HKDF overwrites every byte, so no fixed key is ever used.
+fn expand_key(hk: &Hkdf<Sha256>, info: &[u8]) -> Key {
+    let mut key = Key::default();
+    // 32 bytes is far below HKDF-SHA256's 8160-byte limit, so expand can't fail.
+    hk.expand(info, &mut key).expect("HKDF length");
+    key
 }
 
 impl Keys {
     pub fn derive(secret: &[u8]) -> Keys {
         let hk = Hkdf::<Sha256>::new(Some(VERSION.as_bytes()), secret);
-        let mut enc = [0u8; 32];
-        let mut auth = [0u8; 32];
-        // 32 bytes is far below HKDF-SHA256's 8160-byte limit, so expand can't fail.
-        hk.expand(b"encrypt", &mut enc).expect("HKDF length");
-        hk.expand(b"authenticate", &mut auth).expect("HKDF length");
-        Keys { enc, auth }
+        Keys {
+            enc: expand_key(&hk, b"encrypt"),
+            auth: expand_key(&hk, b"authenticate"),
+        }
     }
 
     fn cipher(&self) -> XChaCha20Poly1305 {
-        XChaCha20Poly1305::new((&self.enc).into())
+        XChaCha20Poly1305::new(&self.enc)
     }
 
-    /// Seal with a fresh random nonce: `nonce || ciphertext || tag`.
+    /// Seal with a fresh random nonce from the OS: `nonce || ciphertext || tag`.
     pub fn seal(&self, ad: &[u8], plaintext: &[u8]) -> Vec<u8> {
-        let mut nonce = [0u8; NONCE_LEN];
-        OsRng.fill_bytes(&mut nonce);
-        self.seal_with_nonce(&nonce, ad, plaintext)
+        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        self.seal_under(&nonce, ad, plaintext)
     }
 
     /// Seal with a given nonce. Only for the shared test vector; real messages use `seal`.
+    #[cfg(test)]
     pub fn seal_with_nonce(&self, nonce: &[u8; NONCE_LEN], ad: &[u8], plaintext: &[u8]) -> Vec<u8> {
+        self.seal_under(XNonce::from_slice(nonce), ad, plaintext)
+    }
+
+    fn seal_under(&self, nonce: &XNonce, ad: &[u8], plaintext: &[u8]) -> Vec<u8> {
         let ct = self
             .cipher()
             .encrypt(
-                XNonce::from_slice(nonce),
+                nonce,
                 Payload {
                     msg: plaintext,
                     aad: ad,
