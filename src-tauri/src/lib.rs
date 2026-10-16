@@ -152,8 +152,9 @@ pub fn run() {
             if let Err(e) = tray::install(app.handle()) {
                 log::warn!("tray icon unavailable: {e}");
             }
-            // Log WebView2 process-failed events (crash/hang of the web content), so the next one
-            // isn't a mystery. Registered whether or not the window is shown now.
+            // Watch WebView2 for a failed process: log which one truthfully, and reload the page or
+            // rebuild the window when that brings it back. Registered whether or not the window is
+            // shown now.
             if let Some(window) = app.get_webview_window("main") {
                 webview_watch::watch(&window);
             }
@@ -328,6 +329,14 @@ pub fn run() {
         }
     };
     app.run(|app, event| {
+        // Rebuilding the main window after WebView2's browser process died briefly leaves no
+        // window at all; that isn't the user closing tug.
+        if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event {
+            if webview_watch::recreating_window() {
+                api.prevent_exit();
+                return;
+            }
+        }
         // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
         if let tauri::RunEvent::Exit = event {
             toast::withdraw_all(app);

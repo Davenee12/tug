@@ -86,7 +86,9 @@ map is `EventPayloads` in `src/lib/ipc.ts`.
 autostart with `--minimized`; log with rotation; notification; dialog) → create the data folder →
 open the SQLite store and migrate → `Shared` → start the BLE actor → start the MAP worker → media
 keys → Spotify → Tugboat service (cleans partial uploads) → developer bridge → register state → a
-one-off cache trim → tray → WebView2 crash watch → show the window unless started minimized.
+one-off cache trim → tray → WebView2 watch (reloads the page if its process dies or hangs; rebuilds the
+window if WebView2's browser process exits, except during a Windows shutdown) → show the window unless
+started minimized.
 Closing the window hides it to the tray (unless the user turned that off); on exit tug withdraws its
 toasts and stops Tugboat.
 
