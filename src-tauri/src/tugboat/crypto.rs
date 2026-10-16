@@ -104,7 +104,9 @@ impl Keys {
     }
 
     fn mac(&self) -> Hmac<Sha256> {
-        <Hmac<Sha256> as Mac>::new_from_slice(&self.auth).expect("HMAC takes any key length")
+        // hmac 0.13 (digest 0.11) moved the constructor from `Mac` to `KeyInit`. Spelled out in
+        // full because `KeyInit` in scope here is the AEAD's (crypto-common 0.1) trait.
+        <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(&self.auth).expect("HMAC takes any key length")
     }
 
     /// The MAC the phone sends with a request (see `auth_message`). The server only verifies;
