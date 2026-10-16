@@ -10,6 +10,7 @@ impl Actor {
         // Whatever stall was being recovered from, the link it was on is gone.
         self.wedge_relink_at = None;
         self.wedge.new_link();
+        self.forgotten.link_closed();
         if let Some(link) = self.link.take() {
             let _ = link.device.Close();
         }
@@ -44,6 +45,9 @@ impl Actor {
     /// "Reconnecting…" (tug is doing this on its own; the phone doesn't need the user) until the
     /// link is back or a few attempts have failed.
     pub(super) fn restart_link(&mut self) {
+        // tug is rebuilding the link for a reason of its own (a stall, a wake, closed objects): the
+        // link coming and going meanwhile isn't the phone refusing this PC.
+        self.forgotten.interrupted();
         self.drop_link();
         self.retry_in = 0;
         // An away phone stays shown as away: "Reconnecting…" would flip back on the next failure.
@@ -112,7 +116,13 @@ impl Actor {
         }
         if self.link.is_none() {
             match self.open_link(&id).await {
-                Ok(link) => self.link = Some(link),
+                Ok(link) => {
+                    // Already up: Windows sends no up event for it, so time it from here.
+                    if link.connected {
+                        self.forgotten.link_up(Instant::now());
+                    }
+                    self.link = Some(link);
+                }
                 Err(e) => {
                     self.fail_connect(&e);
                     return;
@@ -146,6 +156,8 @@ impl Actor {
                 self.connected_since_adopt = true;
                 self.adopt_timeouts = 0;
                 self.had_session = true;
+                let change = self.forgotten.healthy();
+                self.note_forgotten(change, "it connected normally again");
                 if let Some(l) = self.link.as_mut() {
                     l.connected = true;
                 }
@@ -206,9 +218,15 @@ impl Actor {
                         self.adopt_timeouts = self.adopt_timeouts.saturating_add(1);
                     }
                 }
-                // One refusal can be a glitch; two in a row means the phone dropped the bond. A newly
-                // adopted phone that never connects and keeps timing out needs pairing again too.
-                let stale = (e.is_stale_bond() && self.connect_failures >= 2)
+                // Refusals for want of a pairing (or the link flapping, in `on_connection`) mean the
+                // phone forgot this PC (`crate::forgotten`). A newly adopted phone that never
+                // connects and keeps timing out needs pairing again too.
+                let awaiting_unlock = self.shared.status().awaiting_unlock;
+                let change = self
+                    .forgotten
+                    .attempt_failed(Instant::now(), e.bond_signal(), awaiting_unlock);
+                self.note_forgotten(change, "");
+                let stale = self.forgotten.forgotten()
                     || link_policy::suggests_pair_again(self.connected_since_adopt, self.adopt_timeouts);
                 self.shared.update_status(|s| s.pairing_stale = stale);
             }
@@ -350,6 +368,15 @@ impl Actor {
     pub(super) async fn on_connection(&mut self, connected: bool, at: Instant) {
         if self.link.is_none() {
             return;
+        }
+        // Every edge counts toward "the phone forgot this PC" (Windows bringing the link up and the
+        // phone dropping it again at once), judged on Windows' own stamps.
+        if connected {
+            self.forgotten.link_up(at);
+        } else {
+            let awaiting_unlock = self.shared.status().awaiting_unlock;
+            let change = self.forgotten.link_down(at, awaiting_unlock);
+            self.note_forgotten(change, "");
         }
         if connected {
             let up = classify_link_up(self.link_down_at.take(), at);

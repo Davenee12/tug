@@ -38,6 +38,7 @@ use crate::ams::{self, NowPlaying};
 use crate::ancs::{self, Category, EventFlags, EventId, ParseError, Response};
 use crate::ancs_queue::{Request, RequestQueue, MAX_ATTEMPTS};
 use crate::device_info;
+use crate::forgotten::{self, ForgottenWatch};
 use crate::link_policy;
 use crate::state::{
     events, keys, AdvertisingState, AppName, ConnectionState, DiscoveredDevice, PairedDevice, PairingRequest,
@@ -275,6 +276,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         adopt_timeouts: 0,
         had_session: false,
         adopted_at: None,
+        forgotten: ForgottenWatch::default(),
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -344,6 +346,8 @@ struct Actor {
     had_session: bool,
     /// When this phone was adopted (paired) this run, for its grace period before "away".
     adopted_at: Option<Instant>,
+    /// Watches for the phone having forgotten this PC while Windows still holds the bond.
+    forgotten: ForgottenWatch,
 }
 
 fn now_ms() -> i64 {
@@ -431,6 +435,8 @@ impl Actor {
             });
             self.device_id = Some(id);
             self.retry_in = 0;
+            // Remembered from an earlier run, where it connected: a bond that has worked here.
+            self.forgotten = ForgottenWatch::new(true);
         }
     }
 
@@ -547,6 +553,8 @@ impl Actor {
                 );
                 // A real change: drop the backoff and retry at once instead of waiting it out.
                 self.connect_failures = 0;
+                // Whatever the link did before the sleep says nothing about the bond now.
+                self.forgotten.interrupted();
                 self.link_down_at = None;
                 self.retry_in = 0;
                 self.last_poke = None;
@@ -624,6 +632,8 @@ impl Actor {
             }
             Event::Radio(state) => {
                 log::info!("Bluetooth radio: {state:?}");
+                // The link coming and going with the radio isn't the phone refusing this PC.
+                self.forgotten.interrupted();
                 self.shared.update_status(|s| {
                     s.radio = state;
                     // With Bluetooth off there's nothing to reconnect: the UI says it's off instead.
@@ -810,6 +820,23 @@ impl Actor {
         self.shared.update_status(|s| s.last_error = Some(message));
     }
 
+    /// Act on a change in whether the iPhone looks to have forgotten this PC: one log line each way,
+    /// and the status (`pairing_stale`, which the UI shows as "Your iPhone forgot this PC" with Pair
+    /// again). `why` says what cleared it; callers that clear it also clear `pairing_stale` in their
+    /// own status update.
+    fn note_forgotten(&mut self, change: Option<forgotten::Change>, why: &str) {
+        match change {
+            Some(forgotten::Change::Entered { flaps, refusals }) => {
+                log::info!(
+                    "the iPhone looks to have forgotten this PC ({flaps} short connection(s) and {refusals} refused attempt(s), none working); asking to pair again"
+                );
+                self.shared.update_status(|s| s.pairing_stale = true);
+            }
+            Some(forgotten::Change::Left) => log::info!("no longer asking to pair the iPhone again: {why}"),
+            None => {}
+        }
+    }
+
     /// Recovering from a stalled adapter: requests are paused until the link is rebuilt.
     fn wedged(&self) -> bool {
         self.wedge_relink_at.is_some()
@@ -852,6 +879,8 @@ impl Actor {
             settle.as_secs()
         );
         self.wedge_relink_at = Some(Instant::now() + settle);
+        // A stalled adapter explains a messy link; it isn't the phone refusing this PC.
+        self.forgotten.interrupted();
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Connecting;
             s.reconnecting = true;

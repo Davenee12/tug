@@ -5,6 +5,7 @@ import { useTugStore } from "../stores/tug";
 import { bondHint, pairingProblem, setupDeviceLists } from "../lib/pairings";
 import { api } from "../lib/ipc";
 import { connectionSentence } from "../lib/connectionStatus";
+import ForgottenNotice from "./ForgottenNotice.vue";
 import type { DiscoveredDevice } from "../types/protocol";
 
 // The paired iPhone, or the steps to pair one. Shared by first-run setup (the inline
@@ -89,11 +90,13 @@ const advertisingLabel = computed(
 
 <template>
   <div class="flex flex-col gap-6">
-    <!-- The phone looks to have forgotten this PC while Windows still holds the bond. -->
-    <div v-if="bond" class="flex flex-col gap-2 rounded-xl border border-error/30 bg-canvas px-4 py-3">
+    <!-- The iPhone forgot this PC while Windows still holds the bond: Pair again. -->
+    <ForgottenNotice v-if="bond === 'forgotten'" />
+
+    <!-- It might have: the phone keeps refusing, but that's also how some switches look. -->
+    <div v-else-if="bond" class="flex flex-col gap-2 rounded-xl border border-error/30 bg-canvas px-4 py-3">
       <p class="text-[13px] text-body-strong">
-        <template v-if="bond === 'forgotten'">Your PC still remembers a pairing your iPhone forgot, so they can't reconnect.</template>
-        <template v-else>Your iPhone keeps refusing this PC's pairing — it may have been forgotten on the phone.</template>
+        Your iPhone keeps refusing this PC's pairing — it may have been forgotten on the phone.
         Remove <strong class="font-medium">{{ s.textsDevice ?? s.device?.name ?? "your iPhone" }}</strong> in Windows Bluetooth settings, or Start over
         here, then pair again.
       </p>

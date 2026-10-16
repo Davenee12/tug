@@ -7,7 +7,7 @@
 
 import type { DeviceStatus } from "../types/protocol";
 import { textsDownNote } from "./availability";
-import { connectionSentence } from "./connectionStatus";
+import { connectionSentence, FORGOT_BODY, FORGOT_TITLE } from "./connectionStatus";
 import { CHECKING_MAX_MS, phoneSwitches, type PhoneSwitch, type SwitchContext } from "./phoneSwitches";
 
 /**
@@ -101,7 +101,7 @@ function visibleLink(s: DeviceStatus): HealthLink {
 function notificationsLink(s: DeviceStatus, x: PhoneSwitch): HealthLink {
   const base = { key: "notifications", label: "Notifications" };
   if (s.pairingStale) {
-    return { ...base, state: "error", detail: "Your iPhone forgot this PC. Pair again from the setup steps below." };
+    return { ...base, state: "error", detail: `${FORGOT_TITLE}. ${FORGOT_BODY}` };
   }
   if (x.state === "on") return { ...base, state: "ok", detail: "Your iPhone is sharing its notifications." };
   return { ...base, state: "off", detail: "Turn on Share System Notifications on your iPhone so its notifications reach tug." };

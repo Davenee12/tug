@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectionBusy, connectionLabel, connectionSentence, NOT_AN_IPHONE } from "./connectionStatus";
+import { connectionBusy, connectionLabel, connectionSentence, FORGOT_ACTION, FORGOT_BODY, FORGOT_TITLE, NOT_AN_IPHONE } from "./connectionStatus";
 import winrtRs from "../../src-tauri/src/ble/winrt.rs?raw";
 
 const base = { connection: "connected" as const, awaitingUnlock: false, reconnecting: false, radio: "on" as const };
@@ -49,6 +49,25 @@ describe("connectionLabel", () => {
   });
 });
 
+describe("the iPhone forgot this PC", () => {
+  it("is one steady state: no pulsing dot, since waiting won't fix it", () => {
+    expect(connectionBusy({ ...base, connection: "connecting", pairingStale: true })).toBe(false);
+    expect(connectionBusy({ ...base, connection: "disconnected", reconnecting: true, pairingStale: true })).toBe(false);
+  });
+
+  it("clears the moment the phone connects normally again", () => {
+    // The backend drops pairingStale with the connect that works; nothing lingers.
+    expect(connectionLabel({ ...base, connection: "connected", pairingStale: false })).toBe("Connected");
+    expect(connectionLabel({ ...base, connection: "disconnected", away: true, pairingStale: false })).toBe("iPhone away");
+  });
+
+  it("speaks plainly, like the rest of tug", () => {
+    expect(FORGOT_TITLE).toBe("Your iPhone forgot this PC");
+    expect(FORGOT_BODY).toBe("Pair again to reconnect.");
+    expect(FORGOT_ACTION).toBe("Pair again");
+  });
+});
+
 describe("connectionBusy", () => {
   it("pulses while connecting or reconnecting, not while waiting idle", () => {
     expect(connectionBusy({ ...base, connection: "connecting" })).toBe(true);
@@ -86,6 +105,13 @@ describe("connectionSentence agrees with the sidebar label", () => {
     // An Android phone paired by mistake: never "Unlock your iPhone".
     { connection: "disconnected" as const, notIphone: true, label: "Not an iPhone", sentence: /doesn't look like an iPhone/ },
     { connection: "disconnected" as const, notIphone: true, awaitingUnlock: true, label: "Not an iPhone", sentence: /works with iPhone/ },
+    // The iPhone forgot this PC: said over "away" (the flapping link had made it away), over
+    // "Connecting…" while tug still tries, and over the rest, in both places.
+    { connection: "disconnected" as const, pairingStale: true, away: true, label: "iPhone forgot this PC", sentence: /^Your iPhone forgot this PC\. Pair again to reconnect\.$/ },
+    { connection: "connecting" as const, pairingStale: true, label: "iPhone forgot this PC", sentence: /^Your iPhone forgot this PC/ },
+    { connection: "disconnected" as const, pairingStale: true, reconnecting: true, label: "iPhone forgot this PC", sentence: /^Your iPhone forgot this PC/ },
+    // Bluetooth off still comes first: nothing pairs with the radio off.
+    { connection: "disconnected" as const, pairingStale: true, radio: "off" as const, label: "Bluetooth is off", sentence: /Bluetooth is off/ },
   ];
   it.each(cases)("$label", (c) => {
     const s = { ...base, ...c, device };

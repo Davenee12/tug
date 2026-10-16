@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, Gamepad2, QrCode } from "lucide-vue-next";
-import { connectionBusy, connectionLabel as connectionLabelFor } from "../lib/connectionStatus";
+import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, Gamepad2, LoaderCircle, QrCode } from "lucide-vue-next";
+import { connectionBusy, connectionLabel as connectionLabelFor, FORGOT_ACTION } from "../lib/connectionStatus";
 import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
 import { useGameStore } from "../stores/game";
@@ -153,6 +153,11 @@ const dnd = computed({
         <BluetoothOff :size="15" class="text-error" />
         {{ s.radio === "off" ? "Bluetooth is off in Windows" : "No Bluetooth adapter found" }}
       </div>
+      <!-- The iPhone forgot this PC (the label above says so): the way forward, on every window size. -->
+      <button v-else-if="s.device && s.pairingStale" class="btn-primary btn-sm mt-3" :disabled="tug.pairingAgain" @click="tug.pairAgain()">
+        <LoaderCircle v-if="tug.pairingAgain" :size="13" class="animate-spin" />
+        {{ FORGOT_ACTION }}
+      </button>
 
       <div class="mt-3 flex flex-wrap items-center gap-1.5">
         <span
