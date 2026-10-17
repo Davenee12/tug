@@ -85,6 +85,10 @@ const model = params.has("nomodel") ? null : params.get("model") || "iPhone16,2"
 // card read the release being built. ?whatsnew also fakes an older last-seen version (below).
 const whatsNewPreview = params.has("whatsnew");
 const appVersion = RELEASE_NOTES[0].version;
+// ?quickaction=new-message (tugboat, copy-code, game, settings): tug was started from that taskbar
+// jump-list task, so it's waiting when the UI first takes quick actions. &again repeats it 4 s
+// later, as a click on the task while tug is running would.
+const quickActionWaiting: string[] = params.get("quickaction") ? [String(params.get("quickaction"))] : [];
 const now = Date.now();
 const min = 60_000;
 
@@ -1257,6 +1261,9 @@ mockIPC(
         return null;
       case "code_hotkey_status":
         return { ...codeHotkey };
+      // Taskbar quick actions (quick_actions/ in Rust): taking them empties the queue.
+      case "take_quick_actions":
+        return quickActionWaiting.splice(0);
       case "set_code_hotkey": {
         const keys = String(a.keys);
         const taken = params.has("hotkeybusy") && keys === "ctrl+shift+v";
@@ -1454,6 +1461,13 @@ if (params.has("call")) {
     history.unshift(missed);
     void emit("notification", missed);
   }, 31500);
+}
+
+if (params.get("quickaction") && params.has("again")) {
+  setTimeout(() => {
+    quickActionWaiting.push(String(params.get("quickaction")));
+    void emit("quick-action", null);
+  }, 4000);
 }
 
 // ?codefill: a verification code arrives as an ANCS notification and as a MAP text (as a bank's

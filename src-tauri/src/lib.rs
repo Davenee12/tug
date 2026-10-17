@@ -27,6 +27,7 @@ mod pc_audio;
 #[cfg(test)]
 mod perf;
 mod pin_confirm;
+mod quick_actions;
 mod session_end;
 mod spotify;
 mod startup;
@@ -114,10 +115,18 @@ pub fn run() {
     let log_dir = startup::log_dir(&context.config().identifier);
     startup::install_panic_hook(log_dir.clone());
     let setup_log_dir = log_dir.clone();
+    // Before any window exists, so tug's taskbar button carries the id its jump list is under.
+    quick_actions::init(&context.config().identifier);
     let built = tauri::Builder::default()
         // Must be first: a second launch focuses the running window instead of
         // starting a rival that can't advertise (Windows allows one provider per service).
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show(app)))
+        // A jump-list task is such a launch: its `--action` is carried out here.
+        .plugin(tauri_plugin_single_instance::init(
+            |app, args, _cwd| match quick_actions::parse_args(&args) {
+                Some(action) => quick_actions::receive(app, action),
+                None => tray::show(app),
+            },
+        ))
         // Start with Windows (Settings › General) is tug's own HKCU Run entry (autostart.rs),
         // carrying `--minimized` so an automatic launch comes up hidden in the tray.
         .plugin(
@@ -147,6 +156,13 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let store = Arc::new(open_store(&dir, setup_log_dir.as_deref()));
+            // Taskbar quick actions: a task clicked while tug wasn't running started this launch;
+            // the UI carries it out once it has loaded. Then (re)build the jump list itself.
+            if let Some(action) = quick_actions::parse_args(std::env::args()) {
+                quick_actions::queue(action);
+            }
+            let show_games = store.setting(quick_actions::SHOW_GAMES_SETTING).ok().flatten();
+            quick_actions::install(quick_actions::show_games(show_games.as_deref()));
             let shared = Arc::new(Shared::new(app.handle().clone(), store.clone()));
             let ble = ble::start(shared.clone());
             let _ = shared.map.set(map::service::start(shared.clone()));
@@ -289,6 +305,7 @@ pub fn run() {
             commands::copy_text,
             commands::copy_code,
             commands::code_hotkey_status,
+            commands::take_quick_actions,
             commands::set_code_hotkey,
             commands::set_conversation_hidden,
             commands::set_unread,

@@ -35,6 +35,9 @@ pub mod events {
     pub const TOAST_PRESSED: &str = "toast-pressed";
     /// The type-the-code shortcut was pressed: what it did (see `code_fill`), never the code.
     pub const CODE_FILLED: &str = "code-filled";
+    /// A taskbar jump-list task was clicked: the frontend takes what's waiting with
+    /// `take_quick_actions` (see `quick_actions`). No payload, so a lost nudge loses nothing.
+    pub const QUICK_ACTION: &str = "quick-action";
 }
 
 /// Settings keys stored in SQLite.

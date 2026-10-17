@@ -26,6 +26,8 @@ import { phoneTextMessage, skippedMessage } from "./lib/tugboat";
 import { START_FAILED } from "./lib/startup";
 import { isWide } from "./lib/layout";
 import { useElementSize } from "./lib/useElementSize";
+import { api, on } from "./lib/ipc";
+import { quickActionRunner, runQuickAction } from "./lib/quickActions";
 
 const tug = useTugStore();
 const tugboat = useTugboatStore();
@@ -86,9 +88,7 @@ function onShortcut(e: KeyboardEvent) {
   if (e.shiftKey) {
     if (key !== "c") return;
     e.preventDefault();
-    const latest = tug.latestCode();
-    if (latest) void tug.copyCode(latest.code, latest.from);
-    else tug.notify("info", "No code in the last 10 minutes");
+    void tug.copyLatestCode();
     return;
   }
   // A ringing call has the keyboard (Enter answers, Esc declines) until it's dealt with, and
@@ -111,6 +111,40 @@ function onShortcut(e: KeyboardEvent) {
     tug.pickerOpen = true;
   }
 }
+
+// Taskbar quick actions (the jump list's Tasks): the same paths as Ctrl+K and the shortcuts. Rust
+// has already brought the window forward; anything covering the window that would hide what was
+// asked for is closed first (a ringing call stays on top until it's answered).
+function newMessage() {
+  game.close();
+  tug.searchOpen = false;
+  tug.view = "messages";
+  tug.pickerOpen = true;
+}
+function settings() {
+  game.close();
+  tug.searchOpen = false;
+  tug.pickerOpen = false;
+  tug.openSettings();
+}
+const quickActions = quickActionRunner(api.takeQuickActions, (action) => {
+  runQuickAction(action, {
+    newMessage,
+    tugboat: () => {
+      tug.searchOpen = false;
+      void tugboat.show();
+    },
+    copyCode: () => void tug.copyLatestCode(),
+    game: () => {
+      tug.searchOpen = false;
+      tug.pickerOpen = false;
+      void game.show();
+    },
+    settings,
+  });
+});
+let quickActionsOff: (() => void) | undefined;
+let unmounted = false;
 
 onMounted(async () => {
   window.addEventListener("keydown", onShortcut);
@@ -140,8 +174,21 @@ onMounted(async () => {
     console.error("tug init failed", e);
     tug.notify("error", START_FAILED);
   }
+  // Only now, with history and settings loaded (so Copy latest code can find the code): a task
+  // clicked before tug was ready has been waiting in the backend and runs here, once.
+  try {
+    const off = await on("quick-action", () => void quickActions.drain());
+    if (unmounted) off();
+    else quickActionsOff = off;
+  } catch {
+    /* not running in tug */
+  }
+  void quickActions.drain();
 });
 onUnmounted(() => {
+  unmounted = true;
+  quickActionsOff?.();
+  quickActionsOff = undefined;
   window.removeEventListener("keydown", onShortcut);
   window.clearTimeout(graceTimer);
   tug.dispose();

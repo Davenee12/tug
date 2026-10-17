@@ -515,6 +515,13 @@ pub fn copy_code(code: String) -> Result<()> {
     Ok(())
 }
 
+/// Taskbar quick actions waiting to be carried out (oldest first); taking them clears them, so
+/// each click runs once. The UI calls this once it has loaded and on every `quick-action` nudge.
+#[tauri::command]
+pub fn take_quick_actions() -> Vec<crate::quick_actions::QuickAction> {
+    crate::quick_actions::take()
+}
+
 /// The type-the-code shortcut's state, for Settings.
 #[tauri::command]
 pub fn code_hotkey_status() -> crate::code_fill::HotkeyStatus {
@@ -652,7 +659,16 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
     if !key.starts_with(UI_SETTING_PREFIX) {
         return Err(format!("{key} is not a UI setting"));
     }
-    state.shared.store.set_setting(&key, &value).map_err(|e| e.to_string())
+    state
+        .shared
+        .store
+        .set_setting(&key, &value)
+        .map_err(|e| e.to_string())?;
+    // Show games also decides whether the jump list offers Play Tugboat Run.
+    if key == crate::quick_actions::SHOW_GAMES_SETTING {
+        crate::quick_actions::install(crate::quick_actions::show_games(Some(&value)));
+    }
+    Ok(())
 }
 
 /// Whether tug starts with Windows. The registry entry (this user's Run key, see autostart.rs)

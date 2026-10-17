@@ -102,6 +102,14 @@ windows = { version = "0.62", features = [
   "Win32_System_WindowsProgramming",
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",
+  # Quick actions: the taskbar jump list (ICustomDestinationList, IShellLinkW tasks with a title)
+  # and the AppUserModelID the window and the list share.
+  "Win32_Storage_EnhancedStorage",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_UI_Shell_Common",
+  "Win32_UI_Shell_PropertiesSystem",
   "Win32_UI_WindowsAndMessaging",
 ] }
 windows-collections = "0.3"
