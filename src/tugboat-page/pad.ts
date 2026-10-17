@@ -67,7 +67,7 @@ export function nextSendDelay(sinceLastMs: number, changed: boolean): number {
  * asked for fewer. "retry": a dropped packet or a stale sequence number; carry on.
  */
 export function padErrorAction(code: string): "leave" | "slow" | "retry" {
-  if (["no-game", "closed", "unauthorized", "in-use", "full"].includes(code)) return "leave";
+  if (["no-game", "closed", "unauthorized", "in-use", "full", "no-race", "player-2-code"].includes(code)) return "leave";
   if (code === "busy") return "slow";
   return "retry";
 }

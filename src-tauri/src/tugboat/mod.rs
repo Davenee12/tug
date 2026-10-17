@@ -7,7 +7,9 @@
 //! (`net.rs`). It stops when the panel closes, when tug quits, when tug's window hides to the tray
 //! (once any transfer in progress finishes), or after 10 minutes without a request; the secret is
 //! useless after that. Unfinished uploads are removed on start and stop. Tugboat Run can also start
-//! it, to use the phone as a game controller (`pad.rs`); the same rules then apply.
+//! it, to use the phone as a game controller (`pad.rs`); the same rules then apply. A two-player
+//! game also shows a Player 2 code, `http://<address>:<port>/#g.<guest secret>`: a key derived from
+//! the secret that only steers (see `crypto::guest_secret` and `auth.rs`).
 //! tug never touches Windows Firewall: Windows asks the user the first time on its own (an account
 //! that isn't an administrator may need one to answer). It needs an IPv4 home or office network
 //! the phone is also on; on a network Windows calls Public, inbound connections are blocked.
@@ -144,6 +146,10 @@ pub struct TugboatStatus {
     /// `192.168.1.20:53211`.
     pub address: Option<String>,
     pub qr: Option<Qr>,
+    /// The Player 2 code's link (with the guest secret), only while a two-player game asks for a
+    /// second phone. It can only steer: never files, text or the clipboard.
+    pub guest_url: Option<String>,
+    pub guest_qr: Option<Qr>,
     /// "iPhone", once one has connected.
     pub phone: Option<String>,
     /// The phone's page is open and checking in.
@@ -180,6 +186,9 @@ struct Endpoint {
     port: u16,
     url: String,
     qr: Option<Qr>,
+    /// The Player 2 code (shown only while a two-player game asks for it).
+    guest_url: String,
+    guest_qr: Option<Qr>,
     shutdown: Option<oneshot::Sender<()>>,
     task: tauri::async_runtime::JoinHandle<()>,
 }
@@ -315,6 +324,16 @@ fn link(ip: Ipv4Addr, port: u16, secret: &[u8]) -> String {
     format!("http://{ip}:{port}/#{}", crypto::b64(secret))
 }
 
+/// The Player 2 code's link: the same address, and the guest secret (never the session's) after
+/// `#g.`, so the page knows it's a guest and the phone can only ever steer.
+fn guest_link(ip: Ipv4Addr, port: u16, secret: &[u8]) -> String {
+    format!(
+        "http://{ip}:{port}/#{}{}",
+        crypto::GUEST_PREFIX,
+        crypto::b64(&crypto::guest_secret(secret))
+    )
+}
+
 async fn open_endpoint(
     ip: Ipv4Addr,
     port_hint: u16,
@@ -330,6 +349,8 @@ async fn open_endpoint(
     let port = listener.local_addr()?.port();
     let url = link(ip, port, secret);
     let qr = qr::encode(&url);
+    let guest_url = guest_link(ip, port, secret);
+    let guest_qr = qr::encode(&guest_url);
     let (tx, rx) = oneshot::channel::<()>();
     let task = tauri::async_runtime::spawn(server::serve(listener, session, async {
         let _ = rx.await;
@@ -340,6 +361,8 @@ async fn open_endpoint(
         port,
         url,
         qr,
+        guest_url,
+        guest_qr,
         shutdown: Some(tx),
         task,
     })
@@ -390,15 +413,16 @@ impl TugboatService {
             .ok()
             .map(|p| p.to_string_lossy().into_owned());
         let ended = *lock(&self.inner.ended);
-        let (session, endpoint) = {
+        let (session, endpoint, guest) = {
             let run = lock(&self.inner.running);
             match run.as_ref() {
-                None => (None, None),
+                None => (None, None, None),
                 Some(r) => (
                     Some(r.session.clone()),
                     r.endpoint
                         .as_ref()
                         .map(|e| (e.url.clone(), format!("{}:{}", e.ip, e.port), e.qr.clone())),
+                    r.endpoint.as_ref().map(|e| (e.guest_url.clone(), e.guest_qr.clone())),
                 ),
             }
         };
@@ -409,6 +433,8 @@ impl TugboatService {
                 url: None,
                 address: None,
                 qr: None,
+                guest_url: None,
+                guest_qr: None,
                 phone: None,
                 phone_active: false,
                 folder,
@@ -435,12 +461,19 @@ impl TugboatService {
             Some((u, a, q)) => (Some(u), Some(a), q),
             None => (None, None, None),
         };
+        // The Player 2 code only while a two-player game asks for a second phone.
+        let (guest_url, guest_qr) = match guest.filter(|_| session.wants_guest()) {
+            Some((u, q)) => (Some(u), q),
+            None => (None, None),
+        };
         TugboatStatus {
             rev,
             phase,
             url,
             address,
             qr,
+            guest_url,
+            guest_qr,
             phone: snap.phone,
             phone_active: snap.phone_active,
             folder,
@@ -753,6 +786,7 @@ impl TugboatService {
             self.start().await?;
         }
         let session = self.session().ok_or("Tugboat isn't open.")?;
+        let wanted_guest = session.wants_guest();
         if session.pad_open(players) {
             let watched = session.clone();
             tauri::async_runtime::spawn(async move {
@@ -767,6 +801,10 @@ impl TugboatService {
         for e in session.pad_events() {
             let _ = self.inner.app.emit(PAD_EVENT, e);
         }
+        // The Player 2 code comes and goes with a two-player game: tell the window.
+        if session.wants_guest() != wanted_guest {
+            self.emit();
+        }
         Ok(self.status())
     }
 
@@ -774,7 +812,12 @@ impl TugboatService {
     /// usual rules (closing the panel, hiding tug, or 10 minutes unused).
     pub fn pad_close(&self) {
         if let Some(s) = self.session() {
+            let wanted_guest = s.wants_guest();
             s.pad_close();
+            if wanted_guest {
+                // The Player 2 code goes with the game.
+                self.emit();
+            }
         }
     }
 

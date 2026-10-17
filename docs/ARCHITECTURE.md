@@ -250,15 +250,24 @@ phone page polls GET /api/state ─► { game: true } ─► Controller.vue (sli
 game closes ─► game_pad_close ─► inputs get 409 ─► the page goes back to Tugboat
 ```
 
-Two players: `game_pad_open(2)` opens a second seat. While it's open, one other phone may join
-with the same code (`auth.rs`: a guest, signed with the same secret, with its own replay window;
-a guest that's been quiet for 8 s gives way to the next phone, and any other phone gets 403
-`full`). The guest may only make the two controller requests (`GET /api/state`, which tells it
-only whether there's a race, and `POST /api/pad`); everything else is 403 `in-use`. Seat 1 is the
-session's own phone, seat 2 the guest; each seat has its own ordering, rate limit, silence watch,
-reply (`player` 1 or 2, so the phone shows its colour) and latency summary, and `game-pad` carries
-the `seat`. `game_pad_open(1)` closes seat 2 again (the game hears it's gone; the guest waits on
-its page for the next race).
+Two players: `game_pad_open(2)` opens a second seat, and `TugboatStatus` carries a second code
+(`guestUrl`/`guestQr`) for as long as it's open, which TugboatRun.vue shows as the **Player 2
+code** beside Tugboat's own (Player 1 scans Tugboat's usual code). The Player 2 code's fragment is
+`#g.` and a guest secret, `HKDF-SHA256(session secret, salt "tugboat/1", info "tugboat guest v1")`,
+16 bytes (`crypto::guest_secret`, `guestSecret` in the page's crypto.ts, pinned by
+`guestVector.json`); it can't be turned back into the session secret. The page reads the `g.`
+(`secret.ts`), derives keys from the guest secret the usual way and signs and seals with them, and
+shows only the race. `auth.rs` checks a request against the session's keys first (the owner,
+bound by the first such request as always) and then the guest's: a guest-key request may only be
+`GET /api/state` (which tells it only whether there's a race) or `POST /api/pad`, anything else is
+403 `in-use`; it can never bind the session, even as the first request; and it joins as the guest
+only while seat 2 is open (else 403 `no-race`), one at a time with its own replay window (a guest
+quiet for 8 s gives way to the next, otherwise 403 `full`). A second phone with Tugboat's own code
+during a race gets 403 `player-2-code`, never the guest seat. Its bodies and replies are sealed with
+the guest keys. Seat 1 is the session's own phone, seat 2 the guest; each seat has its own
+ordering, rate limit, silence watch, reply (`player` 1 or 2, so the phone shows its colour) and
+latency summary, and `game-pad` carries the `seat`. `game_pad_open(1)` closes seat 2 again (the
+game hears it's gone; the guest waits on its page for the next race) and the Player 2 code goes.
 
 The input channel is a small POST endpoint rather than a WebSocket: it reuses Tugboat's
 authentication, sealing, connection limits and timeouts unchanged, needs no new dependency or

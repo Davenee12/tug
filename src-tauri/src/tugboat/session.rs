@@ -62,6 +62,11 @@ pub enum ApiError {
     InUse,
     /// A two-player game already has its two phones: a third is turned away.
     Full,
+    /// A phone with the Player 2 code, but no two-player game is asking for a second phone.
+    NoRace,
+    /// A second phone scanned Tugboat's own code (another phone has it) while a two-player game
+    /// asks for a second phone: it wants the Player 2 code.
+    Player2Code,
     NotFound,
     BadRequest,
     /// A chunk didn't decrypt, or had the wrong length.
@@ -90,7 +95,7 @@ impl ApiError {
         match self {
             ApiError::Closed => 410,
             ApiError::Unauthorized => 401,
-            ApiError::InUse | ApiError::Blocked | ApiError::Full => 403,
+            ApiError::InUse | ApiError::Blocked | ApiError::Full | ApiError::NoRace | ApiError::Player2Code => 403,
             ApiError::NotFound => 404,
             ApiError::BadRequest | ApiError::BadChunk => 400,
             ApiError::TooBig => 413,
@@ -107,6 +112,8 @@ impl ApiError {
             ApiError::Unauthorized => "unauthorized",
             ApiError::InUse => "in-use",
             ApiError::Full => "full",
+            ApiError::NoRace => "no-race",
+            ApiError::Player2Code => "player-2-code",
             ApiError::NotFound => "not-found",
             ApiError::BadRequest => "bad-request",
             ApiError::BadChunk => "bad-chunk",
@@ -413,6 +420,9 @@ struct State {
 
 pub struct Session {
     pub keys: Keys,
+    /// The keys of the Player 2 code (`crypto::guest_secret`): a two-player game's second phone
+    /// signs and seals with these, and they're good for the two controller requests only.
+    guest_keys: Keys,
     /// `Pictures\Tugboat`: where received files go, unless Windows won't let tug write there.
     pub folder: PathBuf,
     /// `Downloads\Tugboat`: used when Windows refuses `folder` (Controlled folder access).
@@ -440,6 +450,7 @@ impl Session {
     pub fn new(secret: &[u8], folder: PathBuf, incoming: PathBuf, sink: Arc<dyn Sink>) -> Session {
         Session {
             keys: Keys::derive(secret),
+            guest_keys: Keys::derive(&crypto::guest_secret(secret)),
             folder,
             fallback: None,
             prober: Box::new(probe_folder),
@@ -609,9 +620,10 @@ impl Session {
 
     // --- Requests from the phone ---
 
-    /// Check a request's `Authorization` header. The first good one binds the session. While a
-    /// two-player game asks for two controllers, one second phone may join too, for steering only:
-    /// its page's check-in and its inputs, nothing else.
+    /// Check a request's `Authorization` header. The first one signed with the session's keys binds
+    /// the session. While a two-player game asks for two controllers, one second phone holding the
+    /// Player 2 code's keys may join too, for steering only: its page's check-in and its inputs,
+    /// nothing else (`auth.rs` refuses the guest keys for anything more).
     pub fn authorize(
         &self,
         header: Option<&str>,
@@ -622,21 +634,18 @@ impl Session {
         if self.is_closed() {
             return Err(ApiError::Closed);
         }
-        let controller = is_controller_request(method, path);
         let mut st = self.state();
         let duo = st.pad.as_ref().is_some_and(|p| p.players() == 2);
         let policy = GuestPolicy {
-            may_join: duo && controller,
+            may_join: duo,
             // Exactly two phones at a time; one that has gone quiet makes room for the next.
             may_replace: st.guest_seen.is_none_or(|t| t.elapsed() >= ACTIVE),
         };
-        let result = st.auth.check_with(&self.keys, header, method, path, policy);
+        let result = st
+            .auth
+            .check_with(&self.keys, &self.guest_keys, header, method, path, policy);
         match result {
             Ok(ok) if ok.guest => {
-                if !controller {
-                    // A second phone only ever steers: never files, text or the panel.
-                    return Err(ApiError::InUse);
-                }
                 st.guest_seen = Some(Instant::now());
                 st.last_activity = Instant::now();
                 if ok.first {
@@ -668,9 +677,14 @@ impl Session {
                     log::debug!("tugboat: request refused ({why:?}){}", super::tally::more(held));
                 }
                 Err(match why {
-                    // Turned away from a two-player game's controller: it has its two phones.
-                    Rejected::OtherDevice if policy.may_join => ApiError::Full,
+                    // Tugboat's own code on a second phone during a race: it wants the Player 2 code.
+                    Rejected::OtherDevice if policy.may_join => ApiError::Player2Code,
                     Rejected::OtherDevice => ApiError::InUse,
+                    // The Player 2 code asking for files, text or the clipboard.
+                    Rejected::GuestOnly => ApiError::InUse,
+                    // The race already has its two phones.
+                    Rejected::GuestTaken => ApiError::Full,
+                    Rejected::NoGuestSeat => ApiError::NoRace,
                     Rejected::Replayed => ApiError::Stale,
                     Rejected::Malformed | Rejected::BadMac => ApiError::Unauthorized,
                 })
@@ -678,10 +692,20 @@ impl Session {
         }
     }
 
+    /// The keys a request was signed with: the guest's for a two-player game's second phone, the
+    /// session's for everything else. Its body and its reply are sealed with the same ones.
+    fn keys_for(&self, req: &Authorized) -> &Keys {
+        if req.guest {
+            &self.guest_keys
+        } else {
+            &self.keys
+        }
+    }
+
     /// Open a sealed JSON request body.
     pub fn open_json<T: for<'de> Deserialize<'de>>(&self, req: &Authorized, body: &[u8]) -> Result<T, ApiError> {
         let plain = self
-            .keys
+            .keys_for(req)
             .open(&ad::request(&req.client, req.seq), body)
             .ok_or_else(|| {
                 log::debug!("tugboat: request body failed to decrypt");
@@ -693,7 +717,7 @@ impl Session {
     /// Seal a JSON response to `req`.
     pub fn seal_json<T: Serialize>(&self, req: &Authorized, value: &T) -> Vec<u8> {
         let json = serde_json::to_vec(value).expect("reply types always serialize");
-        self.keys.seal(&ad::response(&req.client, req.seq), &json)
+        self.keys_for(req).seal(&ad::response(&req.client, req.seq), &json)
     }
 
     /// What the page polls for: files on offer, the latest text from the PC, and the PC's clipboard
@@ -890,7 +914,7 @@ impl Session {
             return Err(ApiError::TooBig);
         }
         let plain = self
-            .keys
+            .keys_for(req)
             .open(&ad::request(&req.client, req.seq), body)
             .ok_or(ApiError::BadRequest)?;
         let decoded = pad::decode(&plain).map_err(|e| match e {
@@ -935,6 +959,11 @@ impl Session {
     #[cfg(test)]
     pub fn pad_latency(&self) -> Option<String> {
         self.state().pad.as_ref().and_then(|p| p.latency(FIRST).summary())
+    }
+
+    /// A two-player game is asking for a second phone: the Player 2 code is worth showing.
+    pub fn wants_guest(&self) -> bool {
+        self.state().pad.as_ref().is_some_and(|p| p.players() == 2)
     }
 
     /// The controllers as the game should show them now (seat 2 only in a two-player game).
@@ -1439,12 +1468,6 @@ fn withdraw(st: &mut State, payload: &Payload) {
         st.offers.retain(|o| o.id != offer);
         st.downloading.remove(offer);
     }
-}
-
-/// The two requests a game controller makes: the page's check-in and an input. A two-player
-/// game's second phone may make these and nothing else.
-fn is_controller_request(method: &str, path: &str) -> bool {
-    matches!((method, path), ("GET", "/api/state") | ("POST", "/api/pad"))
 }
 
 /// Which seat a controller request is for: the session's own phone is seat 1, the guest seat 2.

@@ -647,18 +647,23 @@ const controllerLine = computed(() => {
   if (duo.value) {
     const n = (padConnected[0] ? 1 : 0) + (padConnected[1] ? 1 : 0);
     if (n === 2) return "Both phones are connected. Each one shows its player's colour.";
-    if (n === 1) return "One phone connected. Scan the same code with a second phone for the other player.";
+    if (padConnected[0]) return "One phone connected. Scan the Player 2 code with the second phone.";
+    if (padConnected[1]) return "One phone connected. Scan Tugboat's code with the other phone.";
   } else if (padConnected[0]) return `Your ${phoneName.value} is the controller. Steer with the pad, Boost to hop.`;
   const p = ts.value.phase;
   if (p === "off") return "Starting Tugboat…";
   if (p === "noNetwork") return "Connect this PC to your home or office Wi-Fi to use your phone.";
-  if (duo.value) return "Both players scan this code with their phone's camera.";
+  if (duo.value) return "Player 1 scans Tugboat's code and Player 2 the Player 2 code, each with their phone's camera.";
   if (p === "connected" && ts.value.phoneActive) return `Your ${phoneName.value} is on Tugboat. The controller opens on it in a moment.`;
   if (p === "connected") return `Open Tugboat on your ${phoneName.value} again: scan the code if the page is closed.`;
   return "Scan with your phone's camera. Tugboat opens on it as a controller.";
 });
 const anyPhone = computed(() => padConnected[0] || padConnected[1]);
-const showCode = computed(() => ts.value.qr !== null && (duo.value ? !(padConnected[0] && padConnected[1]) : !padConnected[0]));
+const showCode = computed(() => !duo.value && ts.value.qr !== null && !padConnected[0]);
+/** A race's codes: Tugboat's own for the first phone, the Player 2 code for the second (which can
+ * only steer, never reach files or the clipboard). Each until its phone is in. */
+const showRaceCode = computed(() => duo.value && ts.value.qr !== null && !padConnected[0]);
+const showGuestCode = computed(() => duo.value && ts.value.guestQr !== null && !padConnected[1]);
 
 // --- Lifetime ---
 let ro: ResizeObserver | null = null;
@@ -1004,15 +1009,35 @@ const leader = computed(() => raceResult.value?.winner ?? null);
             <path :d="ts.qr.path" class="fill-ink" />
           </svg>
         </div>
-        <p v-if="showCode && ts.qr" class="mt-3 text-center text-[12px] text-on-dark-soft">
-          This is Tugboat's code: the same one for photos and files.{{ duo ? " Two phones can join a race; a third is turned away." : "" }}
-        </p>
+        <p v-if="showCode && ts.qr" class="mt-3 text-center text-[12px] text-on-dark-soft">This is Tugboat's code: the same one for photos and files.</p>
         <div v-else-if="!duo && padConnected[0]" class="mt-5 flex flex-col items-center gap-2 py-4 text-center">
           <span class="flex size-14 items-center justify-center rounded-2xl bg-surface-dark-elevated">
             <Smartphone :size="26" class="text-accent-teal" />
           </span>
           <p class="font-display text-[20px]">{{ capitalised(phoneName) }} connected</p>
         </div>
+
+        <template v-if="duo">
+          <section v-if="showRaceCode && ts.qr" class="mt-5 text-center" aria-labelledby="run-code-p1">
+            <h4 id="run-code-p1" class="text-[13px] text-on-dark">Player 1: Tugboat's code</h4>
+            <div class="mx-auto mt-2 w-fit rounded-xl bg-canvas p-3">
+              <svg :viewBox="`-2 -2 ${ts.qr.size + 4} ${ts.qr.size + 4}`" class="block size-[160px]" shape-rendering="crispEdges" role="img" aria-label="Tugboat's code, for Player 1's phone">
+                <path :d="ts.qr.path" class="fill-ink" />
+              </svg>
+            </div>
+            <p class="mt-2 text-[12px] text-on-dark-soft">The same code as for photos and files.</p>
+          </section>
+          <section v-if="showGuestCode && ts.guestQr" class="mt-5 text-center" aria-labelledby="run-code-p2">
+            <h4 id="run-code-p2" class="text-[13px] text-on-dark">Player 2 code</h4>
+            <div class="mx-auto mt-2 w-fit rounded-xl bg-canvas p-3">
+              <svg :viewBox="`-2 -2 ${ts.guestQr.size + 4} ${ts.guestQr.size + 4}`" class="block size-[160px]" shape-rendering="crispEdges" role="img" aria-label="Player 2 code, for a second phone">
+                <path :d="ts.guestQr.path" class="fill-ink" />
+              </svg>
+            </div>
+            <p class="mt-2 text-[12px] text-on-dark-soft">For a friend's phone: it can only steer, never see your photos, files or clipboard.</p>
+            <p class="mt-1 font-mono text-[11px] break-all text-on-dark-soft/80 select-all">{{ ts.guestUrl }}</p>
+          </section>
+        </template>
 
         <ul v-if="duo" class="mt-5 space-y-2">
           <li v-for="p in [1, 2] as Player[]" :key="p" class="flex items-center gap-3 rounded-xl bg-surface-dark-elevated px-3 py-2">

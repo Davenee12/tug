@@ -75,7 +75,7 @@ describe("pacing", () => {
 describe("padErrorAction", () => {
   it("goes back to the Tugboat page when the game or session ended", () => {
     // "full": a two-player race already has its two phones.
-    for (const code of ["no-game", "closed", "unauthorized", "in-use", "full"]) expect(padErrorAction(code)).toBe("leave");
+    for (const code of ["no-game", "closed", "unauthorized", "in-use", "full", "no-race", "player-2-code"]) expect(padErrorAction(code)).toBe("leave");
     expect(padErrorAction("busy")).toBe("slow");
     for (const code of ["network", "stale", "bad-request", "error"]) expect(padErrorAction(code)).toBe("retry");
   });

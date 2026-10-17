@@ -13,6 +13,11 @@
 //! memory, never in web storage, but the history entry can remain), and "Copy link" puts it on the
 //! PC clipboard (kept out of clipboard history and sync).
 //! Never call it end-to-end secure.
+//!
+//! A two-player game's second phone (the guest) never gets the session secret. Its code (the
+//! "Player 2 code") carries a guest secret derived from it with HKDF (`guest_secret`), which can't
+//! be turned back into the session secret, and the guest's keys come from that the same way. The
+//! server only lets guest keys sign the two controller requests (`auth.rs`).
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -32,6 +37,11 @@ pub const TAG_LEN: usize = 16;
 pub const OVERHEAD: usize = NONCE_LEN + TAG_LEN;
 /// Request MACs are HMAC-SHA256 truncated to 128 bits.
 pub const MAC_LEN: usize = 16;
+/// HKDF info for the guest secret (see `guest_secret`).
+pub const GUEST_LABEL: &str = "tugboat guest v1";
+/// What starts the Player 2 code's `#` fragment, before the guest secret: the page reads it as
+/// "I'm a guest". Not base64url, so it can't be mistaken for the start of a session secret.
+pub const GUEST_PREFIX: &str = "g.";
 
 /// The two keys derived from one Tugboat session's secret.
 pub struct Keys {
@@ -161,6 +171,17 @@ pub mod ad {
     }
 }
 
+/// The guest secret for a session: HKDF-SHA256 of the session secret (salt `VERSION`, info
+/// `GUEST_LABEL`), 16 bytes. One-way, so the Player 2 code can't be turned into the session's own
+/// secret; the guest's keys are `Keys::derive(&guest_secret(secret))`.
+pub fn guest_secret(secret: &[u8]) -> [u8; SECRET_LEN] {
+    let hk = Hkdf::<Sha256>::new(Some(VERSION.as_bytes()), secret);
+    let mut out = [0u8; SECRET_LEN];
+    // 16 bytes is far below HKDF-SHA256's 8160-byte limit, so expand can't fail.
+    hk.expand(GUEST_LABEL.as_bytes(), &mut out).expect("HKDF length");
+    out
+}
+
 /// A fresh session secret for the QR code.
 pub fn new_secret() -> [u8; SECRET_LEN] {
     let mut s = [0u8; SECRET_LEN];
@@ -264,6 +285,42 @@ mod tests {
         assert_eq!(keys.open(&up, &sealed).unwrap(), v.plaintext.as_bytes());
         let mac = keys.request_mac(&v.mac.client, v.mac.seq, &v.mac.method, &v.mac.path);
         assert_eq!(b64(&mac), v.mac.mac);
+    }
+
+    /// The guest (Player 2) key vector, also asserted by vitest (`src/tugboat-page/crypto.test.ts`).
+    const GUEST_VECTOR: &str = include_str!("../../../src/tugboat-page/guestVector.json");
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GuestVector {
+        secret: String,
+        label: String,
+        guest_secret: String,
+        fragment: String,
+        enc_key: String,
+        auth_key: String,
+        mac: MacVector,
+    }
+
+    #[test]
+    fn guest_key_vector_matches() {
+        let v: GuestVector = serde_json::from_str(GUEST_VECTOR).unwrap();
+        assert_eq!(v.label, GUEST_LABEL);
+        let secret = hex(&v.secret);
+        let guest = guest_secret(&secret);
+        assert_eq!(to_hex(&guest), v.guest_secret);
+        assert_eq!(format!("#{GUEST_PREFIX}{}", b64(&guest)), v.fragment);
+        let keys = Keys::derive(&guest);
+        assert_eq!(to_hex(&keys.enc), v.enc_key);
+        assert_eq!(to_hex(&keys.auth), v.auth_key);
+        let mac = keys.request_mac(&v.mac.client, v.mac.seq, &v.mac.method, &v.mac.path);
+        assert_eq!(b64(&mac), v.mac.mac);
+        // Nothing the guest holds is the session's: not the secret, not either key.
+        let session = Keys::derive(&secret);
+        assert_ne!(guest.as_slice(), secret.as_slice());
+        assert_ne!(to_hex(&session.enc), v.enc_key);
+        assert_ne!(to_hex(&session.auth), v.auth_key);
+        assert!(!session.verify_request_mac(&v.mac.client, v.mac.seq, &v.mac.method, &v.mac.path, &mac));
     }
 
     #[test]

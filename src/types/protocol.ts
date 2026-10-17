@@ -568,6 +568,12 @@ export interface TugboatStatus {
   /** "192.168.1.20:53211". */
   address: string | null;
   qr: TugboatQr | null;
+  /**
+   * The Player 2 code's link: the guest secret (derived from the session's, never the session's
+   * own) after `#g.`. Only while a two-player game asks for a second phone; it can only steer.
+   */
+  guestUrl: string | null;
+  guestQr: TugboatQr | null;
   /** "iPhone", once one has connected. */
   phone: string | null;
   /** The phone's page is open and checking in. */

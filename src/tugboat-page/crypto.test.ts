@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { hexToBytes, bytesToHex } from "@noble/ciphers/utils.js";
 import vector from "./testVector.json";
-import { ad, authHeader, b64, deriveKeys, fileId, open, requestMac, seal, unb64, OVERHEAD } from "./crypto";
+import guestVector from "./guestVector.json";
+import { GUEST_LABEL, GUEST_PREFIX, ad, authHeader, b64, deriveKeys, fileId, guestSecret, open, requestMac, seal, unb64, OVERHEAD } from "./crypto";
+import { keyFromHash } from "./secret";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -40,6 +42,38 @@ describe("shared test vector (also asserted by cargo test in src-tauri/src/tugbo
     const f = vector.fileId;
     expect(fileId(keys, f.name, f.size, f.lastModified)).toBe(f.id);
     expect(fileId(keys, f.name, f.size + 1, f.lastModified)).not.toBe(f.id);
+  });
+});
+
+describe("guest key vector (also asserted by cargo test in src-tauri/src/tugboat/crypto.rs)", () => {
+  const secret = hexToBytes(guestVector.secret);
+  const guest = guestSecret(secret);
+
+  it("derives the same guest secret, with the same label", () => {
+    expect(GUEST_LABEL).toBe(guestVector.label);
+    expect(bytesToHex(guest)).toBe(guestVector.guestSecret);
+    expect(`#${GUEST_PREFIX}${b64(guest)}`).toBe(guestVector.fragment);
+  });
+
+  it("derives the same guest keys and signs the same way", () => {
+    const keys = deriveKeys(guest);
+    expect(bytesToHex(keys.enc)).toBe(guestVector.encKey);
+    expect(bytesToHex(keys.auth)).toBe(guestVector.authKey);
+    const m = guestVector.mac;
+    expect(b64(requestMac(keys, m.client, BigInt(m.seq), m.method, m.path))).toBe(m.mac);
+  });
+
+  it("shares nothing with the session's own keys", () => {
+    const session = deriveKeys(secret);
+    expect(bytesToHex(guest)).not.toBe(guestVector.secret);
+    expect(bytesToHex(session.enc)).not.toBe(guestVector.encKey);
+    expect(bytesToHex(session.auth)).not.toBe(guestVector.authKey);
+  });
+
+  it("is what the page reads out of the Player 2 code's link", () => {
+    const key = keyFromHash(guestVector.fragment);
+    expect(key?.guest).toBe(true);
+    expect(bytesToHex(key!.secret)).toBe(guestVector.guestSecret);
   });
 });
 

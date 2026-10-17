@@ -242,11 +242,12 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - **Free play**: the endless runner as before, a new course every time.
 - **Two players**: race side by side in two lanes on the same course; the higher score wins, and
   the winner screen shows both scores. Player 1 (coral) steers with ← → and hops with ↑, Player 2
-  (teal) with A, D and W, or each uses a phone: both scan the same code, and each phone shows its
-  player's colour (**Swap phones** puts the first phone on Player 2, so the keyboard can be
-  Player 1). Exactly two phones can join; a third is turned away. If a player's phone drops
-  mid-race the race waits ("Player 2 disconnected — waiting…") until it's back, or **Continue
-  solo**. A second phone can only steer: it never sees Tugboat's files or text.
+  (teal) with A, D and W, or each uses a phone: Player 1 scans Tugboat's code and Player 2 a
+  separate **Player 2 code**, and each phone shows its player's colour (**Swap phones** puts the
+  first phone on Player 2, so the keyboard can be Player 1). Exactly two phones can join; a third
+  is turned away. If a player's phone drops mid-race the race waits ("Player 2 disconnected —
+  waiting…") until it's back, or **Continue solo**. The Player 2 code can only steer: it never
+  reaches Tugboat's files, text or clipboard, and never takes Tugboat over.
 - Scores are kept on this PC only: the Free play best, each day's daily best and the streak, and a
   separate best race score for two players. Nothing runs while the game is closed or paused.
 - With Windows' reduce-motion setting on, the lighthouse beam holds still, rain and snow drift with

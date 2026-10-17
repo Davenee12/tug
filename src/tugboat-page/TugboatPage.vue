@@ -12,7 +12,11 @@ import { MAX_DOWNLOAD, MAX_UPLOAD, canRetryUpload, formatSize, isFatal, messageF
 import { ackOutcome, copyWith, isNewClip, needsAck, showClip, type ShownClip } from "./clip";
 import { copyEnv, selectText } from "./copy";
 
-const props = defineProps<{ api: TugboatApi | null }>();
+const props = defineProps<{
+  api: TugboatApi | null;
+  /** Opened from a race's Player 2 code: its keys only steer, so the page is only a controller. */
+  guest?: boolean;
+}>();
 
 const POLL_MS = 2000;
 
@@ -40,7 +44,7 @@ async function poll() {
     // The PC's clipboard: show a new one; keep telling the PC we have it until it has heard.
     if (isNewClip(clip.value ?? (dismissedClip === null ? null : { id: dismissedClip }), s.clip)) receiveClip(s.clip);
     else if (needsAck(clip.value)) void ackClip();
-    guest.value = s.guest === true;
+    guest.value = props.guest === true || s.guest === true;
     // The game closed: next time it asks, the controller opens again by itself.
     if (!s.game) padDismissed.value = false;
     connection.value = "ok";
@@ -64,7 +68,7 @@ function schedule() {
 // --- tug's game wants a controller ---
 const game = ref(false);
 /** This phone is a two-player race's second controller: no files or text, only the race. */
-const guest = ref(false);
+const guest = ref(props.guest === true);
 /** "Stop using as a controller" was tapped: stay on this page until the game asks again. */
 const padDismissed = ref(false);
 const controller = computed(() => props.api !== null && game.value && !padDismissed.value && !fatal.value);

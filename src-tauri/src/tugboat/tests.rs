@@ -91,6 +91,11 @@ impl Phone {
         }
     }
 
+    /// A phone that scanned the Player 2 code: it holds only the guest secret, never the session's.
+    fn guest(addr: SocketAddr, secret: &[u8], client: &str) -> Phone {
+        Phone::new(addr, &crypto::guest_secret(secret), client)
+    }
+
     fn next(&mut self) -> u64 {
         self.seq += 1;
         self.seq
@@ -363,6 +368,17 @@ fn the_link_never_carries_a_client_id() {
         super::link(ip, 53211, &secret),
         "http://192.168.1.20:53211/#AAAAAAAAAAAAAAAAAAAAAA"
     );
+}
+
+#[test]
+fn the_player_2_link_carries_the_guest_secret_never_the_session_secret() {
+    use std::net::Ipv4Addr;
+    let secret = crypto::new_secret();
+    let ip = Ipv4Addr::new(192, 168, 1, 20);
+    let link = super::guest_link(ip, 53211, &secret);
+    let guest = crypto::b64(&crypto::guest_secret(&secret));
+    assert_eq!(link, format!("http://192.168.1.20:53211/#g.{guest}"));
+    assert!(!link.contains(&crypto::b64(&secret)));
 }
 
 #[tokio::test]
@@ -682,9 +698,10 @@ fn code(body: &[u8]) -> String {
         .to_string()
 }
 
-/// A two-player game, over a real socket: exactly two phones may steer, each with the session's
-/// own signing and sealing, each in its own seat; a third is turned away; the second phone can only
-/// steer (never files, text or the panel); and going back to one player lets it go.
+/// A two-player game, over a real socket: exactly two phones may steer, the first with the
+/// session's keys and the second with the Player 2 code's, each in its own seat; a third is turned
+/// away; the second phone can only steer (never files, text or the panel); and going back to one
+/// player lets it go.
 #[tokio::test]
 async fn a_two_player_game_takes_exactly_two_controllers() {
     let root = temp_dir();
@@ -699,20 +716,22 @@ async fn a_two_player_game_takes_exactly_two_controllers() {
     let (addr, stop, server) = start_server(session.clone(), server::Limits::default()).await;
     let input = |steer: i64, boost: bool| Some(json!({ "steer": steer, "boost": boost }));
     let mut first = Phone::new(addr, &secret, "firstAAAAAAAAAAAAAAAAA");
-    let mut second = Phone::new(addr, &secret, "secondBBBBBBBBBBBBBBBB");
+    let mut second = Phone::guest(addr, &secret, "secondBBBBBBBBBBBBBBBB");
     // The second phone's clock is a few minutes behind the first's: its own replay window.
     second.seq -= 5 * 60_000 * 1024;
-    let mut third = Phone::new(addr, &secret, "thirdCCCCCCCCCCCCCCCCC");
+    let mut third = Phone::guest(addr, &secret, "thirdCCCCCCCCCCCCCCCCC");
     session.set_pc_text("only for the first phone").unwrap();
 
-    // The first phone binds the session; a one-player game turns a second phone away as before.
+    // The first phone binds the session; a one-player game has no seat for the Player 2 code.
     assert_eq!(first.raw("GET", "/api/state", Vec::new()).await.status, 200);
     session.pad_open(1);
+    assert!(!session.wants_guest(), "no Player 2 code to show");
     let r = second.raw("GET", "/api/state", Vec::new()).await;
-    assert_eq!((r.status, code(&r.body).as_str()), (403, "in-use"));
+    assert_eq!((r.status, code(&r.body).as_str()), (403, "no-race"));
 
     // Two players: the second phone joins, sees only that there's a race, and steers seat 2.
     assert!(!session.pad_open(2), "the same channel, now for two");
+    assert!(session.wants_guest(), "the Player 2 code is shown");
     let (status, state) = second.call::<StateReply>("GET", "/api/state", None).await;
     assert_eq!(status, 200);
     assert_eq!(
@@ -747,13 +766,18 @@ async fn a_two_player_game_takes_exactly_two_controllers() {
     assert!(state.game && !state.guest);
     assert_eq!(state.text.unwrap().text, "only for the first phone");
 
-    // A third phone, even with the secret, is turned away from the race.
+    // A third phone with the Player 2 code is turned away from the race.
     let r = third.raw("GET", "/api/state", Vec::new()).await;
     assert_eq!((r.status, code(&r.body).as_str()), (403, "full"));
     assert_eq!(
         third.call::<PadReply>("POST", "/api/pad", input(100, false)).await.0,
         403
     );
+    // One that scanned Tugboat's own code is told to scan the Player 2 code: it never becomes the
+    // guest, and never gets in.
+    let mut wrong_code = Phone::new(addr, &secret, "fourthDDDDDDDDDDDDDDDD");
+    let r = wrong_code.raw("GET", "/api/state", Vec::new()).await;
+    assert_eq!((r.status, code(&r.body).as_str()), (403, "player-2-code"));
 
     // The second phone can only steer: no text, no files, nothing from the PC.
     assert_eq!(
@@ -806,6 +830,125 @@ async fn a_two_player_game_takes_exactly_two_controllers() {
         second.call::<PadReply>("POST", "/api/pad", input(0, false)).await.0,
         409
     );
+
+    let _ = stop.send(());
+    server.await.unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// The Player 2 code over a real socket: a phone holding only the guest secret joins a race as
+/// Player 2, even as the very first phone to connect, but never becomes the session's phone and
+/// can't reach files, text, the clipboard or uploads. The owner still binds with the session secret.
+#[tokio::test]
+async fn a_player_2_code_only_steers_and_never_owns_the_session() {
+    let root = temp_dir();
+    let secret = crypto::new_secret();
+    let sink = Arc::new(TestSink::default());
+    let session = Arc::new(Session::new(
+        &secret,
+        root.join("Tugboat"),
+        root.join("incoming"),
+        sink.clone(),
+    ));
+    let (addr, stop, server) = start_server(session.clone(), server::Limits::default()).await;
+    let input = |steer: i64, boost: bool| Some(json!({ "steer": steer, "boost": boost }));
+    let mut guest = Phone::guest(addr, &secret, "guestAAAAAAAAAAAAAAAAA");
+    session.set_pc_text("only for the owner").unwrap();
+    let offered = root.join("report.pdf");
+    std::fs::write(&offered, b"for the owner only").unwrap();
+    session.offer(&[offered]);
+    let offer_id = session.snapshot().outgoing[0].id.clone();
+
+    // Before any game asks, the Player 2 code has no seat, and binds nothing.
+    let r = guest.raw("GET", "/api/state", Vec::new()).await;
+    assert_eq!((r.status, code(&r.body).as_str()), (403, "no-race"));
+    assert!(session.snapshot().phone.is_none());
+
+    // A two-player race: the guest is the very first phone to connect. It joins as Player 2, hears
+    // only that there's a race (sealed with its own keys), and the session is still nobody's.
+    session.pad_open(2);
+    let (status, state) = guest.call::<StateReply>("GET", "/api/state", None).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        state.unwrap(),
+        StateReply {
+            offers: vec![],
+            text: None,
+            game: true,
+            clip: None,
+            guest: true
+        }
+    );
+    assert!(session.snapshot().phone.is_none(), "a guest never becomes the owner");
+    let (status, _) = guest.call::<PadReply>("POST", "/api/pad", input(-60, false)).await;
+    assert_eq!(status, 200);
+    let last = *sink.pads.lock().unwrap().last().unwrap();
+    assert_eq!((last.seat, last.connected), (SECOND, true));
+
+    // Nothing else, ever: text, the clipboard, uploads (begin, chunk, finish, cancel), downloads.
+    let r = guest
+        .call::<Value>("POST", "/api/text", Some(json!({ "text": "from the guest" })))
+        .await;
+    assert_eq!(r.0, 403);
+    assert_eq!(
+        guest
+            .call::<Value>("POST", "/api/clip", Some(json!({ "id": 1 })))
+            .await
+            .0,
+        403
+    );
+    let file_id = "fileAAAAAAAAAAAAAAAAAA";
+    let begin = json!({ "name": "a.jpg", "size": 10, "chunkSize": MIN_CHUNK });
+    assert_eq!(
+        guest
+            .call::<UploadReply>("POST", &format!("/api/up/{file_id}"), Some(begin))
+            .await
+            .0,
+        403
+    );
+    assert_eq!(guest.put_chunk(file_id, 0, b"0123456789").await, 403);
+    assert_eq!(
+        guest
+            .raw("POST", &format!("/api/finish/{file_id}"), Vec::new())
+            .await
+            .status,
+        403
+    );
+    assert_eq!(
+        guest
+            .raw("DELETE", &format!("/api/up/{file_id}"), Vec::new())
+            .await
+            .status,
+        403
+    );
+    assert_eq!(
+        guest
+            .raw("GET", &format!("/api/down/{offer_id}/0"), Vec::new())
+            .await
+            .status,
+        403
+    );
+    let snap = session.snapshot();
+    assert!(snap.texts.is_empty() && snap.incoming.is_empty());
+    assert_eq!(snap.outgoing[0].downloads, 0);
+    assert!(sink.texts.lock().unwrap().is_empty());
+    assert!(snap.phone.is_none(), "still nobody's after all that");
+
+    // The owner scans Tugboat's own code: it binds exactly as before, and gets what's for it.
+    let mut owner = Phone::new(addr, &secret, "ownerBBBBBBBBBBBBBBBBB");
+    let (status, state) = owner.call::<StateReply>("GET", "/api/state", None).await;
+    assert_eq!(status, 200);
+    let state = state.unwrap();
+    assert!(!state.guest && state.game);
+    assert_eq!(state.text.unwrap().text, "only for the owner");
+    assert_eq!(state.offers.len(), 1);
+    assert_eq!(session.snapshot().phone.as_deref(), Some("iPhone"));
+    let (_, reply) = owner.call::<PadReply>("POST", "/api/pad", input(20, false)).await;
+    assert!(reply.is_some());
+    assert_eq!(sink.pads.lock().unwrap().last().unwrap().seat, FIRST);
+    // The guest is still Player 2 alongside, and still only that.
+    let (_, state) = guest.call::<StateReply>("GET", "/api/state", None).await;
+    assert!(state.unwrap().guest);
 
     let _ = stop.send(());
     server.await.unwrap();
@@ -889,7 +1032,7 @@ async fn controller_latency_bench() {
     let mut first = Phone::new(addr, &secret, client);
     assert_eq!(first.raw("GET", "/api/state", Vec::new()).await.status, 200);
     let guest = duo.then(|| {
-        let keys = Keys::derive(&secret);
+        let keys = Keys::derive(&crypto::guest_secret(&secret));
         tokio::spawn(async move {
             let client = "secondBBBBBBBBBBBBBBBB";
             let stream = TcpStream::connect(addr).await.unwrap();
@@ -1261,6 +1404,13 @@ async fn manual_page() {
     let listener = TcpListener::bind((host.as_str(), 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
     println!("Tugboat page: http://{addr}/#{}", crypto::b64(&secret));
+    if session.wants_guest() {
+        println!(
+            "Player 2 code: http://{addr}/#{}{}",
+            crypto::GUEST_PREFIX,
+            crypto::b64(&crypto::guest_secret(&secret))
+        );
+    }
     println!("received files: {}", folder.display());
     let secs = std::env::var("TUGBOAT_SECS")
         .ok()

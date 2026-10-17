@@ -3,7 +3,8 @@
 // &offline for the "can't reach your PC" banner, &closed for the ended state, &game for tug's game
 // asking for a controller: the controller opens, and the PC "hits" the boat every 5 s; add
 // &player=1 or &player=2 for a two-player race's colours, and &guest for a race's second phone,
-// which sees only the race: with &guest and no &game it waits for the next one; &clip for the
+// which sees only the race: with &guest and no &game it waits for the next one, and with &norace too
+// it's a Player 2 code with no race to join; &clip for the
 // PC's clipboard arriving as text, &clipimage as a picture).
 
 import { TugboatError, type TugboatApi, type PageOffer, type PageState } from "./client";
@@ -36,6 +37,7 @@ export function mockApi(): TugboatApi {
       await sleep(150);
       if (params.has("closed")) throw new TugboatError("closed");
       if (params.has("offline")) throw new TugboatError("network");
+      if (params.has("guest") && params.has("norace")) throw new TugboatError("no-race");
       return state;
     },
     async sendText() {

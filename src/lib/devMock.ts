@@ -666,6 +666,8 @@ const dropState: TugboatStatus = {
   url: null,
   address: null,
   qr: null,
+  guestUrl: null,
+  guestQr: null,
   phone: null,
   phoneActive: false,
   folder: dropFolder,
@@ -786,11 +788,24 @@ function phoneScript(seat: 1 | 2, phase: number, boosts: boolean) {
     }, 100),
   );
 }
+/** The Player 2 code, while a two-player game asks for a second phone (made-up guest secret). */
+function showGuestCode(on: boolean) {
+  const live = on && dropState.url !== null;
+  Object.assign(dropState, {
+    guestUrl: live ? "http://192.168.1.20:53211/#g.Vqxkt-aRKhZYKPCr8ybaRQ" : null,
+    guestQr: live ? mockQr(29) : null,
+  });
+}
 function gamePadOpen(players: number) {
   padPlayers = players;
-  if (padOpen) return;
+  if (padOpen) {
+    showGuestCode(players === 2);
+    sendDrop();
+    return;
+  }
   padOpen = true;
   startDrop();
+  showGuestCode(players === 2);
   sendDrop();
   if (!params.has("gamephone") && !twoPhones) return;
   padTimers.push(
@@ -819,6 +834,8 @@ function gamePadOpen(players: number) {
 }
 function gamePadClose() {
   padOpen = false;
+  showGuestCode(false);
+  sendDrop();
   for (const t of padTimers.splice(0)) window.clearTimeout(t);
   for (const s of padScripts.splice(0)) window.clearInterval(s);
   void emit("game-pad", { seat: 1, connected: false, steer: 0, boost: false });
@@ -1095,7 +1112,7 @@ mockIPC(
       case "tugboat_status":
         return structuredClone(dropState);
       case "tugboat_stop":
-        Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null, clip: null });
+        Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, guestUrl: null, guestQr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null, clip: null });
         return null;
       case "tugboat_pick_files": {
         startDrop();

@@ -58,6 +58,20 @@ quiet phone (700 ms without an input) is treated as gone and the boat goes back 
 which always works and always wins. The same honest limit applies: an active attacker who
 tampered with the first page load could steer the boat.
 
+**The guest seat (Tugboat Run, two players).** A friend's phone in a two-player race never gets the
+session secret. The race shows a separate **Player 2 code** whose `#` fragment carries `g.` and a
+guest secret derived from the session secret with HKDF-SHA256 (salt `tugboat/1`, info
+`tugboat guest v1`, 16 bytes): one-way, so it can't be turned back into the session secret, and it
+gives the guest phone keys of its own for signing and sealing. Tugboat checks every request against
+the session's keys and then the guest's. Guest keys can sign exactly two requests, `GET /api/state`
+(which tells the guest only whether there's a race: never files, text or the clipboard) and
+`POST /api/pad` (steering seat 2, under the controller rules above); anything else is refused. A
+guest key can never bind the session, even if it's the first to connect, so it can't become the
+owner; it joins only while a two-player game asks for a second phone, one phone at a time (a third
+is turned away), and the Player 2 code is shown only for as long as the game asks. The person's
+own phone still binds with Tugboat's usual code exactly as before. Like the rest of Tugboat, it's only as safe as the first
+page load: an active attacker on the network could steer seat 2.
+
 **Other local users and sandboxed processes (developer bridge).** The `tug` command and MCP server
 reach tug over a named pipe that only the current user can open; low-integrity processes and
 remote machines are refused. Each connection proves it holds the bridge token (an HMAC

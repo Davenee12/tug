@@ -13,6 +13,8 @@ export const TUGBOAT_OFF: TugboatStatus = {
   url: null,
   address: null,
   qr: null,
+  guestUrl: null,
+  guestQr: null,
   phone: null,
   phoneActive: false,
   folder: null,
