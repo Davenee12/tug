@@ -460,6 +460,17 @@ fn set_engine_language(language: Option<String>) {
 #[cfg(not(windows))]
 fn set_engine_language(_language: Option<String>) {}
 
+/// Whether voice typing is in the middle of a hold right now (listening, recognizing or typing):
+/// an update restart waits for it.
+#[cfg(windows)]
+pub fn busy() -> bool {
+    win::busy()
+}
+#[cfg(not(windows))]
+pub fn busy() -> bool {
+    false
+}
+
 #[cfg(windows)]
 fn mic_blocked_now() -> bool {
     win::mic_blocked()

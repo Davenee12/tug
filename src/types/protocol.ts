@@ -916,3 +916,49 @@ export interface VoiceStatus {
 export interface VoiceTyped {
   outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "noTarget" | "keysHeld" | "unavailable" | "failed";
 }
+
+/** Where automatic updates are (`updater::policy::Phase`). */
+export type UpdatePhase =
+  | "notConfigured"
+  | "idle"
+  | "checking"
+  | "upToDate"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "applying"
+  | "failed";
+
+/** Which step failed (`updater::policy::Failure`). */
+export type UpdateFailure = "check" | "download" | "apply";
+
+/** What an update restart would cut off (`updater::policy::Blocker`). */
+export type UpdateBlocker = "call" | "transfer" | "voice";
+
+/** Automatic updates for the Update button and Settings › About (`update_status`, the `update-status` event). */
+export interface UpdateStatus {
+  /** Counts the changes; the store keeps the highest (`lib/ordering`). Optional only for fixtures. */
+  rev?: number;
+  phase: UpdatePhase;
+  /** The version running now. */
+  current: string;
+  /** The newer release found, while there is one. */
+  version: string | null;
+  /** The release notes' first paragraph. */
+  headline: string | null;
+  /** Download progress in percent, when the size is known. */
+  progress: number | null;
+  failure: UpdateFailure | null;
+  /** The portable exe: it can only point at the download. */
+  portable: boolean;
+  /** "Download updates automatically". */
+  auto: boolean;
+  /** When the last check finished (ms since the epoch). */
+  checkedAt: number | null;
+}
+
+/** Restart now's answer when it didn't restart (`updater::ApplyAnswer`). */
+export interface UpdateApplyAnswer {
+  blocked: UpdateBlocker | null;
+  status: UpdateStatus;
+}

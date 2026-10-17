@@ -10,7 +10,7 @@ The few things that go online are listed below, and each one only happens for a 
 
 - No tug servers, no sign-up, no account.
 - No analytics, telemetry, crash reporting, advertising or tracking.
-- No update checks: tug never contacts anyone to see whether there's a new version.
+- No update checks to anyone but GitHub, where tug's releases live (see below).
 - Nothing you receive (notifications, texts, contacts, calls, files) is sent anywhere by tug.
 
 ## What stays on your PC
@@ -40,11 +40,18 @@ it goes nowhere unless you paste it somewhere yourself.
 | **App icons** | Apple's public App Store lookup (`itunes.apple.com`) and Apple's image servers | The app's identifier (for example `com.example.app`), once per app; nothing about you or your notifications | While **App icons** is on (Settings › Data & privacy; on by default) |
 | **Spotify** | Spotify (`accounts.spotify.com`, `api.spotify.com`, Spotify's image servers) | Your Spotify sign-in, and the requests you make (search, play, queue, like) | Only after you connect Spotify in Settings › Connectors |
 | **Open on the web** | The website, in your browser | Whatever your browser sends | Only when you click it |
+| **Automatic updates** | GitHub (`github.com` and GitHub's download servers, `objects.githubusercontent.com`) | An ordinary web request for tug's `latest.json`, then the installer if there's a new version; nothing about you, your phone or your data | In release builds set up for updates: shortly after tug starts and then every 6 hours, while **Download updates automatically** is on (Settings › About; on by default); otherwise only when you press **Check for updates**. Builds without an update key never check |
 
 **Spotify** asks for permission to: read your private and collaborative playlists; read and
 control playback; read what's currently playing; and read and change your Liked Songs. The sign-in
 returns to tug on your own PC (`127.0.0.1`), and Spotify's policies apply to what Spotify receives.
 Disconnect any time in Settings › Connectors, which removes the stored sign-in.
+
+**Automatic updates** only ever contact GitHub. Like any web request, GitHub sees your IP address
+and that a copy of tug asked for its latest version; GitHub's privacy statement applies to that.
+tug sends no identifier, no version history and nothing from your phone. A downloaded update is
+checked against tug's signing key before it can be installed, and tug only restarts to install it
+when you click **Update** (or quit from the tray).
 
 ## Features that stay local
 
@@ -94,8 +101,8 @@ Disconnect any time in Settings › Connectors, which removes the stored sign-in
 
 tug only receives what iOS shares with Bluetooth accessories and what you allow with the iPhone's
 switches (Share System Notifications, Show Notifications, Sync Contacts). You can turn any of them
-off on the iPhone at any time. Apple, Microsoft, Spotify, Open-Meteo and BigDataCloud have their own
-privacy policies for what they receive.
+off on the iPhone at any time. Apple, Microsoft, Spotify, Open-Meteo, BigDataCloud and GitHub have
+their own privacy policies for what they receive.
 
 ## Changes and contact
 

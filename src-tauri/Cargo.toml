@@ -56,6 +56,11 @@ tug-bridge = { path = "crates/tug-bridge" }
 # Verification codes for the bridge: a port of src/lib/codes.ts, whose look-arounds the
 # `regex` crate can't express.
 fancy-regex = "0.19"
+# Automatic updates (updater/), checked with Tauri's own free minisign signature. Windows' TLS
+# (schannel) instead of rustls: no `ring`, and no .zip/.tar support, which NSIS updates don't need.
+tauri-plugin-updater = { version = "2.14", default-features = false, features = ["native-tls"] }
+# Version comparison for updates (never a downgrade); already in the tree through Tauri.
+semver = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
