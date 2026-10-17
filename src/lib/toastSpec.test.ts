@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { replyAddress, replyReadsConversation, replyTarget, toastSpec } from "./toastSpec";
+import { replyAddress, replyReadsConversation, replyTarget, sendOutcome, toastSpec } from "./toastSpec";
 import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const T0 = Date.parse("2026-10-05T12:00:00");
@@ -156,5 +156,17 @@ describe("replyReadsConversation", () => {
   it("keeps the old behaviour without a stored row", () => {
     expect(replyReadsConversation(null)).toBe(true);
     expect(replyReadsConversation(undefined)).toBe(true);
+  });
+});
+
+describe("sendOutcome", () => {
+  const msg = (status: SmsMessage["status"]) => ({ status }) as SmsMessage;
+  it("counts a send as done only when the phone took it, like a pop-up reply", () => {
+    expect(sendOutcome(msg("accepted"))).toBe("sent");
+    expect(sendOutcome(msg("sent"))).toBe("sent");
+    // "May have sent" must not clear the conversation's notifications on the phone.
+    expect(sendOutcome(msg("unconfirmed"))).toBe("unconfirmed");
+    expect(sendOutcome(msg("pending"))).toBe("unconfirmed");
+    expect(sendOutcome(msg("failed"))).toBe("failed");
   });
 });

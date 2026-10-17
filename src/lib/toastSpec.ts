@@ -29,6 +29,16 @@ export function replyReadsConversation(message: SmsMessage | null | undefined): 
 }
 
 /**
+ * How a send from tug's composer went, by the same rule: "sent" only when the phone took it (the
+ * conversation's notifications can be cleared), "unconfirmed" when it may have sent but the phone
+ * never said ("May have sent"), "failed" for "Not sent" with Retry.
+ */
+export function sendOutcome(message: SmsMessage): "sent" | "unconfirmed" | "failed" {
+  if (message.status === "failed") return "failed";
+  return replyReadsConversation(message) ? "sent" : "unconfirmed";
+}
+
+/**
  * Where a reply to this Messages notification goes. A pop-up's reply box doesn't show which
  * number it sends to, so it only gets one when there's exactly one: the conversation's only
  * number, or the number/email iOS shows for an unknown sender. When the name has several numbers
