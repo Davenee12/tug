@@ -92,8 +92,13 @@ pub fn search_all(state: State<'_, AppState>, query: String, limit: u32) -> Resu
 }
 
 #[tauri::command]
-pub fn clear_history(state: State<'_, AppState>) -> Result<()> {
-    state.shared.store.clear_history().map_err(|e| e.to_string())?;
+pub fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
+    let cleared_up_to = state.shared.store.clear_history().map_err(|e| e.to_string())?;
+    // Pop-ups and the Bluetooth actor name notifications by row id, and those rows are gone: take
+    // the pop-ups back (their buttons would act on nothing tug still shows) and have the actor drop
+    // its map from the phone's notification ids to the cleared rows.
+    crate::toast::withdraw_all(&app);
+    state.ble.send(Command::ForgetRows { up_to: cleared_up_to });
     // The in-memory recent calls too (emits the empty list to the window).
     state.shared.set_calls(Vec::new());
     crate::bt_inventory::clear_last_report();

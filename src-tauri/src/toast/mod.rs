@@ -344,9 +344,13 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
             }
         }
         ToastAction::Clear { .. } => {
-            // A ringing call's negative action is Decline: only its own button sends that.
-            if category().as_deref() == Some("incomingCall") {
-                return log::warn!("clear pressed on ringing call row {id}; ignored");
+            match category().as_deref() {
+                // Gone from tug (Clear history): nothing to act on, and the phone's notification
+                // is no longer tied to this pop-up.
+                None => return log::info!("clear pressed on row {id}, which tug no longer has; ignored"),
+                // A ringing call's negative action is Decline: only its own button sends that.
+                Some("incomingCall") => return log::warn!("clear pressed on ringing call row {id}; ignored"),
+                Some(_) => {}
             }
             if let Err(e) = ble
                 .request(|reply| Command::PerformAction {

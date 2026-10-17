@@ -19,6 +19,7 @@ import {
   type Thread,
 } from "../lib/format";
 import { replyAddress, replyReadsConversation, toastSpec } from "../lib/toastSpec";
+import { clearHistory as clearHistoryNow } from "../lib/clearHistory";
 import { shouldPopUp, type PopupEvent } from "../lib/popup";
 import { isVip, vipIndex } from "../lib/vips";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
@@ -2000,10 +2001,15 @@ export const useTugStore = defineStore("tug", () => {
       pairingRequest.value = null;
       await attempt(() => api.confirmPairing(accept));
     },
-    async clearHistory() {
-      await attempt(api.clearHistory);
-      notifications.value = [];
-      hasMore.value = false;
+    /** Settings › Clear history; true only if it worked (lists emptied, "History cleared"). */
+    async clearHistory(): Promise<boolean> {
+      const emptyLists = () => {
+        notifications.value = [];
+        messages.value = [];
+        calls.value = [];
+        hasMore.value = false;
+      };
+      return clearHistoryNow(() => api.clearHistory(), { emptyLists, say: notify }, errorMessage);
     },
   };
 });

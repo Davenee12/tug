@@ -279,6 +279,10 @@ fn register_functions(conn: &Connection) -> Result<()> {
     })
 }
 
+/// Settings key: the highest notification id Clear history removed. New notifications get ids
+/// above it, so an id is never reused (see `Store::clear_history`).
+pub const NOTIFICATION_ID_FLOOR: &str = "notification_id_floor";
+
 /// The schema version this build expects.
 pub const SCHEMA_VERSION: i64 = 1 + MIGRATIONS.len() as i64;
 
@@ -447,10 +451,14 @@ impl Store {
                 id
             }
             None => {
+                // Above every id ever handed out, even after Clear history emptied the table.
                 conn.execute(
-                    "INSERT INTO notifications (session, uid, app_id, category, title, subtitle, message, posted_at,
+                    "INSERT INTO notifications (id, session, uid, app_id, category, title, subtitle, message, posted_at,
                          received_at, flags, positive_label, negative_label)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                     VALUES (
+                         1 + MAX(COALESCE((SELECT MAX(id) FROM notifications), 0),
+                                 COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = ?13), 0)),
+                         ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                     params![
                         n.session,
                         n.uid,
@@ -463,7 +471,8 @@ impl Store {
                         n.received_at,
                         n.flags.bits(),
                         a.positive_label,
-                        a.negative_label
+                        a.negative_label,
+                        NOTIFICATION_ID_FLOOR
                     ],
                 )?;
                 conn.last_insert_rowid()
@@ -621,9 +630,27 @@ impl Store {
     /// sender or address) so the phone's next listing can't bring it back. Recent calls and
     /// notifications still on the phone return at its next sync. Settings, the pairing and the
     /// phone's contacts stay; the iPhone keeps its own.
-    pub fn clear_history(&self) -> Result<()> {
+    ///
+    /// Notification ids never go back: a pop-up still in Action Center, the Bluetooth actor's map
+    /// of the phone's notifications and the window all name notifications by id, so a reused id
+    /// would point a stale Clear or Call back at a different notification. The table has no
+    /// AUTOINCREMENT (SQLite would hand out 1 again once it's empty), so the highest id cleared
+    /// is kept as a floor (`NOTIFICATION_ID_FLOOR`) that new rows start above; no schema change, so
+    /// it's safe for any install. Returns that floor: every id up to it is gone.
+    pub fn clear_history(&self) -> Result<i64> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
+        let floor: i64 = tx.query_row(
+            "SELECT MAX(COALESCE((SELECT MAX(id) FROM notifications), 0),
+                        COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = ?1), 0))",
+            params![NOTIFICATION_ID_FLOOR],
+            |r| r.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![NOTIFICATION_ID_FLOOR, floor.to_string()],
+        )?;
         // Texts stay as blank, hidden rows (tombstones), keyed by the phone's handle: the phone
         // re-lists its recent texts at every sync, and a row that's gone would come straight back.
         // Blanking the body and rebuilding the index means nothing is readable or searchable.
@@ -641,7 +668,8 @@ impl Store {
             "DELETE FROM settings WHERE key = ?1",
             params![crate::map::calls::RECENT_CALLS],
         )?;
-        tx.commit()
+        tx.commit()?;
+        Ok(floor)
     }
 
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
@@ -1199,6 +1227,26 @@ mod tests {
             2,
             "blank query falls back to recent"
         );
+    }
+
+    #[test]
+    fn notification_ids_are_never_reused_after_clear_history() {
+        // A pop-up still in Action Center, the Bluetooth actor and the window name notifications
+        // by id; a reused id would point a stale Clear or Call back at someone else's notification.
+        let s = Store::in_memory().unwrap();
+        let a = insert(&s, "s1", 1, EventFlags::default(), &attrs("x", "Jane", "one"));
+        let b = insert(&s, "s1", 2, EventFlags::default(), &attrs("x", "Sam", "two"));
+        assert_eq!(s.clear_history().unwrap(), b.id, "returns the highest id cleared");
+        let c = insert(&s, "s1", 3, EventFlags::default(), &attrs("x", "Pat", "three"));
+        assert!(c.id > b.id && c.id > a.id, "{} after {}", c.id, b.id);
+        // Clearing an already empty-looking table twice still never goes back.
+        assert_eq!(s.clear_history().unwrap(), c.id);
+        assert_eq!(s.clear_history().unwrap(), c.id);
+        let d = insert(&s, "s2", 1, EventFlags::default(), &attrs("x", "Lee", "four"));
+        assert!(d.id > c.id);
+        // Ordinary inserts keep counting up from there.
+        let e = insert(&s, "s2", 2, EventFlags::default(), &attrs("x", "Lee", "five"));
+        assert_eq!(e.id, d.id + 1);
     }
 
     #[test]
