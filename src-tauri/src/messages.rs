@@ -17,6 +17,15 @@ const MESSAGES_APP: &str = "com.apple.MobileSMS";
 /// close together (the notification triggers the MAP fetch).
 const LEARN_WINDOW_MS: i64 = 10 * 60 * 1000;
 
+/// A listing time in the form an older tug may have stored it: `…Z` without the `Z`, and the
+/// other way round (see `map::listing::datetime_to_iso`).
+fn other_utc_form(sent_at: &str) -> String {
+    match sent_at.strip_suffix('Z') {
+        Some(without) => without.to_string(),
+        None => format!("{sent_at}Z"),
+    }
+}
+
 /// Handles are stable across sessions (verified on hardware), so content-based
 /// dedupe only guards against a phone re-listing an old message under a new
 /// handle. A row stored this recently is a different message, not a re-listing.
@@ -214,13 +223,24 @@ impl Store {
         // same sender, text and phone timestamp, stored a while ago. Two genuinely
         // identical texts ("ok", "ok") arrive close together and are both kept, and
         // without a phone timestamp there's nothing reliable to compare.
+        // The same instant may be stored in the other form: before 0.5.17 a UTC listing time lost
+        // its `Z` (same digits), so a row from then must still match the `…Z` of a re-listing.
+        let other_form = m.sent_at.map(other_utc_form);
         let duplicate = m.sent_at.is_some()
             && conn
                 .query_row(
                     "SELECT 1 FROM messages
-                     WHERE source = ?1 AND direction = 'in' AND address = ?2 AND body = ?3 AND sent_at = ?4
+                     WHERE source = ?1 AND direction = 'in' AND address = ?2 AND body = ?3
+                       AND (sent_at = ?4 OR sent_at = ?6)
                        AND received_at < ?5",
-                    params![m.source, m.address, m.body, m.sent_at, m.received_at - RELIST_GUARD_MS],
+                    params![
+                        m.source,
+                        m.address,
+                        m.body,
+                        m.sent_at,
+                        m.received_at - RELIST_GUARD_MS,
+                        other_form
+                    ],
                     |_| Ok(()),
                 )
                 .optional()?
@@ -852,6 +872,21 @@ mod tests {
         let mut relisted = incoming("H9", "+13025550100", "see you at 5");
         relisted.received_at = 1_000 + 2 * RELIST_GUARD_MS;
         assert!(s.insert_incoming(&relisted).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_relisting_after_the_utc_fix_still_matches_the_old_row() {
+        // Stored by an older tug, which dropped a UTC listing time's Z (same digits); re-listed
+        // under a new handle after the upgrade, with the Z kept. It's the same text, not a new one.
+        let s = Store::in_memory().unwrap();
+        s.insert_incoming(&incoming("H1", "+13025550100", "see you at 5"))
+            .unwrap();
+        let mut relisted = incoming("H9", "+13025550100", "see you at 5");
+        relisted.sent_at = Some("2026-10-04T19:11:17Z");
+        relisted.received_at = 1_000 + 2 * RELIST_GUARD_MS;
+        assert!(s.insert_incoming(&relisted).unwrap().is_none(), "shown once");
+        assert_eq!(other_utc_form("2026-10-04T19:11:17Z"), "2026-10-04T19:11:17");
+        assert_eq!(other_utc_form("2026-10-04T19:11:17"), "2026-10-04T19:11:17Z");
     }
 
     #[test]
