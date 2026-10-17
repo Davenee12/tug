@@ -150,9 +150,17 @@ mod tests {
             code: Some("482913".into()),
             call_back: true,
             clear: true,
+            replies: vec!["You're welcome 👍".into(), "<5 min & \"ok\"".into()],
+        };
+        let suggestions = ToastSpec {
+            code: None,
+            call_back: false,
+            replies: vec!["On my way".into(), "5 minutes".into(), "Running late".into()],
+            ..busy.clone()
         };
         for xml in [
             notification_toast(&busy, false),
+            notification_toast(&suggestions, false),
             notification_toast(&ToastSpec::default(), true),
             note_toast(1, "Sent to Zoe", "on my way & <b>", true),
         ] {

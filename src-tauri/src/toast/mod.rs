@@ -166,6 +166,10 @@ pub fn blocked(app: &AppHandle) -> bool {
 /// Pop up one phone notification with the actions its spec allows.
 pub fn show(app: &AppHandle, spec: ToastSpec) {
     remember(&spec);
+    if !spec.replies.is_empty() {
+        // How many, never which: suggestions are drawn from the text they answer.
+        log::debug!("pop-up {} offers {} suggested replies", spec.id, spec.replies.len());
+    }
     #[cfg(windows)]
     {
         let xml = xml::notification_toast(&spec, sound_on(app));
@@ -268,7 +272,6 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
             pressed(PressKind::Open);
         }
         ToastAction::Reply { to, .. } => {
-            let who = name_for(id).unwrap_or_else(|| to.clone());
             let text = input.unwrap_or_default();
             if text.trim().is_empty() {
                 // Send with nothing typed: open the conversation instead.
@@ -276,48 +279,15 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 pressed(PressKind::Open);
                 return;
             }
-            let text = text.trim().to_string();
-            // A double-press, or pressing Send again from Action Center before Windows dismissed
-            // the pop-up, must not text them twice: take the pop-up down and drop a repeat.
-            if !first_reply(id, &text) {
-                log::info!("ignored a repeated reply press (row {id})");
-                return;
+            if let Some(stored) = reply(&app, &shared, id, &to, text.trim(), ReplyFrom::Typed).await {
+                pressed_with(PressKind::Replied, Some(stored));
             }
-            withdraw(&app, id);
-            // Saved and shown as "Sending…" before it's queued (#99); the stored row comes back so
-            // the window can show it even if it missed the live event (#98).
-            let sent = crate::map::service::send_text(&shared, &to, &text).await;
-            match sent {
-                // A send the phone refused is saved as failed (with Retry in the conversation), not
-                // returned as an error: say so, and still hand the row to the window.
-                Ok(stored) if stored.status == crate::messages::Status::Failed => {
-                    log::info!("reply from a pop-up not sent (row {id}, message {})", stored.id);
-                    let body =
-                        format!("Use Retry in the conversation when your iPhone is nearby.\n\u{201c}{text}\u{201d}");
-                    note(&app, id, &format!("Couldn't send to {who}"), &body, false);
-                    pressed_with(PressKind::Replied, Some(stored));
-                }
-                Ok(stored) if stored.status == crate::messages::Status::Unconfirmed => {
-                    log::info!("reply from a pop-up may have sent (row {id}, message {})", stored.id);
-                    note(
-                        &app,
-                        id,
-                        &format!("May have sent to {who}"),
-                        "Check your iPhone to be sure.",
-                        false,
-                    );
-                    pressed_with(PressKind::Replied, Some(stored));
-                }
-                Ok(stored) => {
-                    log::info!("sent a reply from a pop-up (row {id}, message {})", stored.id);
-                    note(&app, id, &format!("Sent to {who}"), &text, true);
-                    pressed_with(PressKind::Replied, Some(stored));
-                }
-                Err(e) => {
-                    log::info!("reply from a pop-up not sent (row {id}): {e}");
-                    let body = format!("{e}\n\u{201c}{text}\u{201d}");
-                    note(&app, id, &format!("Couldn't send to {who}"), &body, false);
-                }
+        }
+        // A suggested reply's button: its text, through exactly the same send as a typed reply
+        // (same repeat guard, same "Sending…" row, same Sent / May have sent / Couldn't send note).
+        ToastAction::Suggested { to, text, .. } => {
+            if let Some(stored) = reply(&app, &shared, id, &to, &text, ReplyFrom::Suggested).await {
+                pressed_with(PressKind::Replied, Some(stored));
             }
         }
         ToastAction::Read { .. } => pressed(PressKind::Read),
@@ -358,6 +328,81 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
             {
                 note(&app, id, "Couldn't clear it on your iPhone", &e, false);
             }
+        }
+    }
+}
+
+/// How a pop-up reply was written, for the log only (never the text itself).
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+enum ReplyFrom {
+    Typed,
+    Suggested,
+}
+
+#[cfg(windows)]
+impl ReplyFrom {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Typed => "reply",
+            Self::Suggested => "suggested reply",
+        }
+    }
+}
+
+/// Send `text` to `to` as a reply to pop-up `id`: a typed reply and a suggested one take this one
+/// path, so both get the same repeat guard, the same honest follow-up and the same stored row.
+/// Returns the stored row for the window (None when the press was a repeat or nothing was saved).
+#[cfg(windows)]
+async fn reply(
+    app: &AppHandle,
+    shared: &crate::state::Shared,
+    id: i64,
+    to: &str,
+    text: &str,
+    from: ReplyFrom,
+) -> Option<StoredMessage> {
+    let who = name_for(id).unwrap_or_else(|| to.to_string());
+    let what = from.label();
+    // A double-press, or pressing Send again from Action Center before Windows dismissed
+    // the pop-up, must not text them twice: take the pop-up down and drop a repeat.
+    if !first_reply(id, text) {
+        log::info!("ignored a repeated {what} press (row {id})");
+        return None;
+    }
+    withdraw(app, id);
+    // Saved and shown as "Sending…" before it's queued (#99); the stored row comes back so
+    // the window can show it even if it missed the live event (#98).
+    match crate::map::service::send_text(shared, to, text).await {
+        // A send the phone refused is saved as failed (with Retry in the conversation), not
+        // returned as an error: say so, and still hand the row to the window.
+        Ok(stored) if stored.status == crate::messages::Status::Failed => {
+            log::info!("{what} from a pop-up not sent (row {id}, message {})", stored.id);
+            let body = format!("Use Retry in the conversation when your iPhone is nearby.\n\u{201c}{text}\u{201d}");
+            note(app, id, &format!("Couldn't send to {who}"), &body, false);
+            Some(stored)
+        }
+        Ok(stored) if stored.status == crate::messages::Status::Unconfirmed => {
+            log::info!("{what} from a pop-up may have sent (row {id}, message {})", stored.id);
+            note(
+                app,
+                id,
+                &format!("May have sent to {who}"),
+                "Check your iPhone to be sure.",
+                false,
+            );
+            Some(stored)
+        }
+        Ok(stored) => {
+            log::info!("sent a {what} from a pop-up (row {id}, message {})", stored.id);
+            note(app, id, &format!("Sent to {who}"), text, true);
+            Some(stored)
+        }
+        Err(e) => {
+            log::info!("{what} from a pop-up not sent (row {id}): {e}");
+            let body = format!("{e}\n\u{201c}{text}\u{201d}");
+            note(app, id, &format!("Couldn't send to {who}"), &body, false);
+            None
         }
     }
 }

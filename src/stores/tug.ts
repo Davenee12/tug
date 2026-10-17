@@ -19,6 +19,7 @@ import {
   type Thread,
 } from "../lib/format";
 import { replyAddress, replyReadsConversation, toastSpec } from "../lib/toastSpec";
+import { DEFAULT_REPLIES, parseReplyDefaults } from "../lib/smartReplies";
 import { shouldPopUp, type PopupEvent } from "../lib/popup";
 import { isVip, vipIndex } from "../lib/vips";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
@@ -202,6 +203,8 @@ export const useTugStore = defineStore("tug", () => {
     typeCodeHotkey: true,
     typeCodeKeys: DEFAULT_CODE_HOTKEY,
     showGames: true,
+    smartReplies: true,
+    smartReplyDefaults: [...DEFAULT_REPLIES],
   });
   /** The type-the-code shortcut as the backend registered it (Settings shows "in use" from this). */
   const codeHotkey = ref<CodeHotkeyStatus>({ state: "off", keys: DEFAULT_CODE_HOTKEY });
@@ -800,7 +803,11 @@ export const useTugStore = defineStore("tug", () => {
     if (!admitToast(event.isCall)) return;
     // With buttons for what applies (reply, mark read, copy code, call back, clear); the
     // backend falls back to a plain pop-up itself if Windows won't take that one.
-    let spec = toastSpec(n, messages.value, contacts.value);
+    // A text from a person also gets up to three suggested replies (Settings, lib/smartReplies).
+    let spec = toastSpec(n, messages.value, contacts.value, {
+      enabled: settings.value.smartReplies,
+      defaults: settings.value.smartReplyDefaults,
+    });
     // Already on the clipboard: "482193 copied, from Chase", no Copy button.
     if (copied && code !== null) spec = copiedToastSpec(spec, code, spec.name || appLabel(n));
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
@@ -1177,6 +1184,8 @@ export const useTugStore = defineStore("tug", () => {
       typeCodeHotkey: raw["ui.typeCodeHotkey"] !== "false",
       typeCodeKeys: knownHotkey(raw["ui.typeCodeKeys"]),
       showGames: raw["ui.showGames"] !== "false",
+      smartReplies: raw["ui.smartReplies"] !== "false",
+      smartReplyDefaults: parseReplyDefaults(raw["ui.smartReplyDefaults"]),
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
     // A missing key is a fresh install: null (not ""), so the first launch records the version

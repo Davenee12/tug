@@ -225,7 +225,7 @@ updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `co
 `locating`, `media` (which controls show, skip routing), `messageSync`, `messageType`, `pairings`,
 `pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
-(unknown-sender filter), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
+(unknown-sender filter), `smartReplies` (suggested replies: the rules, and when there are none), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `threadWindow` (long conversations render their newest texts first),
 `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: seeded spawning, collisions,
 scoring, the speed curve, inertia, merging the controls), `vips`, `weather`, `weblinks`, `whatsNew`.

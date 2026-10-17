@@ -13,12 +13,20 @@ const BODY_MAX: usize = 600;
 const NAME_MAX: usize = 40;
 /// Windows shows at most five buttons on a toast.
 const ACTIONS_MAX: usize = 5;
-/// Arguments longer than this weren't written by tug: refuse them.
-const ARGS_MAX: usize = 512;
+/// Arguments longer than this weren't written by tug: refuse them. Room for a suggested reply's
+/// address and text, both percent-encoded (an emoji is 12 characters that way).
+const ARGS_MAX: usize = 1024;
 /// A reply address is a phone number or an email; anything longer isn't one.
 const ADDRESS_MAX: usize = 64;
 /// One-time codes are a handful of letters and digits.
 const CODE_MAX: usize = 16;
+/// At most this many suggested-reply buttons. Mirrors `MAX_REPLIES` in `src/lib/smartReplies.ts`.
+const REPLIES_MAX: usize = 3;
+/// Longest suggested reply (characters). Mirrors `REPLY_MAX_CHARS` in `src/lib/smartReplies.ts`.
+const REPLY_TEXT_MAX: usize = 40;
+/// Windows refuses a toast whose XML is over 5 KB. Suggested replies are the extras, so they're
+/// the first to go when a toast would be bigger than this (it's then shown without them).
+const PAYLOAD_MAX: usize = 4800;
 
 /// The id of the text box on a reply toast; its text arrives in the activation's UserInput.
 pub const REPLY_INPUT: &str = "reply";
@@ -51,6 +59,11 @@ pub struct ToastSpec {
     /// Clearable on the phone (never a ringing call): "Clear".
     #[serde(default)]
     pub clear: bool,
+    /// Suggested replies (`src/lib/smartReplies.ts`): one button each, sent to `reply_to` exactly
+    /// like a typed reply. Only shown with a reply box, and only as many as fit beside the other
+    /// buttons.
+    #[serde(default)]
+    pub replies: Vec<String>,
 }
 
 /// A press on the toast (its body or a button), as carried in the toast's arguments.
@@ -60,6 +73,9 @@ pub enum ToastAction {
     Open { id: i64 },
     /// Send: the typed text (in UserInput, not here) goes to `to` over MAP.
     Reply { id: i64, to: String },
+    /// A suggested reply's button: `text` (carried here, since there's nothing typed) goes to
+    /// `to` over MAP, the same way as [`ToastAction::Reply`].
+    Suggested { id: i64, to: String, text: String },
     /// Mark the conversation read.
     Read { id: i64 },
     /// Put the code on the clipboard.
@@ -75,6 +91,7 @@ impl ToastAction {
         match self {
             Self::Open { id }
             | Self::Reply { id, .. }
+            | Self::Suggested { id, .. }
             | Self::Read { id }
             | Self::Copy { id, .. }
             | Self::CallBack { id }
@@ -86,16 +103,17 @@ impl ToastAction {
 /// `a=reply&id=12&to=%2B13025550123`. Values are percent-encoded so a number, an email or
 /// a code can never break out of its field (or the XML attribute it ends up in).
 pub fn encode(action: &ToastAction) -> String {
-    let (kind, extra) = match action {
-        ToastAction::Open { .. } => ("open", None),
-        ToastAction::Reply { to, .. } => ("reply", Some(("to", to.as_str()))),
-        ToastAction::Read { .. } => ("read", None),
-        ToastAction::Copy { code, .. } => ("copy", Some(("code", code.as_str()))),
-        ToastAction::CallBack { .. } => ("call", None),
-        ToastAction::Clear { .. } => ("clear", None),
+    let (kind, extra): (&str, Vec<(&str, &str)>) = match action {
+        ToastAction::Open { .. } => ("open", vec![]),
+        ToastAction::Reply { to, .. } => ("reply", vec![("to", to.as_str())]),
+        ToastAction::Suggested { to, text, .. } => ("say", vec![("to", to.as_str()), ("text", text.as_str())]),
+        ToastAction::Read { .. } => ("read", vec![]),
+        ToastAction::Copy { code, .. } => ("copy", vec![("code", code.as_str())]),
+        ToastAction::CallBack { .. } => ("call", vec![]),
+        ToastAction::Clear { .. } => ("clear", vec![]),
     };
     let mut out = format!("a={kind}&id={}", action.id());
-    if let Some((key, value)) = extra {
+    for (key, value) in extra {
         out.push('&');
         out.push_str(key);
         out.push('=');
@@ -110,7 +128,7 @@ pub fn decode(args: &str) -> Option<ToastAction> {
     if args.is_empty() || args.len() > ARGS_MAX {
         return None;
     }
-    let (mut kind, mut id, mut to, mut code) = (None, None, None, None);
+    let (mut kind, mut id, mut to, mut code, mut text) = (None, None, None, None, None);
     for pair in args.split('&') {
         let (key, value) = pair.split_once('=')?;
         let value = percent_decode(value)?;
@@ -119,6 +137,7 @@ pub fn decode(args: &str) -> Option<ToastAction> {
             "id" => &mut id,
             "to" => &mut to,
             "code" => &mut code,
+            "text" => &mut text,
             _ => return None,
         };
         if slot.replace(value).is_some() {
@@ -133,6 +152,11 @@ pub fn decode(args: &str) -> Option<ToastAction> {
             id,
             to: to.clone().filter(|t| valid_address(t))?,
         },
+        "say" => ToastAction::Suggested {
+            id,
+            to: to.clone().filter(|t| valid_address(t))?,
+            text: text.clone().filter(|t| valid_reply_text(t))?,
+        },
         "read" => ToastAction::Read { id },
         "copy" => ToastAction::Copy {
             id,
@@ -142,13 +166,24 @@ pub fn decode(args: &str) -> Option<ToastAction> {
         "clear" => ToastAction::Clear { id },
         _ => return None,
     };
-    let wants_to = matches!(action, ToastAction::Reply { .. });
+    let wants_to = matches!(action, ToastAction::Reply { .. } | ToastAction::Suggested { .. });
     let wants_code = matches!(action, ToastAction::Copy { .. });
-    (extra_ok(to.is_some(), wants_to) && extra_ok(code.is_some(), wants_code)).then_some(action)
+    let wants_text = matches!(action, ToastAction::Suggested { .. });
+    (extra_ok(to.is_some(), wants_to) && extra_ok(code.is_some(), wants_code) && extra_ok(text.is_some(), wants_text))
+        .then_some(action)
 }
 
 fn valid_address(to: &str) -> bool {
     !to.trim().is_empty() && to.chars().count() <= ADDRESS_MAX && !to.chars().any(char::is_control)
+}
+
+/// A suggested reply as `src/lib/smartReplies.ts` `cleanReplies` makes them: trimmed, not blank,
+/// no control characters, at most [`REPLY_TEXT_MAX`] characters.
+fn valid_reply_text(text: &str) -> bool {
+    !text.is_empty()
+        && text.trim() == text
+        && text.chars().count() <= REPLY_TEXT_MAX
+        && !text.chars().any(char::is_control)
 }
 
 fn valid_code(code: &str) -> bool {
@@ -244,6 +279,7 @@ pub fn notification_toast(spec: &ToastSpec, sound: bool) -> String {
     let name = clip(&spec.name, NAME_MAX);
     let mut inputs = String::new();
     let mut actions: Vec<String> = Vec::new();
+    let mut suggested: Vec<String> = Vec::new();
     if let Some(to) = spec.reply_to.as_deref().filter(|t| valid_address(t)) {
         let placeholder = if name.is_empty() {
             "Reply".to_string()
@@ -256,6 +292,17 @@ pub fn notification_toast(spec: &ToastSpec, sound: bool) -> String {
         );
         let reply = ToastAction::Reply { id, to: to.to_string() };
         actions.push(action("Send", &reply, Some(REPLY_INPUT)));
+        suggested = suggested_replies(&spec.replies)
+            .into_iter()
+            .map(|text| {
+                let say = ToastAction::Suggested {
+                    id,
+                    to: to.to_string(),
+                    text: text.to_string(),
+                };
+                action(text, &say, None)
+            })
+            .collect();
     }
     if spec.mark_read {
         actions.push(action("Mark read", &ToastAction::Read { id }, None));
@@ -275,12 +322,43 @@ pub fn notification_toast(spec: &ToastSpec, sound: bool) -> String {
         actions.push(action("Clear", &ToastAction::Clear { id }, None));
     }
     actions.truncate(ACTIONS_MAX);
-    let actions = if inputs.is_empty() && actions.is_empty() {
-        String::new()
-    } else {
-        format!("<actions>{inputs}{}</actions>", actions.concat())
+    // Suggestions only take the buttons left over: Send, Mark read, Copy code and the rest keep
+    // theirs. They go right after Send, the other way of answering.
+    suggested.truncate(ACTIONS_MAX - actions.len());
+    let build = |suggested: &[String]| {
+        // Suggestions only come with a reply box, so Send is first: they go in after it.
+        let mut all = actions.clone();
+        let at = all.len().min(1);
+        all.splice(at..at, suggested.iter().cloned());
+        let actions = if inputs.is_empty() && all.is_empty() {
+            String::new()
+        } else {
+            format!("<actions>{inputs}{}</actions>", all.concat())
+        };
+        toast(&ToastAction::Open { id }, &spec.title, &spec.body, &actions, !sound)
     };
-    toast(&ToastAction::Open { id }, &spec.title, &spec.body, &actions, !sound)
+    let mut xml = build(&suggested);
+    // Too big for Windows with every suggestion: drop them from the end rather than lose the toast.
+    while xml.len() > PAYLOAD_MAX && !suggested.is_empty() {
+        suggested.pop();
+        xml = build(&suggested);
+    }
+    xml
+}
+
+/// The suggestions a toast can carry: valid ones (see [`valid_reply_text`]), no repeats, at most
+/// [`REPLIES_MAX`]. The frontend already sends them that way; this keeps the toast honest if not.
+fn suggested_replies(replies: &[String]) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    for text in replies.iter().map(String::as_str).filter(|t| valid_reply_text(t)) {
+        if !out.iter().any(|t| t.to_lowercase() == text.to_lowercase()) {
+            out.push(text);
+        }
+        if out.len() == REPLIES_MAX {
+            break;
+        }
+    }
+    out
 }
 
 /// A plain follow-up (a reply was sent, or something couldn't be done). Clicking it brings
@@ -339,6 +417,21 @@ mod tests {
             },
             ToastAction::CallBack { id: 6 },
             ToastAction::Clear { id: i64::MAX },
+            ToastAction::Suggested {
+                id: 7,
+                to: "+13025550123".into(),
+                text: "You're welcome".into(),
+            },
+            ToastAction::Suggested {
+                id: 8,
+                to: "zoe&co@example.com".into(),
+                text: "👍".into(),
+            },
+            ToastAction::Suggested {
+                id: 9,
+                to: "+1 (302) 555-0123".into(),
+                text: "🚗".repeat(REPLY_TEXT_MAX),
+            },
         ] {
             assert_eq!(decode(&encode(&action)), Some(action.clone()), "{}", encode(&action));
         }
@@ -382,9 +475,25 @@ mod tests {
             "a=open&id=%4",
             "a=open&id=%+1",
             "a=reply&id=3&to=%FF",
+            // Suggested replies: an address and a text, nothing else.
+            "a=say&id=3&to=%2B1",
+            "a=say&id=3&text=OK",
+            "a=say&id=3&to=%2B1&text=",
+            "a=say&id=3&to=%2B1&text=%20OK",
+            "a=say&id=3&to=%2B1&text=O%0AK",
+            "a=say&id=3&to=%2B1&text=OK&text=OK",
+            "a=say&id=3&to=%2B1&text=OK&code=1234",
+            "a=reply&id=3&to=%2B1&text=OK",
+            "a=open&id=3&text=OK",
         ] {
             assert_eq!(decode(bad), None, "{bad}");
         }
+        let long_text = "x".repeat(REPLY_TEXT_MAX + 1);
+        assert_eq!(decode(&format!("a=say&id=1&to=1&text={long_text}")), None);
+        assert_eq!(
+            decode(&format!("a=say&id=1&to=1&text={}", "x".repeat(REPLY_TEXT_MAX))).map(|a| a.id()),
+            Some(1)
+        );
         assert_eq!(decode(&format!("a=open&id=1&to={}", "x".repeat(600))), None);
         let long_to = "1".repeat(ADDRESS_MAX + 1);
         assert_eq!(decode(&format!("a=reply&id=1&to={long_to}")), None);
@@ -526,6 +635,132 @@ mod tests {
             xml,
             r#"<toast launch="a=open&amp;id=7" activationType="foreground"><visual><binding template="ToastGeneric"><text hint-maxLines="1">tug</text></binding></visual><audio silent="true"/></toast>"#
         );
+    }
+
+    fn text_from_zoe(replies: &[&str]) -> ToastSpec {
+        ToastSpec {
+            reply_to: Some("+13025550123".into()),
+            mark_read: true,
+            clear: true,
+            replies: replies.iter().map(|r| r.to_string()).collect(),
+            ..spec()
+        }
+    }
+
+    /// The `content` of every button, in order.
+    fn buttons(xml: &str) -> Vec<String> {
+        xml.split(r#"<action content=""#)
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn suggested_replies_sit_between_send_and_mark_read_within_five_buttons() {
+        let xml = notification_toast(&text_from_zoe(&["On my way", "5 minutes", "Running late"]), true);
+        assert_eq!(
+            buttons(&xml),
+            ["Send", "On my way", "5 minutes", "Running late", "Mark read"],
+            "{xml}"
+        );
+        // The reply box stays, and each suggestion is its own press carrying the text.
+        assert!(xml.contains(r#"<input id="reply""#));
+        assert!(xml.contains(
+            r#"<action content="5 minutes" arguments="a=say&amp;id=42&amp;to=%2B13025550123&amp;text=5%20minutes" activationType="foreground"/>"#
+        ), "{xml}");
+        assert_eq!(xml.matches("hint-inputId").count(), 1, "only Send reads the box: {xml}");
+        // Every button decodes back to what it says.
+        let args: Vec<&str> = xml
+            .split(r#"arguments=""#)
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap_or_default())
+            .collect();
+        let said: Vec<ToastAction> = args
+            .iter()
+            .filter_map(|a| decode(&a.replace("&amp;", "&")))
+            .filter(|a| matches!(a, ToastAction::Suggested { .. }))
+            .collect();
+        assert_eq!(
+            said,
+            ["On my way", "5 minutes", "Running late"].map(|text| ToastAction::Suggested {
+                id: 42,
+                to: "+13025550123".into(),
+                text: text.into(),
+            })
+        );
+    }
+
+    #[test]
+    fn suggestions_only_get_the_buttons_left_over() {
+        // Send, Mark read, Copy code and Call back leave room for one.
+        let crowded = ToastSpec {
+            code: Some("482913".into()),
+            call_back: true,
+            ..text_from_zoe(&["Yes", "No", "Let me check"])
+        };
+        let xml = notification_toast(&crowded, true);
+        assert_eq!(
+            buttons(&xml),
+            ["Send", "Yes", "Mark read", "Copy code", "Call back"],
+            "{xml}"
+        );
+    }
+
+    #[test]
+    fn no_reply_box_means_no_suggestions() {
+        let xml = notification_toast(
+            &ToastSpec {
+                reply_to: None,
+                ..text_from_zoe(&["On my way"])
+            },
+            true,
+        );
+        assert_eq!(buttons(&xml), ["Mark read"], "{xml}");
+        assert!(!xml.contains("a=say"));
+    }
+
+    #[test]
+    fn bad_repeated_and_extra_suggestions_are_left_out() {
+        let long = "x".repeat(REPLY_TEXT_MAX + 1);
+        let xml = notification_toast(
+            &text_from_zoe(&["", " OK", "O\nK", &long, "Sure", "sure", "Later", "On it", "One more"]),
+            true,
+        );
+        assert_eq!(buttons(&xml), ["Send", "Sure", "Later", "On it", "Mark read"], "{xml}");
+    }
+
+    #[test]
+    fn hostile_suggestions_cant_break_the_xml() {
+        let xml = notification_toast(&text_from_zoe(&[r#""/><action content="x"#, "<b>&"]), true);
+        assert_eq!(xml.matches("<action ").count(), 4, "{xml}");
+        assert!(xml.contains("&lt;b&gt;&amp;"));
+    }
+
+    #[test]
+    fn suggestions_give_way_before_the_toast_gets_too_big_for_windows() {
+        let emoji = "🚗".repeat(REPLY_TEXT_MAX);
+        let big = ToastSpec {
+            body: "😀".repeat(BODY_MAX),
+            title: "😀".repeat(TITLE_MAX),
+            ..text_from_zoe(&[&emoji, &format!("{}a", &emoji[4..]), &format!("{}b", &emoji[4..])])
+        };
+        let xml = notification_toast(&big, true);
+        assert!(xml.len() <= PAYLOAD_MAX, "{}", xml.len());
+        assert!(buttons(&xml).len() < 5, "some suggestions dropped: {xml}");
+        assert_eq!(buttons(&xml).first().map(String::as_str), Some("Send"));
+        assert_eq!(buttons(&xml).last().map(String::as_str), Some("Mark read"));
+        // An ordinary text keeps all three.
+        let small = notification_toast(&text_from_zoe(&[&emoji, "Yes", "No"]), true);
+        assert_eq!(buttons(&small).len(), 5);
+    }
+
+    #[test]
+    fn the_spec_reads_suggested_replies() {
+        let spec: ToastSpec = serde_json::from_str(
+            r#"{"id":9,"title":"Messages · Zoe","body":"where are you?","name":"Zoe","replyTo":"+13025550123","markRead":true,"code":null,"callBack":false,"clear":true,"replies":["On my way","5 minutes","Running late"]}"#,
+        )
+        .unwrap();
+        assert_eq!(spec.replies, ["On my way", "5 minutes", "Running late"]);
     }
 
     #[test]
