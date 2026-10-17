@@ -1061,9 +1061,11 @@ export const useTugStore = defineStore("tug", () => {
     }
   }
 
+  /** Names with numbers tug knows (contacts, recent calls): a missed call matches a name only if it's unique here. */
+  const knownPeople = computed(() => [...contacts.value, ...calls.value.map((c) => ({ name: c.name, address: c.number }))]);
   /** A missed call from this person still on the phone, to call back from (no hands-free needed). */
   function missedCallFrom(name: string | null, address: string | null): PhoneNotification | null {
-    return missedCallFor(notifications.value, { name, address });
+    return missedCallFor(notifications.value, { name, address }, knownPeople.value);
   }
 
   /** How tug can call this person right now: back from their missed call, by dialing, or not yet. */

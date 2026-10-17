@@ -392,6 +392,34 @@ describe("missedCallFor", () => {
     expect(missedCallFor([missed("Priya", 0)], { name: "zoe 💜", address: "+13025550173" })).toBeNull();
     expect(missedCallFor([note("zoe 💜", "hey", 0)], { name: "zoe 💜", address: null })).toBeNull();
   });
+
+  it("never matches a name two people share: calling back the wrong Sam is worse than no Call back", () => {
+    const known = [
+      { name: "Sam", address: "+13025550111" },
+      { name: "Sam", address: "+13025550112" },
+    ];
+    const fromSam = missed("Sam", 0);
+    expect(missedCallFor([fromSam], { name: "Sam", address: "+13025550112" }, known)).toBeNull();
+    expect(missedCallFor([fromSam], { name: "Sam", address: null }, known)).toBeNull();
+    // The number still matches when iOS titles the call with it.
+    const byNumber = missed("(302) 555-0112", 1);
+    expect(missedCallFor([fromSam, byNumber], { name: "Sam", address: "+13025550112" }, known)).toBe(byNumber);
+  });
+
+  it("matches a unique name only when its one number is this person's", () => {
+    const known = [{ name: "Zoe", address: "+13025550173" }];
+    const fromZoe = missed("Zoe", 0);
+    expect(missedCallFor([fromZoe], { name: "Zoe", address: "+13025550173" }, known)).toBe(fromZoe);
+    expect(missedCallFor([fromZoe], { name: "Zoe", address: null }, known)).toBe(fromZoe);
+    // A different Zoe (another number under the same name): not her missed call.
+    expect(missedCallFor([fromZoe], { name: "Zoe", address: "+13025550999" }, known)).toBeNull();
+  });
+
+  it("prefers a number match over a newer name match", () => {
+    const byNumber = missed("(302) 555-0173", 0);
+    const byName = missed("Zoe", 5);
+    expect(missedCallFor([byName, byNumber], { name: "Zoe", address: "+13025550173" })).toBe(byNumber);
+  });
 });
 
 describe("message order", () => {

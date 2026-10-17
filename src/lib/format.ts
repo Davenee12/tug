@@ -568,23 +568,47 @@ export function canClear(n: PhoneNotification): boolean {
 
 const lastDigits = (s: string | null | undefined) => (s ?? "").replace(/\D/g, "").slice(-10);
 
+/** Someone tug knows a number for: a contact, or a call in the phone's recent calls. */
+export interface KnownPerson {
+  name: string | null;
+  address: string | null;
+}
+
 /**
  * The phone's missed-call notification from this person that's still on the iPhone. iOS puts
  * a "Dial" action on it, so tug can have the phone call them back without a hands-free link
- * (confirmed on a real iPhone). Matched on the name the phone shows, or the number; newest wins.
+ * (confirmed on a real iPhone). Calling back the wrong person is worse than not offering it, so:
+ * matched on the number first (iOS titles an unknown caller with it); on the name the phone shows
+ * only when that name isn't shared, i.e. `known` (contacts, recent calls) has at most one number
+ * for it, and that number is this person's when theirs is known. Newest wins.
  */
 export function missedCallFor(
   notifications: PhoneNotification[],
   person: { name: string | null; address: string | null },
+  known: KnownPerson[] = [],
 ): PhoneNotification | null {
   const name = person.name ? nameKey(person.name) : null;
   const digits = lastDigits(person.address);
-  let best: PhoneNotification | null = null;
+  const hasNumber = digits.length >= 7;
+  let nameIsSafe = false;
+  if (name) {
+    const numbers = new Set(
+      known
+        .filter((k) => k.name && nameKey(k.name) === name)
+        .map((k) => lastDigits(k.address))
+        .filter((d) => d.length >= 7),
+    );
+    nameIsSafe = numbers.size === 0 || (numbers.size === 1 && (!hasNumber || numbers.has(digits)));
+  }
+  let byNumber: PhoneNotification | null = null;
+  let byName: PhoneNotification | null = null;
   for (const n of notifications) {
     if (n.category !== "missedCall" || !n.live || n.removedAt != null || !n.flags.positiveAction) continue;
-    const title = nameKey(n.title);
-    const matches = (name && title === name) || (digits.length >= 7 && lastDigits(n.title) === digits);
-    if (matches && (!best || n.receivedAt > best.receivedAt)) best = n;
+    if (hasNumber && lastDigits(n.title) === digits) {
+      if (!byNumber || n.receivedAt > byNumber.receivedAt) byNumber = n;
+    } else if (nameIsSafe && nameKey(n.title) === name) {
+      if (!byName || n.receivedAt > byName.receivedAt) byName = n;
+    }
   }
-  return best;
+  return byNumber ?? byName;
 }

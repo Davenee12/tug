@@ -305,6 +305,8 @@ export interface ToastSpec {
   name: string;
   /** A text from a person tug can answer over message access: the reply box and Send. */
   replyTo: string | null;
+  /** A text whose sender's name has several numbers: "Open in tug" (pick the number there) instead of a reply box. */
+  open?: boolean;
   /** A conversation: "Mark read". */
   markRead: boolean;
   /** A one-time code: "Copy code". */

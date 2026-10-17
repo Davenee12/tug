@@ -39,6 +39,10 @@ pub struct ToastSpec {
     /// A text from a person tug can reply to over MAP: the reply box and Send.
     #[serde(default)]
     pub reply_to: Option<String>,
+    /// A text whose sender's name has several numbers: no reply box (it can't show which number
+    /// it would send to) but "Open in tug", where the number is shown and can be picked.
+    #[serde(default)]
+    pub open: bool,
     /// A conversation: "Mark read" (read in tug, read and cleared on the phone).
     #[serde(default)]
     pub mark_read: bool,
@@ -256,6 +260,8 @@ pub fn notification_toast(spec: &ToastSpec, sound: bool) -> String {
         );
         let reply = ToastAction::Reply { id, to: to.to_string() };
         actions.push(action("Send", &reply, Some(REPLY_INPUT)));
+    } else if spec.open {
+        actions.push(action("Open in tug", &ToastAction::Open { id }, None));
     }
     if spec.mark_read {
         actions.push(action("Mark read", &ToastAction::Read { id }, None));
@@ -475,6 +481,33 @@ mod tests {
     }
 
     #[test]
+    fn a_name_with_several_numbers_gets_open_in_tug_not_a_reply_box() {
+        let xml = notification_toast(
+            &ToastSpec {
+                open: true,
+                mark_read: true,
+                ..spec()
+            },
+            true,
+        );
+        assert!(!xml.contains("<input"), "{xml}");
+        assert!(
+            xml.contains(r#"<action content="Open in tug" arguments="a=open&amp;id=42" activationType="foreground"/>"#),
+            "{xml}"
+        );
+        // A reply box, when the frontend gives one, wins: never both.
+        let both = notification_toast(
+            &ToastSpec {
+                open: true,
+                reply_to: Some("+13025550123".into()),
+                ..spec()
+            },
+            true,
+        );
+        assert!(!both.contains("Open in tug"), "{both}");
+    }
+
+    #[test]
     fn bad_reply_addresses_and_codes_get_no_button() {
         let xml = notification_toast(
             &ToastSpec {
@@ -536,5 +569,9 @@ mod tests {
         .unwrap();
         assert_eq!(spec.id, 9);
         assert!(spec.call_back && spec.clear && !spec.mark_read);
+        assert!(!spec.open, "absent means no Open in tug button");
+        let open: ToastSpec =
+            serde_json::from_str(r#"{"id":9,"title":"","body":"","replyTo":null,"open":true}"#).unwrap();
+        assert!(open.open);
     }
 }
