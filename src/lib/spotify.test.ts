@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { bestTrack, idFromUri, matchPlaylists, matchScore, nextRepeat, normalize, playlistDetail, sameSong, seekFraction, trackLength, uniqueAlbums, uniqueSongs } from "./spotify";
-import type { SpotifyPlaylist, SpotifyTrack } from "../types/protocol";
+import { bestTrack, idFromUri, matchPlaylists, matchScore, mergeSearchPage, nextRepeat, normalize, playlistDetail, sameSong, seekFraction, trackLength, uniqueAlbums, uniqueSongs } from "./spotify";
+import type { SpotifyPlaylist, SpotifySearch, SpotifyTrack } from "../types/protocol";
 import { SPOTIFY_INVITE_ONLY, SPOTIFY_RECONNECT } from "./spotify";
 import modelRs from "../../src-tauri/src/spotify/model.rs?raw";
 
@@ -165,6 +165,41 @@ describe("uniqueSongs / uniqueAlbums", () => {
       { name: "Big Album (Deluxe)", artists: "Test Artist" },
     ];
     expect(uniqueAlbums(albums)).toHaveLength(2);
+  });
+});
+
+describe("mergeSearchPage (Show more)", () => {
+  const artist = (id: string) => ({ uri: `spotify:artist:${id}`, id, name: id, imageUrl: null });
+  const playlist = (id: string) => ({ uri: `spotify:playlist:${id}`, id, name: id, owner: null, trackCount: null, imageUrl: null, owned: false });
+  const none = { tracks: false, albums: false, artists: false, playlists: false };
+  const results = (over: Partial<SpotifySearch>): SpotifySearch => ({ tracks: [], albums: [], artists: [], playlists: [], more: none, ...over });
+
+  it("doesn't show an artist or playlist twice when Spotify's pages overlap", () => {
+    const shown = results({ artists: [artist("a"), artist("b")], playlists: [playlist("p")], more: { ...none, artists: true, playlists: true } });
+    const page = results({ artists: [artist("b"), artist("c")], more: { ...none, artists: true } });
+    const merged = mergeSearchPage(shown, "artists", page);
+    expect(merged.artists.map((a) => a.id)).toEqual(["a", "b", "c"]);
+    expect(merged.more.artists).toBe(true);
+    // Other kinds untouched, including their "more".
+    expect(merged.playlists).toBe(shown.playlists);
+    expect(merged.more.playlists).toBe(true);
+
+    const pl = mergeSearchPage(merged, "playlists", results({ playlists: [playlist("p"), playlist("q")] }));
+    expect(pl.playlists.map((p) => p.id)).toEqual(["p", "q"]);
+    expect(pl.more.playlists).toBe(false);
+  });
+
+  it("collapses other copies of songs already shown", () => {
+    const song = (uri: string, name: string) => ({ uri, name, artists: "Test Artist", album: "Big Album", durationMs: 189_000 }) as SpotifyTrack;
+    const shown = results({ tracks: [song("spotify:track:1", "Anybody")] });
+    const merged = mergeSearchPage(shown, "tracks", results({ tracks: [song("spotify:track:9", "Anybody"), song("spotify:track:8", "Somebody")] }));
+    expect(merged.tracks.map((t) => t.uri)).toEqual(["spotify:track:1", "spotify:track:8"]);
+  });
+
+  it("leaves the results it was given alone", () => {
+    const shown = results({ artists: [artist("a")] });
+    mergeSearchPage(shown, "artists", results({ artists: [artist("b")] }));
+    expect(shown.artists).toHaveLength(1);
   });
 });
 
