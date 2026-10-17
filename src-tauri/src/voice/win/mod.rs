@@ -30,7 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::engine::{Engine, EngineError};
-use super::{judge_recording, judge_typing, peak, text, VoiceLanguage, VoiceOutcome, MAX_HOLD, TAIL};
+use super::{judge_recording, judge_typing, peak, pill_problem, text, VoiceLanguage, VoiceOutcome, MAX_HOLD, TAIL};
 use crate::code_fill::Keys;
 use overlay::Look;
 
@@ -289,19 +289,12 @@ fn still_held(keys: &Keys) -> bool {
         && (!keys.alt || system::key_down(VK_MENU))
 }
 
-/// What the indicator says at the end of a hold.
+/// What the indicator says at the end of a hold (`pill_problem`).
 fn finish(outcome: VoiceOutcome) {
-    let problem = match outcome {
-        VoiceOutcome::Typed => return overlay::hide(),
-        VoiceOutcome::TooShort => "Hold the keys while you talk",
-        VoiceOutcome::NothingHeard => "Didn't catch that",
-        VoiceOutcome::MicBlocked => "Microphone blocked. Open tug's Settings to fix it",
-        VoiceOutcome::NoMic => "No microphone found",
-        VoiceOutcome::NoTarget => "The window changed, so nothing was typed",
-        VoiceOutcome::Unavailable => "Voice typing needs a Windows speech language",
-        VoiceOutcome::Failed => "Couldn't type that. Try again",
-    };
-    overlay::show(problem, Look::Problem, PROBLEM_MS);
+    match pill_problem(outcome) {
+        Some(problem) => overlay::show(problem, Look::Problem, PROBLEM_MS),
+        None => overlay::hide(),
+    }
 }
 
 /// One hold, from the press to the typed text. Always ends with the microphone closed.
@@ -381,10 +374,11 @@ fn hold(press: &Press, engine: &mut Option<sapi::Sapi>, language: Option<&str>) 
     let recognized_ms = t0.elapsed().as_millis();
     let typed = text::format(&heard, text::target_for_process(&target.exe));
 
-    // Held Ctrl or Alt would turn the characters into shortcuts.
-    crate::code_fill::wait_for_release();
+    // Held Ctrl or Alt would turn the characters into shortcuts: wait for them, and if they're
+    // still down when the wait runs out, type nothing (the pill says to let go).
+    let released = crate::code_fill::wait_for_release();
     let same = system::foreground().is_some_and(|f| f.hwnd == target.hwnd);
-    if let Some(outcome) = judge_typing(&typed, same) {
+    if let Some(outcome) = judge_typing(&typed, released, same) {
         log::info!(
             "voice typing: {outcome:?} ({} ms of speech, recognized in {recognized_ms} ms)",
             held.as_millis()

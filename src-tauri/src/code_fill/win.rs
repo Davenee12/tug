@@ -231,14 +231,20 @@ fn key_down(vk: VIRTUAL_KEY) -> bool {
     (unsafe { GetAsyncKeyState(i32::from(vk.0)) } as u16 & 0x8000) != 0
 }
 
-/// Wait (briefly) for Ctrl, Shift, Alt and Windows to be let go.
-pub(crate) fn wait_for_release() {
+/// Wait (briefly) for Ctrl, Shift, Alt and Windows to be let go. True once they're all up; false
+/// if one was still down when the wait ran out (typing then would turn characters into shortcuts).
+pub(crate) fn wait_for_release() -> bool {
     let started = Instant::now();
-    while started.elapsed() < RELEASE_WAIT
-        && [VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN]
+    loop {
+        let held = [VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN]
             .into_iter()
-            .any(key_down)
-    {
+            .any(key_down);
+        if !held {
+            return true;
+        }
+        if started.elapsed() >= RELEASE_WAIT {
+            return false;
+        }
         std::thread::sleep(Duration::from_millis(15));
     }
 }

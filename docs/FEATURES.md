@@ -308,7 +308,9 @@ Play Tugboat Run is left out while Show games is off.
   message, accepts a suggestion or runs a command by itself.
 - A small **Listening…** pill shows at the bottom of the screen while you hold the keys, then
   **Typing…**; if something's wrong it says so there ("Microphone blocked", "Didn't catch that").
-  One hold types once; letting go early or switching windows never leaves anything stuck.
+  One hold types once; letting go early or switching windows never leaves anything stuck. If
+  Ctrl, Alt or Shift is still held when the text is ready, nothing is typed (it would act as
+  shortcuts) and the pill says **Let go of the keys**.
 - If Windows' privacy settings block the microphone, Settings says so with a button to fix it.
 - Spoken commands are English; untrained, Windows' recognizer is less accurate than cloud
   dictation, best for short phrases in a quiet room.

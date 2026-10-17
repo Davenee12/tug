@@ -178,6 +178,9 @@ pub enum VoiceOutcome {
     NoMic,
     /// The window changed before typing, so nothing was typed.
     NoTarget,
+    /// Ctrl, Alt, Shift or Windows was still held after the wait, so nothing was typed: the
+    /// characters would have gone in as shortcuts.
+    KeysHeld,
     /// Windows has no speech recognizer for the language.
     Unavailable,
     /// Recognition or typing failed.
@@ -207,15 +210,34 @@ pub fn peak(pcm: &[i16]) -> i16 {
     pcm.iter().map(|s| s.saturating_abs()).max().unwrap_or(0)
 }
 
-/// After recognizing: type only real text, only into the window the shortcut was pressed in.
-pub fn judge_typing(text: &str, same_window: bool) -> Option<VoiceOutcome> {
+/// After recognizing: type only real text, only once the modifier keys are up (`keys_released`:
+/// the wait for them didn't run out), and only into the window the shortcut was pressed in.
+pub fn judge_typing(text: &str, keys_released: bool, same_window: bool) -> Option<VoiceOutcome> {
     if text.trim().is_empty() {
         Some(VoiceOutcome::NothingHeard)
+    } else if !keys_released {
+        Some(VoiceOutcome::KeysHeld)
     } else if !same_window {
         Some(VoiceOutcome::NoTarget)
     } else {
         None
     }
+}
+
+/// What the indicator pill says at the end of a hold, or `None` when it just goes (typed).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn pill_problem(outcome: VoiceOutcome) -> Option<&'static str> {
+    Some(match outcome {
+        VoiceOutcome::Typed => return None,
+        VoiceOutcome::TooShort => "Hold the keys while you talk",
+        VoiceOutcome::NothingHeard => "Didn't catch that",
+        VoiceOutcome::MicBlocked => "Microphone blocked. Open tug's Settings to fix it",
+        VoiceOutcome::NoMic => "No microphone found",
+        VoiceOutcome::NoTarget => "The window changed, so nothing was typed",
+        VoiceOutcome::KeysHeld => "Let go of the keys",
+        VoiceOutcome::Unavailable => "Voice typing needs a Windows speech language",
+        VoiceOutcome::Failed => "Couldn't type that. Try again",
+    })
 }
 
 /// The shortcut's state for Settings.
@@ -571,13 +593,33 @@ mod tests {
         assert_eq!(judge_recording(ms(120), 9000), Some(VoiceOutcome::TooShort));
         assert_eq!(judge_recording(ms(2000), 40), Some(VoiceOutcome::NothingHeard));
         assert_eq!(judge_recording(ms(2000), 9000), None);
-        assert_eq!(judge_typing("", true), Some(VoiceOutcome::NothingHeard));
-        assert_eq!(judge_typing("  ", false), Some(VoiceOutcome::NothingHeard));
-        assert_eq!(judge_typing("userId", false), Some(VoiceOutcome::NoTarget));
-        assert_eq!(judge_typing("userId", true), None);
+        assert_eq!(judge_typing("", true, true), Some(VoiceOutcome::NothingHeard));
+        assert_eq!(judge_typing("  ", true, false), Some(VoiceOutcome::NothingHeard));
+        assert_eq!(judge_typing("userId", true, false), Some(VoiceOutcome::NoTarget));
+        assert_eq!(judge_typing("userId", true, true), None);
         assert_eq!(peak(&[3, -9000, 200]), 9000);
         assert_eq!(peak(&[i16::MIN]), i16::MAX);
         assert_eq!(peak(&[]), 0);
+    }
+
+    #[test]
+    fn keys_still_held_after_the_wait_means_nothing_is_typed() {
+        // Ctrl, Alt or Shift still down once the wait ran out: typing would fire shortcuts.
+        assert_eq!(judge_typing("userId", false, true), Some(VoiceOutcome::KeysHeld));
+        assert_eq!(
+            judge_typing("userId", false, false),
+            Some(VoiceOutcome::KeysHeld),
+            "nothing is typed either way; the keys are what to fix"
+        );
+        assert_eq!(pill_problem(VoiceOutcome::KeysHeld), Some("Let go of the keys"));
+        // Nothing heard is still said first: there was nothing to type.
+        assert_eq!(judge_typing(" ", false, true), Some(VoiceOutcome::NothingHeard));
+        assert_eq!(pill_problem(VoiceOutcome::Typed), None);
+        let json = serde_json::to_string(&VoiceTyped {
+            outcome: VoiceOutcome::KeysHeld,
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"outcome":"keysHeld"}"#);
     }
 
     #[test]

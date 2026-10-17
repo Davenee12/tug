@@ -908,5 +908,5 @@ export interface VoiceStatus {
 
 /** What one hold did (`voice-typed`). The words themselves are never sent. */
 export interface VoiceTyped {
-  outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "noTarget" | "unavailable" | "failed";
+  outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "noTarget" | "keysHeld" | "unavailable" | "failed";
 }
