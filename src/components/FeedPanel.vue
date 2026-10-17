@@ -7,6 +7,7 @@ import { optionalNudge } from "../lib/connectFlow";
 import type { CodeEntry } from "../lib/codeFeed";
 import { preservedScrollTop } from "../lib/scroll";
 import { reuseUnchanged, sameFeedEntry } from "../lib/stableList";
+import { createFeedPager } from "../lib/feedPaging";
 import CallsPanel from "./CallsPanel.vue";
 import CodeFeedRow from "./CodeFeedRow.vue";
 import FeedEntryRow from "./FeedEntryRow.vue";
@@ -80,12 +81,26 @@ watch(entryGroups, async (next, prev) => {
 const unreadMessages = computed(() => tug.unreadTexts);
 const TITLES: Record<string, string> = { feed: "Feed", messages: "Messages", calls: "Calls" };
 
-// Infinite scroll through older history.
+// Infinite scroll through older history. A page can be all cleared notifications and add nothing to
+// the screen, so the pager keeps going while the end of the list is still in view (lib/feedPaging).
 const sentinel = ref<HTMLElement | null>(null);
+function sentinelInView(): boolean {
+  const el = sentinel.value;
+  const box = feedScroller.value;
+  if (!el || !box || !tug.hasMore) return false;
+  const r = el.getBoundingClientRect();
+  const b = box.getBoundingClientRect();
+  return r.top <= b.bottom && r.bottom >= b.top;
+}
+const pager = createFeedPager({
+  load: () => tug.loadMore(),
+  canLoad: sentinelInView,
+  settle: () => nextTick(),
+});
 let observer: IntersectionObserver | undefined;
 onMounted(() => {
   observer = new IntersectionObserver((entries) => {
-    if (entries.some((e) => e.isIntersecting)) void tug.loadMore();
+    if (entries.some((e) => e.isIntersecting)) void pager.kick();
   });
   watch(
     sentinel,
@@ -175,7 +190,8 @@ const nudgeDismissed = ref(false);
         </div>
       </div>
 
-      <div v-if="entryGroups.length === 0" class="flex flex-1 items-center justify-center py-10">
+      <!-- Not while older pages are still coming in: "all caught up" only once it's true. -->
+      <div v-if="entryGroups.length === 0 && !pager.busy.value" class="flex flex-1 items-center justify-center py-10">
         <div class="max-w-lg text-center">
           <p class="headline text-[28px]">{{ tug.notifications.length ? "You're all caught up" : "Quiet for now" }}</p>
           <p class="mt-2 text-[14px] text-muted">

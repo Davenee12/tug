@@ -367,6 +367,8 @@ export const useTugStore = defineStore("tug", () => {
   const pickerOpen = ref(false);
   /** Universal search (Ctrl+K or the search box). */
   const searchOpen = ref(false);
+  /** What universal search opens with, once (a Ctrl+K text that couldn't be sent comes back). */
+  const searchDraft = ref("");
   /** Ringing calls whose card was answered or hidden here; their Feed row stays until the phone drops them. */
   const callsHandled = ref<number[]>([]);
   /** The call ringing on the phone right now (newest first), for the incoming-call card. */
@@ -720,11 +722,27 @@ export const useTugStore = defineStore("tug", () => {
   /** Settings › Notifications: turn the shortcut on or off, or pick another; the backend says if it's taken. */
   async function setCodeHotkey(enabled: boolean, keys: string) {
     const id = knownHotkey(keys);
+    const before = { typeCodeHotkey: settings.value.typeCodeHotkey, typeCodeKeys: settings.value.typeCodeKeys };
+    const beforeStatus = codeHotkey.value;
     settings.value = { ...settings.value, typeCodeHotkey: enabled, typeCodeKeys: id };
-    await attempt(() => api.setSetting("ui.typeCodeHotkey", JSON.stringify(enabled)));
-    await attempt(() => api.setSetting("ui.typeCodeKeys", id));
+    // Still the newest choice? A later press owns the switch; an older failure mustn't undo it.
+    const stillMine = () => settings.value.typeCodeHotkey === enabled && settings.value.typeCodeKeys === id;
+    const revert = () => {
+      if (stillMine()) settings.value = { ...settings.value, ...before };
+    };
+    // Register first: if Windows' side fails outright, nothing was saved and the switch goes back
+    // (a shortcut another app holds isn't a failure; it comes back as "inUse" and Settings says so).
     const s = await attempt(() => api.setCodeHotkey(enabled, id));
-    if (s) codeHotkey.value = s;
+    if (!s) return revert();
+    if (stillMine()) codeHotkey.value = s;
+    const saved =
+      (await attempt(() => api.setSetting("ui.typeCodeHotkey", JSON.stringify(enabled)).then(() => true))) === true &&
+      (await attempt(() => api.setSetting("ui.typeCodeKeys", id).then(() => true))) === true;
+    if (saved || !stillMine()) return;
+    // Not saved, so it wouldn't survive a restart: put the shortcut back as it was, quietly.
+    revert();
+    const back = await api.setCodeHotkey(before.typeCodeHotkey, before.typeCodeKeys).catch(() => null);
+    codeHotkey.value = back ?? beforeStatus;
   }
 
   /** Calls always ring through; everything else is rate-limited and the overflow summed up once. */
@@ -1390,13 +1408,25 @@ export const useTugStore = defineStore("tug", () => {
     started = false;
   }
 
-  async function loadMore() {
-    if (!hasMore.value) return;
-    const last = notifications.value.at(-1);
-    const page = await attempt(() => api.listNotifications(PAGE, last?.id));
-    if (!page) return;
-    for (const n of page) upsert(notifications.value, n);
-    hasMore.value = page.length === PAGE;
+  /**
+   * The next page of older notifications. One page at a time: a second call while one is out
+   * waits for that one instead of asking for the same page again. True if a page came in.
+   */
+  let loadingMore: Promise<boolean> | null = null;
+  function loadMore(): Promise<boolean> {
+    if (loadingMore) return loadingMore;
+    if (!hasMore.value) return Promise.resolve(false);
+    loadingMore = (async () => {
+      const list = notifications.value;
+      const last = list.at(-1);
+      const page = await attempt(() => api.listNotifications(PAGE, last?.id));
+      // The list was replaced meanwhile (history cleared): this page belongs to the old one.
+      if (!page || list !== notifications.value) return false;
+      for (const n of page) upsert(notifications.value, n);
+      hasMore.value = page.length === PAGE;
+      return true;
+    })().finally(() => (loadingMore = null));
+    return loadingMore;
   }
 
   /** Re-read what's loaded (names are resolved server-side, e.g. after a contact is renamed). */
@@ -1423,9 +1453,15 @@ export const useTugStore = defineStore("tug", () => {
     return attempt(() => api.searchAll(query, 30));
   }
 
-  async function setSetting<K extends keyof UiSettings>(key: K, value: UiSettings[K]) {
+  /** Show the change at once; if it can't be saved, the switch goes back (the error says why). */
+  async function setSetting<K extends keyof UiSettings>(key: K, value: UiSettings[K]): Promise<boolean> {
+    const previous = settings.value[key];
     settings.value = { ...settings.value, [key]: value };
-    await attempt(() => api.setSetting(`ui.${key}`, typeof value === "string" ? value : JSON.stringify(value)));
+    const raw = typeof value === "string" ? value : JSON.stringify(value);
+    const ok = (await attempt(() => api.setSetting(`ui.${key}`, raw).then(() => true))) === true;
+    // Only while it's still this change on screen: a newer one owns the switch now.
+    if (!ok && settings.value[key] === value) settings.value = { ...settings.value, [key]: previous };
+    return ok;
   }
 
   /** App zoom from Settings (Ctrl +/−/0 does the same from anywhere). */
@@ -1710,26 +1746,43 @@ export const useTugStore = defineStore("tug", () => {
     }
   }
 
+  // Shuffle and repeat are optimistic. Spotify's player read lags a change by about a second, so
+  // reading straight after a successful change brought the old value back and the button flipped
+  // back on screen. Keep what was pressed; once things have settled, read again to catch anything
+  // else that changed, unless another press came in meanwhile (that one reads for itself).
+  const PLAYER_SETTLE_MS = 1500;
+  let playerPresses = 0;
+  let playerSettleTimer: number | undefined;
+  function settlePlayerLater(press: number) {
+    window.clearTimeout(playerSettleTimer);
+    playerSettleTimer = window.setTimeout(() => {
+      if (press === playerPresses) void refreshSpotifyPlayer();
+    }, PLAYER_SETTLE_MS);
+  }
+
   /** Cycle Spotify repeat (off → all → one → off), optimistic with revert on failure. */
   async function cycleSpotifyRepeat() {
     const p = spotifyPlayer.value;
     if (!p) return;
+    const press = ++playerPresses;
     const previous = p.repeat;
     const mode = nextRepeat(previous);
     p.repeat = mode;
     const ok = await attempt(() => api.spotifySetRepeat(mode).then(() => true));
-    if (ok !== true && spotifyPlayer.value) spotifyPlayer.value.repeat = previous;
-    else void refreshSpotifyPlayer();
+    // A newer press owns the button now; only the newest one puts it back.
+    if (ok !== true && press === playerPresses && spotifyPlayer.value) spotifyPlayer.value.repeat = previous;
+    if (ok === true) settlePlayerLater(press);
   }
 
   async function toggleSpotifyShuffle() {
     const p = spotifyPlayer.value;
     if (!p) return;
+    const press = ++playerPresses;
     const previous = p.shuffle;
     p.shuffle = !previous;
     const ok = await attempt(() => api.spotifySetShuffle(!previous).then(() => true));
-    if (ok !== true && spotifyPlayer.value) spotifyPlayer.value.shuffle = previous;
-    else void refreshSpotifyPlayer();
+    if (ok !== true && press === playerPresses && spotifyPlayer.value) spotifyPlayer.value.shuffle = previous;
+    if (ok === true) settlePlayerLater(press);
   }
 
   async function toggleSpotifyLike() {
@@ -1870,6 +1923,7 @@ export const useTugStore = defineStore("tug", () => {
     composeTo,
     pickerOpen,
     searchOpen,
+    searchDraft,
     unreadTexts,
     ringing,
     hideCall,
@@ -1982,8 +2036,11 @@ export const useTugStore = defineStore("tug", () => {
       return ok === true;
     },
     async setAdvertising(enabled: boolean) {
+      const previous = advertiseEnabled.value;
       advertiseEnabled.value = enabled;
-      await attempt(() => api.setAdvertising(enabled));
+      const ok = await attempt(() => api.setAdvertising(enabled).then(() => true));
+      // Didn't take: the switch goes back rather than claim tug is (or isn't) visible.
+      if (ok !== true && advertiseEnabled.value === enabled) advertiseEnabled.value = previous;
     },
     async setAutostart(enabled: boolean) {
       // Show the change at once, then confirm against what the registry actually holds, so a

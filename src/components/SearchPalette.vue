@@ -5,7 +5,7 @@ import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
 import { useGameStore } from "../stores/game";
 import { useFocusTrap } from "../lib/focusTrap";
-import { parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
+import { afterPaletteSend, parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
 import {
   appLabel,
   canClear,
@@ -43,6 +43,11 @@ const expanded = ref<number | null>(null);
 // Esc closes from anywhere in the dialog, not only from the search box.
 useFocusTrap(root, () => close());
 onMounted(async () => {
+  // Opened with something to put back (a text that couldn't be sent): it searches like typing.
+  if (tug.searchDraft) {
+    query.value = tug.searchDraft;
+    tug.searchDraft = "";
+  }
   await nextTick();
   input.value?.focus();
 });
@@ -197,8 +202,14 @@ function openConversation(address: string | null, name: string) {
 async function run(a: Action) {
   close();
   if (a.kind === "send") {
-    const ok = await tug.sendMessage(a.person.address, a.text);
-    if (ok) openConversation(a.person.address, cleanName(a.person.name));
+    const typed = query.value;
+    const result = await tug.sendMessage(a.person.address, a.text);
+    if (afterPaletteSend(result) === "open-conversation") openConversation(a.person.address, cleanName(a.person.name));
+    else if (!tug.searchOpen) {
+      // Nothing was recorded (the error says why): come back with what was typed, ready to retry.
+      tug.searchDraft = typed;
+      tug.searchOpen = true;
+    }
   } else if (a.kind === "open-chat") {
     openConversation(a.person.address, cleanName(a.person.name));
   } else if (a.kind === "media") {
