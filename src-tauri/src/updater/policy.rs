@@ -283,6 +283,24 @@ pub fn valid_resume(screen: &str) -> bool {
         }
 }
 
+/// What to do when starting the installer failed. Before tug tidied up for it, nothing changed:
+/// stay and say so. After (`on_before_exit` already took the tray icon away, hid the windows and
+/// latched the one-time tidy-up), tug would be left running with no window and no tray icon, so
+/// start it again instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterFailedInstall {
+    Stay,
+    Restart,
+}
+
+pub fn after_failed_install(tidied_for_exit: bool) -> AfterFailedInstall {
+    if tidied_for_exit {
+        AfterFailedInstall::Restart
+    } else {
+        AfterFailedInstall::Stay
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,5 +608,11 @@ mod tests {
     fn an_installed_copy_has_the_uninstaller_beside_it() {
         assert!(!is_portable(true));
         assert!(is_portable(false));
+    }
+
+    #[test]
+    fn a_failed_install_after_tidying_up_starts_tug_again() {
+        assert_eq!(after_failed_install(false), AfterFailedInstall::Stay);
+        assert_eq!(after_failed_install(true), AfterFailedInstall::Restart);
     }
 }

@@ -469,6 +469,14 @@ impl Updater {
             Err(e) => e.to_string(),
         };
         log::warn!("update install failed: {err}");
+        if policy::after_failed_install(EXIT_STARTED.load(Ordering::SeqCst)) == policy::AfterFailedInstall::Restart {
+            // The tidy-up for the installer already ran (tray icon gone, windows hidden, tidy-up
+            // latched): staying would leave tug running with no way to reach it. Start again; the
+            // saved screen stays, so the window comes back where it was, and a later check retries.
+            log::warn!("update: the installer didn't start after tug had tidied up; starting tug again");
+            log::logger().flush();
+            self.inner.app.restart();
+        }
         if let Some(store) = &store {
             let _ = store.delete_setting(RESUME_SETTING);
         }
@@ -522,6 +530,7 @@ impl Updater {
             // Right before the installer starts and tug exits: the same tidy-up as Quit (pop-ups,
             // Tugboat, PC audio), then Tauri's own.
             .on_before_exit(move || {
+                EXIT_STARTED.store(true, Ordering::SeqCst);
                 crate::tidy_before_exit(&app, false);
                 app.cleanup_before_exit();
             })
@@ -560,6 +569,9 @@ pub fn resume_pending(store: &crate::store::Store) -> bool {
 
 /// Run once per exit, whichever way tug leaves (Quit, Windows ending the session, an update).
 static TIDIED: AtomicBool = AtomicBool::new(false);
+
+/// The updater's `on_before_exit` ran: tug tidied up for the installer and expects to exit.
+static EXIT_STARTED: AtomicBool = AtomicBool::new(false);
 
 /// Whether this is the first call (the caller should tidy up).
 pub fn first_tidy() -> bool {
