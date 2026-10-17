@@ -116,11 +116,11 @@ const dnd = computed({
         <TugMark :size="30" class="text-on-dark" />
       </span>
       <span class="font-display text-[30px] leading-none text-on-dark" style="letter-spacing: -0.03em">tug</span>
-      <!-- Tugboat Run. Beside the name, so the sidebar (which never scrolls) doesn't grow. -->
+      <!-- The games picker. Beside the name, so the sidebar (which never scrolls) doesn't grow. -->
       <button
         v-if="tug.settings.showGames"
         class="ml-auto inline-flex items-center gap-1.5 rounded-full border border-on-dark-soft/30 px-2.5 py-0.5 text-[12px] font-medium text-on-dark transition-colors active:bg-surface-dark-elevated"
-        title="Tugboat Run: a little boat game"
+        title="Play a game: Tugboat Run or Harbor Stack"
         @click="game.show()"
       >
         <Gamepad2 :size="13" class="text-primary" />

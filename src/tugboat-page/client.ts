@@ -4,7 +4,7 @@
 
 import { ad, authHeader, fileId, open, seal, type Keys } from "./crypto";
 import { CHUNK, MAX_DOWNLOAD, PARALLEL, chunkBounds, isFatal, missing, nextSeq, receivedBytes, retryDelay } from "./chunks";
-import type { PadInput, PadProbe } from "./pad";
+import type { PadGame, PadInput, PadProbe } from "./pad";
 
 export interface PageOffer {
   id: string;
@@ -27,6 +27,8 @@ export interface PageState {
   text: { id: number; text: string } | null;
   /** tug's game on the PC wants this phone as its controller. */
   game: boolean;
+  /** Which game, while `game` is true (Tugboat Run when the PC doesn't say). */
+  gameId?: PadGame;
   /** The PC's clipboard, until this page says it has it. */
   clip: PageClip | null;
   /** This phone joined a two-player race as the second controller: it only steers (no files or
@@ -37,10 +39,12 @@ export interface PageState {
 /** What the PC answers each controller input with. */
 export interface PadReply {
   paused: boolean;
-  /** Times the boat was hit this run: the phone buzzes when it goes up. */
+  /** Times the boat was hit (or a container missed) this run: the phone buzzes when it goes up. */
   hits: number;
   /** In a two-player race, which player this phone is (its colour). */
   player?: 1 | 2;
+  /** The game being played, so the controller shows its buttons. */
+  game?: PadGame;
 }
 
 interface UploadReply {

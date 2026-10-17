@@ -1,7 +1,9 @@
 // Dev-only stand-in for the PC, so the phone page can be reviewed in a browser:
 // `npm run dev:tugboat` → http://localhost:1430/?mock (add &busy for files on offer and PC text,
 // &offline for the "can't reach your PC" banner, &closed for the ended state, &game for tug's game
-// asking for a controller: the controller opens, and the PC "hits" the boat every 5 s; add
+// asking for a controller: the controller opens, and the PC "hits" the boat every 5 s; add &stack
+// for Harbor Stack's controller (Drop) instead of Tugboat Run's, or &switch for Tugboat Run that
+// becomes Harbor Stack 8 s in; add
 // &player=1 or &player=2 for a two-player race's colours, and &guest for a race's second phone,
 // which sees only the race: with &guest and no &game it waits for the next one, and with &norace too
 // it's a Player 2 code with no race to join; &clip for the
@@ -22,6 +24,7 @@ export function mockApi(): TugboatApi {
     offers,
     text: busy ? { id: 1, text: "https://maps.app.goo.gl/x7Qp — meet at the north entrance" } : null,
     game: params.has("game"),
+    gameId: params.has("stack") ? "harbor-stack" : "tugboat-run",
     clip: params.has("clip")
       ? { id: 1, text: "221B Example Street, flat 2. Door code 4821.\nhttps://example.com/booking/7Q2X", image: null }
       : params.has("clipimage")
@@ -71,7 +74,9 @@ export function mockApi(): TugboatApi {
       await sleep(15);
       if (!state.game) throw new TugboatError("no-game");
       console.debug("[mock] pad", input, probe);
-      return { paused: false, hits: Math.floor((Date.now() - started) / 5000), player };
+      // &switch: the PC closes Tugboat Run and opens Harbor Stack 8 s in (the buttons follow).
+      const game = params.has("switch") && Date.now() - started > 8000 ? "harbor-stack" : state.gameId;
+      return { paused: false, hits: Math.floor((Date.now() - started) / 5000), player, game };
     },
   };
 }

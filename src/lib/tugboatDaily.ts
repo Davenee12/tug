@@ -1,6 +1,7 @@
 // Tugboat Run's daily challenge, the pure parts: today's date and the course seed it gives (the
 // same course for everyone that day), what the player's real weather does to the water, the line
-// the start screen says about it, and the streak of days with a finished daily run.
+// the start screen says about it, and the streak of days with a finished daily run. Harbor Stack's
+// daily stack uses the same date, seed (with its own name in it), weather and streak rules.
 //
 // Weather is only ever what tug's weather card already has: no forecast (weather off, not set up,
 // or nothing fresh) means calm seas, said as such, never made up.
@@ -23,10 +24,13 @@ export function dayBefore(date: string): string {
   return t.toISOString().slice(0, 10);
 }
 
-/** The course seed for a day: a 32-bit hash (FNV-1a) of the date, the same on every PC. */
-export function dailySeed(date: string): number {
+/**
+ * The course seed for a day: a 32-bit hash (FNV-1a) of the game and the date, the same on every PC.
+ * Each game has its own daily (Harbor Stack's day isn't Tugboat Run's course reused).
+ */
+export function dailySeed(date: string, game: "tugboat-run" | "harbor-stack" = "tugboat-run"): number {
   let h = 0x811c9dc5;
-  for (const ch of `tugboat-run/${date}`) {
+  for (const ch of `${game}/${date}`) {
     h ^= ch.charCodeAt(0);
     h = Math.imul(h, 0x01000193);
   }
@@ -107,22 +111,28 @@ function list(items: string[]): string {
   return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
-/**
- * The start screen's line about today: "Today: rainy, wind 12 mph — expect waves", or "Calm seas
- * today" when there's no real weather to go on.
- */
-export function conditionsLine(c: Conditions, unit: Unit): string {
-  if (!c.live) return "Calm seas today";
-  const h = handlingFor(c);
-  const sky = c.rain === 3 && c.sky === "rain" ? "pouring" : c.sky ? SKY_WORD[c.sky] : "fair";
-  const wind = Math.round(c.windKmh) >= 1 ? `wind ${windText(c.windKmh, unit)}` : "no wind";
+/** What a tugboat should expect from today's water (the start screen's "expect …"). */
+export function boatOutlook(c: Conditions, h: Handling): string[] {
   const expect: string[] = [];
   if (c.snow) expect.push("icy, slower water");
   if (h.waves > 0) expect.push("waves");
   if (Math.abs(h.drift) >= 2) expect.push("a crosswind");
   if (c.night) expect.push("a lighthouse to steer by");
-  const outlook = expect.length ? `expect ${list(expect)}` : "smooth sailing";
-  return `${c.night ? "Tonight" : "Today"}: ${sky}, ${wind} — ${outlook}`;
+  return expect;
+}
+
+/**
+ * The start screen's line about today: "Today: rainy, wind 12 mph — expect waves", or "Calm seas
+ * today" when there's no real weather to go on. `outlook` says what the weather means for the game
+ * (Tugboat Run's water by default; Harbor Stack has its own).
+ */
+export function conditionsLine(c: Conditions, unit: Unit, outlook: (c: Conditions, h: Handling) => string[] = boatOutlook): string {
+  if (!c.live) return "Calm seas today";
+  const sky = c.rain === 3 && c.sky === "rain" ? "pouring" : c.sky ? SKY_WORD[c.sky] : "fair";
+  const wind = Math.round(c.windKmh) >= 1 ? `wind ${windText(c.windKmh, unit)}` : "no wind";
+  const expect = outlook(c, handlingFor(c));
+  const outlookText = expect.length ? `expect ${list(expect)}` : "smooth sailing";
+  return `${c.night ? "Tonight" : "Today"}: ${sky}, ${wind} — ${outlookText}`;
 }
 
 // --- The streak ---

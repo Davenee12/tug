@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { HEARTBEAT_MS, MAX_IN_FLIGHT, MIN_GAP_MS, encodePad, nextSendDelay, padErrorAction, positionFromTouch, probe, samePad, tiltSupport } from "./pad";
+import {
+  HEARTBEAT_MS,
+  MAX_IN_FLIGHT,
+  MIN_GAP_MS,
+  chooseLayout,
+  controlsFor,
+  encodeFor,
+  encodePad,
+  encodeStackPad,
+  gameFrom,
+  nextSendDelay,
+  padErrorAction,
+  positionFromTouch,
+  probe,
+  samePad,
+  tiltSupport,
+  tiltToSteer,
+} from "./pad";
 
 describe("encodePad", () => {
   it("sends whole-number steering from -100 to 100 and a real boolean", () => {
@@ -87,5 +104,70 @@ describe("tiltSupport", () => {
     expect(tiltSupport({ secure: false, hasOrientation: false })).toBe("needs-secure");
     expect(tiltSupport({ secure: true, hasOrientation: true })).toBe("available");
     expect(tiltSupport({ secure: true, hasOrientation: false })).toBe("unsupported");
+  });
+});
+
+describe("Harbor Stack's input", () => {
+  it("carries Drop and the crane nudge, never a boost", () => {
+    expect(encodeStackPad(-0.5, true)).toEqual({ steer: -50, boost: false, drop: true });
+    expect(JSON.stringify(encodeStackPad(0, false))).toBe('{"steer":0,"boost":false,"drop":false}');
+    expect(encodeStackPad(Number.NaN, true).steer).toBe(0);
+  });
+
+  it("leaves Tugboat Run's input exactly as it was", () => {
+    expect(encodeFor("tugboat-run", 0.2, true)).toEqual({ steer: 20, boost: true });
+    expect(Object.keys(encodeFor("tugboat-run", 0, false))).toEqual(["steer", "boost"]);
+    expect(encodeFor("harbor-stack", 0.2, true)).toEqual({ steer: 20, boost: false, drop: true });
+  });
+
+  it("counts a change of Drop as a change", () => {
+    expect(samePad(encodeStackPad(0, false), encodeStackPad(0, true))).toBe(false);
+    expect(samePad(encodeStackPad(0, true), encodeStackPad(0, true))).toBe(true);
+    // A Tugboat Run input without the field equals one that says "not held".
+    expect(samePad({ steer: 0, boost: false }, { steer: 0, boost: false, drop: false })).toBe(true);
+  });
+});
+
+describe("which game", () => {
+  it("reads the PC's game id, and falls back to Tugboat Run", () => {
+    expect(gameFrom("harbor-stack")).toBe("harbor-stack");
+    expect(gameFrom("tugboat-run")).toBe("tugboat-run");
+    expect(gameFrom(undefined)).toBe("tugboat-run");
+    expect(gameFrom("snake")).toBe("tugboat-run");
+  });
+
+  it("gives each game its own buttons", () => {
+    const run = controlsFor("tugboat-run");
+    expect([run.title, run.action, run.springBack]).toEqual(["Tugboat Run", "Boost", false]);
+    const stack = controlsFor("harbor-stack");
+    expect([stack.title, stack.action, stack.springBack]).toEqual(["Harbor Stack", "Drop", true]);
+    expect(stack.ends).toEqual(["Slower", "Faster"]);
+  });
+});
+
+describe("chooseLayout", () => {
+  it("is a gamepad held sideways", () => {
+    expect(chooseLayout({ landscape: true, portraitAnyway: false })).toBe("landscape");
+    expect(chooseLayout({ landscape: true, portraitAnyway: true })).toBe("landscape");
+  });
+
+  it("asks to turn the phone when it's upright, unless the player chose to play upright", () => {
+    expect(chooseLayout({ landscape: false, portraitAnyway: false })).toBe("rotate");
+    expect(chooseLayout({ landscape: false, portraitAnyway: true })).toBe("portrait");
+  });
+});
+
+describe("tiltToSteer", () => {
+  it("turns the phone like a steering wheel when it's held sideways", () => {
+    expect(tiltToSteer(12.5, 3, 90)).toBe(0.5);
+    expect(tiltToSteer(12.5, 3, -90)).toBe(-0.5);
+    expect(tiltToSteer(12.5, 3, 270)).toBe(-0.5);
+    expect(tiltToSteer(80, 0, 90)).toBe(1);
+  });
+
+  it("uses side-to-side tilt upright, and is safe without readings", () => {
+    expect(tiltToSteer(40, -25, 0)).toBe(-1);
+    expect(tiltToSteer(null, null, 90)).toBe(0);
+    expect(tiltToSteer(Number.NaN, 0, 90)).toBe(0);
   });
 });

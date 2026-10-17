@@ -50,6 +50,9 @@
 //   http://localhost:1420/?game2p     Tugboat Run, two players with two phones (add &p2drop: Player 2's
 //                                     phone goes quiet mid-race). Any game URL takes &weather=rain,
 //                                     snow, night, windy, storm or off for the daily challenge
+//   http://localhost:1420/?games      the games picker
+//   http://localhost:1420/?stack      Harbor Stack open (?stackphone with a phone that drops every 1.6 s,
+//                                     ?stack2p a stack-off with two phones, &p2drop, &weather= as above)
 //   http://localhost:1420/?devtools   Settings › Developer tools, switched on, with two connected tools
 //   http://localhost:1420/?devconfirm the "wants to text" confirmation card an AI tool's send_text shows
 //   http://localhost:1420/?codefill   code fill: a bank's code arrives 1.5 s after load (as a notification and
@@ -770,11 +773,22 @@ if (dropOn || dropWait || dropNoNet) {
 // quiet 10 s into the race ("Player 2 disconnected — waiting…").
 // The daily challenge's weather: &weather=rain, snow, night, windy, storm or off (a made-up forecast
 // for the preview only, so the start screen and the water can be checked without real weather).
+// Harbor Stack has the same scenarios: ?stack, ?stackphone (the phone presses Drop every 1.6 s,
+// which starts the game and then stacks; a nudge now and then), ?stack2p (&p2drop) for a
+// stack-off. ?games opens the games picker.
 let padOpen = false;
 let padPlayers = 1;
+/** The game that opened the controller (each game hears only its own button, like the PC). */
+let padGame = "tugboat-run";
 const padScripts: number[] = [];
 const padTimers: number[] = [];
-const twoPhones = params.has("game2p");
+const stackGame = params.has("stack") || params.has("stackphone") || params.has("stack2p");
+const twoPhones = params.has("game2p") || params.has("stack2p");
+const phoneParam = params.has("gamephone") || params.has("stackphone");
+function padEvent(seat: 1 | 2, connected: boolean, steer: number, pressed: boolean) {
+  const stack = padGame === "harbor-stack";
+  return { seat, connected, steer: connected ? steer : 0, boost: connected && !stack && pressed, drop: connected && stack && pressed };
+}
 function phoneScript(seat: 1 | 2, phase: number, boosts: boolean) {
   const t0 = performance.now();
   let tick = 0;
@@ -782,9 +796,16 @@ function phoneScript(seat: 1 | 2, phase: number, boosts: boolean) {
     window.setInterval(() => {
       const t = (performance.now() - t0) / 1000;
       tick++;
+      if (padGame === "harbor-stack") {
+        // Drop every 1.6 s (the first one starts the game), and nudge the crane now and then.
+        const drop = (tick + phase * 4) % 16 < 2;
+        const nudge = Math.sin(t * 0.7 + phase) > 0.8 ? -0.6 : 0;
+        void emit("game-pad", padEvent(seat, true, nudge, drop));
+        return;
+      }
       // Boost for a moment at the start (starts the run) and every few seconds after.
       const boost = boosts ? tick % 30 < 3 : tick % 40 === 20;
-      void emit("game-pad", { seat, connected: true, steer: Math.round(Math.sin(t * 1.3 + phase) * 80) / 100, boost });
+      void emit("game-pad", padEvent(seat, true, Math.round(Math.sin(t * 1.3 + phase) * 80) / 100, boost));
     }, 100),
   );
 }
@@ -796,8 +817,9 @@ function showGuestCode(on: boolean) {
     guestQr: live ? mockQr(29) : null,
   });
 }
-function gamePadOpen(players: number) {
+function gamePadOpen(players: number, game: string) {
   padPlayers = players;
+  padGame = game;
   if (padOpen) {
     showGuestCode(players === 2);
     sendDrop();
@@ -807,7 +829,7 @@ function gamePadOpen(players: number) {
   startDrop();
   showGuestCode(players === 2);
   sendDrop();
-  if (!params.has("gamephone") && !twoPhones) return;
+  if (!phoneParam && !twoPhones) return;
   padTimers.push(
     window.setTimeout(() => {
       Object.assign(dropState, { phase: "connected", phone: "iPhone", phoneActive: true });
@@ -821,13 +843,13 @@ function gamePadOpen(players: number) {
       if (padPlayers === 2) phoneScript(2, 2, false);
     }, 3000),
     // The first phone starts the race once both are in.
-    window.setTimeout(() => void emit("game-pad", { seat: 1, connected: true, steer: 0, boost: true }), 4200),
+    window.setTimeout(() => void emit("game-pad", padEvent(1, true, 0, true)), 4200),
   );
   if (params.has("p2drop")) {
     padTimers.push(
       window.setTimeout(() => {
         window.clearInterval(padScripts.pop());
-        void emit("game-pad", { seat: 2, connected: false, steer: 0, boost: false });
+        void emit("game-pad", padEvent(2, false, 0, false));
       }, 14_000),
     );
   }
@@ -838,8 +860,8 @@ function gamePadClose() {
   sendDrop();
   for (const t of padTimers.splice(0)) window.clearTimeout(t);
   for (const s of padScripts.splice(0)) window.clearInterval(s);
-  void emit("game-pad", { seat: 1, connected: false, steer: 0, boost: false });
-  void emit("game-pad", { seat: 2, connected: false, steer: 0, boost: false });
+  void emit("game-pad", padEvent(1, false, 0, false));
+  void emit("game-pad", padEvent(2, false, 0, false));
 }
 const mockWeather = params.get("weather");
 if (mockWeather && mockWeather !== "off") {
@@ -865,14 +887,14 @@ if (mockWeather && mockWeather !== "off") {
 } else if (mockWeather === "off") {
   settings["ui.weather"] = "off";
 }
-if (params.has("game") || params.has("gamephone") || twoPhones) {
+if (params.has("game") || params.has("gamephone") || twoPhones || stackGame || params.has("games")) {
   setTimeout(async () => {
     const { useGameStore } = await import("../stores/game");
-    await useGameStore().show();
-    if (!params.has("gamephone") && !twoPhones) return;
+    await useGameStore().show(params.has("games") ? "picker" : stackGame ? "harbor-stack" : "tugboat-run");
+    if (!phoneParam && !twoPhones) return;
     const click = (text: string) => Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes(text))?.click();
     setTimeout(() => {
-      if (twoPhones) click("Two players");
+      if (twoPhones) click(stackGame ? "Stack-off" : "Two players");
       setTimeout(() => click(twoPhones ? "Use phones as controllers" : "Use your phone as a controller"), 100);
     }, 300);
   }, 400);
@@ -1141,7 +1163,7 @@ mockIPC(
         console.log("[devMock] open Tugboat folder", a.path ?? dropFolder);
         return null;
       case "game_pad_open":
-        gamePadOpen(Number(a.players ?? 1));
+        gamePadOpen(Number(a.players ?? 1), String(a.game ?? "tugboat-run"));
         return structuredClone(dropState);
       case "game_pad_close":
         gamePadClose();

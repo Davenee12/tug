@@ -1,5 +1,5 @@
-//! The phone as a game controller (Tugboat Run): the input channel's rules, kept pure so they're
-//! tested without a socket.
+//! The phone as a game controller (Tugboat Run and Harbor Stack): the input channel's rules, kept
+//! pure so they're tested without a socket.
 //!
 //! While tug's game has asked for a controller (`Session::pad_open`), the phone bound to the
 //! Tugboat session may `POST /api/pad`. The request is signed like every Tugboat request (same
@@ -7,20 +7,23 @@
 //! like every other JSON body. Inside is the whole vocabulary an input has:
 //!
 //! ```json
-//! {"steer": -100..=100, "boost": true|false, "age"?: 0..=10000, "rtt"?: 0..=10000}
+//! {"steer": -100..=100, "boost": true|false, "drop"?: true|false, "age"?: 0..=10000, "rtt"?: 0..=10000}
 //! ```
 //!
-//! `steer` is where the phone's slider sits (full left to full right) and `boost` whether Boost is
-//! held. `age` and `rtt` are an optional latency probe, in milliseconds: how long the newest touch
+//! `steer` is where the phone's slider sits (full left to full right; in Harbor Stack it nudges the
+//! crane slower or faster), `boost` whether Boost is held (Tugboat Run's hop) and `drop` whether
+//! Drop is held (Harbor Stack's). Which game is open is the PC's to say (`GameId`, chosen when the
+//! game opens the channel): the page hears it in `/api/state` and in every reply, so it shows that
+//! game's buttons, and an action that isn't the open game's is dropped before the game sees it. `age` and `rtt` are an optional latency probe, in milliseconds: how long the newest touch
 //! waited on the phone before this input went out, and the phone's last round trip. They're only
 //! counted for a per-session summary (logged at debug level when the controller closes); nothing
 //! acts on them.
 //!
 //! Anything else (another field, a number out of range, a bigger body) is refused. An input
 //! never reaches the files, the clipboard or the panel: it only updates the one `PadInput` the
-//! game reads, which steers a boat. The phone sends at most ~60 inputs a second (up to two in
-//! flight, the newest state wins) plus a heartbeat, so a token bucket caps the rate and silence
-//! means the phone has gone.
+//! game reads, which steers a boat or drops a container. The phone sends at most ~60 inputs a
+//! second (up to two in flight, the newest state wins) plus a heartbeat, so a token bucket caps
+//! the rate and silence means the phone has gone.
 //!
 //! A two-player game has two seats: seat 1 is the phone the session belongs to, seat 2 the one
 //! guest phone `auth.rs` lets join while the game asks for two. Each seat has its own ordering,
@@ -32,9 +35,10 @@ use serde::{Deserialize, Serialize};
 
 use super::crypto::OVERHEAD;
 
-/// The longest input plaintext accepted. `{"steer":-100,"boost":false,"age":10000,"rtt":10000}` is
-/// 52 bytes; a little room for whitespace, no room for anything else.
-pub const MAX_PLAIN: usize = 64;
+/// The longest input plaintext accepted.
+/// `{"steer":-100,"boost":false,"drop":false,"age":10000,"rtt":10000}` is 65 bytes; a little room
+/// for whitespace, no room for anything else.
+pub const MAX_PLAIN: usize = 80;
 /// The longest sealed input body read off the network.
 pub const MAX_BODY: usize = MAX_PLAIN + OVERHEAD;
 /// Steering is a whole number from full left (-100) to full right (100).
@@ -56,6 +60,9 @@ pub const PROBE_MAX_MS: u16 = 10_000;
 struct Wire {
     steer: i16,
     boost: bool,
+    /// Harbor Stack's Drop. Absent means not held, so Tugboat Run's inputs are exactly what they
+    /// always were.
+    drop: Option<bool>,
     age: Option<u16>,
     rtt: Option<u16>,
 }
@@ -83,12 +90,37 @@ pub struct Decoded {
     pub probe: Option<Probe>,
 }
 
-/// One controller state: steering and whether boost is held.
+/// One controller state: steering and whether boost (or drop) is held.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PadInput {
     /// -100 (full left) to 100 (full right).
     pub steer: i16,
     pub boost: bool,
+    pub drop: bool,
+}
+
+/// Which of tug's games has the channel open. The page shows that game's controls; an input can
+/// only ever carry that game's action (`allow`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GameId {
+    /// Steer and Boost (hop).
+    #[default]
+    TugboatRun,
+    /// Nudge the crane and Drop.
+    HarborStack,
+}
+
+impl GameId {
+    /// The input as this game may see it: Tugboat Run never sees a drop, Harbor Stack never a
+    /// boost. (A phone still showing the other game's buttons gets the right ones from its next
+    /// reply.)
+    pub fn allow(self, input: PadInput) -> PadInput {
+        match self {
+            GameId::TugboatRun => PadInput { drop: false, ..input },
+            GameId::HarborStack => PadInput { boost: false, ..input },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +151,7 @@ pub fn decode(plain: &[u8]) -> Result<Decoded, PadError> {
         input: PadInput {
             steer: wire.steer,
             boost: wire.boost,
+            drop: wire.drop.unwrap_or(false),
         },
         // Both or neither: half a probe can't say anything.
         probe: wire.age.zip(wire.rtt).map(|(age_ms, rtt_ms)| Probe { age_ms, rtt_ms }),
@@ -216,6 +249,8 @@ pub struct PadEvent {
     /// -1 (full left) to 1 (full right); 0 whenever not connected.
     pub steer: f32,
     pub boost: bool,
+    /// Harbor Stack's Drop is held (always false in Tugboat Run).
+    pub drop: bool,
 }
 
 impl PadEvent {
@@ -226,6 +261,7 @@ impl PadEvent {
             connected: false,
             steer: 0.0,
             boost: false,
+            drop: false,
         }
     }
 }
@@ -235,11 +271,16 @@ impl PadEvent {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PadReply {
     pub paused: bool,
-    /// Times this phone's boat has been hit this run; the phone buzzes when it goes up.
+    /// Times this phone's boat has been hit (or its container missed the stack) this run; the phone
+    /// buzzes when it goes up.
     pub hits: u32,
     /// The player this phone is in a two-player game (1 or 2, its colour); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub player: Option<u8>,
+    /// The game being played, so the phone shows its buttons. Filled in by the channel
+    /// (`Pad::reply`), never taken from the game's feedback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<GameId>,
 }
 
 /// One phone's side of the channel.
@@ -274,6 +315,7 @@ impl Seat {
 #[derive(Debug)]
 pub struct Pad {
     players: u8,
+    game: GameId,
     seats: [Seat; 2],
 }
 
@@ -282,10 +324,29 @@ fn index(seat: SeatNo) -> usize {
 }
 
 impl Pad {
-    pub fn new(now: Instant, players: u8) -> Pad {
+    pub fn new(now: Instant, players: u8, game: GameId) -> Pad {
         Pad {
             players: players.clamp(1, 2),
+            game,
             seats: [Seat::new(now), Seat::new(now)],
+        }
+    }
+
+    /// The game that has the channel open.
+    pub fn game(&self) -> GameId {
+        self.game
+    }
+
+    /// Another game took the channel over (one game closed and the other opened before the phones
+    /// noticed): inputs are read as that game's from now on, and the replies say so.
+    pub fn set_game(&mut self, game: GameId) {
+        if self.game == game {
+            return;
+        }
+        self.game = game;
+        for s in &mut self.seats {
+            s.input = game.allow(s.input);
+            s.reply = PadReply::default();
         }
     }
 
@@ -325,7 +386,7 @@ impl Pad {
         if let Some(p) = decoded.probe {
             s.latency.add(p.touch_to_pc_ms());
         }
-        let input = decoded.input;
+        let input = self.game.allow(decoded.input);
         s.last_seq = seq;
         s.last_input = Some(now);
         let changed = !s.connected || input != s.input;
@@ -375,6 +436,7 @@ impl Pad {
                 connected: true,
                 steer: f32::from(s.input.steer) / f32::from(STEER_MAX),
                 boost: s.input.boost,
+                drop: s.input.drop,
             }
         } else {
             PadEvent::gone(seat)
@@ -385,8 +447,12 @@ impl Pad {
         self.seats[index(seat)].reply = reply;
     }
 
+    /// What `seat`'s phone hears back: the game's feedback, and which game it is.
     pub fn reply(&self, seat: SeatNo) -> PadReply {
-        self.seats[index(seat)].reply
+        PadReply {
+            game: Some(self.game),
+            ..self.seats[index(seat)].reply
+        }
     }
 
     /// Touch-to-PC latency so far this session for `seat` (from its phone's probe).
@@ -402,7 +468,11 @@ mod tests {
     /// An input without a probe.
     fn d(steer: i16, boost: bool) -> Decoded {
         Decoded {
-            input: PadInput { steer, boost },
+            input: PadInput {
+                steer,
+                boost,
+                drop: false,
+            },
             probe: None,
         }
     }
@@ -412,7 +482,14 @@ mod tests {
         assert_eq!(decode(br#"{"steer":-100,"boost":false}"#), Ok(d(-100, false)));
         assert_eq!(decode(br#"{ "boost": true, "steer": 37 }"#), Ok(d(37, true)));
         let probed = decode(br#"{"steer":5,"boost":false,"age":3,"rtt":12}"#).unwrap();
-        assert_eq!(probed.input, PadInput { steer: 5, boost: false });
+        assert_eq!(
+            probed.input,
+            PadInput {
+                steer: 5,
+                boost: false,
+                drop: false
+            }
+        );
         assert_eq!(probed.probe, Some(Probe { age_ms: 3, rtt_ms: 12 }));
         assert_eq!(probed.probe.unwrap().touch_to_pc_ms(), 9);
         // The longest legal input fits.
@@ -488,7 +565,7 @@ mod tests {
     #[test]
     fn newest_input_wins_and_late_ones_are_ignored() {
         let t0 = Instant::now();
-        let mut p = Pad::new(t0, 1);
+        let mut p = Pad::new(t0, 1, GameId::TugboatRun);
         assert!(!p.connected(FIRST));
         // The first input connects the phone.
         let e = p.input(FIRST, 10, d(-60, false), t0).unwrap();
@@ -507,7 +584,7 @@ mod tests {
     #[test]
     fn silence_disconnects_and_zeroes_the_steering() {
         let t0 = Instant::now();
-        let mut p = Pad::new(t0, 1);
+        let mut p = Pad::new(t0, 1, GameId::TugboatRun);
         assert!(p.tick(t0 + QUIET * 2).is_empty()); // never connected: nothing to say
         p.input(FIRST, 1, d(100, true), t0);
         assert!(p.tick(t0 + QUIET / 2).is_empty());
@@ -518,7 +595,8 @@ mod tests {
                 seat: FIRST,
                 connected: false,
                 steer: 0.0,
-                boost: false
+                boost: false,
+                drop: false
             }
         );
         // Said once.
@@ -532,7 +610,7 @@ mod tests {
     #[test]
     fn a_new_phone_after_a_rebind_starts_ordering_afresh() {
         let t0 = Instant::now();
-        let mut p = Pad::new(t0, 2);
+        let mut p = Pad::new(t0, 2, GameId::TugboatRun);
         p.input(FIRST, 5_000, d(10, false), t0);
         p.input(SECOND, 7_000, d(10, false), t0);
         // Phones whose clocks are behind the first ones'.
@@ -548,7 +626,7 @@ mod tests {
     #[test]
     fn two_seats_are_kept_apart() {
         let t0 = Instant::now();
-        let mut p = Pad::new(t0, 2);
+        let mut p = Pad::new(t0, 2, GameId::TugboatRun);
         assert!(p.open_for(FIRST) && p.open_for(SECOND));
         // Each phone steers its own seat, with its own ordering.
         let a = p.input(FIRST, 100, d(-50, false), t0).unwrap();
@@ -568,6 +646,7 @@ mod tests {
                 paused: false,
                 hits: 1,
                 player: Some(2),
+                game: None,
             },
         );
         p.set_reply(
@@ -576,6 +655,7 @@ mod tests {
                 paused: false,
                 hits: 0,
                 player: Some(1),
+                game: None,
             },
         );
         assert_eq!(p.reply(FIRST).player, Some(2));
@@ -590,7 +670,7 @@ mod tests {
     #[test]
     fn going_back_to_one_player_closes_seat_two() {
         let t0 = Instant::now();
-        let mut p = Pad::new(t0, 1);
+        let mut p = Pad::new(t0, 1, GameId::TugboatRun);
         assert!(!p.open_for(SECOND));
         assert_eq!(p.set_players(2, t0), None);
         assert!(p.open_for(SECOND));
@@ -602,7 +682,7 @@ mod tests {
         // Anything else is clamped to one or two.
         p.set_players(9, t0);
         assert_eq!(p.players(), 2);
-        assert_eq!(Pad::new(t0, 0).players(), 1);
+        assert_eq!(Pad::new(t0, 0, GameId::TugboatRun).players(), 1);
     }
 
     #[test]
@@ -611,6 +691,7 @@ mod tests {
             paused: true,
             hits: 2,
             player: None,
+            game: None,
         };
         assert_eq!(serde_json::to_string(&solo).unwrap(), r#"{"paused":true,"hits":2}"#);
         let duo = PadReply {
@@ -623,8 +704,100 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(&PadEvent::gone(SECOND)).unwrap(),
-            r#"{"seat":2,"connected":false,"steer":0.0,"boost":false}"#
+            r#"{"seat":2,"connected":false,"steer":0.0,"boost":false,"drop":false}"#
         );
+    }
+
+    #[test]
+    fn the_reply_names_the_game_so_the_phone_shows_its_buttons() {
+        let t0 = Instant::now();
+        let mut p = Pad::new(t0, 1, GameId::TugboatRun);
+        p.set_reply(
+            FIRST,
+            PadReply {
+                paused: true,
+                hits: 1,
+                player: None,
+                game: None,
+            },
+        );
+        assert_eq!(
+            serde_json::to_string(&p.reply(FIRST)).unwrap(),
+            r#"{"paused":true,"hits":1,"game":"tugboat-run"}"#
+        );
+        // The game's feedback can't claim to be another game: the channel says which it is.
+        p.set_reply(
+            FIRST,
+            PadReply {
+                game: Some(GameId::HarborStack),
+                ..PadReply::default()
+            },
+        );
+        assert_eq!(p.reply(FIRST).game, Some(GameId::TugboatRun));
+        // Another game takes the channel over: its name from the next reply, and its old feedback
+        // (another game's hits) is forgotten.
+        p.set_game(GameId::HarborStack);
+        assert_eq!(
+            serde_json::to_string(&p.reply(FIRST)).unwrap(),
+            r#"{"paused":false,"hits":0,"game":"harbor-stack"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<GameId>(r#""harbor-stack""#).unwrap(),
+            GameId::HarborStack
+        );
+        assert!(serde_json::from_str::<GameId>(r#""snake""#).is_err());
+    }
+
+    #[test]
+    fn drop_is_optional_so_tugboat_runs_inputs_are_unchanged() {
+        // Exactly what Tugboat Run's controller has always sent.
+        assert_eq!(decode(br#"{"steer":-40,"boost":true}"#), Ok(d(-40, true)));
+        // Harbor Stack's Drop.
+        let dropped = decode(br#"{"steer":0,"boost":false,"drop":true}"#).unwrap();
+        assert!(dropped.input.drop && !dropped.input.boost);
+        // The longest legal input, with every field, fits.
+        assert!(decode(br#"{"steer":-100,"boost":false,"drop":false,"age":10000,"rtt":10000}"#).is_ok());
+        // Drop must be a plain true or false.
+        for bad in [
+            &br#"{"steer":0,"boost":false,"drop":1}"#[..],
+            br#"{"steer":0,"boost":false,"drop":"yes"}"#,
+            br#"{"steer":0,"boost":false,"drop":null,"stack":3}"#,
+        ] {
+            assert_eq!(
+                decode(bad),
+                Err(PadError::Malformed),
+                "{}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+    }
+
+    #[test]
+    fn each_game_sees_only_its_own_action() {
+        let t0 = Instant::now();
+        let both = Decoded {
+            input: PadInput {
+                steer: 20,
+                boost: true,
+                drop: true,
+            },
+            probe: None,
+        };
+        // Tugboat Run: steering and Boost, never a drop.
+        let mut run = Pad::new(t0, 1, GameId::TugboatRun);
+        let e = run.input(FIRST, 1, both, t0).unwrap();
+        assert!(e.boost && !e.drop);
+        // Harbor Stack: the crane nudge and Drop, never a boost.
+        let mut stack = Pad::new(t0, 2, GameId::HarborStack);
+        let e = stack.input(SECOND, 1, both, t0).unwrap();
+        assert!(e.drop && !e.boost);
+        assert!((e.steer - 0.2).abs() < 1e-6);
+        // A Boost from a phone still showing Tugboat Run's buttons changes nothing Harbor Stack sees.
+        assert_eq!(stack.input(FIRST, 1, d(0, false), t0).map(|e| e.connected), Some(true));
+        assert_eq!(stack.input(FIRST, 2, d(0, true), t0), None);
+        // Switching games mid-hold lets go of the other game's action.
+        run.set_game(GameId::HarborStack);
+        assert!(!run.event(FIRST).boost && !run.event(FIRST).drop);
     }
 
     #[test]
@@ -643,10 +816,14 @@ mod tests {
         );
         // Only probed inputs count, per seat.
         let t0 = Instant::now();
-        let mut p = Pad::new(t0, 2);
+        let mut p = Pad::new(t0, 2, GameId::TugboatRun);
         p.input(FIRST, 1, d(0, false), t0);
         let probed = Decoded {
-            input: PadInput { steer: 1, boost: false },
+            input: PadInput {
+                steer: 1,
+                boost: false,
+                drop: false,
+            },
             probe: Some(Probe { age_ms: 4, rtt_ms: 6 }),
         };
         p.input(FIRST, 2, probed, t0);

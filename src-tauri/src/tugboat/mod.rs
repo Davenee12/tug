@@ -6,7 +6,7 @@
 //! Lifetime: the server runs only while Tugboat is open, on the one address the phone can reach
 //! (`net.rs`). It stops when the panel closes, when tug quits, when tug's window hides to the tray
 //! (once any transfer in progress finishes), or after 10 minutes without a request; the secret is
-//! useless after that. Unfinished uploads are removed on start and stop. Tugboat Run can also start
+//! useless after that. Unfinished uploads are removed on start and stop. tug's games can also start
 //! it, to use the phone as a game controller (`pad.rs`); the same rules then apply. A two-player
 //! game also shows a Player 2 code, `http://<address>:<port>/#g.<guest secret>`: a key derived from
 //! the secret that only steers (see `crypto::guest_secret` and `auth.rs`).
@@ -65,7 +65,7 @@ const TICK: Duration = Duration::from_secs(2);
 const NET_EVERY: u32 = 3;
 /// Progress events are coalesced to at most one per this long.
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
-/// The game controller changed: `pad::PadEvent`. Only Tugboat Run listens.
+/// The game controller changed: `pad::PadEvent`. Only the open game listens.
 pub const PAD_EVENT: &str = "game-pad";
 /// How often an open controller channel looks for a phone that went quiet. The watch exists only
 /// while the game has the channel open.
@@ -778,16 +778,17 @@ impl TugboatService {
         Ok(self.status())
     }
 
-    /// Tugboat Run wants the phone as a controller (or two phones, for two players): open Tugboat if
-    /// it's off (same session, same code, same rules), open the controller channel, and watch it for
-    /// a phone that goes quiet. Asking again changes how many phones.
-    pub async fn pad_open(&self, players: u8) -> Result<TugboatStatus, String> {
+    /// One of tug's games (`game`) wants the phone as a controller (or two phones, for two players):
+    /// open Tugboat if it's off (same session, same code, same rules), open the controller channel,
+    /// and watch it for a phone that goes quiet. Asking again changes how many phones (or which
+    /// game).
+    pub async fn pad_open(&self, players: u8, game: pad::GameId) -> Result<TugboatStatus, String> {
         if self.session().is_none() {
             self.start().await?;
         }
         let session = self.session().ok_or("Tugboat isn't open.")?;
         let wanted_guest = session.wants_guest();
-        if session.pad_open(players) {
+        if session.pad_open(players, game) {
             let watched = session.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
