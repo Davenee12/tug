@@ -37,7 +37,6 @@ import {
 } from "../lib/codeFill";
 import { MESSAGES_APP } from "../lib/format";
 import { batteryAlert, restoreBatteryAlerted, saveBatteryAlerted } from "../lib/battery";
-import { copyText } from "../lib/clipboard";
 import { isAddressLike, normalizeAddress } from "../lib/address";
 import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync } from "../lib/messageSync";
 import { canSeeWindow } from "../lib/attention";
@@ -973,7 +972,13 @@ export const useTugStore = defineStore("tug", () => {
 
   /** Copy a one-time code; once it's used, its notification has done its job on the phone too. */
   async function copyCode(code: string, from: PhoneNotification[] = []): Promise<boolean> {
-    if (!(await copyText(code))) {
+    // The same private path as auto-copy: kept out of Win+V clipboard history and cloud sync, and
+    // taken off again after 2 minutes if it's still there.
+    const copied = await api.copyCodePrivately(code).then(
+      () => true,
+      () => false,
+    );
+    if (!copied) {
       notify("error", "Couldn't copy to the clipboard.");
       return false;
     }

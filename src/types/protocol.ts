@@ -197,7 +197,7 @@ export interface SmsMessage {
   address: string;
   contactName: string | null;
   body: string;
-  /** Phone-local ISO time, when the phone reported one. */
+  /** ISO time when the phone reported one: phone-local without a zone, or UTC with Z. */
   sentAt: string | null;
   receivedAt: number;
   /**

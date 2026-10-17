@@ -484,17 +484,18 @@ pub fn copy_text(text: String) -> Result<()> {
     crate::clipboard::set_text(&text)
 }
 
-/// Code fill: put a just-arrived verification code on the clipboard, kept out of Win+V history
-/// and cloud sync, and take it off again after 2 minutes if it's still there. Only a code's shape
-/// (4–8 digits, as `findCode` gives) is accepted, so the webview can't put free text here. Sync
-/// for the same STA reason as `copy_text`.
+/// Put a verification code on the clipboard, kept out of Win+V history and cloud sync, and take it
+/// off again after 2 minutes if it's still there: code fill's auto-copy, and every manual Copy code
+/// (a code chip, Ctrl+Shift+C; a pop-up's Copy code takes the same path in `toast`). Only a code's
+/// shape (4–8 digits, as `findCode` gives) is accepted, so the webview can't put free text here.
+/// Sync for the same STA reason as `copy_text`.
 #[tauri::command]
 pub fn copy_code(code: String) -> Result<()> {
     if !crate::code_fill::is_code(&code) {
         return Err("That isn't a verification code".into());
     }
     crate::clipboard::set_text_private(&code)?;
-    log::info!("code copied automatically");
+    log::info!("code copied (kept out of clipboard history)");
     crate::code_fill::clear_later(code);
     Ok(())
 }
