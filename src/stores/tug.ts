@@ -975,6 +975,19 @@ export const useTugStore = defineStore("tug", () => {
     return true;
   }
 
+  /**
+   * Copy the newest code (Ctrl+Shift+C, the taskbar's Copy latest code). With none in the last
+   * 10 minutes, say so rather than do nothing.
+   */
+  async function copyLatestCode(): Promise<boolean> {
+    const latest = latestCode();
+    if (!latest) {
+      notify("info", "No code in the last 10 minutes");
+      return false;
+    }
+    return copyCode(latest.code, latest.from);
+  }
+
   /** The newest code that arrived in the last few minutes, from a notification or a text. */
   function latestCode(maxAgeMs = 10 * 60 * 1000): { code: string; from: PhoneNotification[] } | null {
     return newestCode(notifications.value, messages.value, { maxAgeMs });
@@ -1913,6 +1926,7 @@ export const useTugStore = defineStore("tug", () => {
     readConversation,
     markAllRead,
     copyCode,
+    copyLatestCode,
     latestCode,
     codeFeed,
     clearCode,

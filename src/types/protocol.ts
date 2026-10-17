@@ -333,6 +333,12 @@ export interface CodeFilled {
   from: string | null;
 }
 
+/**
+ * A task from tug's taskbar jump list (`quick_actions::QuickAction`, serialized kebab-case: the
+ * same id the task passes as `--action`), taken with `take_quick_actions`.
+ */
+export type QuickAction = "new-message" | "tugboat" | "copy-code" | "game" | "settings";
+
 /** The type-the-code shortcut (`code_hotkey_status`, `set_code_hotkey`). */
 export interface CodeHotkeyStatus {
   /** off (switched off, or not on this PC); on (registered); inUse (another app holds it). */

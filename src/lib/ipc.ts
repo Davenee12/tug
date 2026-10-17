@@ -24,6 +24,7 @@ import type {
   PairingRequest,
   PcAudioStatus,
   PhoneNotification,
+  QuickAction,
   RepeatMode,
   SpotifyAlbumDetail,
   SpotifyArtist,
@@ -85,6 +86,8 @@ export const api = {
   /** Code fill: a verification code (digits only) onto the clipboard, out of history and sync, cleared after 2 minutes. */
   copyCodePrivately: (code: string) => invoke<void>("copy_code", { code }),
   codeHotkeyStatus: () => invoke<CodeHotkeyStatus>("code_hotkey_status"),
+  /** Taskbar quick actions waiting to run, oldest first; taking them clears them (each runs once). */
+  takeQuickActions: () => invoke<QuickAction[]>("take_quick_actions"),
   /** Register the type-the-code shortcut (or unregister it); says if another app holds it. */
   setCodeHotkey: (enabled: boolean, keys: string) => invoke<CodeHotkeyStatus>("set_code_hotkey", { enabled, keys }),
   /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */
@@ -205,6 +208,8 @@ interface EventPayloads {
   "toast-pressed": ToastPressed;
   /** The type-the-code shortcut was pressed (from Rust, `code_fill`): what happened, never the code. */
   "code-filled": CodeFilled;
+  /** A taskbar jump-list task was clicked (from Rust, `quick_actions`): take what's waiting. */
+  "quick-action": null;
   "tugboat-status": TugboatStatus;
   "tugboat-text": TugboatTextArrived;
   /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */

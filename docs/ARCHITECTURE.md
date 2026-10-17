@@ -66,6 +66,7 @@ Inside `tug.exe`:
 | Tugboat | `tugboat/` | An HTTP server, a 2 s supervisor (idle stop after 10 minutes, network changes) and per-connection tasks; exists only while the panel is open (or Tugboat Run asked for the phone as a controller). While the game's controller channel is open, a 150 ms watch notices a phone that went quiet. |
 | `tug-hotkey` | `code_fill/win.rs` (logic in `code_fill/mod.rs`) | Owns the type-the-code shortcut (RegisterHotKey belongs to the registering thread); each press types the newest code with SendInput on a short-lived `tug-code-fill` thread. |
 | Toasts, tray | `toast/`, `tray.rs` | Toast activations arrive on a pool thread and are handed to the async runtime; the tray runs on the main thread. |
+| `tug-jump-list` | `quick_actions/win.rs` (logic in `quick_actions/mod.rs`) | A short-lived COM thread that hands the taskbar jump list's Tasks to Windows, at startup and when Show games changes; nothing waits for it. |
 | Spotify, location | `commands.rs`, `spotify/`, `location.rs` | No background task: each command runs on `spawn_blocking`. The UI reads Spotify's player when the song changes. |
 | PC audio | `pc_audio/` | No thread of its own: AudioPlaybackConnection is agile, so `PcAudio` keeps the open connection behind a mutex and each Windows call runs on a time-limited helper (`off_thread`). Follows the connection through a status hook on `Shared` (stop on a phone switch; the opt-in automatic switch). Closed on Stop, Forget and exit. |
 
@@ -76,15 +77,17 @@ oneshot replies. `Shared` (`state.rs`) is the one `Arc` everything holds; `updat
 **Events to the UI** (Rust → Vue): `device-status`, `now-playing`, `notification`,
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
 `pairing-request-closed`, `message`, `contacts`, `calls`, `open-latest-conversation`,
-`open-settings`, `toast-pressed`, `code-filled` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`,
+`open-settings`, `toast-pressed`, `code-filled`, `quick-action` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`,
 `game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`). The typed listener
 map is `EventPayloads` in `src/lib/ipc.ts`.
 
 ## Startup
 
-`src-tauri/src/lib.rs`: plugins (single-instance first, so a second launch just shows the window;
-autostart with `--minimized`; log with rotation; notification; dialog) → create the data folder →
-open the SQLite store and migrate → `Shared` → start the BLE actor → start the MAP worker → media
+`src-tauri/src/lib.rs`: claim tug's AppUserModelID (`quick_actions::init`, before any window) →
+plugins (single-instance first, so a second launch just shows the window or carries out its
+`--action`; autostart with `--minimized`; log with rotation; notification; dialog) → create the
+data folder → open the SQLite store and migrate → queue this launch's `--action`, if any, and
+build the taskbar jump list (off-thread) → `Shared` → start the BLE actor → start the MAP worker → media
 keys → Spotify → Tugboat service (cleans partial uploads) → developer bridge → register state → a
 one-off cache trim → tray → WebView2 crash watch → show the window unless started minimized.
 Closing the window hides it to the tray (unless the user turned that off); on exit tug withdraws its
@@ -160,6 +163,25 @@ phone page ─POST /api/up─► PUT chunks (XChaCha20-Poly1305, keys from HKDF 
   ─► emit "tugboat-status"
 ```
 
+**A taskbar quick action (jump list)**
+
+```
+right-click tug on the taskbar / in Start ─► Tasks: New message · Tugboat · Copy latest code ·
+  Play Tugboat Run (only while Show games is on) · Settings
+  each task is a shell link: tug.exe --action <id>   (registered by quick_actions/win.rs under the
+  AppUserModelID the process claims: the bundle identifier, which the installer stamps on the
+  Start menu shortcut; a cargo build uses "<identifier>.dev" so it never repoints the installed list)
+tug running?  the new tug.exe hands its args to the running one (single-instance) and exits
+              ─► quick_actions::receive: queue it, tray::show, emit "quick-action" (no payload)
+not running?  this launch is tug: setup queues parse_args(std::env::args())
+UI (App.vue), only after tug.init() has loaded history and settings, and on every nudge:
+  invoke take_quick_actions ─► the queue, drained (each click runs once; duplicates of a waiting
+  action collapse) ─► lib/quickActions ─► the same paths as Ctrl+K / Ctrl+N / Ctrl+Shift+C / Ctrl+,
+```
+
+A nudge carries nothing, so one lost to a page that's still loading loses nothing: the action
+waits in the queue until the next take.
+
 **A game controller input (Tugboat Run)**
 
 ```
@@ -212,6 +234,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
 | `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone |
+| `quick_actions/mod.rs` | Taskbar quick actions: reading `--action` from a launch, the jump list's tasks (the game only with Show games on), the AppUserModelID for installed, portable and cargo builds, the take-once queue |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
@@ -227,7 +250,7 @@ updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `co
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
 (unknown-sender filter), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `threadWindow` (long conversations render their newest texts first),
-`toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: seeded spawning, collisions,
+`quickActions` (routing a taskbar task, one take at a time), `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: seeded spawning, collisions,
 scoring, the speed curve, inertia, merging the controls), `vips`, `weather`, `weblinks`, `whatsNew`.
 The phone page has its own: `tugboat-page/chunks`, `crypto` and `pad` (the controller's wire format,
 pacing and errors). Components and
@@ -296,6 +319,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
 | `/?pcaudio`, `/?pcaudiofail`, `/?pcaudiodrop`, `/?pcaudioold` | iPhone audio playing on this PC / Play on this PC times out / it drops after 6 s (Reconnect) / Windows too old for it |
 | `/?whatsnew` | The What's new card for the newest release |
+| `/?quickaction=new-message` (`tugboat`, `copy-code`, `game`, `settings`; `&again`) | tug started from that taskbar task (and, with `&again`, the task clicked again 4 s later while running) |
 | `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 

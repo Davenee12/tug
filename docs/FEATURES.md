@@ -196,8 +196,8 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   offered: phone browsers only allow it on a secure (HTTPS) page, and Tugboat's page is plain HTTP
   on your Wi-Fi.
 - Best score is kept on this PC only. Nothing runs while the game is closed or paused.
-- Open it from the **Play** button beside tug's name, or Ctrl+K "game" / "tugboat run". Turn
-  **Show games** off in Settings › General to hide both.
+- Open it from the **Play** button beside tug's name, Ctrl+K "game" / "tugboat run", or **Play
+  Tugboat Run** in tug's taskbar menu. Turn **Show games** off in Settings › General to hide them.
 
 ## Weather, battery & the phone card
 
@@ -225,6 +225,12 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 **Other shortcuts:** Ctrl+N new message · Ctrl+Shift+C copy the latest code · Ctrl+, Settings ·
 Ctrl+plus / Ctrl+minus / Ctrl+0 zoom · Esc closes dialogs and Settings.
+
+**Quick actions in the taskbar:** right-click tug's taskbar button (or tug in Start) for **New
+message**, **Tugboat**, **Copy latest code**, **Play Tugboat Run** and **Settings**. They bring tug
+forward and do the same as their Ctrl+K and keyboard versions, and work whether tug is running
+or not (it starts first). Copy latest code says so when there's no code from the last 10 minutes.
+Play Tugboat Run is left out while Show games is off.
 
 ## Developer tools (MCP server and the `tug` command)
 
