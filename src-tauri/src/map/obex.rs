@@ -124,11 +124,14 @@ pub fn request(opcode: u8, fields: &[u8], headers: &[Header]) -> Vec<u8> {
 }
 
 pub fn connect(target: &[u8; 16]) -> Vec<u8> {
-    request(
-        OP_CONNECT,
-        &connect_fields(),
-        &[Header::Bytes(HI_TARGET, target.to_vec())],
-    )
+    connect_with(target, &[])
+}
+
+/// CONNECT with headers after the Target (PBAP 1.2 sends its PbapSupportedFeatures here).
+pub fn connect_with(target: &[u8; 16], extra: &[Header]) -> Vec<u8> {
+    let mut headers = vec![Header::Bytes(HI_TARGET, target.to_vec())];
+    headers.extend_from_slice(extra);
+    request(OP_CONNECT, &connect_fields(), &headers)
 }
 
 /// CONNECT's fields, the same in both directions: version, flags (none), max packet.
@@ -161,6 +164,13 @@ impl Response {
 
     pub fn name(&self) -> Option<&str> {
         find_name(&self.headers)
+    }
+
+    /// One application parameter's value (MAP/PBAP), if present and well formed.
+    pub fn app_param(&self, tag: u8) -> Option<&[u8]> {
+        decode_app_params(find_bytes(&self.headers, HI_APP_PARAMS)?)?
+            .into_iter()
+            .find_map(|(t, v)| (t == tag).then_some(v))
     }
 }
 
@@ -425,6 +435,21 @@ mod tests {
         assert_eq!(&p[3..7], &[0x10, 0x00, 0x20, 0x00]);
         assert_eq!(&p[7..10], &[HI_TARGET, 0x00, 19]);
         assert_eq!(&p[10..], &target);
+    }
+
+    #[test]
+    fn a_connect_can_carry_application_parameters_after_the_target() {
+        let target = [0xAB; 16];
+        let p = connect_with(&target, &[app_params(&[(0x10, &[0, 0, 0, 0x0F])])]);
+        let r = parse_request(&p).unwrap();
+        assert_eq!((r.opcode, r.is_final), (OP_CONNECT & !FINAL_BIT, true));
+        assert_eq!(r.target(), Some(&target[..]));
+        assert_eq!(r.app_param(0x10), Some(&[0, 0, 0, 0x0F][..]));
+        assert_eq!(
+            connect_with(&target, &[]),
+            connect(&target),
+            "no extras: the plain CONNECT"
+        );
     }
 
     #[test]

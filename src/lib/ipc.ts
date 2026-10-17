@@ -108,6 +108,7 @@ export const api = {
   setWatching: (on: boolean) => invoke<void>("set_watching", { on }),
   /** Check the iPhone's switches now (Sync Contacts is read by asking the phone). */
   checkSwitches: () => invoke<void>("check_switches"),
+  setSwitchesVisible: (on: boolean) => invoke<void>("set_switches_visible", { on }),
   appIcon: (appId: string) => invoke<string | null>("app_icon", { appId }),
   appWebsite: (appId: string) => invoke<string | null>("app_website", { appId }),
   contactPhoto: (key: string) => invoke<string | null>("contact_photo", { key }),

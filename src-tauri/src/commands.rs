@@ -322,19 +322,26 @@ pub async fn place_lookup(latitude: f64, longitude: f64) -> Result<String> {
         .map_err(|e| e.to_string())?
 }
 
-/// The UI is showing the iPhone's switches (or stopped): check them every couple of seconds.
-/// Turning it on also checks Sync Contacts right away, not at the next due pull.
+/// A switch is still off and the user may be flipping it (the switches on screen, or setup's
+/// first minutes): check notifications and texts every couple of seconds. Contacts follow
+/// `set_switches_visible` instead: they're a whole PBAP connection per check.
 #[tauri::command]
 pub fn set_watching(state: State<'_, AppState>, on: bool) {
-    if state.shared.set_watching(on) {
-        if let Some(map) = state.shared.map.get() {
-            map.check_contacts();
-        }
+    state.shared.set_watching(on);
+}
+
+/// The iPhone's switches are on screen (setup, Settings › iPhone), or stopped being: Sync Contacts
+/// is checked every few seconds while they are, so flipping it either way shows. Renewed by the
+/// window; lapses on its own.
+#[tauri::command]
+pub fn set_switches_visible(state: State<'_, AppState>, on: bool) {
+    if let Some(map) = state.shared.map.get() {
+        map.switches_on_screen(on);
     }
 }
 
-/// Check the iPhone's switches now: tug's window came to the front, or the user pressed
-/// "Check again". Sync Contacts is the one that needs a pull to read; the others follow live.
+/// Check the iPhone's switches now: the user pressed "Check again". Sync Contacts is the one that
+/// needs asking the phone; the others follow live.
 #[tauri::command]
 pub fn check_switches(state: State<'_, AppState>) {
     if let Some(map) = state.shared.map.get() {

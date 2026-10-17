@@ -416,7 +416,6 @@ export const useTugStore = defineStore("tug", () => {
   const onWindowFocus = () => {
     windowFocused.value = true;
     cameBack();
-    checkSwitches();
   };
   // Registered in init() and removed in dispose(), so it's torn down with the rest (see teardown).
   const onVisibilityChange = () => {
@@ -426,8 +425,6 @@ export const useTugStore = defineStore("tug", () => {
       // The minute clock skips its ticks while hidden: catch the code rows up now.
       if (clockTimer !== undefined) clock.value = Date.now();
       cameBack();
-      // tug coming to the front is when a switch flipped on the phone should show: check now.
-      checkSwitches();
     }
   };
 
@@ -497,8 +494,9 @@ export const useTugStore = defineStore("tug", () => {
   // Not "no contacts saved": names kept from before a re-pair hid a Sync Contacts that was off.
   const switchesPending = computed(() => !!status.value.device && anySwitchPending(switches.value));
   /**
-   * Ask the phone about its switches now (window to the front, "Check again"). At most one per
-   * SWITCH_CHECK_GAP_MS: focus and visibility both fire on the same return.
+   * Ask the phone about its switches now ("Check again"). At most one per SWITCH_CHECK_GAP_MS.
+   * Coming back to tug's window doesn't ask: Sync Contacts is a whole phonebook connection, so the
+   * backend checks it on its own schedule, and every few seconds while the switches are on screen.
    */
   let lastSwitchCheck: number | null = null;
   function checkSwitches() {
@@ -517,6 +515,19 @@ export const useTugStore = defineStore("tug", () => {
     () =>
       pageVisible.value &&
       (view.value === "settings" ? settingsSection.value === "iphone" : showConnect.value),
+  );
+  // Sync Contacts is checked quickly only while the switches are actually on screen (not during
+  // setup's fresh window with tug in the tray): each check is a phonebook connection.
+  let switchesRenew: number | undefined;
+  watch(
+    () => connectPanelVisible.value && !!status.value.device,
+    (on) => {
+      void api.setSwitchesVisible(on).catch(() => undefined);
+      // The backend lets it lapse after 90 s unless renewed, like `setWatching`.
+      window.clearInterval(switchesRenew);
+      if (on) switchesRenew = window.setInterval(() => void api.setSwitchesVisible(true).catch(() => undefined), 45_000);
+    },
+    { immediate: true },
   );
   watch(
     () =>
@@ -1388,6 +1399,8 @@ export const useTugStore = defineStore("tug", () => {
     spotifySongTimer = undefined;
     window.clearTimeout(flashTimer);
     window.clearInterval(watchRenew);
+    window.clearInterval(switchesRenew);
+    switchesRenew = undefined;
     window.clearInterval(clockTimer);
     nowPlayingUpdates.cancel();
     window.clearTimeout(switchTimer);

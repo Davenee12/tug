@@ -25,9 +25,8 @@ export type SwitchState = "on" | "off" | "checking" | "waiting";
 export const CHECKING_MAX_MS = 60_000;
 
 /**
- * "Check the switches now" asks at most this often. Coming to the front fires both focus and
- * visibility, and each check is a message-access listing plus a phonebook pull ahead of any send,
- * so they collapse into one. Watching (the switches card open) polls on its own in the backend.
+ * "Check again" asks at most this often: each check is a message-access listing plus a phonebook
+ * check. With the switches on screen the backend also checks on its own every few seconds.
  */
 export const SWITCH_CHECK_GAP_MS = 3_000;
 

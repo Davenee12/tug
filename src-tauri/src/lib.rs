@@ -25,6 +25,7 @@ mod messages;
 mod pc_audio;
 #[cfg(test)]
 mod perf;
+mod pin_confirm;
 mod spotify;
 mod startup;
 mod state;
@@ -264,6 +265,7 @@ pub fn run() {
             commands::mark_read,
             commands::set_watching,
             commands::check_switches,
+            commands::set_switches_visible,
             commands::warm_texts,
             commands::get_calls,
             commands::refresh_calls,

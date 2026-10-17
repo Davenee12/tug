@@ -231,8 +231,8 @@ pub struct Shared {
     calls: Mutex<Vec<CallRecord>>,
     /// Current ANCS subscription id; rows from it can still take actions.
     live_session: Mutex<Option<String>>,
-    /// Answer channel for a PIN-confirmation prompt that is waiting on the user.
-    pub pairing_confirm: Mutex<Option<SyncSender<bool>>>,
+    /// The PIN-confirmation prompt waiting on the user, with its answer channel (`pin_confirm`).
+    pairing_confirm: Mutex<crate::pin_confirm::PinConfirm<SyncSender<bool>>>,
     /// Message service, set once at startup.
     pub map: OnceLock<MapHandle>,
     /// The user is looking at the iPhone's switches (setup's sharing step, Settings): check
@@ -385,11 +385,18 @@ impl Shared {
         *lock(&self.live_session) = session;
     }
 
-    pub fn set_pairing_confirm(&self, tx: Option<SyncSender<bool>>) {
-        *lock(&self.pairing_confirm) = tx;
+    /// A PIN prompt is showing: returns its id, for `close_pairing_confirm`.
+    pub fn open_pairing_confirm(&self, tx: SyncSender<bool>) -> u64 {
+        lock(&self.pairing_confirm).open(tx)
     }
 
     pub fn take_pairing_confirm(&self) -> Option<SyncSender<bool>> {
         lock(&self.pairing_confirm).take()
+    }
+
+    /// Close PIN prompt `id` if it's still the one showing; true if it was (only then should the
+    /// dialog be told to close).
+    pub fn close_pairing_confirm(&self, id: u64) -> bool {
+        lock(&self.pairing_confirm).close(id)
     }
 }
