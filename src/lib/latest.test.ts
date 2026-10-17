@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createLoader, latestOnly } from "./latest";
+import { createLoader, latestOnly, pendingKey } from "./latest";
 
 /** A promise the test settles by hand. */
 function deferred<T>() {
@@ -72,5 +72,30 @@ describe("createLoader (Spotify panel detail view)", () => {
     await view.load(async () => Promise.reject("offline"));
     expect(errors).toEqual(["offline"]);
     expect(view.loading.value).toBe(false);
+  });
+});
+
+describe("pendingKey", () => {
+  it("an older request ending late never clears a newer one for the same key", () => {
+    const pending = pendingKey();
+    const endA = pending.begin("album a");
+    expect(pending.has("album a")).toBe(true);
+    pending.begin("album b");
+    const endAgain = pending.begin("album a");
+    // The first lookup for album a comes back now: the second is still out.
+    endA();
+    expect(pending.has("album a")).toBe(true);
+    endAgain();
+    expect(pending.has("album a")).toBe(false);
+  });
+
+  it("knows only the newest key", () => {
+    const pending = pendingKey();
+    const end = pending.begin("x");
+    pending.begin("y");
+    expect(pending.has("x")).toBe(false);
+    expect(pending.has("y")).toBe(true);
+    end();
+    expect(pending.has("y")).toBe(true);
   });
 });

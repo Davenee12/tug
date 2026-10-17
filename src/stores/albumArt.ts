@@ -8,7 +8,7 @@ import { computed, shallowRef, watch } from "vue";
 import { api } from "../lib/ipc";
 import { artChoice, cardTint, type ArtChoice, type CardTint } from "../lib/albumArt";
 import { paletteFromImage, themeColors } from "../lib/artCanvas";
-import { latestOnly } from "../lib/latest";
+import { latestOnly, pendingKey } from "../lib/latest";
 import { useTugStore } from "./tug";
 
 /** Covers kept in memory for albums played this session (the disk cache holds the rest). */
@@ -43,19 +43,19 @@ export const useAlbumArtStore = defineStore("albumArt", () => {
   /** Answers by album this session: a data URI, or null when Apple has no cover for it. */
   const covers = shallowRef(new Map<string, string | null>());
   const lookups = latestOnly();
-  let pending: string | null = null;
+  const pending = pendingKey();
 
   const lookupKey = computed(() => (choice.value.kind === "lookup" ? choice.value.key : null));
   watch(
     [lookupKey, () => tug.pageVisible],
     ([key, visible]) => {
-      if (!key || covers.value.has(key) || pending === key) return;
+      if (!key || covers.value.has(key) || pending.has(key)) return;
       // Hidden in the tray: nothing is looked up; the song showing when tug comes back is.
       if (!visible) return;
       const c = choice.value;
       if (c.kind !== "lookup") return;
       const live = lookups.begin();
-      pending = key;
+      const done = pending.begin(key);
       api
         .albumArt(c.artist, c.album)
         .then((src) => {
@@ -68,9 +68,8 @@ export const useAlbumArtStore = defineStore("albumArt", () => {
         })
         // Offline or the lookup failed: the placeholder, asked again next time the album plays.
         .catch(() => undefined)
-        .finally(() => {
-          if (pending === key) pending = null;
-        });
+        // Only this lookup's own mark: an older one ending late never clears a newer one's.
+        .finally(done);
     },
     { immediate: true },
   );
