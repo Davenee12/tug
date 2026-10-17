@@ -21,8 +21,10 @@ pub const WINDOW: Duration = Duration::from_secs(120);
 pub const ACK_GRACE: Duration = Duration::from_secs(10);
 /// Largest picture sent from the clipboard, once encoded as PNG. The page holds it in memory.
 pub const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
-/// Largest picture by pixels (a 40-megapixel screenshot is already far beyond any monitor).
-pub const MAX_IMAGE_PIXELS: u64 = 40_000_000;
+/// Largest picture by pixels: 24 megapixels, room for a 6K screen or two 4K screens side by side.
+/// The bitmap is read off the clipboard whole (4 bytes a pixel), decoded and PNG-encoded in
+/// memory, so this bounds what one press can make tug hold.
+pub const MAX_IMAGE_PIXELS: u64 = 24_000_000;
 /// The file name the phone sees for a picture from the clipboard.
 pub const IMAGE_NAME: &str = "Clipboard picture.png";
 
@@ -468,6 +470,17 @@ mod tests {
             Prepared::Image(png) => assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n"),
             other => panic!("expected a picture, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn refuses_a_picture_over_24_megapixels_before_reading_it() {
+        use super::super::dib::tests::header;
+        // Only the header: the size alone decides, nothing is allocated for the pixels.
+        let over = header(40, 5000, 5000, 24, 0);
+        assert!(matches!(prepare(Reading::Image(over), 100), Err(Refused::TooBig)));
+        // Exactly at the limit is let through to the bitmap check (this one has no pixels).
+        let at = header(40, 6000, 4000, 24, 0);
+        assert!(matches!(prepare(Reading::Image(at), 100), Err(Refused::BadImage)));
     }
 
     #[test]

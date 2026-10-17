@@ -36,7 +36,7 @@ destination. Only the bound phone gets it, at its next signed check-in. The PC h
 phone acknowledges it (`POST /api/clip`, signed and sealed like any request; for a picture only
 after the phone really fetched every chunk), dropped when the 2 minutes are up, replaced by a newer
 press, and gone with the session. Text or pictures beyond Tugboat's limits (256 KB of text, 64 MB
-or 40 megapixels for a picture) are refused, and the clipboard's bitmap is parsed by a bounds-checked
+or 24 megapixels for a picture) are refused, and the clipboard's bitmap is parsed by a bounds-checked
 pure module (`tugboat/dib.rs`). In the other direction, text pasted on the phone goes onto the
 clipboard kept out of Windows' clipboard history and cloud clipboard sync. Logs record lengths and
 kinds only, never contents. The honest limit is Tugboat's: an active attacker who tampered with the

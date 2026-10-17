@@ -197,7 +197,7 @@ phone page ─POST /api/up─► PUT chunks (XChaCha20-Poly1305, keys from HKDF 
 PC → phone: tray "Send clipboard to iPhone" (emits tugboat-send-clipboard) / Ctrl+K / the panel
   ─► stores/tugboat.ts sendClipboard (one press, one send) ─► invoke tugboat_send_clipboard
   ─► clipboard::read_for_sharing (Win32, off the main thread) ─► clip::prepare
-     (text ≤ 256 KB; a CF_DIB picture ─► dib.rs ─► PNG ≤ 64 MB / 40 MP, held in memory as a hidden offer)
+     (text ≤ 256 KB; a CF_DIB picture ─► dib.rs ─► PNG ≤ 64 MB / 24 MP, held in memory as a hidden offer)
   ─► Tugboat starts if it's off ─► Session::send_clip ─► clip::Outbox (waiting, 2-minute window)
   no phone on the page? the panel opens: the code says "Scan to receive your clipboard on your iPhone"
 phone page polls GET /api/state ─► { clip: { id, text | image } } ─► big Copy card

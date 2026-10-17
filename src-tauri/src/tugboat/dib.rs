@@ -71,13 +71,16 @@ impl Channel {
         }
     }
 
-    /// The channel's value scaled to 0–255.
+    /// The channel's value scaled to 0–255. In u64: a mask can be up to 32 bits wide, and
+    /// `v * 255` overflows u32 for anything over 24 (a panic in debug, a wrong colour in release).
     fn get(self, px: u32) -> u8 {
         if self.max == 0 {
             return 0;
         }
-        let v = (px & self.mask) >> self.shift;
-        ((v * 255 + self.max / 2) / self.max) as u8
+        let v = u64::from((px & self.mask) >> self.shift);
+        let max = u64::from(self.max);
+        // At most 255: v never exceeds max.
+        ((v * 255 + max / 2) / max) as u8
     }
 }
 
@@ -219,7 +222,7 @@ pub fn to_png(dib: &[u8], max_pixels: u64) -> Result<Vec<u8>, DibError> {
 pub(crate) mod tests {
     use super::*;
 
-    fn header(size: u32, w: i32, h: i32, bits: u16, compression: u32) -> Vec<u8> {
+    pub(crate) fn header(size: u32, w: i32, h: i32, bits: u16, compression: u32) -> Vec<u8> {
         let mut b = Vec::new();
         b.extend_from_slice(&size.to_le_bytes());
         b.extend_from_slice(&w.to_le_bytes());
@@ -322,6 +325,23 @@ pub(crate) mod tests {
             decode(&header(40, i32::MAX, i32::MAX, 32, 0), 40_000_000).err(),
             Some(DibError::TooBig)
         );
+    }
+
+    #[test]
+    fn wide_colour_masks_scale_without_overflowing() {
+        // Masks a bitmap may legally declare: one channel 32 bits wide, another 25 bits wide (both
+        // overflowed `v * 255` in u32), and blue in the top byte.
+        let mut b = header(40, 3, 1, 32, BI_BITFIELDS);
+        for m in [0xffff_ffffu32, 0x01ff_ffff, 0xff00_0000] {
+            b.extend_from_slice(&m.to_le_bytes());
+        }
+        for px in [0xffff_ffffu32, 0, 0x8000_0000] {
+            b.extend_from_slice(&px.to_le_bytes());
+        }
+        let pic = decode(&b, 100).unwrap();
+        assert!(!pic.alpha);
+        // Full scale, zero, and half scale (rounded) of each channel's own width.
+        assert_eq!(pic.pixels, vec![255, 255, 255, 0, 0, 0, 128, 0, 128]);
     }
 
     #[test]
