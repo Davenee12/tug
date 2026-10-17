@@ -21,15 +21,19 @@ const CHUNK: usize = 1 << 20;
 
 #[derive(Debug)]
 pub enum CopyError {
-    Io(io::Error),
+    /// Reading the backup's file failed (`NotFound`: it isn't there).
+    Read(io::Error),
+    /// Writing the copy on this PC failed (the disk is probably full).
+    Write(io::Error),
     /// The data isn't whole AES blocks, so it isn't what the manifest says it is.
     Corrupt,
     Cancelled,
 }
 
-impl From<io::Error> for CopyError {
-    fn from(e: io::Error) -> Self {
-        CopyError::Io(e)
+impl CopyError {
+    /// The backup doesn't have the file at all.
+    pub fn is_missing(&self) -> bool {
+        matches!(self, CopyError::Read(e) if e.kind() == io::ErrorKind::NotFound)
     }
 }
 
@@ -98,9 +102,9 @@ pub fn copy_file(
     size: Option<u64>,
     mut go_on: impl FnMut() -> bool,
 ) -> Result<Copied, CopyError> {
-    let mut input = File::open(src)?;
+    let mut input = File::open(src).map_err(CopyError::Read)?;
     let mut sink = Sink {
-        out: io::BufWriter::new(File::create(dst)?),
+        out: io::BufWriter::new(File::create(dst).map_err(CopyError::Write)?),
         hasher: Sha256::new(),
         written: 0,
     };
@@ -110,11 +114,11 @@ pub fn copy_file(
             if !go_on() {
                 return Err(CopyError::Cancelled);
             }
-            let n = input.read(&mut buf)?;
+            let n = input.read(&mut buf).map_err(CopyError::Read)?;
             if n == 0 {
-                return Ok(sink.finish()?);
+                return sink.finish().map_err(CopyError::Write);
             }
-            sink.write(&buf[..n])?;
+            sink.write(&buf[..n]).map_err(CopyError::Write)?;
         }
     };
     let mut dec = Decryptor::new((&**key).into(), &[0u8; BLOCK].into());
@@ -126,14 +130,14 @@ pub fn copy_file(
         if !go_on() {
             return Err(CopyError::Cancelled);
         }
-        let n = input.read(&mut buf[filled..])?;
+        let n = input.read(&mut buf[filled..]).map_err(CopyError::Read)?;
         filled += n;
         let eof = n == 0;
         let whole = filled - filled % BLOCK;
         if whole > 0 && (filled == CHUNK || eof) {
             decrypt_blocks(&mut dec, &mut buf[..whole]);
-            sink.write(&held)?;
-            sink.write(&buf[..whole - BLOCK])?;
+            sink.write(&held).map_err(CopyError::Write)?;
+            sink.write(&buf[..whole - BLOCK]).map_err(CopyError::Write)?;
             held.clear();
             held.extend_from_slice(&buf[whole - BLOCK..whole]);
             buf.copy_within(whole..filled, 0);
@@ -151,21 +155,25 @@ pub fn copy_file(
         Some(size) => usize::try_from(size.saturating_sub(sink.written)).map_or(held.len(), |s| s.min(held.len())),
         None => plain_len(&held, None),
     };
-    sink.write(&held[..keep])?;
-    let copied = sink.finish()?;
+    sink.write(&held[..keep]).map_err(CopyError::Write)?;
+    let copied = sink.finish().map_err(CopyError::Write)?;
     match size {
         // A manifest that says less than the earlier blocks held gets exactly what it says (it
         // can't happen for a real file, whose padding is all in the last block).
         Some(size) if copied.bytes > size => {
-            File::options().write(true).open(dst)?.set_len(size)?;
-            copied_from_disk(dst)
+            File::options()
+                .write(true)
+                .open(dst)
+                .and_then(|f| f.set_len(size))
+                .map_err(CopyError::Write)?;
+            copied_from_disk(dst).map_err(CopyError::Write)
         }
         _ => Ok(copied),
     }
 }
 
 /// Hash a file already written (the rare cut-to-size case above).
-fn copied_from_disk(path: &Path) -> Result<Copied, CopyError> {
+fn copied_from_disk(path: &Path) -> io::Result<Copied> {
     let mut f = File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; CHUNK];
@@ -238,6 +246,18 @@ pub(crate) mod tests {
             copy_file(&dir.join("src"), &dir.join("dst"), Some(&key(9)), None, || true),
             Err(CopyError::Corrupt)
         ));
+        // A file the backup doesn't have is missing; one that can't be written is a write failure.
+        let gone = copy_file(&dir.join("nope"), &dir.join("dst"), None, None, || true).unwrap_err();
+        assert!(gone.is_missing());
+        let unwritable = copy_file(
+            &dir.join("src"),
+            &dir.join("no-such-dir").join("dst"),
+            None,
+            None,
+            || true,
+        );
+        assert!(matches!(unwritable, Err(CopyError::Write(_))));
+        assert!(!unwritable.unwrap_err().is_missing());
         // Cancel stops between chunks.
         std::fs::write(dir.join("src"), encrypt(&[9; 32], &vec![0u8; CHUNK * 3])).unwrap();
         let mut asks = 0;

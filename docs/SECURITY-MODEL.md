@@ -174,7 +174,9 @@ tug treats reading one as the most sensitive thing it does:
   start in case tug crashed or the PC lost power.
 - The backup is untrusted input: its plists, keybag, SQLite databases and `attributedBody`
   typedstreams go through bounds-checked parsers that refuse what they can't read (tested on cut
-  and garbled input), and a damaged photo is skipped rather than stopping the import.
+  and garbled input), and a damaged photo is skipped rather than stopping the import. Only a
+  file the backup doesn't have counts as missing: any other error reading it (the drive went
+  away, access refused) stops the import with "couldn't read this backup", and what came in stays.
 - Logs record counts and timings only, never a word of a message, a name, a number, a file name, a
   path or the password.
 - The backup itself is only ever read. Remove imported history (and Clear history) delete every

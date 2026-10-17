@@ -104,6 +104,9 @@ pub enum SinkError {
     Cancelled,
     /// Couldn't write (the disk is full, or the folder is gone).
     Failed,
+    /// Couldn't read the backup's file for a reason other than its not being there (the drive
+    /// went away, access was refused): not "missing", so it isn't counted as such.
+    Unreadable,
 }
 
 #[derive(Debug)]
@@ -112,6 +115,8 @@ pub enum ImportError {
     /// tug's own database refused a write (never logged in detail: it could quote a text).
     Store,
     Files,
+    /// The backup stopped being readable partway.
+    Unreadable,
 }
 
 impl From<rusqlite::Error> for ImportError {
@@ -775,6 +780,7 @@ fn copy_files(
                 }
                 Err(SinkError::Cancelled) => return Err(ImportError::Cancelled),
                 Err(SinkError::Failed) => return Err(ImportError::Files),
+                Err(SinkError::Unreadable) => return Err(ImportError::Unreadable),
             },
         };
         if let Some((key, bytes)) = stored {

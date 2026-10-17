@@ -441,7 +441,7 @@ impl BackupService {
         })
         .map_err(|e| match e {
             decrypt::CopyError::Cancelled => Phase::Cancelled,
-            decrypt::CopyError::Io(e) if disk_full(&e) => fail(Problem::CantWrite, "Manifest.db copy"),
+            decrypt::CopyError::Write(_) => fail(Problem::CantWrite, "Manifest.db copy"),
             _ => fail(Problem::Unreadable, "Manifest.db"),
         })?;
         drop(manifest_key);
@@ -482,6 +482,7 @@ impl BackupService {
             decrypt::copy_file(&src, dest, key.as_ref(), entry.size, || !cancel.load(Ordering::Relaxed)).map_err(
                 |e| match e {
                     decrypt::CopyError::Cancelled => Phase::Cancelled,
+                    decrypt::CopyError::Write(_) => fail(Problem::CantWrite, "Messages database copy"),
                     _ => fail(Problem::Unreadable, "Messages database"),
                 },
             )?;
@@ -622,6 +623,10 @@ impl BackupService {
                 log::warn!("backup: import stopped: couldn't write to tug's history");
                 self.fail(Problem::Failed);
             }
+            Err(ImportError::Unreadable) => {
+                log::warn!("backup: import stopped: a file in the backup couldn't be read");
+                self.fail(Problem::Unreadable);
+            }
         }
     }
 
@@ -674,9 +679,33 @@ struct BackupSink<'a> {
     next: AtomicU64,
 }
 
-/// Windows' "disk full" errors.
-fn disk_full(e: &std::io::Error) -> bool {
-    matches!(e.raw_os_error(), Some(39) | Some(112)) || e.kind() == std::io::ErrorKind::StorageFull
+/// Whether the backup has a regular file at `src`: `Ok(false)` only when it isn't there (or isn't a
+/// file); any other error reading it (the drive went away, access refused) is `Unreadable`, so a
+/// backup that stops being readable halfway stops the import instead of being counted as photos
+/// the backup "didn't have".
+fn source_present(src: &Path) -> Result<bool, SinkError> {
+    match std::fs::metadata(src) {
+        Ok(m) => Ok(m.is_file()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(SinkError::Unreadable),
+    }
+}
+
+/// What a failed copy means for the import: a file that isn't there is missing; one that can't be
+/// read is `Unreadable`; a failed write is `Failed` (the disk); damaged data skips that one file.
+fn copy_failure(e: decrypt::CopyError) -> Result<Option<(String, u64)>, SinkError> {
+    match e {
+        decrypt::CopyError::Cancelled => Err(SinkError::Cancelled),
+        e if e.is_missing() => Ok(None),
+        decrypt::CopyError::Read(_) => Err(SinkError::Unreadable),
+        decrypt::CopyError::Write(e) => {
+            // The kind only ("StorageFull", "PermissionDenied"): never a path.
+            log::warn!("backup: couldn't write a photo to this PC ({:?})", e.kind());
+            Err(SinkError::Failed)
+        }
+        // One damaged file doesn't stop the rest.
+        decrypt::CopyError::Corrupt => Ok(None),
+    }
 }
 
 impl FileSink for BackupSink<'_> {
@@ -684,9 +713,12 @@ impl FileSink for BackupSink<'_> {
         let Some(entry) = self.session.attachments.get(path) else {
             return Ok(None);
         };
-        let Some(src) = entry.path_in(&self.session.root).filter(|p| p.is_file()) else {
+        let Some(src) = entry.path_in(&self.session.root) else {
             return Ok(None);
         };
+        if !source_present(&src)? {
+            return Ok(None);
+        }
         let key = match &self.session.keys {
             Some(keys) => match entry.encryption_key.as_deref().and_then(|t| keys.unwrap_tagged(t)) {
                 Some(k) => Some(k),
@@ -705,23 +737,15 @@ impl FileSink for BackupSink<'_> {
             Ok(c) => c,
             Err(e) => {
                 let _ = std::fs::remove_file(&tmp);
-                return match e {
-                    decrypt::CopyError::Cancelled => Err(SinkError::Cancelled),
-                    decrypt::CopyError::Io(e) if disk_full(&e) => Err(SinkError::Failed),
-                    // One damaged file doesn't stop the rest.
-                    _ => Ok(None),
-                };
+                return copy_failure(e);
             }
         };
         match files::adopt(self.local_dir, &tmp, &copied.sha256, ext) {
             Ok(key) => Ok(Some((key, copied.bytes))),
-            Err(e) => {
+            Err(_) => {
+                // Moving it into tug's own folder failed: that's this PC's disk, not the backup.
                 let _ = std::fs::remove_file(&tmp);
-                if disk_full(&e) {
-                    Err(SinkError::Failed)
-                } else {
-                    Ok(None)
-                }
+                Err(SinkError::Failed)
             }
         }
     }
@@ -886,6 +910,34 @@ mod tests {
             service.cancel();
         }
         assert!(walk(&local.join(files::TEMP_DIR)).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn only_a_file_that_isnt_there_counts_as_missing() {
+        let root = temp_dir("backup-missing");
+        std::fs::write(root.join("photo"), b"x").unwrap();
+        assert!(matches!(source_present(&root.join("photo")), Ok(true)));
+        assert!(matches!(source_present(&root.join("gone")), Ok(false)));
+        assert!(matches!(source_present(&root), Ok(false)), "a folder isn't a photo");
+        // A copy that couldn't find its file is missing; any other read error stops the import.
+        let missing = decrypt::copy_file(&root.join("gone"), &root.join("out"), None, None, || true).unwrap_err();
+        assert!(matches!(copy_failure(missing), Ok(None)));
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(matches!(
+            copy_failure(decrypt::CopyError::Read(denied)),
+            Err(SinkError::Unreadable)
+        ));
+        let full = std::io::Error::from(std::io::ErrorKind::StorageFull);
+        assert!(matches!(
+            copy_failure(decrypt::CopyError::Write(full)),
+            Err(SinkError::Failed)
+        ));
+        assert!(matches!(copy_failure(decrypt::CopyError::Corrupt), Ok(None)));
+        assert!(matches!(
+            copy_failure(decrypt::CopyError::Cancelled),
+            Err(SinkError::Cancelled)
+        ));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
