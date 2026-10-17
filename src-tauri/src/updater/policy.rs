@@ -283,6 +283,19 @@ pub fn valid_resume(screen: &str) -> bool {
         }
 }
 
+/// Where an update may be downloaded from: tug's own releases on GitHub. latest.json names the
+/// installer's address; anything else (another repository, another host, plain http) is refused
+/// before a byte is fetched, whatever the manifest says.
+pub const DOWNLOAD_PREFIX: &str = "https://github.com/Davenee12/tug/releases/download/";
+
+pub fn trusted_download(url: &str) -> bool {
+    url.strip_prefix(DOWNLOAD_PREFIX).is_some_and(|rest| {
+        !rest.is_empty()
+            && !rest.contains("..")
+            && !rest.chars().any(|c| c.is_whitespace() || c.is_control() || c == '\\')
+    })
+}
+
 /// What to do when starting the installer failed. Before tug tidied up for it, nothing changed:
 /// stay and say so. After (`on_before_exit` already took the tray icon away, hid the windows and
 /// latched the one-time tidy-up), tug would be left running with no window and no tray icon, so
@@ -614,5 +627,25 @@ mod tests {
     fn a_failed_install_after_tidying_up_starts_tug_again() {
         assert_eq!(after_failed_install(false), AfterFailedInstall::Stay);
         assert_eq!(after_failed_install(true), AfterFailedInstall::Restart);
+    }
+
+    #[test]
+    fn updates_download_only_from_tugs_own_releases() {
+        assert!(trusted_download(
+            "https://github.com/Davenee12/tug/releases/download/v0.5.19/tug-0.5.19-setup.exe"
+        ));
+        for bad in [
+            "https://github.com/someone-else/tug/releases/download/v0.5.19/tug-0.5.19-setup.exe",
+            "https://github.com/Davenee12/tug-fork/releases/download/v1/x.exe",
+            "http://github.com/Davenee12/tug/releases/download/v0.5.19/tug-0.5.19-setup.exe",
+            "https://github.com.evil.example/Davenee12/tug/releases/download/v1/x.exe",
+            "https://objects.githubusercontent.com/x.exe",
+            "https://github.com/Davenee12/tug/releases/download/../../../evil/x.exe",
+            "https://github.com/Davenee12/tug/releases/download/",
+            "https://github.com/Davenee12/tug/releases/download/v1/x y.exe",
+        ] {
+            assert!(!trusted_download(bad), "{bad}");
+        }
+        assert!(ENDPOINT.starts_with("https://github.com/Davenee12/tug/releases/"));
     }
 }

@@ -216,7 +216,10 @@ describe the files people download. See [RELEASING.md](RELEASING.md).
 
 **Automatic updates.** Release builds set up for them check GitHub only
 (`https://github.com/Davenee12/tug/releases/latest/download/latest.json`, then the installer it
-names), from Rust; the webview's CSP is unchanged and it has no updater permission. Every download
+names), from Rust; the webview's CSP is unchanged and it has no updater permission. The installer's
+address in `latest.json` must be on tug's own releases
+(`https://github.com/Davenee12/tug/releases/download/…`) or the update is refused before anything
+is fetched. Every download
 is verified by `tauri-plugin-updater` against the minisign public key compiled into tug
 (`tauri.conf.json`) before it can run, and the signature must name the same version the manifest
 announces (`requireSignedVersion`), so a tampered `latest.json` can't pair a new version number with

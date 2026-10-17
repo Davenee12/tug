@@ -314,6 +314,23 @@ impl Updater {
             }
             newer
         });
+        // The installer must come from tug's own releases on GitHub, whatever latest.json says.
+        if let Some(u) = found
+            .as_ref()
+            .filter(|u| !policy::trusted_download(u.download_url.as_str()))
+        {
+            log::warn!(
+                "update: refused {}: its download isn't on tug's GitHub releases",
+                u.version
+            );
+            self.set(|s| {
+                s.phase = Phase::Failed;
+                s.failure = Some(Failure::Check);
+                s.last_attempt_ms = Some(now);
+                s.last_failed = true;
+            });
+            return;
+        }
         let next = policy::after_check(found.is_some(), self.auto(), self.inner.portable);
         if let Some(u) = &found {
             log::info!("update: tug {} is available", u.version);
