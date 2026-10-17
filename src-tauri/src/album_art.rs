@@ -447,6 +447,12 @@ fn mark_miss(marker: &Path) {
     }
 }
 
+/// `mark_miss`, making the folder first if this is its first file.
+fn mark_miss_in(dir: &Path, marker: &Path) {
+    let _ = std::fs::create_dir_all(dir.join(DIR));
+    mark_miss(marker);
+}
+
 /// A name worth looking up: something left after trimming, and not absurdly long.
 fn usable(name: &str) -> bool {
     let n = name.trim();
@@ -504,6 +510,12 @@ pub fn art_with(
         })?,
         None => Vec::new(),
     };
+    if !crate::app_icons::within_limit(&bytes) {
+        // Far bigger than any cover: refused before it's written or encoded, and remembered.
+        mark_miss_in(dir, &miss);
+        log::info!("album art: refused an oversized cover ({} KB)", bytes.len() / 1024);
+        return Ok(None);
+    }
     let _ = std::fs::create_dir_all(dir.join(DIR));
     match crate::app_icons::data_uri(&bytes) {
         Some(uri) => {
@@ -817,6 +829,34 @@ mod tests {
         assert!(!stale.exists());
         assert!(marker.exists(), "re-marked by the last lookup, so still fresh");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_oversized_cover_is_never_written_or_shown() {
+        let dir = temp("oversized");
+        let mut net = fake(&[result("Massive Attack", "Mezzanine", "m")]);
+        // A PNG header, then far more than any cover weighs.
+        net.image = PNG.to_vec();
+        net.image.resize(crate::app_icons::MAX_IMAGE_BYTES + 1, 0);
+        let gate = open_gate();
+        assert_eq!(
+            art_with(&dir, "Massive Attack", "Mezzanine", true, &net, &gate).unwrap(),
+            None
+        );
+        let key = cache_key("Massive Attack", "Mezzanine");
+        assert!(!dir.join(DIR).join(format!("{key}.img")).exists(), "nothing written");
+        assert!(
+            dir.join(DIR).join(format!("{key}.none")).exists(),
+            "remembered as a miss"
+        );
+        // Just under the limit is fine.
+        let dir2 = temp("oversized-ok");
+        net.image.truncate(crate::app_icons::MAX_IMAGE_BYTES);
+        assert!(art_with(&dir2, "Massive Attack", "Mezzanine", true, &net, &gate)
+            .unwrap()
+            .is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
     }
 
     #[test]
