@@ -6,6 +6,12 @@
 //! binds the session to that client; any other client gets "in use" even with the secret (a
 //! second phone that scanned the same code). A sequence number seen before, or far older than
 //! the newest, is a replay and is refused.
+//!
+//! The one exception is a two-player game: while tug's game asks for two controllers, one second
+//! phone (a "guest") may join with the same secret and the same signing, so exactly two phones can
+//! drive the session. The session (not this module) limits a guest to steering: it never sees files
+//! or text. A third phone is still another device. A guest has its own replay window, since its
+//! sequence numbers come from its own clock.
 
 use std::collections::BTreeSet;
 
@@ -20,8 +26,20 @@ pub const REPLAY_WINDOW: u64 = 60_000 * 1024;
 pub struct Authorized {
     pub client: String,
     pub seq: u64,
-    /// True for the request that bound the session (the phone just connected).
+    /// True for the request that bound the session (the phone just connected), or that let a
+    /// guest join.
     pub first: bool,
+    /// The second phone of a two-player game, not the phone the session belongs to.
+    pub guest: bool,
+}
+
+/// Whether a phone that isn't the session's own may join as the guest with this request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GuestPolicy {
+    /// A two-player game is asking for a second controller, and this is a controller request.
+    pub may_join: bool,
+    /// The guest there is has gone quiet: a new phone may take its place.
+    pub may_replace: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,11 +54,19 @@ pub enum Rejected {
     OtherDevice,
 }
 
+/// The sequence numbers one client has used (see `REPLAY_WINDOW`).
+#[derive(Default)]
+struct Replay {
+    newest: u64,
+    seen: BTreeSet<u64>,
+}
+
 #[derive(Default)]
 pub struct Auth {
     bound: Option<String>,
-    newest: u64,
-    seen: BTreeSet<u64>,
+    replay: Replay,
+    /// The second phone of a two-player game, and its own replay window.
+    guest: Option<(String, Replay)>,
 }
 
 impl Auth {
@@ -53,13 +79,22 @@ impl Auth {
         self.bound.is_some()
     }
 
+    #[cfg(test)]
+    pub fn has_guest(&self) -> bool {
+        self.guest.is_some()
+    }
+
     /// Forget which phone the session belongs to, so the next one to scan the code binds it. Used
     /// when the advertised address changes: that's a new browser origin, so even the same phone
     /// comes back with a new client id. Replay state is kept, so nothing seen before works again.
+    /// A guest goes too (it comes back with a new client id as well, and may join again).
     pub fn unbind(&mut self) {
         self.bound = None;
+        self.guest = None;
     }
 
+    /// Check a request from the session's own phone (no guest may join).
+    #[cfg(test)]
     pub fn check(
         &mut self,
         keys: &Keys,
@@ -67,29 +102,70 @@ impl Auth {
         method: &str,
         path: &str,
     ) -> Result<Authorized, Rejected> {
+        self.check_with(keys, header, method, path, GuestPolicy::default())
+    }
+
+    /// Check a request. The session's own phone as always; another phone is the guest if it
+    /// already is, or if `policy` lets it join (or take a quiet guest's place); otherwise it's
+    /// another device.
+    pub fn check_with(
+        &mut self,
+        keys: &Keys,
+        header: Option<&str>,
+        method: &str,
+        path: &str,
+        policy: GuestPolicy,
+    ) -> Result<Authorized, Rejected> {
         let (client, seq, mac) = parse(header.ok_or(Rejected::Malformed)?).ok_or(Rejected::Malformed)?;
         if !keys.verify_request_mac(client, seq, method, path, &mac) {
             return Err(Rejected::BadMac);
         }
-        if let Some(bound) = &self.bound {
-            if bound != client {
-                return Err(Rejected::OtherDevice);
-            }
-        }
-        if !self.fresh(seq) {
-            return Err(Rejected::Replayed);
-        }
-        let first = self.bound.is_none();
-        if first {
-            self.bound = Some(client.to_string());
-        }
-        Ok(Authorized {
+        let ok = |first: bool, guest: bool| Authorized {
             client: client.to_string(),
             seq,
             first,
-        })
+            guest,
+        };
+        match &self.bound {
+            None => {
+                if !self.replay.fresh(seq) {
+                    return Err(Rejected::Replayed);
+                }
+                self.bound = Some(client.to_string());
+                return Ok(ok(true, false));
+            }
+            Some(bound) if bound == client => {
+                if !self.replay.fresh(seq) {
+                    return Err(Rejected::Replayed);
+                }
+                return Ok(ok(false, false));
+            }
+            Some(_) => {}
+        }
+        if let Some((guest, replay)) = self.guest.as_mut() {
+            if guest == client {
+                return if replay.fresh(seq) {
+                    Ok(ok(false, true))
+                } else {
+                    Err(Rejected::Replayed)
+                };
+            }
+        }
+        let may = match self.guest {
+            None => policy.may_join,
+            Some(_) => policy.may_join && policy.may_replace,
+        };
+        if !may {
+            return Err(Rejected::OtherDevice);
+        }
+        let mut replay = Replay::default();
+        replay.fresh(seq);
+        self.guest = Some((client.to_string(), replay));
+        Ok(ok(true, true))
     }
+}
 
+impl Replay {
     /// Record `seq` if it hasn't been seen and isn't older than the window.
     fn fresh(&mut self, seq: u64) -> bool {
         if seq.saturating_add(REPLAY_WINDOW) < self.newest || self.seen.contains(&seq) {
@@ -198,7 +274,92 @@ mod tests {
         assert!(req(&mut a, base + 30 + 2 * REPLAY_WINDOW).is_ok());
         assert_eq!(req(&mut a, base + 25), Err(Rejected::Replayed));
         // The seen set doesn't grow without bound.
-        assert!(a.seen.len() <= 2);
+        assert!(a.replay.seen.len() <= 2);
+    }
+
+    const THIRD: &str = "thirdCCCCCCCCCCCCCCCCC";
+    const JOIN: GuestPolicy = GuestPolicy {
+        may_join: true,
+        may_replace: false,
+    };
+
+    #[test]
+    fn a_two_player_game_lets_exactly_one_second_phone_join() {
+        let k = keys();
+        let mut a = Auth::new();
+        let base = 1_800_000_000_000 * 1024;
+        let req = |a: &mut Auth, client: &str, seq: u64, policy: GuestPolicy| {
+            let h = header(&k, client, seq, "POST", "/api/pad");
+            a.check_with(&k, Some(&h), "POST", "/api/pad", policy)
+        };
+        // The first phone binds the session the usual way, even when a guest could join.
+        let first = req(&mut a, PHONE, base + 1, JOIN).unwrap();
+        assert!(first.first && !first.guest);
+        // Without a two-player game, a second phone is another device.
+        assert_eq!(
+            req(&mut a, OTHER, base + 2, GuestPolicy::default()),
+            Err(Rejected::OtherDevice)
+        );
+        assert!(!a.has_guest(), "a refused phone never joins");
+        // With one, it joins as the guest, once.
+        let joined = req(&mut a, OTHER, base + 3, JOIN).unwrap();
+        assert!(joined.first && joined.guest);
+        let again = req(&mut a, OTHER, base + 4, JOIN).unwrap();
+        assert!(!again.first && again.guest);
+        // The guest stays itself even after the game stops asking (the session limits what it may do).
+        assert!(req(&mut a, OTHER, base + 5, GuestPolicy::default()).unwrap().guest);
+        // A third phone is turned away while the guest is there.
+        assert_eq!(req(&mut a, THIRD, base + 6, JOIN), Err(Rejected::OtherDevice));
+        // The session's own phone is unaffected.
+        assert!(!req(&mut a, PHONE, base + 7, JOIN).unwrap().guest);
+        // A wrong signature never joins, however the policy reads.
+        let wrong = header(&Keys::derive(&[1u8; 16]), THIRD, base + 8, "POST", "/api/pad");
+        assert_eq!(
+            a.check_with(&k, Some(&wrong), "POST", "/api/pad", JOIN),
+            Err(Rejected::BadMac)
+        );
+    }
+
+    #[test]
+    fn a_quiet_guest_gives_its_place_to_the_next_phone() {
+        let k = keys();
+        let mut a = Auth::new();
+        let base = 1_800_000_000_000 * 1024;
+        let req = |a: &mut Auth, client: &str, seq: u64, policy: GuestPolicy| {
+            let h = header(&k, client, seq, "GET", "/api/state");
+            a.check_with(&k, Some(&h), "GET", "/api/state", policy)
+        };
+        req(&mut a, PHONE, base + 1, JOIN).unwrap();
+        req(&mut a, OTHER, base + 2, JOIN).unwrap();
+        let replace = GuestPolicy {
+            may_join: true,
+            may_replace: true,
+        };
+        let third = req(&mut a, THIRD, base + 3, replace).unwrap();
+        assert!(third.first && third.guest);
+        // The old guest is now another device.
+        assert_eq!(req(&mut a, OTHER, base + 4, JOIN), Err(Rejected::OtherDevice));
+    }
+
+    #[test]
+    fn each_phone_has_its_own_replay_window() {
+        let k = keys();
+        let mut a = Auth::new();
+        let base = 1_800_000_000_000 * 1024;
+        let req = |a: &mut Auth, client: &str, seq: u64| {
+            let h = header(&k, client, seq, "POST", "/api/pad");
+            a.check_with(&k, Some(&h), "POST", "/api/pad", JOIN)
+        };
+        assert!(req(&mut a, PHONE, base + 10 * REPLAY_WINDOW).is_ok());
+        // The second phone's clock is minutes behind the first's: still fine, it's its own window.
+        assert!(req(&mut a, OTHER, base + 1).is_ok());
+        assert!(req(&mut a, OTHER, base + 2).is_ok());
+        // Its replays are refused, and its numbers don't open a window for the first phone.
+        assert_eq!(req(&mut a, OTHER, base + 2), Err(Rejected::Replayed));
+        assert_eq!(req(&mut a, PHONE, base + 3), Err(Rejected::Replayed));
+        // An origin change lets go of the guest as well.
+        a.unbind();
+        assert!(!a.has_guest());
     }
 
     #[test]

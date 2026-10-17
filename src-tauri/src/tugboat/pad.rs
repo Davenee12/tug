@@ -21,6 +21,10 @@
 //! game reads, which steers a boat. The phone sends at most ~60 inputs a second (up to two in
 //! flight, the newest state wins) plus a heartbeat, so a token bucket caps the rate and silence
 //! means the phone has gone.
+//!
+//! A two-player game has two seats: seat 1 is the phone the session belongs to, seat 2 the one
+//! guest phone `auth.rs` lets join while the game asks for two. Each seat has its own ordering,
+//! rate limit, silence watch, reply and latency summary, so one phone can't slow or steer the other.
 
 use std::time::{Duration, Instant};
 
@@ -196,28 +200,51 @@ impl Bucket {
     }
 }
 
+/// Which phone: 1 is the phone the session belongs to, 2 the guest of a two-player game.
+pub type SeatNo = u8;
+pub const FIRST: SeatNo = 1;
+pub const SECOND: SeatNo = 2;
+
 /// What the game sees (the `game-pad` event). Mirrored in `src/types/protocol.ts` as `GamePad`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PadEvent {
-    /// A phone is sending inputs right now.
+    /// Which phone this is about.
+    pub seat: SeatNo,
+    /// That phone is sending inputs right now.
     pub connected: bool,
     /// -1 (full left) to 1 (full right); 0 whenever not connected.
     pub steer: f32,
     pub boost: bool,
 }
 
-/// What the PC tells the phone in each reply, so the phone can say "Paused" and buzz on a hit.
+impl PadEvent {
+    /// The phone in `seat` is gone (nothing held, nothing steering).
+    pub fn gone(seat: SeatNo) -> PadEvent {
+        PadEvent {
+            seat,
+            connected: false,
+            steer: 0.0,
+            boost: false,
+        }
+    }
+}
+
+/// What the PC tells a phone in each reply, so it can say "Paused", buzz on a hit and, in a
+/// two-player game, show which player it is.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PadReply {
     pub paused: bool,
-    /// Times the boat has been hit this run; the phone buzzes when it goes up.
+    /// Times this phone's boat has been hit this run; the phone buzzes when it goes up.
     pub hits: u32,
+    /// The player this phone is in a two-player game (1 or 2, its colour); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player: Option<u8>,
 }
 
-/// One open controller channel.
+/// One phone's side of the channel.
 #[derive(Debug)]
-pub struct Pad {
+struct Seat {
     /// The newest request sequence number applied. Requests run in parallel and can land out of
     /// order; an older input arriving late would steer backwards in time, so it's ignored.
     last_seq: u64,
@@ -229,9 +256,9 @@ pub struct Pad {
     latency: Latency,
 }
 
-impl Pad {
-    pub fn new(now: Instant) -> Pad {
-        Pad {
+impl Seat {
+    fn new(now: Instant) -> Seat {
+        Seat {
             last_seq: 0,
             input: PadInput::default(),
             last_input: None,
@@ -241,82 +268,132 @@ impl Pad {
             latency: Latency::default(),
         }
     }
+}
 
-    /// Whether another input may come in now (rate limit).
-    pub fn admit(&mut self, now: Instant) -> bool {
-        self.bucket.take(now)
+/// One open controller channel: one seat, or two in a two-player game.
+#[derive(Debug)]
+pub struct Pad {
+    players: u8,
+    seats: [Seat; 2],
+}
+
+fn index(seat: SeatNo) -> usize {
+    usize::from(seat == SECOND)
+}
+
+impl Pad {
+    pub fn new(now: Instant, players: u8) -> Pad {
+        Pad {
+            players: players.clamp(1, 2),
+            seats: [Seat::new(now), Seat::new(now)],
+        }
     }
 
-    /// Apply an authenticated input. Returns the event to send the game when anything it shows
-    /// changed (steering, boost, or the phone just arriving).
-    pub fn input(&mut self, seq: u64, decoded: Decoded, now: Instant) -> Option<PadEvent> {
-        if seq <= self.last_seq {
+    /// How many phones the game asks for (1, or 2 for a two-player game).
+    pub fn players(&self) -> u8 {
+        self.players
+    }
+
+    /// Whether `seat` is open: seat 2 only in a two-player game.
+    pub fn open_for(&self, seat: SeatNo) -> bool {
+        seat == FIRST || (seat == SECOND && self.players == 2)
+    }
+
+    /// The game changed how many phones it wants. Going back to one closes seat 2: returns the
+    /// event saying its phone is gone, if it was there.
+    pub fn set_players(&mut self, players: u8, now: Instant) -> Option<PadEvent> {
+        self.players = players.clamp(1, 2);
+        if self.players == 2 {
+            return None;
+        }
+        let was = std::mem::replace(&mut self.seats[1], Seat::new(now));
+        was.connected.then(|| PadEvent::gone(SECOND))
+    }
+
+    /// Whether another input from `seat` may come in now (its own rate limit).
+    pub fn admit(&mut self, seat: SeatNo, now: Instant) -> bool {
+        self.seats[index(seat)].bucket.take(now)
+    }
+
+    /// Apply an authenticated input from `seat`. Returns the event to send the game when anything
+    /// it shows changed (steering, boost, or the phone just arriving).
+    pub fn input(&mut self, seat: SeatNo, seq: u64, decoded: Decoded, now: Instant) -> Option<PadEvent> {
+        let s = &mut self.seats[index(seat)];
+        if seq <= s.last_seq {
             return None;
         }
         if let Some(p) = decoded.probe {
-            self.latency.add(p.touch_to_pc_ms());
+            s.latency.add(p.touch_to_pc_ms());
         }
         let input = decoded.input;
-        self.last_seq = seq;
-        self.last_input = Some(now);
-        let changed = !self.connected || input != self.input;
-        self.connected = true;
-        self.input = input;
-        changed.then(|| self.event())
+        s.last_seq = seq;
+        s.last_input = Some(now);
+        let changed = !s.connected || input != s.input;
+        s.connected = true;
+        s.input = input;
+        changed.then(|| self.event(seat))
     }
 
-    /// Called a few times a second while the channel is open: after `QUIET` without an input the
-    /// phone has gone (locked, left the page, dropped off the Wi-Fi). Returns the event to send.
-    pub fn tick(&mut self, now: Instant) -> Option<PadEvent> {
-        let quiet = self
-            .last_input
-            .is_none_or(|t| now.saturating_duration_since(t) >= QUIET);
-        if self.connected && quiet {
-            self.connected = false;
-            self.input = PadInput::default();
-            return Some(self.event());
+    /// Called a few times a second while the channel is open: after `QUIET` without an input a
+    /// phone has gone (locked, left the page, dropped off the Wi-Fi). Returns the events to send.
+    pub fn tick(&mut self, now: Instant) -> Vec<PadEvent> {
+        let mut gone = Vec::new();
+        for (i, s) in self.seats.iter_mut().enumerate() {
+            let quiet = s
+                .last_input
+                .is_none_or(|t| now.saturating_duration_since(t) >= QUIET);
+            if s.connected && quiet {
+                s.connected = false;
+                s.input = PadInput::default();
+                gone.push(PadEvent::gone(if i == 0 { FIRST } else { SECOND }));
+            }
         }
-        None
+        gone
     }
 
-    /// The session moved to a new address and the next phone to scan binds it: its sequence
-    /// numbers come from its own clock, so start ordering afresh. Replay protection is still
+    /// The session moved to a new address and the next phones to scan bind it: their sequence
+    /// numbers come from their own clocks, so start ordering afresh. Replay protection is still
     /// `auth.rs`'s job and carries on.
     pub fn rebound(&mut self) {
-        self.last_seq = 0;
-    }
-
-    pub fn connected(&self) -> bool {
-        self.connected
-    }
-
-    pub fn event(&self) -> PadEvent {
-        if self.connected {
-            PadEvent {
-                connected: true,
-                steer: f32::from(self.input.steer) / f32::from(STEER_MAX),
-                boost: self.input.boost,
-            }
-        } else {
-            PadEvent {
-                connected: false,
-                steer: 0.0,
-                boost: false,
-            }
+        for s in &mut self.seats {
+            s.last_seq = 0;
         }
     }
 
-    pub fn set_reply(&mut self, reply: PadReply) {
-        self.reply = reply;
+    /// A new phone took seat 2 (the last guest went quiet): order its inputs afresh.
+    pub fn rebound_seat(&mut self, seat: SeatNo) {
+        self.seats[index(seat)].last_seq = 0;
     }
 
-    pub fn reply(&self) -> PadReply {
-        self.reply
+    pub fn connected(&self, seat: SeatNo) -> bool {
+        self.seats[index(seat)].connected
     }
 
-    /// Touch-to-PC latency so far this session (from the phone's probe).
-    pub fn latency(&self) -> &Latency {
-        &self.latency
+    pub fn event(&self, seat: SeatNo) -> PadEvent {
+        let s = &self.seats[index(seat)];
+        if s.connected {
+            PadEvent {
+                seat,
+                connected: true,
+                steer: f32::from(s.input.steer) / f32::from(STEER_MAX),
+                boost: s.input.boost,
+            }
+        } else {
+            PadEvent::gone(seat)
+        }
+    }
+
+    pub fn set_reply(&mut self, seat: SeatNo, reply: PadReply) {
+        self.seats[index(seat)].reply = reply;
+    }
+
+    pub fn reply(&self, seat: SeatNo) -> PadReply {
+        self.seats[index(seat)].reply
+    }
+
+    /// Touch-to-PC latency so far this session for `seat` (from its phone's probe).
+    pub fn latency(&self, seat: SeatNo) -> &Latency {
+        &self.seats[index(seat)].latency
     }
 }
 
@@ -413,42 +490,43 @@ mod tests {
     #[test]
     fn newest_input_wins_and_late_ones_are_ignored() {
         let t0 = Instant::now();
-        let mut p = Pad::new(t0);
-        assert!(!p.connected());
+        let mut p = Pad::new(t0, 1);
+        assert!(!p.connected(FIRST));
         // The first input connects the phone.
-        let e = p.input(10, d(-60, false), t0).unwrap();
-        assert!(e.connected);
+        let e = p.input(FIRST, 10, d(-60, false), t0).unwrap();
+        assert!(e.connected && e.seat == FIRST);
         assert!((e.steer + 0.6).abs() < 1e-6);
         // The same state again (a heartbeat) changes nothing the game needs to hear about.
-        assert_eq!(p.input(11, d(-60, false), t0), None);
+        assert_eq!(p.input(FIRST, 11, d(-60, false), t0), None);
         // A newer state does.
-        assert!(p.input(13, d(-60, true), t0).unwrap().boost);
+        assert!(p.input(FIRST, 13, d(-60, true), t0).unwrap().boost);
         // An older one landing late (two in flight) is ignored, not applied.
-        assert_eq!(p.input(12, d(0, false), t0), None);
-        assert_eq!(p.event().steer, -0.6);
-        assert!(p.event().boost);
+        assert_eq!(p.input(FIRST, 12, d(0, false), t0), None);
+        assert_eq!(p.event(FIRST).steer, -0.6);
+        assert!(p.event(FIRST).boost);
     }
 
     #[test]
     fn silence_disconnects_and_zeroes_the_steering() {
         let t0 = Instant::now();
-        let mut p = Pad::new(t0);
-        assert_eq!(p.tick(t0 + QUIET * 2), None); // never connected: nothing to say
-        p.input(1, d(100, true), t0);
-        assert_eq!(p.tick(t0 + QUIET / 2), None);
-        let gone = p.tick(t0 + QUIET).unwrap();
+        let mut p = Pad::new(t0, 1);
+        assert!(p.tick(t0 + QUIET * 2).is_empty()); // never connected: nothing to say
+        p.input(FIRST, 1, d(100, true), t0);
+        assert!(p.tick(t0 + QUIET / 2).is_empty());
+        assert_eq!(p.tick(t0 + QUIET), vec![PadEvent::gone(FIRST)]);
         assert_eq!(
-            gone,
+            PadEvent::gone(FIRST),
             PadEvent {
+                seat: FIRST,
                 connected: false,
                 steer: 0.0,
                 boost: false
             }
         );
         // Said once.
-        assert_eq!(p.tick(t0 + QUIET * 3), None);
+        assert!(p.tick(t0 + QUIET * 3).is_empty());
         // The phone coming back reconnects, even with the same input as before it went.
-        let back = p.input(2, d(100, true), t0 + QUIET * 4).unwrap();
+        let back = p.input(FIRST, 2, d(100, true), t0 + QUIET * 4).unwrap();
         assert!(back.connected);
         assert_eq!(back.steer, 1.0);
     }
@@ -456,11 +534,99 @@ mod tests {
     #[test]
     fn a_new_phone_after_a_rebind_starts_ordering_afresh() {
         let t0 = Instant::now();
-        let mut p = Pad::new(t0);
-        p.input(5_000, d(10, false), t0);
-        // A phone whose clock is behind the first one's.
+        let mut p = Pad::new(t0, 2);
+        p.input(FIRST, 5_000, d(10, false), t0);
+        p.input(SECOND, 7_000, d(10, false), t0);
+        // Phones whose clocks are behind the first ones'.
         p.rebound();
-        assert!(p.input(10, d(20, false), t0).is_some());
+        assert!(p.input(FIRST, 10, d(20, false), t0).is_some());
+        assert!(p.input(SECOND, 10, d(20, false), t0).is_some());
+        // A new guest in seat 2 only resets seat 2.
+        p.rebound_seat(SECOND);
+        assert!(p.input(SECOND, 5, d(30, false), t0).is_some());
+        assert_eq!(p.input(FIRST, 9, d(30, false), t0), None);
+    }
+
+    #[test]
+    fn two_seats_are_kept_apart() {
+        let t0 = Instant::now();
+        let mut p = Pad::new(t0, 2);
+        assert!(p.open_for(FIRST) && p.open_for(SECOND));
+        // Each phone steers its own seat, with its own ordering.
+        let a = p.input(FIRST, 100, d(-50, false), t0).unwrap();
+        let b = p.input(SECOND, 3, d(80, true), t0).unwrap();
+        assert_eq!((a.seat, b.seat), (FIRST, SECOND));
+        assert!((p.event(FIRST).steer + 0.5).abs() < 1e-6);
+        assert!(p.event(SECOND).boost && !p.event(FIRST).boost);
+        // Seat 2's low sequence numbers are its own: not "late" next to seat 1's.
+        assert!(p.input(SECOND, 4, d(0, false), t0).is_some());
+        // Each has its own rate limit: one phone flooding doesn't starve the other.
+        while p.admit(SECOND, t0) {}
+        assert!(p.admit(FIRST, t0));
+        // Each has its own reply (its player and its hits).
+        p.set_reply(
+            FIRST,
+            PadReply {
+                paused: false,
+                hits: 1,
+                player: Some(2),
+            },
+        );
+        p.set_reply(
+            SECOND,
+            PadReply {
+                paused: false,
+                hits: 0,
+                player: Some(1),
+            },
+        );
+        assert_eq!(p.reply(FIRST).player, Some(2));
+        assert_eq!(p.reply(SECOND).hits, 0);
+        // Silence is per phone: seat 2 keeps talking, seat 1 goes quiet.
+        p.input(SECOND, 5, d(10, false), t0 + QUIET);
+        assert_eq!(p.tick(t0 + QUIET + QUIET / 2), vec![PadEvent::gone(FIRST)]);
+        assert!(p.connected(SECOND));
+        assert_eq!(p.tick(t0 + QUIET * 2), vec![PadEvent::gone(SECOND)]);
+    }
+
+    #[test]
+    fn going_back_to_one_player_closes_seat_two() {
+        let t0 = Instant::now();
+        let mut p = Pad::new(t0, 1);
+        assert!(!p.open_for(SECOND));
+        assert_eq!(p.set_players(2, t0), None);
+        assert!(p.open_for(SECOND));
+        p.input(SECOND, 1, d(40, false), t0);
+        // The game said one player again: seat 2's phone is gone, and it starts over if it returns.
+        assert_eq!(p.set_players(1, t0), Some(PadEvent::gone(SECOND)));
+        assert!(!p.open_for(SECOND) && !p.connected(SECOND));
+        assert_eq!(p.set_players(1, t0), None, "said once");
+        // Anything else is clamped to one or two.
+        p.set_players(9, t0);
+        assert_eq!(p.players(), 2);
+        assert_eq!(Pad::new(t0, 0).players(), 1);
+    }
+
+    #[test]
+    fn the_reply_names_the_player_only_in_a_two_player_game() {
+        let solo = PadReply {
+            paused: true,
+            hits: 2,
+            player: None,
+        };
+        assert_eq!(serde_json::to_string(&solo).unwrap(), r#"{"paused":true,"hits":2}"#);
+        let duo = PadReply {
+            player: Some(2),
+            ..solo
+        };
+        assert_eq!(
+            serde_json::to_string(&duo).unwrap(),
+            r#"{"paused":true,"hits":2,"player":2}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&PadEvent::gone(SECOND)).unwrap(),
+            r#"{"seat":2,"connected":false,"steer":0.0,"boost":false}"#
+        );
     }
 
     #[test]
@@ -477,18 +643,19 @@ mod tests {
             l.summary().unwrap(),
             "n=10, half within 10 ms, 90% within 30 ms, slowest 180 ms"
         );
-        // Only probed inputs count.
+        // Only probed inputs count, per seat.
         let t0 = Instant::now();
-        let mut p = Pad::new(t0);
-        p.input(1, d(0, false), t0);
+        let mut p = Pad::new(t0, 2);
+        p.input(FIRST, 1, d(0, false), t0);
         let probed = Decoded {
             input: PadInput { steer: 1, boost: false },
             probe: Some(Probe { age_ms: 4, rtt_ms: 6 }),
         };
-        p.input(2, probed, t0);
+        p.input(FIRST, 2, probed, t0);
         assert_eq!(
-            p.latency().summary().unwrap(),
+            p.latency(FIRST).summary().unwrap(),
             "n=1, half within 7 ms, 90% within 7 ms, slowest 7 ms"
         );
+        assert_eq!(p.latency(SECOND).summary(), None);
     }
 }

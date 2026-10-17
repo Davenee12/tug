@@ -1,7 +1,9 @@
 // Dev-only stand-in for the PC, so the phone page can be reviewed in a browser:
 // `npm run dev:tugboat` → http://localhost:1430/?mock (add &busy for files on offer and PC text,
 // &offline for the "can't reach your PC" banner, &closed for the ended state, &game for tug's game
-// asking for a controller: the controller opens, and the PC "hits" the boat every 5 s).
+// asking for a controller: the controller opens, and the PC "hits" the boat every 5 s; add
+// &player=1 or &player=2 for a two-player race's colours, and &guest for a race's second phone,
+// which sees only the race: with &guest and no &game it waits for the next one).
 
 import { TugboatError, type TugboatApi, type PageOffer, type PageState } from "./client";
 
@@ -18,7 +20,9 @@ export function mockApi(): TugboatApi {
     offers,
     text: busy ? { id: 1, text: "https://maps.app.goo.gl/x7Qp — meet at the north entrance" } : null,
     game: params.has("game"),
+    guest: params.has("guest"),
   };
+  const player = params.get("player") === "2" ? 2 : params.get("player") === "1" ? 1 : undefined;
   const started = Date.now();
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   return {
@@ -52,7 +56,7 @@ export function mockApi(): TugboatApi {
       await sleep(15);
       if (!state.game) throw new TugboatError("no-game");
       console.debug("[mock] pad", input, probe);
-      return { paused: false, hits: Math.floor((Date.now() - started) / 5000) };
+      return { paused: false, hits: Math.floor((Date.now() - started) / 5000), player };
     },
   };
 }

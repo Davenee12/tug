@@ -58,7 +58,7 @@ export function retryDelay(attempt: number): number {
 
 /** Errors that retrying won't fix. Anything else (a dropped connection) is retried. */
 export function isFatal(code: string): boolean {
-  return ["closed", "unauthorized", "in-use", "too-big", "no-space", "changed", "not-found"].includes(code);
+  return ["closed", "unauthorized", "in-use", "full", "too-big", "no-space", "changed", "not-found"].includes(code);
 }
 
 /** A failed upload worth offering "Try again" for: not one the PC refused for good (too big, or
@@ -78,6 +78,8 @@ export function messageFor(code: string): string {
       return "This link has expired. Open Tugboat in tug and scan the code again.";
     case "in-use":
       return "Tugboat is already open on another device. Close Tugboat in tug and open it again for a new code.";
+    case "full":
+      return "This race already has two players. Scan the code again when one of them is done.";
     case "too-big":
       return "This file is too big to send.";
     case "no-space":

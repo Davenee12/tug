@@ -15,7 +15,8 @@ use tokio::net::{TcpListener, TcpStream};
 
 use super::auth;
 use super::crypto::{self, ad, Keys};
-use super::pad::{PadEvent, PadReply, BURST};
+use super::auth::Authorized;
+use super::pad::{PadEvent, PadReply, BURST, FIRST, SECOND};
 use super::server;
 use super::session::{self, FinishReply, Session, Sink, StateReply, UploadReply, OFFER_CHUNK};
 use super::upload::MIN_CHUNK;
@@ -173,7 +174,8 @@ async fn phone_session_over_a_socket() {
         StateReply {
             offers: vec![],
             text: None,
-            game: false
+            game: false,
+            guest: false
         }
     );
     assert_eq!(session.snapshot().phone.as_deref(), Some("iPhone"));
@@ -456,18 +458,23 @@ async fn game_controller_inputs_only_steer_the_game() {
     assert!(sink.pads.lock().unwrap().is_empty());
 
     // The game opens the channel: the page sees it at its next check-in.
-    assert!(session.pad_open());
-    assert!(!session.pad_open(), "opening twice is one channel");
+    assert!(session.pad_open(1));
+    assert!(!session.pad_open(1), "opening twice is one channel");
     let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
     assert!(state.unwrap().game);
 
     // A steering input reaches the game; the reply carries what the phone shows.
-    session.pad_feedback(PadReply { paused: true, hits: 2 });
+    let feedback = PadReply {
+        paused: true,
+        hits: 2,
+        player: None,
+    };
+    session.pad_feedback(FIRST, feedback);
     let (status, reply) = phone.call::<PadReply>("POST", "/api/pad", input(-40, true)).await;
     assert_eq!(status, 200);
-    assert_eq!(reply.unwrap(), PadReply { paused: true, hits: 2 });
+    assert_eq!(reply.unwrap(), feedback);
     let last = *sink.pads.lock().unwrap().last().unwrap();
-    assert!(last.connected && last.boost && (last.steer + 0.4).abs() < 1e-6);
+    assert!(last.connected && last.boost && last.seat == FIRST && (last.steer + 0.4).abs() < 1e-6);
     // A heartbeat with the same state doesn't bother the game again.
     let before = sink.pads.lock().unwrap().len();
     assert_eq!(
@@ -533,13 +540,19 @@ async fn game_controller_inputs_only_steer_the_game() {
 
     // A flood is cut off with "busy" (the phone sends at most ~30 a second). Drained here rather
     // than over the socket, so a slow test machine can't refill the bucket mid-flood.
+    let as_phone = Authorized {
+        client: phone.client.clone(),
+        seq: 0,
+        first: false,
+        guest: false,
+    };
     let refused = (0..(BURST as usize + 5))
-        .filter(|_| session.pad_admit().is_err())
+        .filter(|_| session.pad_admit(&as_phone).is_err())
         .count();
     assert!(refused >= 5, "a flood hits the rate limit");
     let mut saw_busy = false;
     for _ in 0..10 {
-        while session.pad_admit().is_ok() {}
+        while session.pad_admit(&as_phone).is_ok() {}
         if phone.call::<PadReply>("POST", "/api/pad", input(10, false)).await.0 == 429 {
             saw_busy = true;
             break;
@@ -559,6 +572,136 @@ async fn game_controller_inputs_only_steer_the_game() {
     assert_eq!(phone.call::<PadReply>("POST", "/api/pad", input(0, false)).await.0, 409);
     let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
     assert!(!state.unwrap().game);
+
+    let _ = stop.send(());
+    server.await.unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// The error code in a refusal's body (`{"error":"full"}` → "full").
+fn code(body: &[u8]) -> String {
+    serde_json::from_slice::<Value>(body).unwrap()["error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A two-player game, over a real socket: exactly two phones may steer, each with the session's
+/// own signing and sealing, each in its own seat; a third is turned away; the second phone can only
+/// steer (never files, text or the panel); and going back to one player lets it go.
+#[tokio::test]
+async fn a_two_player_game_takes_exactly_two_controllers() {
+    let root = temp_dir();
+    let secret = crypto::new_secret();
+    let sink = Arc::new(TestSink::default());
+    let session = Arc::new(Session::new(
+        &secret,
+        root.join("Tugboat"),
+        root.join("incoming"),
+        sink.clone(),
+    ));
+    let (addr, stop, server) = start_server(session.clone(), server::Limits::default()).await;
+    let input = |steer: i64, boost: bool| Some(json!({ "steer": steer, "boost": boost }));
+    let mut first = Phone::new(addr, &secret, "firstAAAAAAAAAAAAAAAAA");
+    let mut second = Phone::new(addr, &secret, "secondBBBBBBBBBBBBBBBB");
+    // The second phone's clock is a few minutes behind the first's: its own replay window.
+    second.seq -= 5 * 60_000 * 1024;
+    let mut third = Phone::new(addr, &secret, "thirdCCCCCCCCCCCCCCCCC");
+    session.set_pc_text("only for the first phone").unwrap();
+
+    // The first phone binds the session; a one-player game turns a second phone away as before.
+    assert_eq!(first.raw("GET", "/api/state", Vec::new()).await.status, 200);
+    session.pad_open(1);
+    let r = second.raw("GET", "/api/state", Vec::new()).await;
+    assert_eq!((r.status, code(&r.body).as_str()), (403, "in-use"));
+
+    // Two players: the second phone joins, sees only that there's a race, and steers seat 2.
+    assert!(!session.pad_open(2), "the same channel, now for two");
+    let (status, state) = second.call::<StateReply>("GET", "/api/state", None).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        state.unwrap(),
+        StateReply {
+            offers: vec![],
+            text: None,
+            game: true,
+            guest: true
+        }
+    );
+    let feedback = |player| PadReply {
+        paused: false,
+        hits: 0,
+        player: Some(player),
+    };
+    session.pad_feedback(FIRST, feedback(2));
+    session.pad_feedback(SECOND, feedback(1));
+    let (status, reply) = second.call::<PadReply>("POST", "/api/pad", input(70, true)).await;
+    assert_eq!((status, reply.unwrap().player), (200, Some(1)));
+    let last = *sink.pads.lock().unwrap().last().unwrap();
+    assert_eq!((last.seat, last.connected, last.boost), (SECOND, true, true));
+    assert!((last.steer - 0.7).abs() < 1e-6);
+    // The first phone is seat 1, and its reply is its own.
+    let (_, reply) = first.call::<PadReply>("POST", "/api/pad", input(-20, false)).await;
+    assert_eq!(reply.unwrap().player, Some(2));
+    assert_eq!(sink.pads.lock().unwrap().last().unwrap().seat, FIRST);
+    // The first phone still sees the session as its own.
+    let (_, state) = first.call::<StateReply>("GET", "/api/state", None).await;
+    let state = state.unwrap();
+    assert!(state.game && !state.guest);
+    assert_eq!(state.text.unwrap().text, "only for the first phone");
+
+    // A third phone, even with the secret, is turned away from the race.
+    let r = third.raw("GET", "/api/state", Vec::new()).await;
+    assert_eq!((r.status, code(&r.body).as_str()), (403, "full"));
+    assert_eq!(
+        third.call::<PadReply>("POST", "/api/pad", input(100, false)).await.0,
+        403
+    );
+
+    // The second phone can only steer: no text, no files, nothing from the PC.
+    assert_eq!(
+        second
+            .call::<Value>("POST", "/api/text", Some(json!({ "text": "hi" })))
+            .await
+            .0,
+        403
+    );
+    let begin = json!({ "name": "a.jpg", "size": 10, "chunkSize": MIN_CHUNK });
+    assert_eq!(
+        second
+            .call::<UploadReply>("POST", "/api/up/fileAAAAAAAAAAAAAAAAAA", Some(begin))
+            .await
+            .0,
+        403
+    );
+    assert_eq!(
+        second.raw("GET", "/api/down/x/0", Vec::new()).await.status,
+        403
+    );
+    let snap = session.snapshot();
+    assert!(snap.texts.is_empty() && snap.incoming.is_empty());
+    assert_eq!(snap.phone.as_deref(), Some("iPhone"), "the panel's phone is still the first");
+
+    // Back to one player: seat 2's phone is let go (the game hears it's gone), and it waits.
+    session.pad_open(1);
+    assert_eq!(*sink.pads.lock().unwrap().last().unwrap(), PadEvent::gone(SECOND));
+    assert_eq!(second.call::<PadReply>("POST", "/api/pad", input(0, false)).await.0, 409);
+    let (_, state) = second.call::<StateReply>("GET", "/api/state", None).await;
+    let state = state.unwrap();
+    assert!(!state.game && state.guest);
+    // A rematch for two: the same second phone steers again.
+    session.pad_open(2);
+    assert_eq!(
+        second.call::<PadReply>("POST", "/api/pad", input(10, false)).await.0,
+        200
+    );
+
+    // The game closes: both phones are gone at once.
+    let before = sink.pads.lock().unwrap().len();
+    session.pad_close();
+    let pads = sink.pads.lock().unwrap()[before..].to_vec();
+    assert_eq!(pads, vec![PadEvent::gone(FIRST), PadEvent::gone(SECOND)]);
+    assert_eq!(second.call::<PadReply>("POST", "/api/pad", input(0, false)).await.0, 409);
 
     let _ = stop.send(());
     server.await.unwrap();
@@ -590,7 +733,7 @@ async fn controller_inputs_reuse_one_connection() {
     for i in 0..6 {
         // The game opens the controller after the first (refused) input.
         if i == 1 {
-            session.pad_open();
+            session.pad_open(1);
         }
         seq += 1;
         let body = keys.seal(
@@ -618,6 +761,113 @@ async fn controller_inputs_reuse_one_connection() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// Not a test: the controller's round trip on localhost, input by input over one kept-alive
+/// connection, as the phone sends them (signed, sealed, reply opened). Prints p50/p90/p99 so a
+/// change to the channel can be compared before and after.
+///   cargo test --manifest-path src-tauri/Cargo.toml controller_latency_bench -- --ignored --nocapture
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn controller_latency_bench() {
+    let root = temp_dir();
+    let secret = crypto::new_secret();
+    let session = Arc::new(Session::new(
+        &secret,
+        root.join("Tugboat"),
+        root.join("incoming"),
+        Arc::new(TestSink::default()),
+    ));
+    let (addr, stop, server) = start_server(session.clone(), server::Limits::default()).await;
+    // BENCH_PLAYERS=2: a two-player game, with a second phone steering at the same pace alongside.
+    let duo = std::env::var("BENCH_PLAYERS").is_ok_and(|v| v == "2");
+    session.pad_open(if duo { 2 } else { 1 });
+    let keys = Keys::derive(&secret);
+    let client = "phoneAAAAAAAAAAAAAAAAA";
+    let mut first = Phone::new(addr, &secret, client);
+    assert_eq!(first.raw("GET", "/api/state", Vec::new()).await.status, 200);
+    let guest = duo.then(|| {
+        let keys = Keys::derive(&secret);
+        tokio::spawn(async move {
+            let client = "secondBBBBBBBBBBBBBBBB";
+            let stream = TcpStream::connect(addr).await.unwrap();
+            let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+                .await
+                .unwrap();
+            tokio::spawn(conn);
+            let mut seq = 1_700_000_000_000u64 * 1024;
+            loop {
+                seq += 1;
+                let body = keys.seal(&ad::request(client, seq), br#"{"steer":30,"boost":false}"#);
+                let req = Request::builder()
+                    .method("POST")
+                    .uri("/api/pad")
+                    .header("host", addr.to_string())
+                    .header("authorization", auth::header(&keys, client, seq, "POST", "/api/pad"))
+                    .body(Full::new(Bytes::from(body)))
+                    .unwrap();
+                if sender.ready().await.is_err() {
+                    return;
+                }
+                let Ok(res) = sender.send_request(req).await else { return };
+                assert_eq!(res.status().as_u16(), 200);
+                let _ = res.into_body().collect().await;
+                tokio::time::sleep(std::time::Duration::from_millis(12)).await;
+            }
+        })
+    });
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .unwrap();
+    tokio::spawn(conn);
+    let mut seq = first.seq;
+    let mut times = Vec::new();
+    for i in 0..3000u32 {
+        seq += 1;
+        let started = std::time::Instant::now();
+        let steer = (i % 200) as i64 - 100;
+        let body = keys.seal(
+            &ad::request(client, seq),
+            format!(r#"{{"steer":{steer},"boost":false}}"#).as_bytes(),
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/pad")
+            .header("host", addr.to_string())
+            .header("authorization", auth::header(&keys, client, seq, "POST", "/api/pad"))
+            .body(Full::new(Bytes::from(body)))
+            .unwrap();
+        sender.ready().await.unwrap();
+        let res = sender.send_request(req).await.unwrap();
+        assert_eq!(res.status().as_u16(), 200);
+        let reply = res.into_body().collect().await.unwrap().to_bytes();
+        keys.open(&ad::response(client, seq), &reply).expect("reply opens");
+        // Below the rate limit, like a phone at ~60 inputs a second would be (but faster, so the
+        // bench doesn't take minutes): the bucket refills between inputs.
+        if i >= 500 {
+            times.push(started.elapsed());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(12)).await;
+    }
+    times.sort();
+    let at = |p: f64| times[((times.len() as f64 * p) as usize).min(times.len() - 1)];
+    if let Some(g) = guest {
+        g.abort();
+    }
+    println!(
+        "controller round trip on localhost ({} player(s)): n={}, p50 {:?}, p90 {:?}, p99 {:?}, max {:?}",
+        if duo { 2 } else { 1 },
+        times.len(),
+        at(0.5),
+        at(0.9),
+        at(0.99),
+        times[times.len() - 1]
+    );
+    drop(sender);
+    let _ = stop.send(());
+    server.await.unwrap();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// Closing the channel while a phone is steering tells the game at once.
 #[test]
 fn closing_the_controller_tells_the_game_the_phone_is_gone() {
@@ -630,8 +880,8 @@ fn closing_the_controller_tells_the_game_the_phone_is_gone() {
     let seq = 1_790_000_000_000 * 1024;
     let header = auth::header(&keys, client, seq, "POST", "/api/pad");
     let ok = session.authorize(Some(&header), "POST", "/api/pad", None).unwrap();
-    session.pad_open();
-    session.pad_admit().unwrap();
+    session.pad_open(1);
+    session.pad_admit(&ok).unwrap();
     let body = keys.seal(&ad::request(client, seq), br#"{"steer":-100,"boost":false}"#);
     session.pad_input(&ok, &body).unwrap();
     assert!(sink.pads.lock().unwrap().last().unwrap().connected);
@@ -686,8 +936,9 @@ async fn manual_page() {
     std::fs::write(&offered, "Hello from tug on the PC.\n".repeat(200_000)).unwrap();
     session.offer(&[offered]);
     session.set_pc_text("Text from the PC").unwrap();
-    if std::env::var("TUGBOAT_GAME").is_ok() {
-        session.pad_open();
+    if let Ok(game) = std::env::var("TUGBOAT_GAME") {
+        // TUGBOAT_GAME=2: a two-player game (a second browser can join as Player 2).
+        session.pad_open(if game == "2" { 2 } else { 1 });
         let watched = session.clone();
         let pads = sink.clone();
         tokio::spawn(async move {

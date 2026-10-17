@@ -20,6 +20,9 @@ export interface PageState {
   text: { id: number; text: string } | null;
   /** tug's game on the PC wants this phone as its controller. */
   game: boolean;
+  /** This phone joined a two-player race as the second controller: it only steers (no files or
+   * text), and waits on the PC for the next race when there isn't one. */
+  guest?: boolean;
 }
 
 /** What the PC answers each controller input with. */
@@ -27,6 +30,8 @@ export interface PadReply {
   paused: boolean;
   /** Times the boat was hit this run: the phone buzzes when it goes up. */
   hits: number;
+  /** In a two-player race, which player this phone is (its colour). */
+  player?: 1 | 2;
 }
 
 interface UploadReply {

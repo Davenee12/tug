@@ -36,6 +36,8 @@ const steer = ref(0);
 const boost = ref(false);
 const status = ref<"connecting" | "ok" | "network">("connecting");
 const paused = ref(false);
+/** In a two-player race, which player this phone is (the PC says, in each reply). */
+const player = ref<1 | 2 | null>(null);
 const tilt = tiltSupport({ secure: window.isSecureContext, hasOrientation: "DeviceOrientationEvent" in window });
 
 const buzz = (ms: number) => {
@@ -161,6 +163,7 @@ async function send() {
     if (id > appliedReply) {
       appliedReply = id;
       paused.value = reply.paused;
+      player.value = reply.player === 1 || reply.player === 2 ? reply.player : null;
       if (lastHits !== null && reply.hits > lastHits) buzz(120);
       lastHits = reply.hits;
     }
@@ -218,6 +221,8 @@ onUnmounted(() => {
 const statusText = computed(() =>
   status.value === "network" ? "Can't reach PC" : status.value === "connecting" ? "Connecting…" : paused.value ? "Paused on your PC" : "Connected",
 );
+/** Player 1 is coral, Player 2 teal, like their boats on the PC. */
+const teal = computed(() => player.value === 2);
 /** Where the knob sits on the pad, matching `positionFromTouch` (6% margin each side). */
 const knob = computed(() => `${6 + (steer.value + 1) * 44}%`);</script>
 
@@ -228,6 +233,12 @@ const knob = computed(() => `${6 + (steer.value + 1) * 44}%`);</script>
     <header class="flex items-center gap-2.5">
       <TugMark :size="26" class="text-ink" />
       <h1 class="headline text-[24px] leading-none">Tugboat Run</h1>
+      <span
+        v-if="player"
+        :class="['inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[13px] font-medium text-on-primary', teal ? 'bg-accent-teal' : 'bg-primary']"
+      >
+        Player {{ player }}
+      </span>
       <span class="ml-auto inline-flex items-center gap-1.5 rounded-full bg-card px-3 py-1 text-[13px] font-medium text-body" role="status">
         <span
           :class="[
@@ -258,8 +269,8 @@ const knob = computed(() => `${6 + (steer.value + 1) * 44}%`);</script>
         @pointercancel="onPadUp"
       >
         <div class="absolute inset-y-6 left-1/2 w-px bg-hairline" />
-        <ChevronLeft :size="44" :class="['absolute left-4', steer < 0 ? 'text-primary' : 'text-muted']" />
-        <ChevronRight :size="44" :class="['absolute right-4', steer > 0 ? 'text-primary' : 'text-muted']" />
+        <ChevronLeft :size="44" :class="['absolute left-4', steer < 0 ? (teal ? 'text-accent-teal' : 'text-primary') : 'text-muted']" />
+        <ChevronRight :size="44" :class="['absolute right-4', steer > 0 ? (teal ? 'text-accent-teal' : 'text-primary') : 'text-muted']" />
         <span
           class="absolute top-1/2 size-16 -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-canvas bg-ink/80 shadow-md"
           :style="{ left: knob }"
@@ -271,7 +282,7 @@ const knob = computed(() => `${6 + (steer.value + 1) * 44}%`);</script>
       <button
         :class="[
           'flex shrink-0 flex-col items-center justify-center rounded-3xl text-on-primary transition-colors h-36 landscape:h-auto landscape:w-[38%]',
-          boost ? 'bg-primary-active' : 'bg-primary',
+          teal ? (boost ? 'bg-accent-teal brightness-90' : 'bg-accent-teal') : boost ? 'bg-primary-active' : 'bg-primary',
         ]"
         aria-label="Boost"
         @pointerdown="onBoostDown"

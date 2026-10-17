@@ -64,6 +64,8 @@ describe("retries and messages", () => {
   it("knows which errors are final", () => {
     expect(isFatal("closed")).toBe(true);
     expect(isFatal("in-use")).toBe(true);
+    expect(isFatal("full")).toBe(true);
+    expect(messageFor("full")).toContain("two players");
     expect(isFatal("network")).toBe(false);
     expect(isFatal("bad-chunk")).toBe(false);
   });

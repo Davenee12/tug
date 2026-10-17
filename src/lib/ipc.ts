@@ -169,12 +169,15 @@ export const api = {
   /** Open the Tugboat folder, or select a file Tugboat saved. */
   tugboatOpenFolder: (path: string | null) => invoke<void>("tugboat_open_folder", { path }),
   // --- Tugboat Run's phone controller ---
-  /** Open Tugboat if needed and the controller channel; Tugboat's status carries the QR code. */
-  gamePadOpen: () => invoke<TugboatStatus>("game_pad_open"),
+  /** Open Tugboat if needed and the controller channel for one phone, or two (a two-player race);
+   * asking again changes how many. Tugboat's status carries the QR code. */
+  gamePadOpen: (players: 1 | 2 = 1) => invoke<TugboatStatus>("game_pad_open", { players }),
   /** The game closed: the phone's inputs are refused again. */
   gamePadClose: () => invoke<void>("game_pad_close"),
-  /** What the phone's controller shows: paused, and hits this run (it buzzes on a new one). */
-  gamePadFeedback: (paused: boolean, hits: number) => invoke<void>("game_pad_feedback", { paused, hits }),
+  /** What a phone's controller shows: paused, hits this run (it buzzes on a new one), and in a race
+   * which player it is (its colour). */
+  gamePadFeedback: (seat: 1 | 2, paused: boolean, hits: number, player: 1 | 2 | null) =>
+    invoke<void>("game_pad_feedback", { seat, paused, hits, player }),
   // --- Developer tools ---
   devtoolsStatus: () => invoke<DevToolsStatus>("devtools_status"),
   /** "Let AI tools use tug". */

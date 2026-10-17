@@ -549,6 +549,8 @@ export interface TugboatTextArrived {
  * steering or boost changes, and when the phone arrives or goes quiet.
  */
 export interface GamePad {
+  /** Which phone: 1 is the one that opened Tugboat, 2 a second phone (two-player games only). */
+  seat: 1 | 2;
   connected: boolean;
   /** -1 (full left) to 1 (full right); 0 whenever not connected. */
   steer: number;
