@@ -68,9 +68,12 @@ Disconnect any time in Settings › Connectors, which removes the stored sign-in
   does with what it reads is up to that tool and its provider's privacy policy.
 - **Hide previews while sharing or presenting** (Settings › Notifications, on by default) looks at
   this PC only: whether Windows reports a full-screen app or presentation mode, whether the display
-  is duplicated, and whether a meeting app's or browser's sharing bar is open. To tell those bars
-  apart, tug reads the title of a few known windows (Teams' and the browsers'); it never keeps or
-  logs a window title, and its log names only which kind of signal it saw.
+  is duplicated, and whether a meeting app's or browser's sharing bar is open. To spot those bars,
+  tug reads the title of every open browser window (Chrome, Edge, Brave, Vivaldi, Opera) and Teams
+  window, which can include the page you're on; it compares it on the spot and never keeps or logs
+  a window title, and its log names only which kind of signal it saw. When hiding starts, tug takes
+  back its text and notification pop-ups still on screen or in Action Center (they stay in tug's
+  Feed); its own pop-ups, like low battery, stay.
 
 ## Deleting your data
 

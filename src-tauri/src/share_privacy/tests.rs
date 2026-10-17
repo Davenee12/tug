@@ -470,6 +470,34 @@ fn a_spec_that_doesnt_say_what_it_is_is_hidden_like_a_notification() {
 }
 
 #[test]
+fn when_hiding_starts_the_phones_pop_ups_are_taken_back_and_tugs_own_stay() {
+    // Which pop-ups go: everything from the phone and every follow-up; never tug's own.
+    assert!(withdraw_when_hiding(PopupGroup::Phone));
+    assert!(withdraw_when_hiding(PopupGroup::FollowUp));
+    assert!(!withdraw_when_hiding(PopupGroup::Own));
+    for kind in [
+        ToastKind::Message,
+        ToastKind::Notification,
+        ToastKind::Call,
+        ToastKind::MissedCall,
+    ] {
+        assert_eq!(popup_group(kind), PopupGroup::Phone, "{kind:?}");
+    }
+    assert_eq!(popup_group(ToastKind::Info), PopupGroup::Own, "low battery stays");
+
+    // When: only on the edge into hiding (for any reason, including not knowing).
+    let sharing = ShareState::from_signal(Some(Signal::ShareWindow("zoom-share")));
+    let presenting = ShareState::from_signal(Some(Signal::DuplicateDisplay));
+    let clear = ShareState::default();
+    assert!(hiding_started(clear, sharing));
+    assert!(hiding_started(clear, share_state(true, None, true)));
+    assert!(!hiding_started(sharing, sharing));
+    assert!(!hiding_started(sharing, presenting), "still hiding, for another reason");
+    assert!(!hiding_started(sharing, clear));
+    assert!(!hiding_started(clear, clear));
+}
+
+#[test]
 fn a_hidden_follow_up_drops_the_name_and_text() {
     assert_eq!(redact_note("Sent"), ("Sent".to_string(), String::new()));
 }

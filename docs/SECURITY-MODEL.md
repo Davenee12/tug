@@ -93,6 +93,12 @@ and the shortcut types only what the backend picks from tug's own history. Copie
 of clipboard history and cloud sync and are cleared after 2 minutes if still there; the shortcut
 never types into tug's own window; logs say a code was copied or typed, never which.
 
+**Hide previews while sharing or presenting.** On by default. To spot a sharing bar, tug reads
+the title of every open browser window (Chrome, Edge, Brave, Vivaldi, Opera) and Teams window, so
+page titles pass through it; they're compared on the spot and never kept or logged (the log names
+only the kind of signal). It fails closed: if Windows doesn't answer in time, previews are hidden.
+When hiding starts, the phone's pop-ups already on screen or in Action Center are taken back.
+
 **Voice typing.** Off by default. While it's on, tug registers one global shortcut from a fixed
 list and opens the microphone only between that shortcut's press and release (polled with
 GetAsyncKeyState; no keyboard hook, so tug never sees other keys). Audio stays in memory for that

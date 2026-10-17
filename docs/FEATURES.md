@@ -85,8 +85,12 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   Teams, Zoom or a browser (Google Meet and others) shares your screen, a PowerPoint slide show
   runs, the display is duplicated or an app is full screen, pop-ups say only "New message" or "New
   notification" with the app's name, calls ring as "Incoming call", and tug's window blurs texts,
-  names and photos under a "Previews hidden" banner with **Show anyway** for that share. It clears
-  within about 2 seconds of the share ending. Webex, Discord and Slack can't be detected unless the
+  names and photos (in search too) under a "Previews hidden" banner with **Show anyway** for that
+  share. Text and notification pop-ups already on screen or in Action Center are taken back when
+  hiding starts (they stay in the Feed); tug's own, like low battery, stay. If tug can't check the
+  screen in time, it hides previews to be safe and says so. It clears within about 2 seconds of
+  the share ending. To spot a browser's or Teams' sharing bar, tug reads those windows' titles; it
+  never keeps or logs them. Webex, Discord and Slack can't be detected unless the
   share is full screen; nor can a browser shown in a language other than English.
 
 ## Messages (texts)

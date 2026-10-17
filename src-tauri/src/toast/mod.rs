@@ -19,6 +19,8 @@
 //! its Start-menu shortcut (no COM activator, so the press and any typed text are lost)
 //! and the window simply opens. To keep that from happening with stale buttons, tug takes
 //! its notification pop-ups back when it quits, and when the phone clears a notification.
+//! When previews start hiding (screen shared or presented, `share_privacy`), the phone's pop-ups
+//! and their follow-ups are taken back too, since they were shown in full; tug's own stay.
 
 pub mod xml;
 
@@ -32,6 +34,7 @@ use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::messages::StoredMessage;
+use crate::share_privacy::PopupGroup;
 
 pub use xml::ToastSpec;
 
@@ -42,6 +45,20 @@ const GROUP_NOTIFICATIONS: &str = "n";
 /// Follow-ups ("Sent to Zoe", "Couldn't send"): tag `note-<id>`.
 #[cfg_attr(not(windows), allow(dead_code))]
 const GROUP_NOTES: &str = "note";
+/// tug's own pop-ups (`Info`: low battery and the like), apart from the phone's so hiding
+/// previews can take the phone's back and leave these (`share_privacy::withdraw_when_hiding`).
+#[cfg_attr(not(windows), allow(dead_code))]
+const GROUP_OWN: &str = "tug";
+
+/// The Action Center group for each kind of pop-up.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn group_name(group: PopupGroup) -> &'static str {
+    match group {
+        PopupGroup::Phone => GROUP_NOTIFICATIONS,
+        PopupGroup::FollowUp => GROUP_NOTES,
+        PopupGroup::Own => GROUP_OWN,
+    }
+}
 /// A "Sent" note leaves Action Center on its own after this long.
 #[cfg(windows)]
 const SENT_NOTE_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
@@ -181,7 +198,8 @@ pub fn show(app: &AppHandle, spec: ToastSpec) {
     #[cfg(windows)]
     {
         let xml = xml::notification_toast(&spec, sound_on(app));
-        match show_native(app, &xml, &spec.id.to_string(), GROUP_NOTIFICATIONS, None) {
+        let group = group_name(crate::share_privacy::popup_group(spec.kind));
+        match show_native(app, &xml, &spec.id.to_string(), group, None) {
             Ok(()) => return,
             Err(e) => log::warn!("actionable pop-up failed ({}); showing a plain one", e.message()),
         }
@@ -208,14 +226,37 @@ pub fn withdraw(app: &AppHandle, id: i64) {
 }
 
 /// tug is quitting: once it's gone nothing would hear a press (and a typed reply would be
-/// lost), so take its notification pop-ups out of Action Center.
+/// lost), so take its notification pop-ups (and its own, which have buttons too) out of Action
+/// Center.
 pub fn withdraw_all(app: &AppHandle) {
+    remove_groups(app, &[GROUP_NOTIFICATIONS, GROUP_OWN]);
+}
+
+/// Previews just started hiding: the pop-ups already on screen or in Action Center were shown in
+/// full, so take back the phone's and the follow-ups (they stay in tug's Feed) and leave tug's
+/// own (`share_privacy::withdraw_when_hiding`).
+pub fn withdraw_while_hiding(app: &AppHandle) {
+    let groups: Vec<&str> = PopupGroup::ALL
+        .into_iter()
+        .filter(|g| crate::share_privacy::withdraw_when_hiding(*g))
+        .map(group_name)
+        .collect();
+    remove_groups(app, &groups);
+    log::info!("share privacy: took back pop-ups already shown");
+}
+
+fn remove_groups(app: &AppHandle, groups: &[&str]) {
     #[cfg(windows)]
-    if let Err(e) = native::remove_group(&aumid(app), GROUP_NOTIFICATIONS) {
-        log::debug!("pop-ups not withdrawn: {}", e.message());
+    {
+        let aumid = aumid(app);
+        for group in groups {
+            if let Err(e) = native::remove_group(&aumid, group) {
+                log::debug!("pop-ups ({group}) not withdrawn: {}", e.message());
+            }
+        }
     }
     #[cfg(not(windows))]
-    let _ = app;
+    let _ = (app, groups);
 }
 
 #[cfg(windows)]
@@ -536,6 +577,33 @@ mod tests {
             Some(&*format!("p{}", 1000 + KEEP as i64 + 4))
         );
         assert!(SPECS.lock().unwrap().len() <= KEEP);
+    }
+
+    #[test]
+    fn hiding_previews_takes_back_the_phones_pop_ups_and_follow_ups_only() {
+        use crate::share_privacy::{popup_group, withdraw_when_hiding};
+        use xml::ToastKind;
+        // Each kind's Action Center group: tug's own apart from the phone's.
+        for kind in [
+            ToastKind::Message,
+            ToastKind::Notification,
+            ToastKind::Call,
+            ToastKind::MissedCall,
+        ] {
+            assert_eq!(group_name(popup_group(kind)), GROUP_NOTIFICATIONS, "{kind:?}");
+        }
+        assert_eq!(group_name(popup_group(ToastKind::Info)), GROUP_OWN);
+        let taken_back: Vec<&str> = PopupGroup::ALL
+            .into_iter()
+            .filter(|g| withdraw_when_hiding(*g))
+            .map(group_name)
+            .collect();
+        assert_eq!(taken_back, [GROUP_NOTIFICATIONS, GROUP_NOTES]);
+        // Every group has its own name, so removing one never takes another's pop-ups.
+        let mut names: Vec<&str> = PopupGroup::ALL.into_iter().map(group_name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), PopupGroup::ALL.len());
     }
 
     #[test]

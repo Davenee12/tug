@@ -46,9 +46,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::{
-    class_of_interest, covers_monitor, enabled_from_setting, hide_preview, judge, needs_title, plan_look, share_state,
-    transition, Answer, LookPlan, Rect, ShareState, Signal, Snapshot, TopWindow, EVENT, QUNS_APP, QUNS_BUSY,
-    QUNS_RUNNING_D3D_FULL_SCREEN, SETTING,
+    class_of_interest, covers_monitor, enabled_from_setting, hide_preview, hiding_started, judge, needs_title,
+    plan_look, share_state, transition, Answer, LookPlan, Rect, ShareState, Signal, Snapshot, TopWindow, EVENT,
+    QUNS_APP, QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, SETTING,
 };
 use crate::store::Store;
 
@@ -117,6 +117,10 @@ impl Monitor {
         }
         if let Some(line) = transition(before, after) {
             log::info!("share privacy: {line}");
+        }
+        if hiding_started(was, now) {
+            // Before anything new pops up (a pop-up's own look lands here first, then shows).
+            crate::toast::withdraw_while_hiding(&self.app);
         }
         if was != now {
             if let Err(e) = self.app.emit(EVENT, now) {

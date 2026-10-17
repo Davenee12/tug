@@ -40,8 +40,11 @@
 //! Firefox's sharing indicator also shows for a camera or microphone alone, so it can't say
 //! "sharing". Whatever app shares, a full-screen app or a duplicated display still counts.
 //!
-//! **Privacy:** window titles are never read except for the few windows a rule names by
-//! program and class, never kept and never logged; the log names the signal only.
+//! **Privacy:** titles are read only for windows whose program and class a title rule names
+//! ([`needs_title`]): that is every open browser window (Chrome, Edge, Brave, Vivaldi, Opera) and
+//! Teams window, so page titles pass through here. They're compared on the spot, never kept and
+//! never logged; the log names the signal only. When hiding starts, the phone's pop-ups already
+//! shown are taken back ([`withdraw_when_hiding`]).
 
 #[cfg(windows)]
 mod win;
@@ -489,6 +492,44 @@ fn app_or_tug(app: &str) -> String {
     } else {
         app.to_string()
     }
+}
+
+/// tug's pop-ups, by what they can show. Each is its own Action Center group (`toast/mod.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PopupGroup {
+    /// Texts, notifications and calls from the phone: names, texts, codes.
+    Phone,
+    /// Follow-ups about them ("Sent to Zoe" and the reply).
+    FollowUp,
+    /// tug's own (`Info`: low battery and the like): nothing anyone else wrote.
+    Own,
+}
+
+impl PopupGroup {
+    pub const ALL: [PopupGroup; 3] = [PopupGroup::Phone, PopupGroup::FollowUp, PopupGroup::Own];
+}
+
+/// Which group a pop-up of this kind goes in.
+pub fn popup_group(kind: ToastKind) -> PopupGroup {
+    match kind {
+        ToastKind::Info => PopupGroup::Own,
+        ToastKind::Message | ToastKind::Notification | ToastKind::Call | ToastKind::MissedCall => PopupGroup::Phone,
+    }
+}
+
+/// When hiding starts, the pop-ups already on screen or in Action Center were shown in full: take
+/// back everything from the phone and every follow-up (they stay in tug's Feed and
+/// conversations), and leave tug's own alone.
+pub fn withdraw_when_hiding(group: PopupGroup) -> bool {
+    match group {
+        PopupGroup::Phone | PopupGroup::FollowUp => true,
+        PopupGroup::Own => false,
+    }
+}
+
+/// Whether this change of state is hiding starting (the moment to take pop-ups back).
+pub fn hiding_started(was: ShareState, now: ShareState) -> bool {
+    !was.active && now.active
 }
 
 /// A follow-up note ("Sent to Zoe" and the text) while previews are hidden: the generic title
