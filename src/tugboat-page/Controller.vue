@@ -133,7 +133,7 @@ function onActionDown(e: PointerEvent) {
   actionPointer = e.pointerId;
   capture(e.currentTarget as Element, e.pointerId);
   held.value = true;
-  presses.press();
+  presses.press(performance.now());
   taps.value++;
   buzz(12);
   kick();
@@ -142,6 +142,7 @@ function onActionUp(e: PointerEvent) {
   if (e.pointerId !== actionPointer) return;
   actionPointer = null;
   held.value = false;
+  presses.release(performance.now());
   kick();
 }
 
@@ -206,14 +207,14 @@ let sentCount = 0;
 let appliedReply = 0;
 let stopped = false;
 let backoffUntil = 0;
-/** Presses the PC hasn't confirmed. Only the newest state goes out and two can be in flight, so a
- * quick tap (down and up between two sends, or a release overtaking its press) would otherwise
- * never reach the PC: the press stays in every input until a reply to one carrying it comes back,
- * and only then does the release go (`PressLatch`). */
+/** The button's presses and releases the PC hasn't confirmed. Only the newest state goes out and two
+ * can be in flight, so a quick tap (down and up between two sends, or a release overtaking its
+ * press) would otherwise never reach the PC, and two quick taps could arrive as one: each change
+ * stays in every input until a reply to one carrying it comes back, and only then does the next go
+ * (`PressLatch`), so two taps are two presses. One the PC hasn't heard in 500 ms is dropped. */
 const presses = new PressLatch();
 
-const current = () => encodeFor(game.value, steer.value, held.value || presses.pending);
-const carriesPress = (input: PadInput) => input.boost || input.drop === true;
+const current = () => encodeFor(game.value, steer.value, presses.down(performance.now()));
 
 /** Something changed: send it now if the pacing allows, or at the next 16 ms mark. */
 function kick() {
@@ -243,15 +244,15 @@ async function send() {
   dirtySince = null;
   lastSentAt = started;
   lastQueued = input;
-  const mark = carriesPress(input) ? presses.mark() : 0;
+  const mark = presses.mark();
   // Ready for the next change straight away (up to two in flight).
   pump();
   try {
     const reply = await props.api.pad(input, p);
     lastRtt = performance.now() - started;
     status.value = "ok";
-    // The PC has this press: the release can follow (a change, so the next pump sends it at once).
-    if (mark > 0) presses.heardUpTo(mark);
+    // The PC has this change: the next one can follow (a change, so the next pump sends it at once).
+    if (mark > 0) presses.heardUpTo(mark, performance.now());
     if (id > appliedReply) {
       appliedReply = id;
       paused.value = reply.paused;
@@ -272,7 +273,11 @@ async function send() {
     lastQueued = null;
     if (action === "slow") backoffUntil = performance.now() + BUSY_BACKOFF_MS;
     else {
-      if (code === "network") status.value = "network";
+      if (code === "network") {
+        status.value = "network";
+        // A press saved during a Wi-Fi blip mustn't fire when it comes back.
+        presses.clear();
+      }
       backoffUntil = performance.now() + 500;
     }
   } finally {

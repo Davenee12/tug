@@ -136,35 +136,91 @@ export function padBody(input: PadInput, probe?: PadProbe): Record<string, numbe
   return body;
 }
 
+/** How long a press (or release) may wait for the PC to hear it. Past this it's dropped: a press
+ * held back by a Wi-Fi blip and delivered seconds later would drop a container nobody meant to drop
+ * then. A round trip on the same Wi-Fi is a few milliseconds. */
+export const PRESS_EXPIRE_MS = 500;
+/** Button changes waiting behind the one on its way (a burst of taps), at most. */
+const MAX_QUEUED = 6;
+
 /**
- * The big button's presses, latched until the PC has heard one. Only the newest state goes out,
- * and up to two inputs are in flight (the PC ignores the older if they land out of order), so a
- * quick tap whose press and release go out back to back could lose its press. Instead the press
- * stays in every input until a reply to one that carried it comes back; only then can the release
- * go. The press reaches the PC just as fast; the release waits one round trip.
+ * The big button's presses and releases, each latched until the PC has heard it. Only the newest
+ * state goes out, and up to two inputs are in flight (the PC ignores the older if they land out of
+ * order), so a quick tap whose press and release go out back to back could lose its press, and two
+ * quick taps could reach the PC as one long press. Instead each change stays in every input until a
+ * reply to one that carried it comes back, and only then does the next change go: a tap is a press
+ * and then a release, and two taps are two presses with a release between them. The first press
+ * reaches the PC just as fast; each change after it waits one round trip.
+ *
+ * A change the PC hasn't heard within `PRESS_EXPIRE_MS`, or when the connection drops (`clear`), is
+ * forgotten, and a finger still on the button doesn't count until it presses again, so nothing
+ * fires late.
  */
 export class PressLatch {
-  private presses = 0;
-  private heard = 0;
+  /** What the PC has confirmed: up until a press is heard. */
+  private heardDown = false;
+  /** The change on its way, until a reply to an input carrying it comes back. */
+  private frame: { down: boolean; id: number; since: number } | null = null;
+  /** Changes to send after it, in order. */
+  private queue: boolean[] = [];
+  private ids = 0;
+
+  /** Where the button is heading: the last change asked for. */
+  private get wanted(): boolean {
+    if (this.queue.length) return this.queue[this.queue.length - 1];
+    return this.frame ? this.frame.down : this.heardDown;
+  }
+
+  private push(down: boolean, now: number) {
+    this.expire(now);
+    if (this.wanted === down) return;
+    if (this.frame === null) this.frame = { down, id: ++this.ids, since: now };
+    else if (this.queue.length < MAX_QUEUED) this.queue.push(down);
+  }
+
+  private expire(now: number) {
+    if (this.frame && now - this.frame.since > PRESS_EXPIRE_MS) this.clear();
+  }
+
   /** A finger came down on the button. */
-  press() {
-    this.presses++;
+  press(now: number) {
+    this.push(true, now);
   }
-  /** A press the PC hasn't confirmed yet. */
+
+  /** The finger lifted. */
+  release(now: number) {
+    this.push(false, now);
+  }
+
+  /** The button as it goes on the wire now. */
+  down(now: number): boolean {
+    this.expire(now);
+    return this.frame ? this.frame.down : this.heardDown;
+  }
+
+  /** A change the PC hasn't confirmed yet. */
   get pending(): boolean {
-    return this.presses > this.heard;
+    return this.frame !== null;
   }
-  /** An input carrying the press is going out: the mark to confirm when its reply comes back. */
+
+  /** An input is going out: the mark to confirm when its reply comes back (0: nothing waiting). */
   mark(): number {
-    return this.presses;
+    return this.frame?.id ?? 0;
   }
-  /** The reply to an input sent with `mark` came back: the PC has that press. */
-  heardUpTo(mark: number) {
-    this.heard = Math.max(this.heard, mark);
+
+  /** The reply to an input sent with `mark` came back: the PC has that change; the next can go. */
+  heardUpTo(mark: number, now: number) {
+    if (!this.frame || mark !== this.frame.id) return;
+    this.heardDown = this.frame.down;
+    const next = this.queue.shift();
+    this.frame = next === undefined ? null : { down: next, id: ++this.ids, since: now };
   }
-  /** Forget waiting presses (the page hid, or the game changed). */
+
+  /** Forget every waiting change (the page hid, the game changed, or the connection dropped). */
   clear() {
-    this.heard = this.presses;
+    this.frame = null;
+    this.queue = [];
+    this.heardDown = false;
   }
 }
 

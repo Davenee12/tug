@@ -3,6 +3,7 @@ import {
   HEARTBEAT_MS,
   MAX_IN_FLIGHT,
   MIN_GAP_MS,
+  PRESS_EXPIRE_MS,
   PressLatch,
   chooseLayout,
   controlsFor,
@@ -192,47 +193,107 @@ describe("the body on the wire (padVector.json, shared with the Rust decoder)", 
 });
 
 describe("PressLatch: a quick tap always reaches the PC", () => {
+  /** What goes on the wire, input after input, as each reply comes straight back. */
+  function wire(latch: PressLatch, now: number, sends: number): boolean[] {
+    const out: boolean[] = [];
+    for (let i = 0; i < sends; i++) {
+      out.push(latch.down(now));
+      latch.heardUpTo(latch.mark(), now);
+    }
+    return out;
+  }
+
   it("keeps the press in every input until a reply to one carrying it comes back", () => {
     const latch = new PressLatch();
     expect(latch.pending).toBe(false);
     // Down and up before the next send: the finger is already off the button.
-    latch.press();
-    const held = false;
-    const first = encodeFor("harbor-stack", 0, held || latch.pending);
-    expect(first.drop).toBe(true);
+    latch.press(0);
+    latch.release(5);
+    expect(encodeFor("harbor-stack", 0, latch.down(10)).drop).toBe(true);
     const mark = latch.mark();
     // A second input goes out before the first reply (two in flight): still the press, so even if
     // the PC gets this one first and ignores the older, it sees the drop.
-    expect(encodeFor("harbor-stack", 0, held || latch.pending).drop).toBe(true);
-    // The reply comes back: now the release can go.
-    latch.heardUpTo(mark);
-    expect(encodeFor("harbor-stack", 0, held || latch.pending).drop).toBe(false);
+    expect(encodeFor("harbor-stack", 0, latch.down(12)).drop).toBe(true);
+    // The reply comes back: now the release goes, and once that's heard, nothing waits.
+    latch.heardUpTo(mark, 20);
+    expect(encodeFor("harbor-stack", 0, latch.down(21)).drop).toBe(false);
+    latch.heardUpTo(latch.mark(), 30);
+    expect(latch.pending).toBe(false);
+    expect(latch.down(31)).toBe(false);
   });
 
-  it("doesn't lose a second tap to the first one's reply, or a failed send", () => {
+  it("two quick taps are two presses, with a release between them", () => {
     const latch = new PressLatch();
-    latch.press();
+    // Tap, tap, before the first press was heard.
+    latch.press(0);
+    latch.release(30);
+    latch.press(60);
+    latch.release(90);
+    expect(wire(latch, 100, 5)).toEqual([true, false, true, false, false]);
+    // Held through a tap: a press, a release, a press, and it stays pressed.
+    const held = new PressLatch();
+    held.press(0);
+    held.release(10);
+    held.press(20);
+    expect(wire(held, 30, 4)).toEqual([true, false, true, true]);
+  });
+
+  it("doesn't lose a tap to a stale reply or a failed send", () => {
+    const latch = new PressLatch();
+    latch.press(0);
     const one = latch.mark();
-    latch.press(); // a second tap before the first is confirmed
-    latch.heardUpTo(one);
-    expect(latch.pending).toBe(true);
-    // That send failed: nothing confirmed, still waiting.
+    latch.release(5);
+    latch.press(10);
+    // A reply to an input sent before anything was waiting confirms nothing.
+    latch.heardUpTo(0, 12);
+    expect(latch.down(12)).toBe(true);
+    // The first press is heard; its release goes next.
+    latch.heardUpTo(one, 15);
+    expect(latch.down(16)).toBe(false);
+    // That send failed: nothing confirmed, still waiting to release.
     latch.mark();
-    expect(latch.pending).toBe(true);
-    latch.heardUpTo(latch.mark());
+    expect(latch.down(20)).toBe(false);
+    latch.heardUpTo(latch.mark(), 25);
+    expect(latch.down(26)).toBe(true);
+    latch.heardUpTo(latch.mark(), 30);
     expect(latch.pending).toBe(false);
-    latch.press();
+    // Still held.
+    expect(latch.down(31)).toBe(true);
+  });
+
+  it("a press the PC never heard expires, and a held finger doesn't fire it late", () => {
+    const latch = new PressLatch();
+    latch.press(0);
+    expect(latch.down(PRESS_EXPIRE_MS)).toBe(true);
+    // The Wi-Fi blipped: nothing came back in time.
+    expect(latch.down(PRESS_EXPIRE_MS + 1)).toBe(false);
+    expect(latch.pending).toBe(false);
+    // The finger is still down; it only counts again once it lifts and presses.
+    expect(latch.down(2000)).toBe(false);
+    latch.release(2100);
+    expect(latch.pending).toBe(false);
+    latch.press(2200);
+    expect(latch.down(2201)).toBe(true);
+  });
+
+  it("the connection dropping forgets waiting presses", () => {
+    const latch = new PressLatch();
+    latch.press(0);
+    latch.release(5);
+    latch.press(10);
     latch.clear();
     expect(latch.pending).toBe(false);
+    expect(latch.down(20)).toBe(false);
   });
 
   it("drops a container end to end: tap → wire → PC events → the game's next frame", () => {
     // The phone: a tap whose release comes before the first send.
     const latch = new PressLatch();
-    latch.press();
-    const press = padBody(encodeFor("harbor-stack", 0, latch.pending));
-    latch.heardUpTo(latch.mark());
-    const release = padBody(encodeFor("harbor-stack", 0, latch.pending));
+    latch.press(0);
+    latch.release(5);
+    const press = padBody(encodeFor("harbor-stack", 0, latch.down(10)));
+    latch.heardUpTo(latch.mark(), 20);
+    const release = padBody(encodeFor("harbor-stack", 0, latch.down(21)));
     // The PC turns each into a `game-pad` event (the Rust side of this is in pad.rs, from the same
     // padVector.json bodies): both land between two frames.
     const events = [press, release].map((b) => ({ connected: true, drop: b.drop === true }));
