@@ -171,6 +171,24 @@ fn is_build_output(exe: &Path) -> bool {
         && target.to_ascii_lowercase().starts_with("target")
 }
 
+/// The exe path as a shell link target. tauri's `current_exe` is canonicalized, which on Windows
+/// gives a verbatim path (`\\?\C:\Users\…\tug.exe`), and IShellLinkW::SetPath rejects those
+/// with E_INVALIDARG, so the whole jump list failed. `\\?\C:\…` becomes `C:\…` and
+/// `\\?\UNC\server\share\…` becomes `\\server\share\…`; anything else is passed on unchanged.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn shell_path(exe: &Path) -> std::path::PathBuf {
+    let Some(text) = exe.to_str() else {
+        return exe.to_path_buf();
+    };
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{share}").into();
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(drive) if drive.as_bytes().get(1) == Some(&b':') => drive.into(),
+        _ => exe.to_path_buf(),
+    }
+}
+
 /// Actions waiting for the UI to take them. A click on a task that's already waiting isn't
 /// queued twice (pressing New message twice while tug starts opens it once).
 #[derive(Debug, Default)]
@@ -377,6 +395,23 @@ mod tests {
             "dev.example.tug.dev"
         );
         assert_eq!(app_id(id, Path::new("")), id);
+    }
+
+    #[test]
+    fn a_verbatim_exe_path_becomes_one_a_shell_link_accepts() {
+        let plain = |p: &str| shell_path(Path::new(p)).to_str().unwrap().to_owned();
+        // What tauri's canonicalized current_exe gives for the per-user install.
+        assert_eq!(
+            plain(r"\\?\C:\Users\Sam\AppData\Local\tug\tug.exe"),
+            r"C:\Users\Sam\AppData\Local\tug\tug.exe"
+        );
+        assert_eq!(plain(r"\\?\UNC\nas\apps\tug\tug.exe"), r"\\nas\apps\tug\tug.exe");
+        // Already plain: unchanged.
+        assert_eq!(plain(r"C:\tug\tug.exe"), r"C:\tug\tug.exe");
+        assert_eq!(plain(r"\\nas\apps\tug.exe"), r"\\nas\apps\tug.exe");
+        // A verbatim path with no drive letter has no plain form: left as it is.
+        assert_eq!(plain(r"\\?\Volume{0b1c}\tug\tug.exe"), r"\\?\Volume{0b1c}\tug\tug.exe");
+        assert_eq!(plain(""), "");
     }
 
     #[test]

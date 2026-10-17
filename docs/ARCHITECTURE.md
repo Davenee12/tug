@@ -220,7 +220,8 @@ clipboard from such a page, so the page shows the picture to press and hold.
 ```
 right-click tug on the taskbar / in Start ─► Tasks: New message · Tugboat · Copy latest code ·
   Play Tugboat Run (only while Show games is on) · Settings
-  each task is a shell link: tug.exe --action <id>   (registered by quick_actions/win.rs under the
+  each task is a shell link: tug.exe --action <id>   (the exe path made plain by shell_path: tauri's
+  current_exe is a \\?\ verbatim path, which IShellLinkW::SetPath rejects; registered by quick_actions/win.rs under the
   AppUserModelID the process claims: the bundle identifier, which the installer stamps on the
   Start menu shortcut; a cargo build uses "<identifier>.dev" so it never repoints the installed list)
 tug running?  the new tug.exe hands its args to the running one (single-instance) and exits
