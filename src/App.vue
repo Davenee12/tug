@@ -5,6 +5,7 @@ import { useTugStore } from "./stores/tug";
 import { useTugboatStore } from "./stores/tugboat";
 import { useDevToolsStore } from "./stores/devtools";
 import { usePcAudioStore } from "./stores/pcAudio";
+import { useVoiceStore } from "./stores/voice";
 import { useGameStore } from "./stores/game";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import ConnectPanel from "./components/ConnectPanel.vue";
@@ -22,21 +23,27 @@ import PairingDialog from "./components/PairingDialog.vue";
 import ToolConfirmCard from "./components/ToolConfirmCard.vue";
 import { nextDownSince, RECONNECT_GRACE_MS, showConnectionPanel } from "./lib/connectionPanel";
 import { showsReconnecting } from "./lib/connectionStatus";
-import { skippedMessage } from "./lib/tugboat";
+import { phoneTextMessage, skippedMessage } from "./lib/tugboat";
+import { START_FAILED } from "./lib/startup";
+import { isWide } from "./lib/layout";
+import { useElementSize } from "./lib/useElementSize";
+import { api, on } from "./lib/ipc";
+import { quickActionRunner, runQuickAction } from "./lib/quickActions";
 
 const tug = useTugStore();
 const tugboat = useTugboatStore();
 const devtools = useDevToolsStore();
 const pcAudio = usePcAudioStore();
+const voice = useVoiceStore();
 const game = useGameStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
 // show the Connection panel beside the feed; everything else (and narrow windows) uses
-// Settings › iPhone. A quick relink doesn't count: see lib/connectionPanel.
-const WIDE = "(min-width: 1240px)";
-const wide = ref(window.matchMedia(WIDE).matches);
-const mq = window.matchMedia(WIDE);
-const onMq = (e: MediaQueryListEvent) => (wide.value = e.matches);
+// Settings › iPhone. A quick relink doesn't count: see lib/connectionPanel. "Wide" is measured from
+// the window's layout, which follows tug's zoom; a media query wouldn't (lib/layout).
+const shell = ref<HTMLElement | null>(null);
+const { width: shellWidth } = useElementSize(shell, { width: window.innerWidth, height: window.innerHeight });
+const wide = computed(() => isWide(shellWidth.value));
 const downSince = ref<number | null>(null);
 const now = ref(Date.now());
 let graceTimer: number | undefined;
@@ -83,9 +90,7 @@ function onShortcut(e: KeyboardEvent) {
   if (e.shiftKey) {
     if (key !== "c") return;
     e.preventDefault();
-    const latest = tug.latestCode();
-    if (latest) void tug.copyCode(latest.code, latest.from);
-    else tug.notify("info", "No code in the last 10 minutes");
+    void tug.copyLatestCode();
     return;
   }
   // A ringing call has the keyboard (Enter answers, Esc declines) until it's dealt with, and
@@ -109,8 +114,41 @@ function onShortcut(e: KeyboardEvent) {
   }
 }
 
+// Taskbar quick actions (the jump list's Tasks): the same paths as Ctrl+K and the shortcuts. Rust
+// has already brought the window forward; anything covering the window that would hide what was
+// asked for is closed first (a ringing call stays on top until it's answered).
+function newMessage() {
+  game.close();
+  tug.searchOpen = false;
+  tug.view = "messages";
+  tug.pickerOpen = true;
+}
+function settings() {
+  game.close();
+  tug.searchOpen = false;
+  tug.pickerOpen = false;
+  tug.openSettings();
+}
+const quickActions = quickActionRunner(api.takeQuickActions, (action) => {
+  runQuickAction(action, {
+    newMessage,
+    tugboat: () => {
+      tug.searchOpen = false;
+      void tugboat.show();
+    },
+    copyCode: () => void tug.copyLatestCode(),
+    game: () => {
+      tug.searchOpen = false;
+      tug.pickerOpen = false;
+      void game.show();
+    },
+    settings,
+  });
+});
+let quickActionsOff: (() => void) | undefined;
+let unmounted = false;
+
 onMounted(async () => {
-  mq.addEventListener("change", onMq);
   window.addEventListener("keydown", onShortcut);
   // Tugboat: files dragged onto the window open Tugboat with them offered to the phone.
   void tugboat.init({
@@ -119,34 +157,54 @@ onMounted(async () => {
       if (msg) tug.notify("info", msg);
     },
     // Text from the phone replaces the clipboard without asking, so say so (only once it's true).
-    onText: (ok) =>
-      ok
-        ? tug.notify("info", "Text from your phone is on your clipboard")
-        : tug.notify("error", "Text from your phone arrived, but couldn't go on the clipboard"),
+    onText: (ok) => {
+      const m = phoneTextMessage(ok, tugboat.status.phone);
+      tug.notify(m.kind, m.text);
+    },
+    // The shared clipboard's notes: sending, on the phone, not sent in time, or why it can't go.
+    say: (kind, text) => tug.notify(kind, text),
   });
   // Developer tools: only listens for the confirmation card (a text an AI tool wants to send).
   void devtools.init();
   // Play iPhone audio on this PC: the Now Playing button and Settings › iPhone read this.
   void pcAudio.init();
+  // Voice typing: Settings › General and Ctrl+K read this.
+  void voice.init();
   try {
     await tug.init();
   } catch (e) {
-    tug.notify("error", `Couldn't start tug: ${String(e)}`);
+    // init() recovers from failed reads by itself; this is only for something unexpected. The
+    // details go to the console, the person gets words they can act on.
+    console.error("tug init failed", e);
+    tug.notify("error", START_FAILED);
   }
+  // Only now, with history and settings loaded (so Copy latest code can find the code): a task
+  // clicked before tug was ready has been waiting in the backend and runs here, once.
+  try {
+    const off = await on("quick-action", () => void quickActions.drain());
+    if (unmounted) off();
+    else quickActionsOff = off;
+  } catch {
+    /* not running in tug */
+  }
+  void quickActions.drain();
 });
 onUnmounted(() => {
-  mq.removeEventListener("change", onMq);
+  unmounted = true;
+  quickActionsOff?.();
+  quickActionsOff = undefined;
   window.removeEventListener("keydown", onShortcut);
   window.clearTimeout(graceTimer);
   tug.dispose();
   tugboat.dispose();
   devtools.dispose();
   pcAudio.dispose();
+  voice.dispose();
 });
 </script>
 
 <template>
-  <div class="flex h-full">
+  <div ref="shell" class="flex h-full">
     <DeviceRail class="w-[288px] shrink-0" />
 
     <main class="min-w-0 flex-1">

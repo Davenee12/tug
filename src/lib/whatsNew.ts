@@ -21,6 +21,17 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.17",
+    title: "Faster texts, a shared clipboard and privacy while you share",
+    highlights: [
+      "Texts send right away, and pop-ups offer one-tap smart replies.",
+      "While you share your screen or present, previews stay hidden until you say otherwise.",
+      "Send your PC's clipboard to your iPhone, and paste from your phone to your PC.",
+      "Voice typing (off until you turn it on), taskbar shortcuts, and Tugboat Run's daily course and two-player races.",
+      "Texts you send from your iPhone itself still don't show in tug: that's iOS, not you.",
+    ],
+  },
+  {
     version: "0.5.16",
     title: "Play, listen and sign in faster",
     highlights: [

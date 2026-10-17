@@ -12,12 +12,14 @@ import { escClosesSettings } from "../lib/escape";
 import { formatAddress } from "../lib/format";
 import { normalizeAddress } from "../lib/address";
 import { SPOTIFY_BETA_LABEL, SPOTIFY_BETA_NOTE, SPOTIFY_RECONNECT } from "../lib/spotify";
-import { CODE_HOTKEYS, hotkeyAlternatives, hotkeyLabel } from "../lib/codeFill";
+import { CODE_HOTKEYS, hotkeyAlternatives, hotkeyLabel, typeCodeShortcut } from "../lib/codeFill";
+import { cleanReplies, DEFAULT_REPLIES, MAX_REPLIES, REPLY_MAX_CHARS } from "../lib/smartReplies";
 import AppAvatar from "./AppAvatar.vue";
 import ConnectPanel from "./ConnectPanel.vue";
 import DeveloperSettings from "./DeveloperSettings.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsSwitch from "./SettingsSwitch.vue";
+import VoiceSettings from "./VoiceSettings.vue";
 
 const tug = useTugStore();
 const weather = useWeatherStore();
@@ -111,6 +113,10 @@ const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) =>
 const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
 const showGames = computed({ get: () => tug.settings.showGames, set: (v) => void tug.setSetting("showGames", v) });
 const filterUnknown = computed({ get: () => tug.settings.filterUnknown, set: (v) => void tug.setSetting("filterUnknown", v) });
+const hidePreviews = computed({
+  get: () => tug.settings.hidePreviewsWhileSharing,
+  set: (v) => void tug.setSetting("hidePreviewsWhileSharing", v),
+});
 const advertise = computed({ get: () => tug.advertiseEnabled, set: (v) => void tug.setAdvertising(v) });
 const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
 
@@ -138,6 +144,21 @@ function toggleDay(d: number) {
   setQuiet({ days: next.length === 7 ? [] : next });
 }
 const muteCalls = computed({ get: () => tug.settings.muteCalls, set: (v) => void tug.setSetting("muteCalls", v) });
+
+// Suggested replies: on/off, and the list for texts no rule matches (lib/smartReplies). Three
+// boxes; an edit is cleaned (trimmed, no repeats) and saved when the box loses focus.
+const smartReplies = computed({ get: () => tug.settings.smartReplies, set: (v) => void tug.setSetting("smartReplies", v) });
+const replySlots = computed(() => Array.from({ length: MAX_REPLIES }, (_, i) => tug.settings.smartReplyDefaults[i] ?? ""));
+function onReplyDefault(i: number, e: Event) {
+  const box = e.target as HTMLInputElement;
+  const next = [...replySlots.value];
+  next[i] = box.value;
+  void tug.setSetting("smartReplyDefaults", cleanReplies(next));
+  // Show what was kept: a repeat or a blank leaves the box as saved, not as typed.
+  box.value = replySlots.value[i];
+}
+const repliesChanged = computed(() => tug.settings.smartReplyDefaults.join("\n") !== DEFAULT_REPLIES.join("\n"));
+const resetReplyDefaults = () => void tug.setSetting("smartReplyDefaults", [...DEFAULT_REPLIES]);
 
 // Code fill: copy new codes automatically, and a shortcut that types the latest one (lib/codeFill).
 const autoCopyCodes = computed({ get: () => tug.settings.autoCopyCodes, set: (v) => void tug.setSetting("autoCopyCodes", v) });
@@ -192,13 +213,18 @@ function addVip(c: { address: string }) {
   vipQuery.value = "";
 }
 
-const SHORTCUTS: Array<{ what: string; keys: string[] }> = [
+const APP_SHORTCUTS: Array<{ what: string; keys: string[] }> = [
   { what: "Search, or type an action", keys: ["Ctrl", "K"] },
   { what: "New message", keys: ["Ctrl", "N"] },
   { what: "Copy the latest code", keys: ["Ctrl", "Shift", "C"] },
   { what: "Settings", keys: ["Ctrl", ","] },
   { what: "Zoom in · out · reset", keys: ["Ctrl", "+  −  0"] },
 ];
+// Plus the type-the-code shortcut, as registered right now (it's configurable, and can be off).
+const SHORTCUTS = computed(() => {
+  const typeCode = typeCodeShortcut(tug.codeHotkey);
+  return typeCode ? [...APP_SHORTCUTS, typeCode] : APP_SHORTCUTS;
+});
 
 const UNITS = ["f", "c"] as const;
 
@@ -234,11 +260,8 @@ async function clearHistory() {
     return;
   }
   confirmClear.value = false;
+  // Empties the lists and says "History cleared" only if it worked; a failure says why.
   await tug.clearHistory();
-  // The store clears notifications; texts and recent calls went too.
-  tug.messages = [];
-  tug.calls = [];
-  tug.notify("info", "History cleared");
 }
 </script>
 
@@ -330,6 +353,10 @@ async function clearHistory() {
               <SettingsSwitch v-model="showGames" label="Show games" />
             </SettingsRow>
           </div>
+
+          <!-- Voice typing: hold a shortcut, talk, and tug types it (stores/voice, lib/voice). -->
+          <p class="caption-upper mt-6 mb-2 px-1 text-muted">Voice typing</p>
+          <VoiceSettings />
 
           <p class="caption-upper mt-6 mb-2 px-1 text-muted">Keyboard</p>
           <div class="grid grid-cols-1 gap-px overflow-hidden rounded-xl bg-hairline-soft lg:grid-cols-2">
@@ -477,6 +504,43 @@ async function clearHistory() {
             >
               <SettingsSwitch v-model="filterUnknown" label="Filter unknown senders" />
             </SettingsRow>
+            <SettingsRow
+              label="Hide previews while sharing or presenting"
+              :description="`While you share your screen, show slides or use an app full screen, pop-ups and calls say only which app it's from, and tug blurs texts and names until you choose Show anyway.${!tug.shareBanner ? '' : tug.previewsHidden ? ' Hiding previews now.' : ' Showing them for this share, as you chose.'}`"
+            >
+              <SettingsSwitch v-model="hidePreviews" label="Hide previews while sharing or presenting" />
+            </SettingsRow>
+          </div>
+
+          <!-- Suggested replies: one-tap answers on text pop-ups and in Messages (lib/smartReplies). -->
+          <div class="mb-4 rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Suggested replies"
+              description="One-tap replies like “On my way” on a text's pop-up and above the reply box in Messages. tug picks them on this PC from what the text says, and nothing is sent until you tap one. Codes and automated texts get none."
+            >
+              <SettingsSwitch v-model="smartReplies" label="Suggested replies" />
+            </SettingsRow>
+            <div v-if="tug.settings.smartReplies" class="border-t border-hairline-soft px-5 py-4">
+              <p class="text-[14px] font-medium text-ink">For everything else</p>
+              <p class="mt-0.5 text-[13px] leading-snug text-muted">
+                Offered when a text isn't a question, a thank-you, a request to call, or asking where you are. Leave them empty to offer
+                nothing then.
+              </p>
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                <input
+                  v-for="(r, i) in replySlots"
+                  :key="i"
+                  type="text"
+                  class="input h-9 w-40"
+                  :value="r"
+                  :maxlength="REPLY_MAX_CHARS"
+                  :aria-label="`Reply ${i + 1} for everything else`"
+                  placeholder="Add a reply"
+                  @change="onReplyDefault(i, $event)"
+                />
+                <button v-if="repliesChanged" class="btn-secondary btn-sm" @click="resetReplyDefaults">Reset</button>
+              </div>
+            </div>
           </div>
 
           <!-- Code fill: new codes go on the clipboard; a shortcut types the latest one. -->
@@ -732,6 +796,10 @@ async function clearHistory() {
             <SettingsRow
               label="Tugboat"
               description="Only while Tugboat is open: an encrypted link on your Wi-Fi. Nothing goes over the internet. Received files go to Pictures › Tugboat."
+            />
+            <SettingsRow
+              label="Voice typing"
+              description="Only while you hold its shortcut: Windows' own speech recognition turns your voice into text on this PC. The recording is never sent anywhere or saved."
             />
             <SettingsRow
               label="App icons"

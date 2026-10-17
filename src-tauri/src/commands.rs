@@ -14,7 +14,7 @@ use crate::spotify::{
     AlbumDetail, Artist, ArtistDetail, Device, Playlist, Queue, Spotify, SpotifyPlayer, SpotifySearch, SpotifyStatus,
     Track,
 };
-use crate::state::{DeviceStatus, Shared};
+use crate::state::{DeviceStatus, Shared, Stamped};
 use crate::store::StoredNotification;
 use crate::tugboat::session::Skipped;
 use crate::tugboat::{TugboatService, TugboatStatus};
@@ -37,8 +37,8 @@ pub fn get_status(state: State<'_, AppState>) -> DeviceStatus {
 }
 
 #[tauri::command]
-pub fn get_now_playing(state: State<'_, AppState>) -> NowPlaying {
-    state.shared.now_playing()
+pub fn get_now_playing(state: State<'_, AppState>) -> Stamped<NowPlaying> {
+    state.shared.now_playing_stamped()
 }
 
 #[tauri::command]
@@ -92,8 +92,13 @@ pub fn search_all(state: State<'_, AppState>, query: String, limit: u32) -> Resu
 }
 
 #[tauri::command]
-pub fn clear_history(state: State<'_, AppState>) -> Result<()> {
-    state.shared.store.clear_history().map_err(|e| e.to_string())?;
+pub fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
+    let cleared_up_to = state.shared.store.clear_history().map_err(|e| e.to_string())?;
+    // Pop-ups and the Bluetooth actor name notifications by row id, and those rows are gone: take
+    // the pop-ups back (their buttons would act on nothing tug still shows) and have the actor drop
+    // its map from the phone's notification ids to the cleared rows.
+    crate::toast::withdraw_all(&app);
+    state.ble.send(Command::ForgetRows { up_to: cleared_up_to });
     // The in-memory recent calls too (emits the empty list to the window).
     state.shared.set_calls(Vec::new());
     crate::bt_inventory::clear_last_report();
@@ -322,23 +327,38 @@ pub async fn place_lookup(latitude: f64, longitude: f64) -> Result<String> {
         .map_err(|e| e.to_string())?
 }
 
-/// The UI is showing the iPhone's switches (or stopped): check them every couple of seconds.
-/// Turning it on also checks Sync Contacts right away, not at the next due pull.
+/// A switch is still off and the user may be flipping it (the switches on screen, or setup's
+/// first minutes): check notifications and texts every couple of seconds. Contacts follow
+/// `set_switches_visible` instead: they're a whole PBAP connection per check.
 #[tauri::command]
 pub fn set_watching(state: State<'_, AppState>, on: bool) {
-    if state.shared.set_watching(on) {
-        if let Some(map) = state.shared.map.get() {
-            map.check_contacts();
-        }
+    state.shared.set_watching(on);
+}
+
+/// The iPhone's switches are on screen (setup, Settings › iPhone), or stopped being: Sync Contacts
+/// is checked every few seconds while they are, so flipping it either way shows. Renewed by the
+/// window; lapses on its own.
+#[tauri::command]
+pub fn set_switches_visible(state: State<'_, AppState>, on: bool) {
+    if let Some(map) = state.shared.map.get() {
+        map.switches_on_screen(on);
     }
 }
 
-/// Check the iPhone's switches now: tug's window came to the front, or the user pressed
-/// "Check again". Sync Contacts is the one that needs a pull to read; the others follow live.
+/// Check the iPhone's switches now: the user pressed "Check again". Sync Contacts is the one that
+/// needs asking the phone; the others follow live.
 #[tauri::command]
 pub fn check_switches(state: State<'_, AppState>) {
     if let Some(map) = state.shared.map.get() {
         map.check_contacts();
+    }
+}
+
+/// The user is writing a text: have message access open by the time they press Send.
+#[tauri::command]
+pub fn warm_texts(state: State<'_, AppState>) {
+    if let Some(map) = state.shared.map.get() {
+        map.warm();
     }
 }
 
@@ -392,6 +412,10 @@ pub fn open_windows_settings(page: String) -> Result<()> {
         "bluetooth" => "ms-settings:bluetooth",
         "location" => "ms-settings:privacy-location",
         "notifications" => "ms-settings:notifications",
+        // Voice typing's fix-it for a blocked microphone.
+        "microphone" => "ms-settings:privacy-microphone",
+        // ...and for a PC with no speech language to listen in.
+        "language" => "ms-settings:regionlanguage",
         other => return Err(format!("unknown settings page: {other}")),
     };
     std::process::Command::new("explorer.exe")
@@ -472,6 +496,22 @@ pub fn show_toast(app: tauri::AppHandle, spec: crate::toast::ToastSpec) {
     crate::toast::show(&app, spec);
 }
 
+/// tug's window came on screen (`on`) or went away: while it's on screen, check every 2 s whether
+/// previews should be hidden (sharing or presenting). Returns the answer now, so the banner is
+/// right the moment the window shows; changes come as `screen-share` events.
+#[tauri::command]
+pub fn screen_share_watch(on: bool) -> crate::share_privacy::ShareState {
+    #[cfg(windows)]
+    {
+        crate::share_privacy::watch(on)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = on;
+        crate::share_privacy::ShareState::default()
+    }
+}
+
 /// Copy text to the clipboard. Sync on purpose: Tauri runs sync commands on the main
 /// (STA) thread, which the WinRT clipboard requires.
 #[tauri::command]
@@ -479,19 +519,27 @@ pub fn copy_text(text: String) -> Result<()> {
     crate::clipboard::set_text(&text)
 }
 
-/// Code fill: put a just-arrived verification code on the clipboard, kept out of Win+V history
-/// and cloud sync, and take it off again after 2 minutes if it's still there. Only a code's shape
-/// (4–8 digits, as `findCode` gives) is accepted, so the webview can't put free text here. Sync
-/// for the same STA reason as `copy_text`.
+/// Put a verification code on the clipboard, kept out of Win+V history and cloud sync, and take it
+/// off again after 2 minutes if it's still there: code fill's auto-copy, and every manual Copy code
+/// (a code chip, Ctrl+Shift+C; a pop-up's Copy code takes the same path in `toast`). Only a code's
+/// shape (4–8 digits, as `findCode` gives) is accepted, so the webview can't put free text here.
+/// Sync for the same STA reason as `copy_text`.
 #[tauri::command]
 pub fn copy_code(code: String) -> Result<()> {
     if !crate::code_fill::is_code(&code) {
         return Err("That isn't a verification code".into());
     }
     crate::clipboard::set_text_private(&code)?;
-    log::info!("code copied automatically");
+    log::info!("code copied (kept out of clipboard history)");
     crate::code_fill::clear_later(code);
     Ok(())
+}
+
+/// Taskbar quick actions waiting to be carried out (oldest first); taking them clears them, so
+/// each click runs once. The UI calls this once it has loaded and on every `quick-action` nudge.
+#[tauri::command]
+pub fn take_quick_actions() -> Vec<crate::quick_actions::QuickAction> {
+    crate::quick_actions::take()
 }
 
 /// The type-the-code shortcut's state, for Settings.
@@ -509,6 +557,38 @@ pub async fn set_code_hotkey(enabled: bool, keys: String) -> Result<crate::code_
         .map_err(|e| e.to_string())
 }
 
+/// Voice typing's state. With `languages` (Settings), the speech languages installed on this PC
+/// are listed too, the first time it's asked, so the list is there before voice typing is on.
+/// Off the main thread: listing recognizers waits for the voice thread.
+#[tauri::command]
+pub async fn voice_status(languages: bool) -> Result<crate::voice::VoiceStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if languages {
+            crate::voice::refresh_languages()
+        } else {
+            crate::voice::status()
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Turn voice typing on (with one of the offered shortcuts and an installed language) or off,
+/// and save the choice. Says whether another app holds the shortcut, or whether this PC has no
+/// speech recognizer. Off the main thread: it waits for the voice threads.
+#[tauri::command]
+pub async fn set_voice_typing(
+    state: State<'_, AppState>,
+    enabled: bool,
+    keys: String,
+    language: Option<String>,
+) -> Result<crate::voice::VoiceStatus> {
+    let shared = state.shared.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::voice::set(&shared.store, enabled, &keys, language.as_deref()))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Settings safe to print in a support report: scalar on/off flags, never the "seen"
 /// conversation map (its keys embed contact names) or anything carrying message content.
 const DIAGNOSTIC_SETTINGS: &[&str] = &[
@@ -521,6 +601,9 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.autoCopyCodes",
     "ui.typeCodeHotkey",
     "ui.typeCodeKeys",
+    "ui.voiceTyping",
+    "ui.voiceKeys",
+    "ui.voiceLanguage",
     "ui.zoom",
     "ui.onboarded",
     "ui.seenSince",
@@ -575,6 +658,7 @@ pub fn copy_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
         settings: &settings,
         log_lines: &log_lines,
         phone_names: &phone_names,
+        user: &diagnostics::WindowsUser::current(),
     }
     .render();
     // The latest Bluetooth inventory (privacy-safe by construction: UUIDs, names, counts).
@@ -630,34 +714,35 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
     if !key.starts_with(UI_SETTING_PREFIX) {
         return Err(format!("{key} is not a UI setting"));
     }
-    state.shared.store.set_setting(&key, &value).map_err(|e| e.to_string())
-}
-
-/// Whether tug starts with Windows. The registry entry (via the autostart plugin) is the
-/// source of truth, so the Settings switch reads this rather than a stored preference.
-#[tauri::command]
-pub fn get_autostart(app: tauri::AppHandle) -> Result<bool> {
-    use tauri_plugin_autostart::ManagerExt;
-    app.autolaunch().is_enabled().map_err(|e| e.to_string())
-}
-
-/// Turn "start with Windows" on or off. On writes an entry that launches tug with
-/// `--minimized`, so it comes up hidden in the tray.
-#[tauri::command]
-pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<()> {
-    use tauri_plugin_autostart::ManagerExt;
-    let manager = app.autolaunch();
-    if enabled {
-        manager.enable().map_err(|e| e.to_string())?;
-        // The plugin writes the exe path unquoted; quote it so a path with spaces (a user
-        // folder like "C:\Users\Sam Lee\...") always launches tug and nothing else.
-        if let Err(e) = crate::autostart::quote_run_value() {
-            log::warn!("autostart: couldn't quote the Run entry: {e}");
-        }
-        Ok(())
-    } else {
-        manager.disable().map_err(|e| e.to_string())
+    state
+        .shared
+        .store
+        .set_setting(&key, &value)
+        .map_err(|e| e.to_string())?;
+    // Show games also decides whether the jump list offers Play Tugboat Run.
+    if key == crate::quick_actions::SHOW_GAMES_SETTING {
+        crate::quick_actions::install(crate::quick_actions::show_games(Some(&value)));
     }
+    // Hide previews while sharing: the watcher follows the switch at once (off shows everything).
+    #[cfg(windows)]
+    if key == crate::share_privacy::SETTING {
+        crate::share_privacy::set_enabled(crate::share_privacy::enabled_from_setting(Some(&value)));
+    }
+    Ok(())
+}
+
+/// Whether tug starts with Windows. The registry entry (this user's Run key, see autostart.rs)
+/// is the source of truth, so the Settings switch reads this rather than a stored preference.
+#[tauri::command]
+pub fn get_autostart() -> Result<bool> {
+    crate::autostart::enabled()
+}
+
+/// Turn "start with Windows" on or off. On writes this user's entry (quoted path) that launches
+/// tug with `--minimized`, so it comes up hidden in the tray.
+#[tauri::command]
+pub fn set_autostart(enabled: bool) -> Result<()> {
+    crate::autostart::set(enabled)
 }
 
 /// The PC's region from Windows' Region setting (e.g. "US", "AU"), so the UI reads numbers typed
@@ -986,6 +1071,14 @@ pub fn tugboat_send_text(state: State<'_, AppState>, text: String) -> Result<()>
     state.tugboat.send_text(&text)
 }
 
+/// "Send clipboard to iPhone" (Ctrl+K, the tray, the Tugboat panel): the clipboard as it is now,
+/// held for the phone for up to two minutes, opening Tugboat if it's off. The status says whether
+/// the phone has it yet; a "tugboat-clip" event says when it gets it (or doesn't in time).
+#[tauri::command]
+pub async fn tugboat_send_clipboard(state: State<'_, AppState>) -> Result<TugboatStatus> {
+    state.tugboat.send_clipboard().await
+}
+
 /// Open the Tugboat folder, or select one file Tugboat saved this session.
 #[tauri::command]
 pub fn tugboat_open_folder(state: State<'_, AppState>, path: Option<String>) -> Result<()> {
@@ -994,11 +1087,12 @@ pub fn tugboat_open_folder(state: State<'_, AppState>, path: Option<String>) -> 
 
 // --- Tugboat Run's phone controller (tugboat/pad.rs) ---
 
-/// "Use your phone as a controller": open Tugboat if needed and the controller channel. Returns
-/// Tugboat's status, whose QR code the game shows.
+/// "Use your phone as a controller": open Tugboat if needed and the controller channel, for one
+/// phone or two (a two-player race; asking again changes how many). Returns Tugboat's status,
+/// whose QR code the game shows.
 #[tauri::command]
-pub async fn game_pad_open(state: State<'_, AppState>) -> Result<TugboatStatus> {
-    state.tugboat.pad_open().await
+pub async fn game_pad_open(state: State<'_, AppState>, players: Option<u8>) -> Result<TugboatStatus> {
+    state.tugboat.pad_open(players.unwrap_or(1).clamp(1, 2)).await
 }
 
 /// The game closed: the phone's inputs are refused again.
@@ -1007,12 +1101,14 @@ pub fn game_pad_close(state: State<'_, AppState>) {
     state.tugboat.pad_close();
 }
 
-/// What the phone's controller shows next: paused or not, and hits this run (it buzzes on one).
+/// What a phone's controller shows next: paused or not, hits this run (it buzzes on one), and in
+/// a two-player race which player it is (1 or 2, its colour).
 #[tauri::command]
-pub fn game_pad_feedback(state: State<'_, AppState>, paused: bool, hits: u32) {
-    state
-        .tugboat
-        .pad_feedback(crate::tugboat::pad::PadReply { paused, hits });
+pub fn game_pad_feedback(state: State<'_, AppState>, seat: u8, paused: bool, hits: u32, player: Option<u8>) {
+    use crate::tugboat::pad::{PadReply, FIRST, SECOND};
+    let seat = if seat == SECOND { SECOND } else { FIRST };
+    let player = player.filter(|p| *p == 1 || *p == 2);
+    state.tugboat.pad_feedback(seat, PadReply { paused, hits, player });
 }
 
 // --- Developer tools (the bridge for AI tools and the `tug` command; see devtools/mod.rs) ---
@@ -1047,10 +1143,14 @@ pub fn devtools_confirm(state: State<'_, AppState>, id: u64, send: bool) {
     state.devtools.confirm(id, send);
 }
 
-/// "Add tug to PATH" / "Remove from PATH" (the user's own PATH only).
+/// "Add tug to PATH" / "Remove from PATH" (the user's own PATH only). Off the main thread: telling
+/// running apps PATH changed waits up to 2 s on each one that's slow to answer.
 #[tauri::command]
-pub fn devtools_set_on_path(state: State<'_, AppState>, on: bool) -> Result<DevToolsStatus> {
-    state.devtools.add_to_path(on)
+pub async fn devtools_set_on_path(state: State<'_, AppState>, on: bool) -> Result<DevToolsStatus> {
+    let devtools = state.devtools.clone();
+    tauri::async_runtime::spawn_blocking(move || devtools.add_to_path(on))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

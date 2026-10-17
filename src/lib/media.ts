@@ -118,6 +118,36 @@ export function positionMoves(np: Pick<NowPlaying, "elapsed" | "state">): boolea
   return np.state === "playing" && np.elapsed != null;
 }
 
+/** How far one arrow press on the seek bar moves, in seconds. */
+export const SEEK_KEY_STEP_S = 5;
+
+/**
+ * Where a key on the seek bar moves to, as a fraction of the song (0–1), from `at` (the fraction
+ * it's at now): the arrows step 5 s back or on, Page Up/Down 30 s, Home goes to the start. End
+ * isn't offered: jumping to the very end just skips the song, and Next already does that. Null for
+ * keys the bar doesn't handle, or when the song's length isn't known.
+ */
+export function seekKeyFraction(key: string, at: number, durationS: number | null): number | null {
+  if (!durationS || durationS <= 0) return null;
+  const step = (s: number) => Math.min(1, Math.max(0, at + s / durationS));
+  switch (key) {
+    case "ArrowRight":
+    case "ArrowUp":
+      return step(SEEK_KEY_STEP_S);
+    case "ArrowLeft":
+    case "ArrowDown":
+      return step(-SEEK_KEY_STEP_S);
+    case "PageUp":
+      return step(30);
+    case "PageDown":
+      return step(-30);
+    case "Home":
+      return 0;
+    default:
+      return null;
+  }
+}
+
 // --- Press-and-hold volume --------------------------------------------------
 // Holding the volume up/down button should keep changing the volume: one step on press,
 // then a steady (slightly accelerating) repeat. Each step is one AMS VolumeUp/VolumeDown.

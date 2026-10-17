@@ -20,7 +20,8 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - Once notifications work, a dismissible "Get more from tug" banner on the Feed points out any
   optional switch that's still off.
 - tug explains pairing problems in plain words: more than one iPhone paired, the iPhone has
-  forgotten this PC, or a leftover pairing from before (with Use or Remove).
+  forgotten this PC (with **Pair again**, which removes the dead pairing and starts pairing fresh),
+  or a leftover pairing from before (with Use or Remove).
 - **Start over** (Forget this iPhone) removes both of Windows' pairings with the phone and clears
   saved recent calls; your history stays.
 - It tells you when Bluetooth is off (with a button to turn it on), when the PC has no Bluetooth,
@@ -55,6 +56,12 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   this off).
 - **Windows pop-ups** for new notifications, with a reply box for texts, Mark read, Copy code, Call
   back and Clear where they fit.
+- **Suggested replies** (on by default): a text's pop-up gets up to three one-tap replies beside
+  the reply box and Mark read, such as "On my way" / "5 minutes" / "Running late" for "Where are
+  you?", "See you soon" / "👍" / "Drive safe" for "omw", "Yes" / "No" / "Let me check" for a
+  question, "You're welcome" / "👍" for thanks, and "Calling you now" / "Call you later" for
+  "call me". tug picks them on your PC from what the text
+  says (no internet, no AI service); codes, short codes and "Reply STOP" texts get none.
 - Pop-ups disappear from Windows when the phone clears the notification or tug quits.
 - At most 3 pop-ups every 10 seconds; the rest become one "N more notifications" pop-up.
 - Notifications that arrive while the iPhone reconnects still pop up (more than three become one
@@ -74,11 +81,25 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   shows a dot when you have unread texts.
 - Closing the window keeps tug running in the tray (you can change this), with a one-time hint.
 - A **low phone battery** pop-up at 20% and again at 10%.
+- **Hide previews while sharing or presenting** (on by default, Settings › Notifications): while
+  Teams, Zoom or a browser (Google Meet and others) shares your screen, a PowerPoint slide show
+  runs, the display is duplicated or an app is full screen, pop-ups say only "New message" or "New
+  notification" with the app's name, calls ring as "Incoming call", and tug's window blurs texts,
+  names and photos (in search too) under a "Previews hidden" banner with **Show anyway** for that
+  share. Text and notification pop-ups already on screen or in Action Center are taken back when
+  hiding starts (they stay in the Feed); tug's own, like low battery, stay. If tug can't check the
+  screen in time, it hides previews to be safe and says so. It clears within about 2 seconds of
+  the share ending. To spot a browser's or Teams' sharing bar, tug reads those windows' titles; it
+  never keeps or logs them. Webex, Discord and Slack can't be detected unless the
+  share is full screen; nor can a browser shown in a language other than English.
 
 ## Messages (texts)
 
 - Texts arrive the moment your iPhone gets them, and you can **reply** from tug (Enter sends,
   Shift+Enter adds a line).
+- **Suggested replies** sit above the reply box while their newest text is the last word; one tap
+  sends it just like typing it (Sending…, Sent, or Not sent with Retry), and a pop-up's suggestion
+  shows in the conversation the same way.
 - Start a **new conversation** with Ctrl+N or +: recent people, contacts, or a typed number.
 - Drafts are kept per conversation while tug is open, so text typed to one person can't go to
   another.
@@ -90,7 +111,13 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - Opening a conversation marks its texts read on your iPhone and clears their notifications, even
   if the phone was out of reach at the time.
 - Unknown senders sit in their own section, with **Move to conversations**.
-- A photo with no caption reads "Photo or attachment — open it on your iPhone".
+- A photo, sticker, video or other attachment shows as a chip ("Photo", "2 photos", "Sticker"…)
+  with **Open it on your iPhone**, beside its caption if it has one; the conversation list says
+  "📷 Photo", and pop-ups say the same.
+- A text whose words didn't come through from the iPhone takes them from its notification, or
+  says "This text didn't come through".
+- Texts you send from tug show in the conversation; texts you send on your iPhone stay on your
+  iPhone (a one-time tip under the conversation says so).
 - When the iPhone may not have shared every text from while tug was away, the conversation says so.
 - Messages from other chat apps (WhatsApp and so on) show as read-only conversations: reply on your
   phone.
@@ -169,8 +196,17 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   Show and Open folder.
 - **PC → phone:** drag files onto tug's window, or Choose files (up to 1 GB each); the phone taps
   Get to save them.
-- Text pasted on the phone lands on the PC's clipboard, and text from the PC shows on the phone
-  page with a Copy button.
+- **Send clipboard to iPhone** (the tray menu, Ctrl+K "send clipboard", or the Tugboat panel)
+  sends the text or picture on the PC's clipboard to the phone's Tugboat page: text with a big
+  **Copy** button, a picture to press and hold (Copy or Save to Photos). With no phone on the page,
+  Tugboat's code shows "Scan to receive your clipboard on your iPhone"; the clipboard waits at most
+  2 minutes, then it's dropped. tug says it's on your iPhone only once the phone has it.
+- Tugboat's page is plain HTTP on your Wi-Fi, so phone browsers don't give it their modern
+  clipboard API. Copy uses the older way Safari and Chrome still allow during a tap; if the browser
+  refuses, the text is selected and the page says to press and hold it, then tap Copy.
+- **Paste to PC:** paste into the box on the phone page and tap Send. It goes on the PC's clipboard
+  ("Copied from your iPhone"), kept out of Windows' clipboard history and cloud sync.
+- Text typed in the Tugboat panel shows on the phone page with a Copy button too.
 - Everything is encrypted with a key from the QR code, and only the phone that scanned it can join.
 - Files from the phone carry Windows' "downloaded from the internet" mark, so a disguised program
   gets the usual warning.
@@ -183,7 +219,7 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 ## Games
 
-- **Tugboat Run**, a little endless runner: steer a tugboat through the harbor, dodge buoys, logs
+- **Tugboat Run**, a little harbor runner: steer a tugboat through the harbor, dodge buoys, logs
   and other boats, collect coins, and catch a life ring to win back a life. Three lives with a short
   grace after each hit; the water speeds up, so a run lasts a minute or three. Restart instantly.
 - **Controls:** ← → or A and D steer (with a little inertia), Space hops over buoys and logs (not
@@ -195,9 +231,29 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   keyboard always works too and takes over the moment the phone drops. Tilt steering isn't
   offered: phone browsers only allow it on a secure (HTTPS) page, and Tugboat's page is plain HTTP
   on your Wi-Fi.
-- Best score is kept on this PC only. Nothing runs while the game is closed or paused.
-- Open it from the **Play** button beside tug's name, or Ctrl+K "game" / "tugboat run". Turn
-  **Show games** off in Settings › General to hide both.
+- **Daily challenge** (the start screen's Daily tab): one course a day, the same for everyone that
+  day (the course comes from the date), sailed in **your real weather** from the weather card: rain
+  brings waves that rock the boat, wind a gentle sideways drift, snow slower water and icy
+  steering, and at night the harbor goes dark with a lighthouse sweeping its beam. The start screen
+  says what to expect ("Today: rainy, wind 12 mph — expect waves"); with the weather card off or
+  no fresh forecast it's calm water and says "Calm seas today", never made-up weather. A **streak**
+  counts the days in a row you've finished a daily run (a run that ends after midnight counts for
+  the day it started; a missed day starts it again), with your best score for each day.
+- **Free play**: the endless runner as before, a new course every time.
+- **Two players**: race side by side in two lanes on the same course; the higher score wins, and
+  the winner screen shows both scores. Player 1 (coral) steers with ← → and hops with ↑, Player 2
+  (teal) with A, D and W, or each uses a phone: Player 1 scans Tugboat's code and Player 2 a
+  separate **Player 2 code**, and each phone shows its player's colour (**Swap phones** puts the
+  first phone on Player 2, so the keyboard can be Player 1). Exactly two phones can join; a third
+  is turned away. If a player's phone drops mid-race the race waits ("Player 2 disconnected —
+  waiting…") until it's back, or **Continue solo**. The Player 2 code can only steer: it never
+  reaches Tugboat's files, text or clipboard, and never takes Tugboat over.
+- Scores are kept on this PC only: the Free play best, each day's daily best and the streak, and a
+  separate best race score for two players. Nothing runs while the game is closed or paused.
+- With Windows' reduce-motion setting on, the lighthouse beam holds still, rain and snow drift with
+  the water instead of falling across it, there are no wind streaks and no screen shake.
+- Open it from the **Play** button beside tug's name, Ctrl+K "game" / "tugboat run", or **Play
+  Tugboat Run** in tug's taskbar menu. Turn **Show games** off in Settings › General to hide them.
 
 ## Weather, battery & the phone card
 
@@ -218,13 +274,47 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
     conversation;
   - `call sam` to call back a missed call (or call, if Call from tug is on);
   - `play <song or playlist>` and `queue <song>` with Spotify connected;
-  - `copy code`, `clear all`, `mark all read`, `dnd on` / `dnd off`;
+  - `copy code`, `clear all`, `mark all read`, `dnd on` / `dnd off`, `voice typing on` / `off`;
+  - `send clipboard` (or `clipboard`, `paste to phone`) to send the PC's clipboard to your iPhone;
   - an app's name to show its notifications;
   - `new message`, `settings`, `spotify`, `tugboat` to open them, and `game` for Tugboat Run.
 - If a name matches several people, tug lists them and waits for you to pick.
 
 **Other shortcuts:** Ctrl+N new message · Ctrl+Shift+C copy the latest code · Ctrl+, Settings ·
 Ctrl+plus / Ctrl+minus / Ctrl+0 zoom · Esc closes dialogs and Settings.
+
+**Quick actions in the taskbar:** right-click tug's taskbar button (or tug in Start) for **New
+message**, **Tugboat**, **Copy latest code**, **Play Tugboat Run** and **Settings**. They bring tug
+forward and do the same as their Ctrl+K and keyboard versions, and work whether tug is running
+or not (it starts first). Copy latest code says so when there's no code from the last 10 minutes.
+Play Tugboat Run is left out while Show games is off.
+
+## Voice typing (voice to code)
+
+- **Hold a shortcut, talk, let go**: tug types what you said into whatever has focus (a code
+  editor, a terminal, a browser, Claude Code). **Off until you turn it on** in Settings › General.
+- The shortcut is **Ctrl+Alt+Space** by default, or Ctrl+Shift+Alt+Space, Ctrl+Alt+F12 or
+  Ctrl+Shift+F11; Settings says if another app already holds it and offers the others.
+- Recognition is **Windows' own offline speech recognizer**: nothing to download, and your voice
+  is **never sent anywhere or saved**. Pick the language if Windows has more than one installed.
+- **Code-aware:** say symbols ("open paren", "dot", "equals", "semicolon", "quote … quote", "new
+  line") and casing ("camel case user id" → `userId`; also snake, pascal, kebab and constant
+  case, "capitalize", "all caps", and "literal" to type a command word as a word). In code editors
+  and terminals (VS Code, Cursor, Visual Studio, JetBrains IDEs, Windows Terminal, PowerShell…)
+  there are no sentence capitals; elsewhere the first word is capitalised.
+- A spoken **new line** starts a new line only in Notepad, WordPad, Word, Outlook, OneNote and the
+  Teams, Slack and Discord message boxes (typed as Shift+Enter, which never sends there).
+  Everywhere else, including VS Code and other code editors, JetBrains IDEs, terminals, PuTTY and
+  browsers, it's typed as a plain space, never Enter or Shift+Enter, so dictation never sends a
+  message, accepts a suggestion or runs a command by itself.
+- A small **Listening…** pill shows at the bottom of the screen while you hold the keys, then
+  **Typing…**; if something's wrong it says so there ("Microphone blocked", "Didn't catch that").
+  One hold types once; letting go early or switching windows never leaves anything stuck. If
+  Ctrl, Alt or Shift is still held when the text is ready, nothing is typed (it would act as
+  shortcuts) and the pill says **Let go of the keys**.
+- If Windows' privacy settings block the microphone, Settings says so with a button to fix it.
+- Spoken commands are English; untrained, Windows' recognizer is less accurate than cloud
+  dictation, best for short phrases in a quiet room.
 
 ## Developer tools (MCP server and the `tug` command)
 
@@ -250,11 +340,13 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
 ## Settings
 
 - **General:** Windows pop-ups, Pop-up sound, Do not disturb, Low phone battery, Keep running when
-  closed, Start with Windows (starts in the tray), Zoom, Show games, and the keyboard shortcuts.
+  closed, Start with Windows (starts in the tray), Zoom, Show games, Voice typing (shortcut and
+  language), and the keyboard shortcuts.
 - **iPhone:** connection health, Copy diagnostics, Open logs folder, help for the texts pairing,
   Visible to iPhone, Call from tug, and your iPhone's Connect panel.
-- **Notifications:** Filter unknown senders, Quiet hours, Mute calls, Always let through, and
-  muted apps.
+- **Notifications:** Filter unknown senders, Suggested replies (on or off, and your own three for
+  texts no rule fits; 👍 / OK / Talk soon to start), Hide previews while sharing or presenting,
+  Quiet hours, Mute calls, Always let through, and muted apps.
 - **Connectors:** connect or disconnect Spotify.
 - **Weather:** show, set up, change place or hide; °F / °C.
 - **Developer tools:** see above.
@@ -294,15 +386,15 @@ of them one day (see [COMPANION-PLAN.md](COMPANION-PLAN.md)).
 - **Texts:** iOS shares only about the **10 newest incoming texts** when tug catches up (on a fresh
   install or after time away); everything after that is kept in tug's history.
 - **Texts you send from the iPhone itself** never reach tug, and photos and attachments aren't
-  shared (tug says "Photo or attachment").
+  shared (tug shows a "Photo" chip with "Open it on your iPhone").
 - **iMessage vs SMS:** iOS usually reports every message as a text, so tug can't tell them apart.
 - **Group texts:** a group's messages arrive per sender, so a reply from tug goes to that one
   person, and group pop-ups have no reply box.
 - **Message text** only comes through if the lock screen shows previews (Settings › Notifications ›
   Show Previews › Always).
 - **Battery:** the level only; iOS doesn't share whether the phone is charging.
-- **Clipboard sync** isn't possible without an app on the phone; Tugboat's paste box is the
-  one-tap alternative.
+- **Automatic clipboard sync** isn't possible without an app on the phone; Tugboat's Send
+  clipboard and Paste to PC are the one-tap alternative.
 - **After the iPhone restarts**, nothing connects until it's unlocked once.
 - **Calling anyone** from the PC needs Windows' calling connection, which Windows usually keeps for
   itself (Call from tug is experimental).

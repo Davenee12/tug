@@ -14,6 +14,8 @@ use windows::Storage::Streams::{DataReader, DataWriter, InputStreamOptions};
 
 use super::bmessage::{self, BMessage};
 use super::calls::{self, CallDirection, CallRecord};
+use super::charset;
+use super::contacts_watch::Fingerprint;
 use super::listing::{self, ListedMessage};
 use super::obex::{self, Header, ObexError, Response};
 use super::vcard::{self, PhonebookEntry};
@@ -38,6 +40,10 @@ pub const PBAP_TARGET: [u8; 16] = [
 /// worker that runs the contacts and calls pulls also carries texts, which must not stall.
 pub static PBAP_TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// The "attachment line in another language" shape is logged once per launch: enough to learn
+/// a language exists, without a line per text.
+static ATTACHMENT_SHAPE_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Device lookup + RFCOMM connect + OBEX CONNECT, end to end.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -59,6 +65,16 @@ const PB_MAX_LIST_COUNT: u8 = 0x04;
 const PB_PROPERTY_SELECTOR: u8 = 0x06;
 const PB_FORMAT: u8 = 0x07;
 const PB_FORMAT_VCARD30: u8 = 0x01;
+/// In the answer to a PullPhoneBook with MaxListCount 0 (PBAP 1.2 for the last three).
+const PB_PHONEBOOK_SIZE: u8 = 0x08;
+const PB_PRIMARY_COUNTER: u8 = 0x0A;
+const PB_SECONDARY_COUNTER: u8 = 0x0B;
+const PB_DATABASE_ID: u8 = 0x0D;
+/// PbapSupportedFeatures, sent in the CONNECT so a PBAP 1.2 phone includes its counters.
+const PB_SUPPORTED_FEATURES: u8 = 0x10;
+/// What tug does as a PBAP client: download (bit 0), browsing (1), database identifier (2) and
+/// folder version counters (3). Nothing that changes what a pull returns.
+const PCE_FEATURES: u32 = 0b1111;
 /// PropertySelector bits: VERSION, FN, N, TEL.
 const PB_PROPERTIES: u64 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 7);
 /// Contacts also ask for PHOTO (bit 3), so the iPhone inlines a face when it has one. iOS may or
@@ -166,23 +182,36 @@ impl ObexLink {
         target: &[u8; 16],
         forbidden: MapError,
     ) -> Result<Self> {
+        Self::connect_with(device_id, service_uuid, target, forbidden, false, &[]).await
+    }
+
+    /// `cached_first`: try Windows' cached service record (no SDP query over the air) before
+    /// asking the phone afresh. Used for message access, where a reconnect can stand between the
+    /// user and a text going out; a stale record just fails to connect and falls back.
+    pub(super) async fn connect_with(
+        device_id: &str,
+        service_uuid: u128,
+        target: &[u8; 16],
+        forbidden: MapError,
+        cached_first: bool,
+        extra: &[Header],
+    ) -> Result<Self> {
         tokio::time::timeout(
             CONNECT_TIMEOUT,
-            Self::connect_inner(device_id, service_uuid, target, forbidden),
+            Self::connect_inner(device_id, service_uuid, target, forbidden, cached_first, extra),
         )
         .await
         .map_err(|_| MapError::Timeout)?
     }
 
-    async fn connect_inner(
-        device_id: &str,
+    /// An RFCOMM socket to `service_uuid` on `device`, its channel found with `mode`.
+    async fn open_socket(
+        device: &BluetoothDevice,
         service_uuid: u128,
-        target: &[u8; 16],
-        forbidden: MapError,
-    ) -> Result<Self> {
-        let device = BluetoothDevice::FromIdAsync(&HSTRING::from(device_id))?.await?;
+        mode: BluetoothCacheMode,
+    ) -> Result<StreamSocket> {
         let services = device
-            .GetRfcommServicesForIdWithCacheModeAsync(&service_id(service_uuid)?, BluetoothCacheMode::Uncached)?
+            .GetRfcommServicesForIdWithCacheModeAsync(&service_id(service_uuid)?, mode)?
             .await?
             .Services()?;
         if services.Size()? == 0 {
@@ -190,13 +219,44 @@ impl ObexLink {
         }
         let service = services.GetAt(0)?;
         let socket = StreamSocket::new()?;
-        socket
+        let connected = socket
             .ConnectWithProtectionLevelAsync(
                 &service.ConnectionHostName()?,
                 &service.ConnectionServiceName()?,
                 SocketProtectionLevel::BluetoothEncryptionAllowNullAuthentication,
             )?
-            .await?;
+            .await;
+        if let Err(e) = connected {
+            let _ = socket.Close();
+            return Err(e.into());
+        }
+        Ok(socket)
+    }
+
+    async fn connect_inner(
+        device_id: &str,
+        service_uuid: u128,
+        target: &[u8; 16],
+        forbidden: MapError,
+        cached_first: bool,
+        extra: &[Header],
+    ) -> Result<Self> {
+        let device = BluetoothDevice::FromIdAsync(&HSTRING::from(device_id))?.await?;
+        let cached = if cached_first {
+            match Self::open_socket(&device, service_uuid, BluetoothCacheMode::Cached).await {
+                Ok(socket) => Some(socket),
+                Err(e) => {
+                    log::debug!("the cached service record didn't connect ({e}); asking the phone afresh");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let socket = match cached {
+            Some(socket) => socket,
+            None => Self::open_socket(&device, service_uuid, BluetoothCacheMode::Uncached).await?,
+        };
         let reader = DataReader::CreateDataReader(&socket.InputStream()?)?;
         reader.SetInputStreamOptions(InputStreamOptions::Partial)?;
         let writer = DataWriter::CreateDataWriter(&socket.OutputStream()?)?;
@@ -207,7 +267,7 @@ impl ObexLink {
             connection_id: 0,
             max_packet: 255,
         };
-        let resp = link.exchange(&obex::connect(target), true).await?;
+        let resp = link.exchange(&obex::connect_with(target, extra), true).await?;
         if !resp.is_success() {
             let ids: Vec<String> = resp.headers.iter().map(|h| format!("{:#04x}", h.id())).collect();
             log::info!(
@@ -319,24 +379,43 @@ impl Drop for ObexLink {
 /// A MAP client session with the iPhone's Message Access Server.
 pub struct MapSession {
     pub(super) link: ObexLink,
+    /// The session's current folder is `/telecom/msg` (nothing tug does on a session leaves it),
+    /// so a send or listing needn't walk there again: three round trips saved per send.
+    at_msg: bool,
+}
+
+/// The SETPATH steps from wherever the session is to `/telecom/msg`: none once it's there (where
+/// every listing and send leaves it), otherwise from root (SETPATH is relative). `None` is root.
+/// Pure, so "a send on an open session is just the push" is unit-tested.
+fn path_to_msg(at_msg: bool) -> &'static [Option<&'static str>] {
+    if at_msg {
+        &[]
+    } else {
+        &[None, Some("telecom"), Some("msg")]
+    }
 }
 
 impl MapSession {
     pub async fn connect(device_id: &str) -> Result<Self> {
-        let link = ObexLink::connect(device_id, MAS_UUID, &MAS_TARGET, MapError::Consent).await?;
+        let link = ObexLink::connect_with(device_id, MAS_UUID, &MAS_TARGET, MapError::Consent, true, &[]).await?;
         log::info!(
             "MAP session open (connection id {}, max packet {})",
             link.connection_id,
             link.max_packet
         );
-        Ok(Self { link })
+        Ok(Self { link, at_msg: false })
     }
 
-    /// SETPATH is relative, so always start from root: `/telecom/msg`.
-    async fn goto_msg(&mut self) -> Result<()> {
-        self.link.set_path(None).await?;
-        self.link.set_path(Some("telecom")).await?;
-        self.link.set_path(Some("msg")).await
+    /// Go to `/telecom/msg` (already there after the first listing: no round trips).
+    pub(super) async fn goto_msg(&mut self) -> Result<()> {
+        let steps = path_to_msg(self.at_msg);
+        // Wherever a failed step leaves it, the next walk starts again from root.
+        self.at_msg = false;
+        for step in steps {
+            self.link.set_path(*step).await?;
+        }
+        self.at_msg = true;
+        Ok(())
     }
 
     /// Newest messages in `folder` (e.g. "inbox"), at most `max`.
@@ -353,7 +432,8 @@ impl MapSession {
             ]),
         ];
         let xml = self.link.get("GetMessagesListing", headers).await?;
-        Ok(listing::parse(&String::from_utf8_lossy(&xml)))
+        // A subject that isn't UTF-8 reads as Windows-1252 rather than turning into U+FFFD.
+        Ok(listing::parse(&charset::decode_line(&xml)))
     }
 
     pub async fn get_message(&mut self, handle: &str) -> Result<BMessage> {
@@ -364,7 +444,24 @@ impl MapSession {
             obex::app_params(&[(AP_ATTACHMENT, &[0]), (AP_CHARSET, &[CHARSET_UTF8])]),
         ];
         let raw = self.link.get("GetMessage", headers).await?;
-        Ok(bmessage::parse(&String::from_utf8_lossy(&raw)))
+        // Decoded from the bytes (never lossily as a whole), so a body in another encoding still
+        // reads as words. When that took a fallback, log how and the bytes' shape, never the text.
+        let message = bmessage::parse_bytes(&raw);
+        if message.decoding.is_fallback() {
+            log::debug!(
+                "message {handle}: text decoded as {:?} ({})",
+                message.decoding,
+                message.body_pattern
+            );
+        }
+        if let Some(shape) = bmessage::unknown_attachment_shape(&message.body) {
+            if !ATTACHMENT_SHAPE_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log::info!(
+                    "a text looks like an attachment line in another language (shape \"{shape}\"); shown as text"
+                );
+            }
+        }
+        Ok(message)
     }
 
     /// Ask the phone to refresh its inbox view before listing.
@@ -505,6 +602,12 @@ fn notification_registration_request(connection_id: u32, on: bool) -> Vec<u8> {
 /// passes `false` and a separate background pass passes `true`; see `map::service`.
 pub async fn pull_contacts(device_id: &str, with_photos: bool) -> Result<Vec<PhonebookEntry>> {
     let mut link = ObexLink::connect(device_id, PSE_UUID, &PBAP_TARGET, MapError::ContactsConsent).await?;
+    let result = pull_phonebook(&mut link, with_photos).await;
+    link.disconnect().await;
+    result
+}
+
+async fn pull_phonebook(link: &mut ObexLink, with_photos: bool) -> Result<Vec<PhonebookEntry>> {
     let properties = if with_photos {
         PB_CONTACT_PROPERTIES
     } else {
@@ -520,12 +623,151 @@ pub async fn pull_contacts(device_id: &str, with_photos: bool) -> Result<Vec<Pho
             (PB_MAX_LIST_COUNT, &u16::MAX.to_be_bytes()),
         ]),
     ];
-    let result = link.get("PullPhoneBook", headers).await;
-    link.disconnect().await;
-    let text = String::from_utf8_lossy(&result?).into_owned();
+    let raw = link.get("PullPhoneBook", headers).await?;
+    Ok(parse_phonebook(
+        &raw,
+        if with_photos { "contacts+photos" } else { "contacts" },
+    ))
+}
+
+fn parse_phonebook(raw: &[u8], kind: &'static str) -> Vec<PhonebookEntry> {
+    let text = String::from_utf8_lossy(raw).into_owned();
     // Bluetooth inventory: which vCard property NAMES this pull carried (counts only).
-    crate::bt_inventory::record_vcard_fields(if with_photos { "contacts+photos" } else { "contacts" }, &text);
-    Ok(vcard::parse(&text))
+    crate::bt_inventory::record_vcard_fields(kind, &text);
+    vcard::parse(&text)
+}
+
+/// Whether a failed PBAP 1.2 CONNECT (with PbapSupportedFeatures) is worth one plain CONNECT: an
+/// OBEX refusal of the CONNECT, or the phone closing the link or never answering it (a phone that
+/// chokes on the extra header may just drop it). Not a consent refusal or anything else. Pure.
+fn retry_plain_pbap_connect(e: &MapError) -> bool {
+    matches!(
+        e,
+        MapError::Obex { op: "CONNECT", .. } | MapError::Closed | MapError::Timeout
+    )
+}
+
+/// What a contacts check found (`check_contacts`).
+#[derive(Debug)]
+pub enum PhonebookCheck {
+    /// Settled without the names (`contacts_watch::CheckAnswer::Empty` or `Unchanged`).
+    Settled { empty: bool, fingerprint: Fingerprint },
+    /// The names, pulled because the check said so (or the phone sent them anyway).
+    Entries {
+        entries: Vec<PhonebookEntry>,
+        fingerprint: Fingerprint,
+    },
+}
+
+/// The contacts check: one PBAP connection that first asks only for the phonebook's size and
+/// version counters (PullPhoneBook with MaxListCount 0: one short round trip, no names), and pulls
+/// the names (no photos) only when `contacts_watch::after_check` says that doesn't settle it. The
+/// CONNECT offers PBAP 1.2's database identifier and folder version counters; a phone that refuses
+/// that CONNECT gets a plain one, and a phone that sends no counters, refuses the size question or
+/// sends the whole phonebook anyway still gets the right answer.
+pub async fn check_contacts(
+    device_id: &str,
+    last: Option<Fingerprint>,
+    zero_trusted: bool,
+    routine: bool,
+) -> Result<PhonebookCheck> {
+    use super::contacts_watch::{after_check, CheckAnswer};
+    let features = [obex::app_params(&[(
+        PB_SUPPORTED_FEATURES,
+        &PCE_FEATURES.to_be_bytes(),
+    )])];
+    let consent = || MapError::ContactsConsent;
+    let mut link = match ObexLink::connect_with(device_id, PSE_UUID, &PBAP_TARGET, consent(), false, &features).await {
+        Ok(link) => link,
+        Err(e) if retry_plain_pbap_connect(&e) => {
+            log::info!("the iPhone didn't take a PBAP 1.2 connect ({e}); connecting once without counters");
+            ObexLink::connect(device_id, PSE_UUID, &PBAP_TARGET, consent()).await?
+        }
+        Err(e) => return Err(e),
+    };
+    let result = async {
+        let (fingerprint, body) = match phonebook_fingerprint(&mut link).await {
+            Ok(answer) => answer,
+            // Refused (a phone that won't do size-only pulls): pull the names instead.
+            Err(MapError::Obex { code, .. }) => {
+                log::debug!("phonebook size check refused (OBEX {code:#04x}); pulling the names");
+                (Fingerprint::default(), Vec::new())
+            }
+            Err(e) => return Err(e),
+        };
+        if !body.is_empty() {
+            // It ignored MaxListCount 0 and sent the phonebook: use it rather than ask again.
+            return Ok(PhonebookCheck::Entries {
+                entries: parse_phonebook(&body, "contacts"),
+                fingerprint,
+            });
+        }
+        match after_check(&fingerprint, last.as_ref(), zero_trusted, routine) {
+            CheckAnswer::Empty => Ok(PhonebookCheck::Settled {
+                empty: true,
+                fingerprint,
+            }),
+            CheckAnswer::Unchanged => Ok(PhonebookCheck::Settled {
+                empty: false,
+                fingerprint,
+            }),
+            CheckAnswer::Pull => Ok(PhonebookCheck::Entries {
+                entries: pull_phonebook(&mut link, false).await?,
+                fingerprint,
+            }),
+        }
+    }
+    .await;
+    link.disconnect().await;
+    result
+}
+
+/// PullPhoneBook with MaxListCount 0: what the phone says about its phonebook (size, version
+/// counters, database identifier) and any body it sent regardless.
+async fn phonebook_fingerprint(link: &mut ObexLink) -> Result<(Fingerprint, Vec<u8>)> {
+    let headers = vec![
+        link.conn(),
+        Header::type_("x-bt/phonebook"),
+        Header::Name(Some("telecom/pb.vcf".into())),
+        obex::app_params(&[
+            (PB_FORMAT, &[PB_FORMAT_VCARD30]),
+            (PB_PROPERTY_SELECTOR, &PB_PROPERTIES.to_be_bytes()),
+            (PB_MAX_LIST_COUNT, &0u16.to_be_bytes()),
+        ]),
+    ];
+    let mut body = Vec::new();
+    let mut fingerprint = Fingerprint::default();
+    let mut packet = obex::request(obex::OP_GET_FINAL, &[], &headers);
+    loop {
+        let resp = link.exchange(&packet, false).await?;
+        read_fingerprint(&resp, &mut fingerprint);
+        body.extend(resp.body());
+        match resp.code {
+            obex::RSP_SUCCESS => return Ok((fingerprint, body)),
+            obex::RSP_CONTINUE => packet = obex::request(obex::OP_GET_FINAL, &[], &[link.conn()]),
+            code => {
+                return Err(MapError::Obex {
+                    op: "PullPhoneBook size",
+                    code,
+                })
+            }
+        }
+    }
+}
+
+/// Fill in what this response carries: PhonebookSize (two bytes), the primary and secondary
+/// version counters and the database identifier (16 bytes each). Malformed values are ignored.
+fn read_fingerprint(resp: &Response, fp: &mut Fingerprint) {
+    let bytes16 = |tag| resp.app_param(tag).and_then(|v| <[u8; 16]>::try_from(v).ok());
+    if let Some(size) = resp
+        .app_param(PB_PHONEBOOK_SIZE)
+        .and_then(|v| <[u8; 2]>::try_from(v).ok())
+    {
+        fp.size = Some(u16::from_be_bytes(size));
+    }
+    fp.primary = bytes16(PB_PRIMARY_COUNTER).or(fp.primary);
+    fp.secondary = bytes16(PB_SECONDARY_COUNTER).or(fp.secondary);
+    fp.database = bytes16(PB_DATABASE_ID).or(fp.database);
 }
 
 /// Pull the newest `max` calls over PBAP: the combined list (`telecom/cch.vcf`), or, from a
@@ -590,6 +832,87 @@ mod tests {
         let len = expected.len() as u16;
         expected[1..3].copy_from_slice(&len.to_be_bytes());
         assert_eq!(p, expected);
+    }
+
+    #[test]
+    fn a_send_on_an_open_session_walks_no_folders() {
+        // The first listing on a session walks root → telecom → msg; after that a send is the
+        // PushMessage alone, with nothing before it.
+        assert_eq!(path_to_msg(false), &[None, Some("telecom"), Some("msg")]);
+        assert!(path_to_msg(true).is_empty());
+    }
+
+    #[test]
+    fn reads_what_a_size_only_answer_says_about_the_phonebook() {
+        let answer = |params: &[(u8, &[u8])]| Response {
+            code: obex::RSP_SUCCESS,
+            max_packet: None,
+            headers: vec![obex::app_params(params)],
+        };
+        let mut fp = Fingerprint::default();
+        read_fingerprint(
+            &answer(&[
+                (0x08, &[0x01, 0x2C]),
+                (0x0A, &[1; 16]),
+                (0x0B, &[2; 16]),
+                (0x0D, &[3; 16]),
+            ]),
+            &mut fp,
+        );
+        assert_eq!(
+            fp,
+            Fingerprint {
+                size: Some(300),
+                primary: Some([1; 16]),
+                secondary: Some([2; 16]),
+                database: Some([3; 16]),
+            }
+        );
+        // A phone without PBAP 1.2 sends only the size; malformed values are ignored.
+        let mut fp = Fingerprint::default();
+        read_fingerprint(&answer(&[(0x08, &[0, 7]), (0x0B, &[2; 15])]), &mut fp);
+        assert_eq!(fp.size, Some(7));
+        assert!(!fp.has_counters());
+        let mut fp = Fingerprint::default();
+        read_fingerprint(&answer(&[(0x08, &[7])]), &mut fp);
+        assert_eq!(fp, Fingerprint::default(), "a one-byte size is no size");
+        // Spread over packets: each part is kept once seen.
+        let mut fp = Fingerprint::default();
+        read_fingerprint(&answer(&[(0x0D, &[3; 16])]), &mut fp);
+        read_fingerprint(&answer(&[(0x08, &[0, 1])]), &mut fp);
+        assert_eq!((fp.size, fp.database), (Some(1), Some([3; 16])));
+    }
+
+    #[test]
+    fn a_pbap_12_connect_that_is_refused_dropped_or_unanswered_falls_back_once() {
+        assert!(retry_plain_pbap_connect(&MapError::Obex {
+            op: "CONNECT",
+            code: 0xC0
+        }));
+        assert!(retry_plain_pbap_connect(&MapError::Closed));
+        assert!(retry_plain_pbap_connect(&MapError::Timeout));
+        assert!(
+            !retry_plain_pbap_connect(&MapError::ContactsConsent),
+            "the user said no"
+        );
+        assert!(!retry_plain_pbap_connect(&MapError::Obex { op: "GET", code: 0xC4 }));
+    }
+
+    #[test]
+    fn the_pbap_connect_offers_counters_and_nothing_that_changes_a_pull() {
+        assert_eq!(
+            PCE_FEATURES, 0x0F,
+            "download, browsing, database identifier, folder version counters"
+        );
+        let p = obex::connect_with(
+            &PBAP_TARGET,
+            &[obex::app_params(&[(
+                PB_SUPPORTED_FEATURES,
+                &PCE_FEATURES.to_be_bytes(),
+            )])],
+        );
+        let r = obex::parse_request(&p).unwrap();
+        assert_eq!(r.app_param(0x10), Some(&[0, 0, 0, 0x0F][..]));
     }
 
     #[test]

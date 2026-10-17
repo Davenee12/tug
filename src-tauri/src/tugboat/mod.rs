@@ -1,5 +1,5 @@
-//! Tugboat: move photos, files and text between the phone and this PC over the local Wi-Fi,
-//! with nothing installed on the phone. Tugboat's panel shows a QR code for
+//! Tugboat: move photos, files, text and the clipboard between the phone and this PC over the local
+//! Wi-Fi, with nothing installed on the phone. Tugboat's panel shows a QR code for
 //! `http://<LAN address>:<port>/#<secret>`; the phone's camera opens tug's small page in Safari,
 //! which seals everything with keys derived from the secret (see `crypto.rs`).
 //!
@@ -7,7 +7,9 @@
 //! (`net.rs`). It stops when the panel closes, when tug quits, when tug's window hides to the tray
 //! (once any transfer in progress finishes), or after 10 minutes without a request; the secret is
 //! useless after that. Unfinished uploads are removed on start and stop. Tugboat Run can also start
-//! it, to use the phone as a game controller (`pad.rs`); the same rules then apply.
+//! it, to use the phone as a game controller (`pad.rs`); the same rules then apply. A two-player
+//! game also shows a Player 2 code, `http://<address>:<port>/#g.<guest secret>`: a key derived from
+//! the secret that only steers (see `crypto::guest_secret` and `auth.rs`).
 //! tug never touches Windows Firewall: Windows asks the user the first time on its own (an account
 //! that isn't an administrator may need one to answer). It needs an IPv4 home or office network
 //! the phone is also on; on a network Windows calls Public, inbound connections are blocked.
@@ -16,7 +18,9 @@
 //! unit-tested in their modules; `tests.rs` runs a whole session over a real socket.
 
 pub mod auth;
+pub mod clip;
 pub mod crypto;
+mod dib;
 mod names;
 pub mod net;
 pub mod pad;
@@ -24,6 +28,7 @@ mod page;
 pub mod qr;
 pub mod server;
 pub mod session;
+mod tally;
 #[cfg(test)]
 mod tests;
 mod upload;
@@ -39,6 +44,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
+use crate::state::RevCounter;
 use qr::Qr;
 use session::{Session, Sink, Skipped, TugboatIncoming, TugboatOffer, TugboatText};
 
@@ -48,6 +54,10 @@ pub const EVENT: &str = "tugboat-status";
 pub const TEXT_EVENT: &str = "tugboat-text";
 /// Files were dropped onto tug's window and offered: the ones skipped, so the panel can say why.
 pub const DROPPED_EVENT: &str = "tugboat-dropped";
+/// The PC's clipboard reached the phone, or no phone took it in time: `clip::ClipEvent`.
+pub const CLIP_EVENT: &str = "tugboat-clip";
+/// The tray's "Send clipboard to iPhone": the window sends it the same way Ctrl+K does.
+pub const SEND_CLIPBOARD_EVENT: &str = "tugboat-send-clipboard";
 /// Tugboat turns itself off after this long without a request from the phone (or a panel action).
 pub const IDLE_LIMIT: Duration = Duration::from_secs(10 * 60);
 const TICK: Duration = Duration::from_secs(2);
@@ -128,18 +138,28 @@ pub enum Ended {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TugboatStatus {
+    /// Numbers each copy in the order it was composed (`state::RevCounter`); the UI keeps the newest.
+    pub rev: u64,
     pub phase: Phase,
     /// The full link in the QR code (with the secret), also shown as the manual fallback.
     pub url: Option<String>,
     /// `192.168.1.20:53211`.
     pub address: Option<String>,
     pub qr: Option<Qr>,
+    /// The Player 2 code's link (with the guest secret), only while a two-player game asks for a
+    /// second phone. It can only steer: never files, text or the clipboard.
+    pub guest_url: Option<String>,
+    pub guest_qr: Option<Qr>,
     /// "iPhone", once one has connected.
     pub phone: Option<String>,
     /// The phone's page is open and checking in.
     pub phone_active: bool,
-    /// Where received files go (`Pictures\Tugboat`).
+    /// Where received files go (`Pictures\Tugboat`, or `Downloads\Tugboat` when Windows refused
+    /// Pictures).
     pub folder: Option<String>,
+    /// Windows Security (Controlled folder access) refused the Pictures folder: files go to
+    /// Downloads instead (`fallback`), or can't be saved until tug is allowed (`blocked`).
+    pub folder_block: Option<session::FolderBlock>,
     pub incoming: Vec<TugboatIncoming>,
     pub outgoing: Vec<TugboatOffer>,
     pub texts: Vec<TugboatText>,
@@ -151,6 +171,9 @@ pub struct TugboatStatus {
     /// given up on it).
     pub receiving: bool,
     pub ended: Option<Ended>,
+    /// The last clipboard sent to the phone: its kind and whether the phone has it, never its
+    /// contents.
+    pub clip: Option<clip::ClipStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -163,6 +186,9 @@ struct Endpoint {
     port: u16,
     url: String,
     qr: Option<Qr>,
+    /// The Player 2 code (shown only while a two-player game asks for it).
+    guest_url: String,
+    guest_qr: Option<Qr>,
     shutdown: Option<oneshot::Sender<()>>,
     task: tauri::async_runtime::JoinHandle<()>,
 }
@@ -205,6 +231,7 @@ struct Inner {
     ended: Mutex<Option<Ended>>,
     generation: AtomicU64,
     emit_pending: AtomicBool,
+    revs: RevCounter,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -240,9 +267,10 @@ impl Sink for PanelSink {
         let text = text.to_string();
         let app = inner.app.clone();
         // The WinRT clipboard needs the main (STA) thread. The panel says what happened only once
-        // it really did.
+        // it really did. Kept out of Windows' clipboard history and cloud sync, like an auto-copied
+        // code: what's pasted on the phone can be a password or an address.
         let _ = inner.app.run_on_main_thread(move || {
-            let ok = match crate::clipboard::set_text(&text) {
+            let ok = match crate::clipboard::set_text_private(&text) {
                 Ok(()) => true,
                 Err(e) => {
                     log::warn!("tugboat: couldn't put the phone's text on the clipboard: {e}");
@@ -257,6 +285,13 @@ impl Sink for PanelSink {
         let Some(inner) = self.0.upgrade() else { return };
         if let Err(e) = inner.app.emit(PAD_EVENT, event) {
             log::warn!("emit {PAD_EVENT} failed: {e}");
+        }
+    }
+
+    fn clip(&self, event: clip::ClipEvent) {
+        let Some(inner) = self.0.upgrade() else { return };
+        if let Err(e) = inner.app.emit(CLIP_EVENT, event) {
+            log::warn!("emit {CLIP_EVENT} failed: {e}");
         }
     }
 }
@@ -277,10 +312,26 @@ fn tugboat_folder(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "Couldn't find your Pictures folder.".to_string())
 }
 
+/// `Downloads\Tugboat`: where files go when Windows Security won't let tug write to Pictures
+/// (Controlled folder access protects Pictures, not Downloads).
+fn fallback_folder(app: &AppHandle) -> Option<PathBuf> {
+    app.path().download_dir().ok().map(|p| p.join("Tugboat"))
+}
+
 /// The link in the QR code: the address, and the secret after the `#`. Nothing else, ever: who's
 /// bound stays on the PC, so a second phone scanning a re-shown code can't pass for the first.
 fn link(ip: Ipv4Addr, port: u16, secret: &[u8]) -> String {
     format!("http://{ip}:{port}/#{}", crypto::b64(secret))
+}
+
+/// The Player 2 code's link: the same address, and the guest secret (never the session's) after
+/// `#g.`, so the page knows it's a guest and the phone can only ever steer.
+fn guest_link(ip: Ipv4Addr, port: u16, secret: &[u8]) -> String {
+    format!(
+        "http://{ip}:{port}/#{}{}",
+        crypto::GUEST_PREFIX,
+        crypto::b64(&crypto::guest_secret(secret))
+    )
 }
 
 async fn open_endpoint(
@@ -298,6 +349,8 @@ async fn open_endpoint(
     let port = listener.local_addr()?.port();
     let url = link(ip, port, secret);
     let qr = qr::encode(&url);
+    let guest_url = guest_link(ip, port, secret);
+    let guest_qr = qr::encode(&guest_url);
     let (tx, rx) = oneshot::channel::<()>();
     let task = tauri::async_runtime::spawn(server::serve(listener, session, async {
         let _ = rx.await;
@@ -308,6 +361,8 @@ async fn open_endpoint(
         port,
         url,
         qr,
+        guest_url,
+        guest_qr,
         shutdown: Some(tx),
         task,
     })
@@ -327,14 +382,22 @@ impl TugboatService {
                 ended: Mutex::new(None),
                 generation: AtomicU64::new(0),
                 emit_pending: AtomicBool::new(false),
+                revs: RevCounter::default(),
             }),
         }
     }
 
+    /// Compose, number and emit under one lock (`RevCounter`), so racing updates reach the window
+    /// in order and a command's answer composed earlier can't replace a newer event.
     fn emit(&self) {
-        if let Err(e) = self.inner.app.emit(EVENT, self.status()) {
-            log::warn!("emit {EVENT} failed: {e}");
-        }
+        self.inner.revs.stamp(
+            |rev| self.compose(rev),
+            |s| {
+                if let Err(e) = self.inner.app.emit(EVENT, s) {
+                    log::warn!("emit {EVENT} failed: {e}");
+                }
+            },
+        );
     }
 
     fn session(&self) -> Option<Arc<Session>> {
@@ -342,31 +405,40 @@ impl TugboatService {
     }
 
     pub fn status(&self) -> TugboatStatus {
+        self.inner.revs.stamp(|rev| self.compose(rev), |_| ())
+    }
+
+    fn compose(&self, rev: u64) -> TugboatStatus {
         let folder = tugboat_folder(&self.inner.app)
             .ok()
             .map(|p| p.to_string_lossy().into_owned());
         let ended = *lock(&self.inner.ended);
-        let (session, endpoint) = {
+        let (session, endpoint, guest) = {
             let run = lock(&self.inner.running);
             match run.as_ref() {
-                None => (None, None),
+                None => (None, None, None),
                 Some(r) => (
                     Some(r.session.clone()),
                     r.endpoint
                         .as_ref()
                         .map(|e| (e.url.clone(), format!("{}:{}", e.ip, e.port), e.qr.clone())),
+                    r.endpoint.as_ref().map(|e| (e.guest_url.clone(), e.guest_qr.clone())),
                 ),
             }
         };
         let Some(session) = session else {
             return TugboatStatus {
+                rev,
                 phase: Phase::Off,
                 url: None,
                 address: None,
                 qr: None,
+                guest_url: None,
+                guest_qr: None,
                 phone: None,
                 phone_active: false,
                 folder,
+                folder_block: None,
                 incoming: Vec::new(),
                 outgoing: Vec::new(),
                 texts: Vec::new(),
@@ -374,9 +446,12 @@ impl TugboatService {
                 sending: false,
                 receiving: false,
                 ended,
+                clip: None,
             };
         };
         let snap = session.snapshot();
+        let folder = Some(session.save_folder().to_string_lossy().into_owned());
+        let folder_block = session.folder_block();
         let phase = match (&endpoint, &snap.phone) {
             (None, _) => Phase::NoNetwork,
             (Some(_), Some(_)) => Phase::Connected,
@@ -386,14 +461,23 @@ impl TugboatService {
             Some((u, a, q)) => (Some(u), Some(a), q),
             None => (None, None, None),
         };
+        // The Player 2 code only while a two-player game asks for a second phone.
+        let (guest_url, guest_qr) = match guest.filter(|_| session.wants_guest()) {
+            Some((u, q)) => (Some(u), q),
+            None => (None, None),
+        };
         TugboatStatus {
+            rev,
             phase,
             url,
             address,
             qr,
+            guest_url,
+            guest_qr,
             phone: snap.phone,
             phone_active: snap.phone_active,
             folder,
+            folder_block,
             incoming: snap.incoming,
             outgoing: snap.outgoing,
             texts: snap.texts,
@@ -401,6 +485,7 @@ impl TugboatService {
             sending: snap.sending,
             receiving: snap.receiving,
             ended: None,
+            clip: snap.clip,
         }
     }
 
@@ -410,19 +495,22 @@ impl TugboatService {
             return Ok(self.status());
         }
         let folder = tugboat_folder(&self.inner.app)?;
+        let fallback = fallback_folder(&self.inner.app);
         let incoming = incoming_dir(&self.inner.app)?;
         {
             let incoming = incoming.clone();
-            let folder = folder.clone();
+            let folders: Vec<PathBuf> = std::iter::once(folder.clone()).chain(fallback.clone()).collect();
             let _ = tokio::task::spawn_blocking(move || {
                 session::clean_incoming(&incoming);
-                session::sweep_temp(&folder);
+                for f in &folders {
+                    session::sweep_temp(f);
+                }
             })
             .await;
         }
         let secret = crypto::new_secret();
         let sink: Arc<dyn Sink> = Arc::new(PanelSink(Arc::downgrade(&self.inner)));
-        let session = Arc::new(Session::new(&secret, folder, incoming, sink));
+        let session = Arc::new(Session::new(&secret, folder, incoming, sink).with_fallback(fallback));
         let ip = tokio::task::spawn_blocking(net::current).await.ok().flatten();
         let endpoint = match ip {
             Some(ip) => match open_endpoint(ip, 0, &secret, session.clone()).await {
@@ -488,8 +576,10 @@ impl TugboatService {
         self.emit();
     }
 
-    /// tug is quitting: stop at once, from a sync context.
-    pub fn shutdown_now(&self) {
+    /// tug is quitting: stop at once, from a sync context. `clean` removes unfinished uploads now;
+    /// when Windows is shutting down that's left to the next start (`new`), so a big partial file
+    /// can't hold up shutdown.
+    pub fn shutdown_now(&self, clean: bool) {
         if let Some(r) = lock(&self.inner.running).take() {
             r.session.close();
             if let Some(mut e) = r.endpoint {
@@ -498,7 +588,9 @@ impl TugboatService {
                 }
                 e.task.abort();
             }
-            session::clean_incoming(&r.session.incoming);
+            if clean {
+                session::clean_incoming(&r.session.incoming);
+            }
         }
     }
 
@@ -530,6 +622,8 @@ impl TugboatService {
                 self.stop(Some(Ended::Hidden)).await;
                 return;
             }
+            // A clipboard no phone took within two minutes is dropped, never kept waiting.
+            session.clip_tick();
             let active = session.phone_active();
             let sending = session.sending();
             let receiving = session.receiving();
@@ -663,14 +757,37 @@ impl TugboatService {
         self.session().ok_or("Tugboat isn't open.")?.set_pc_text(text)
     }
 
-    /// Tugboat Run wants the phone as a controller: open Tugboat if it's off (same session, same
-    /// code, same rules), open the controller channel, and watch it for a phone that goes quiet.
-    pub async fn pad_open(&self) -> Result<TugboatStatus, String> {
+    /// "Send clipboard to iPhone" (tray, Ctrl+K, the panel): read the clipboard as it is now, open
+    /// Tugboat if it's off (so its code can be scanned), and hold the clipboard for the phone for up
+    /// to two minutes. The clipboard is read first, so an empty one doesn't open Tugboat for
+    /// nothing. Nothing says "sent" until the phone has it (`CLIP_EVENT`).
+    pub async fn send_clipboard(&self) -> Result<TugboatStatus, String> {
+        // Off the main thread: if tug itself owns what's on the clipboard, Windows asks tug's main
+        // thread to hand it over while this waits.
+        let prepared = tokio::task::spawn_blocking(|| {
+            let reading = crate::clipboard::read_for_sharing(session::MAX_TEXT)?;
+            clip::prepare(reading, session::MAX_TEXT).map_err(|why| clip::refuse(why).to_string())
+        })
+        .await
+        .map_err(|_| "Couldn't read your clipboard.".to_string())??;
         if self.session().is_none() {
             self.start().await?;
         }
         let session = self.session().ok_or("Tugboat isn't open.")?;
-        if session.pad_open() {
+        session.send_clip(prepared);
+        Ok(self.status())
+    }
+
+    /// Tugboat Run wants the phone as a controller (or two phones, for two players): open Tugboat if
+    /// it's off (same session, same code, same rules), open the controller channel, and watch it for
+    /// a phone that goes quiet. Asking again changes how many phones.
+    pub async fn pad_open(&self, players: u8) -> Result<TugboatStatus, String> {
+        if self.session().is_none() {
+            self.start().await?;
+        }
+        let session = self.session().ok_or("Tugboat isn't open.")?;
+        let wanted_guest = session.wants_guest();
+        if session.pad_open(players) {
             let watched = session.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -681,8 +798,12 @@ impl TugboatService {
                 }
             });
         }
-        if let Some(e) = session.pad_event() {
+        for e in session.pad_events() {
             let _ = self.inner.app.emit(PAD_EVENT, e);
+        }
+        // The Player 2 code comes and goes with a two-player game: tell the window.
+        if session.wants_guest() != wanted_guest {
+            self.emit();
         }
         Ok(self.status())
     }
@@ -691,20 +812,35 @@ impl TugboatService {
     /// usual rules (closing the panel, hiding tug, or 10 minutes unused).
     pub fn pad_close(&self) {
         if let Some(s) = self.session() {
+            let wanted_guest = s.wants_guest();
             s.pad_close();
+            if wanted_guest {
+                // The Player 2 code goes with the game.
+                self.emit();
+            }
         }
     }
 
-    /// What the phone's controller shows: paused, and hits so far (it buzzes on a new one).
-    pub fn pad_feedback(&self, reply: pad::PadReply) {
+    /// What a phone's controller shows: paused, hits so far (it buzzes on a new one), and in a
+    /// two-player game which player it is.
+    pub fn pad_feedback(&self, seat: pad::SeatNo, reply: pad::PadReply) {
         if let Some(s) = self.session() {
-            s.pad_feedback(reply);
+            s.pad_feedback(seat, reply);
+        }
+    }
+
+    /// Where received files are saved: this session's folder (`Downloads\Tugboat` if Windows
+    /// refused Pictures), else `Pictures\Tugboat`.
+    pub fn received_folder(&self) -> Result<PathBuf, String> {
+        match self.session() {
+            Some(s) => Ok(s.save_folder()),
+            None => tugboat_folder(&self.inner.app),
         }
     }
 
     /// Open the Tugboat folder in Explorer, or select one file this session saved.
     pub fn open_folder(&self, file: Option<&str>) -> Result<(), String> {
-        let folder = tugboat_folder(&self.inner.app)?;
+        let folder = self.received_folder()?;
         std::fs::create_dir_all(&folder).map_err(|_| "Couldn't open the Tugboat folder.".to_string())?;
         let mut cmd = std::process::Command::new("explorer.exe");
         match file.map(Path::new) {

@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onUnmounted, ref, shallowRef, watch } from "vue";
 import { Check, LoaderCircle, RefreshCw, Settings, Smartphone } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { bondHint, leftoverPhone, pairingProblem, setupDeviceLists, startedOutsideTug } from "../lib/pairings";
+import { bondHint, holdPhones, leftoverPhone, pairingProblem, phonesInGrace, setupDeviceLists, startedOutsideTug, type HeldPhone } from "../lib/pairings";
 import { canSkipSwitches, connectStep, rescanDue } from "../lib/connectFlow";
 import { connectionBusy, connectionSentence } from "../lib/connectionStatus";
 import { api } from "../lib/ipc";
 import { phoneModel } from "../lib/phoneModel";
 import PhoneArt from "./PhoneArt.vue";
 import PhoneSwitches from "./PhoneSwitches.vue";
+import ForgottenNotice from "./ForgottenNotice.vue";
 import type { DiscoveredDevice } from "../types/protocol";
 
 // One "Connect your iPhone" panel, live from top to bottom, shown in two places: where the Feed
@@ -29,21 +30,18 @@ const switches = computed(() => tug.switches);
 // Discovery runs only while this panel is on screen (started below, stopped on unmount), so tug
 // never scans in the background. One row per iPhone comes straight from setupDeviceLists.
 const lists = computed(() => setupDeviceLists(tug.discovered));
-// Windows can drop an unpaired link nobody holds within seconds, which made a just-appeared iPhone
-// vanish before it could be clicked. Hold a phone we've seen for a short grace so a transient blip
-// doesn't pull the row out from under the cursor.
-const CANDIDATE_GRACE_MS = 10_000;
-const heldPhones = new Map<string, { device: DiscoveredDevice; at: number }>();
+// A phone that blinks out of discovery stays listed for a short grace (lib/pairings holdPhones), so
+// a transient drop doesn't pull the row out from under the cursor. Held phones are updated when the
+// list changes (here, not inside a computed); `graceNow` moves only while something is ticking.
+const held = shallowRef(new Map<string, HeldPhone<DiscoveredDevice>>());
+watch(
+  () => lists.value.phones,
+  (live) => (held.value = holdPhones(held.value, live, Date.now())),
+  { immediate: true },
+);
 const graceNow = ref(Date.now());
-let graceTimer: number | undefined;
-const candidates = computed(() => {
-  const t = graceNow.value;
-  const live = lists.value.phones;
-  for (const d of live) heldPhones.set(d.id, { device: d, at: Date.now() });
-  const liveIds = new Set(live.map((d) => d.id));
-  const stale = [...heldPhones.values()].filter((e) => !liveIds.has(e.device.id) && t - e.at < CANDIDATE_GRACE_MS).map((e) => e.device);
-  return [...live, ...stale].slice(0, 4);
-});
+const inGrace = computed(() => phonesInGrace(held.value, graceNow.value));
+const candidates = computed(() => [...lists.value.phones, ...inGrace.value].slice(0, 4));
 const otherDevices = computed(() => lists.value.others.slice(0, 5));
 const hidden = computed(() => lists.value.hiddenAccessories);
 
@@ -163,17 +161,34 @@ async function startOver() {
 
 // Re-inquire for the iPhone every ~15 s while the find step is up: an unpaired-Classic AEP watcher
 // inquires once, so a phone made discoverable after scanning began needs a fresh inquiry to appear.
+// The once-a-second check runs only while it has something to do: looking for the iPhone on the
+// find step, or a phone still in its grace. Otherwise the panel sits still (Settings › iPhone can
+// stay open all day).
 let lastRescanAt = Date.now();
-onMounted(() => {
-  graceTimer = window.setInterval(() => {
-    const t = Date.now();
-    graceNow.value = t;
-    if (rescanDue(step.value === "find" && scanning.value, t - lastRescanAt)) {
-      lastRescanAt = t;
-      tug.rescan();
-    }
-  }, 1000);
+let graceTimer: number | undefined;
+const findingPhone = computed(() => step.value === "find" && scanning.value);
+watch(findingPhone, (on) => {
+  if (on) lastRescanAt = Date.now();
 });
+const ticking = computed(() => findingPhone.value || inGrace.value.length > 0);
+watch(
+  ticking,
+  (on) => {
+    window.clearInterval(graceTimer);
+    graceTimer = undefined;
+    if (!on) return;
+    graceNow.value = Date.now();
+    graceTimer = window.setInterval(() => {
+      const t = Date.now();
+      graceNow.value = t;
+      if (rescanDue(findingPhone.value, t - lastRescanAt)) {
+        lastRescanAt = t;
+        tug.rescan();
+      }
+    }, 1000);
+  },
+  { immediate: true },
+);
 onUnmounted(() => {
   window.clearInterval(graceTimer);
   window.clearTimeout(resetTimer);
@@ -215,11 +230,15 @@ const model = computed(() => phoneModel(s.value.device?.model));
         </button>
       </div>
 
-      <!-- The phone looks to have forgotten this PC while Windows still holds the bond: remove it
-           here (unpairs both bonds and scans fresh) rather than leaving them unable to reconnect. -->
-      <div v-if="bond" class="flex flex-col gap-2 rounded-xl border border-error/30 bg-canvas px-4 py-3">
+      <!-- The iPhone forgot this PC while Windows still holds the bond: Pair again removes it and
+           brings this panel back to finding the phone. -->
+      <ForgottenNotice v-if="bond === 'forgotten'" />
+
+      <!-- It might have (the phone keeps refusing, which some switches also cause): remove it here
+           (unpairs both bonds and scans fresh) rather than leaving them unable to reconnect. -->
+      <div v-else-if="bond" class="flex flex-col gap-2 rounded-xl border border-error/30 bg-canvas px-4 py-3">
         <p class="text-[13px] text-body-strong">
-          Your iPhone has forgotten this PC — remove it and pair again.
+          Your iPhone may have forgotten this PC — remove it and pair again.
         </p>
         <div class="flex gap-2">
           <button class="btn-primary btn-sm" :disabled="resetting" @click="startOver">

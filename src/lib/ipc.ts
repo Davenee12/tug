@@ -10,10 +10,12 @@ import type {
   CodeHotkeyStatus,
   Contact,
   SearchResults,
+  ShareState,
   SmsMessage,
   DeviceStatus,
   DevToolsConfirm,
   DevToolsStatus,
+  TugboatClipEvent,
   TugboatSkipped,
   TugboatStatus,
   TugboatTextArrived,
@@ -24,6 +26,7 @@ import type {
   PairingRequest,
   PcAudioStatus,
   PhoneNotification,
+  QuickAction,
   RepeatMode,
   SpotifyAlbumDetail,
   SpotifyArtist,
@@ -38,6 +41,8 @@ import type {
   SpotifyTrack,
   ToastPressed,
   ToastSpec,
+  VoiceStatus,
+  VoiceTyped,
 } from "../types/protocol";
 
 export const api = {
@@ -85,8 +90,15 @@ export const api = {
   /** Code fill: a verification code (digits only) onto the clipboard, out of history and sync, cleared after 2 minutes. */
   copyCodePrivately: (code: string) => invoke<void>("copy_code", { code }),
   codeHotkeyStatus: () => invoke<CodeHotkeyStatus>("code_hotkey_status"),
+  /** Taskbar quick actions waiting to run, oldest first; taking them clears them (each runs once). */
+  takeQuickActions: () => invoke<QuickAction[]>("take_quick_actions"),
   /** Register the type-the-code shortcut (or unregister it); says if another app holds it. */
   setCodeHotkey: (enabled: boolean, keys: string) => invoke<CodeHotkeyStatus>("set_code_hotkey", { enabled, keys }),
+  /** Voice typing's state; with `languages`, the speech languages installed on this PC too (Settings). */
+  voiceStatus: (languages: boolean) => invoke<VoiceStatus>("voice_status", { languages }),
+  /** Turn voice typing on (shortcut, language) or off, and save it; says if the shortcut is taken or no language is installed. */
+  setVoiceTyping: (enabled: boolean, keys: string, language: string | null) =>
+    invoke<VoiceStatus>("set_voice_typing", { enabled, keys, language }),
   /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */
   copyDiagnostics: () => invoke<string>("copy_diagnostics"),
   /** The Bluetooth inventory: what the iPhone exposes to tug (runs it now; privacy-safe). */
@@ -98,7 +110,7 @@ export const api = {
     invoke<void>("log_frontend_error", { kind, name, message, source }),
   setUnread: (count: number) => invoke<void>("set_unread", { count }),
   popupsBlocked: () => invoke<boolean>("popups_blocked"),
-  openWindowsSettings: (page: "bluetooth" | "location" | "notifications") => invoke<void>("open_windows_settings", { page }),
+  openWindowsSettings: (page: "bluetooth" | "location" | "notifications" | "microphone" | "language") => invoke<void>("open_windows_settings", { page }),
   /** Open an http(s) link (a notification's "Open in browser") in the default browser. */
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   /** Delete a conversation (all of it, by sender and address); returns the delete's stamp, which undoes it as `undoAt`. */
@@ -108,11 +120,13 @@ export const api = {
   setWatching: (on: boolean) => invoke<void>("set_watching", { on }),
   /** Check the iPhone's switches now (Sync Contacts is read by asking the phone). */
   checkSwitches: () => invoke<void>("check_switches"),
+  setSwitchesVisible: (on: boolean) => invoke<void>("set_switches_visible", { on }),
   appIcon: (appId: string) => invoke<string | null>("app_icon", { appId }),
   appWebsite: (appId: string) => invoke<string | null>("app_website", { appId }),
   contactPhoto: (key: string) => invoke<string | null>("contact_photo", { key }),
   placeLookup: (latitude: number, longitude: number) => invoke<string>("place_lookup", { latitude, longitude }),
   markRead: (messageIds: number[]) => invoke<void>("mark_read", { messageIds }),
+  warmTexts: () => invoke<void>("warm_texts"),
   searchAll: (query: string, limit: number) => invoke<SearchResults>("search_all", { query, limit }),
   getCalls: () => invoke<CallRecord[]>("get_calls"),
   refreshCalls: () => invoke<void>("refresh_calls"),
@@ -120,6 +134,8 @@ export const api = {
   dial: (number: string | null) => invoke<void>("dial", { number }),
   /** A Windows pop-up with buttons (falls back to a plain one in the backend). */
   showToast: (spec: ToastSpec) => invoke<void>("show_toast", { spec }),
+  /** The window is on screen (or not): while it is, the backend checks for screen sharing every 2 s. Returns the answer now. */
+  screenShareWatch: (on: boolean) => invoke<ShareState>("screen_share_watch", { on }),
   // --- Spotify connector ---
   spotifyStatus: () => invoke<SpotifyStatus>("spotify_status"),
   /** Opens the browser for OAuth; resolves once the loopback redirect comes back. */
@@ -166,15 +182,20 @@ export const api = {
   tugboatRemoveOffer: (id: string) => invoke<void>("tugboat_remove_offer", { id }),
   /** Text for the phone to copy (empty clears it). */
   tugboatSendText: (text: string) => invoke<void>("tugboat_send_text", { text }),
+  /** "Send clipboard to iPhone": the clipboard as it is now, held for the phone for up to 2 minutes. */
+  tugboatSendClipboard: () => invoke<TugboatStatus>("tugboat_send_clipboard"),
   /** Open the Tugboat folder, or select a file Tugboat saved. */
   tugboatOpenFolder: (path: string | null) => invoke<void>("tugboat_open_folder", { path }),
   // --- Tugboat Run's phone controller ---
-  /** Open Tugboat if needed and the controller channel; Tugboat's status carries the QR code. */
-  gamePadOpen: () => invoke<TugboatStatus>("game_pad_open"),
+  /** Open Tugboat if needed and the controller channel for one phone, or two (a two-player race);
+   * asking again changes how many. Tugboat's status carries the QR code. */
+  gamePadOpen: (players: 1 | 2 = 1) => invoke<TugboatStatus>("game_pad_open", { players }),
   /** The game closed: the phone's inputs are refused again. */
   gamePadClose: () => invoke<void>("game_pad_close"),
-  /** What the phone's controller shows: paused, and hits this run (it buzzes on a new one). */
-  gamePadFeedback: (paused: boolean, hits: number) => invoke<void>("game_pad_feedback", { paused, hits }),
+  /** What a phone's controller shows: paused, hits this run (it buzzes on a new one), and in a race
+   * which player it is (its colour). */
+  gamePadFeedback: (seat: 1 | 2, paused: boolean, hits: number, player: 1 | 2 | null) =>
+    invoke<void>("game_pad_feedback", { seat, paused, hits, player }),
   // --- Developer tools ---
   devtoolsStatus: () => invoke<DevToolsStatus>("devtools_status"),
   /** "Let AI tools use tug". */
@@ -205,14 +226,24 @@ interface EventPayloads {
   "toast-pressed": ToastPressed;
   /** The type-the-code shortcut was pressed (from Rust, `code_fill`): what happened, never the code. */
   "code-filled": CodeFilled;
+  /** A taskbar jump-list task was clicked (from Rust, `quick_actions`): take what's waiting. */
+  "quick-action": null;
+  /** Previews started or stopped being hidden because the screen is shared or presented (`share_privacy/`). */
+  "screen-share": ShareState;
   "tugboat-status": TugboatStatus;
   "tugboat-text": TugboatTextArrived;
   /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */
   "tugboat-dropped": TugboatSkipped[];
+  /** The PC's clipboard reached the phone, or no phone took it within 2 minutes. */
+  "tugboat-clip": TugboatClipEvent;
+  /** The tray's "Send clipboard to iPhone" (the window sends it, like Ctrl+K). */
+  "tugboat-send-clipboard": null;
   /** The phone controller changed (Tugboat Run only). */
   "game-pad": GamePad;
   "devtools-status": DevToolsStatus;
   "pc-audio": PcAudioStatus;
+  "voice-status": VoiceStatus;
+  "voice-typed": VoiceTyped;
   /** A text an AI tool (or `tug text`) wants to send; null once it's answered or gone. */
   "devtools-confirm": DevToolsConfirm | null;
 }

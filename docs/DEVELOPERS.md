@@ -73,7 +73,7 @@ in Settings › Developer tools › What AI tools can do. The same switches appl
 | `get_latest_code` | Newest verification code from the last 10 minutes, with sender, app and age | Verification codes (**off**: a code is a key to an account, so it's opt-in) |
 | `search_messages` | Search texts and notifications (`query`, `limit` ≤ 50, `since`) | Search texts and notifications (on) |
 | `recent_dev_notifications` | Notifications from GitHub (incl. Actions), Slack, Linear, Jira, Sentry, PagerDuty, Vercel, Netlify (`since`, default 24 h) | Developer notifications (on) |
-| `list_tugboat_files` | Files received with Tugboat (`Pictures\Tugboat`), newest first | Files from Tugboat (on) |
+| `list_tugboat_files` | Files received with Tugboat (`Pictures\Tugboat`, or `Downloads\Tugboat` while Windows Security refuses Pictures), newest first | Files from Tugboat (on) |
 | `get_tugboat_file` | One of those by name; PNG/JPEG/GIF/WebP up to 3.5 MB come back as an image | Files from Tugboat (on) |
 | `phone_status` | Connected or not, model, battery, now playing | Phone status (on) |
 | `media_control` | `play`, `pause`, `toggle`, `next`, `previous` | Music controls (**off**) |
@@ -105,7 +105,7 @@ A text from an AI tool or `tug text` is only ever sent from tug's own card:
 tug code [--copy]          the newest code on stdout (--copy: also on the clipboard, kept out of history)
 tug boat <file>...         send files to your phone with Tugboat (opens it in tug)
 tug text <name> "<msg>"    text someone: tug asks you first, nothing sends by itself
-tug status                 is tug running, the phone, what's switched on
+tug status                 is tug running, the phone (with Phone status on), what's switched on
 tug mcp                    the MCP server (your AI tool starts this)
 ```
 

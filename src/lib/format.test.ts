@@ -12,6 +12,8 @@ import {
   groupFeed,
   highlight,
   initials,
+  LIVE_TEXT_SKEW_MS,
+  actionLabels,
   messageTime,
   missedCallFor,
   newestUnreadThread,
@@ -133,6 +135,32 @@ describe("groupConversations — duplicates (M4)", () => {
     const [c] = groupConversations([note("Zoe", "omw", 0)], [sms("+1302", "omw", 0, "in", "Zoe")], []);
     expect(c.items).toHaveLength(1);
     expect(c.items[0].kind).toBe("message");
+  });
+
+  it("fills a text that came through as only U+FFFD from its notification", () => {
+    // The phone sent the text as a lone replacement character; its notification ~10 s later has the words.
+    const [c] = groupConversations([note("Zoe", "see you at 6", 0.2)], [sms("+1302", "�", 0, "in", "Zoe")], []);
+    expect(c.items).toHaveLength(1);
+    expect(c.items[0].kind).toBe("message");
+    expect(c.items[0].body).toBe("see you at 6");
+  });
+
+  it("fills each unreadable text from the nearest notification, and only once", () => {
+    const messages = [sms("+1302", "�", 0, "in", "Zoe"), sms("+1302", "ok", 1, "in", "Zoe"), sms("+1302", "�", 2, "in", "Zoe")];
+    const notes = [note("Zoe", "first", 0.2), note("Zoe", "ok", 1.1), note("Zoe", "second", 2.2)];
+    const [c] = groupConversations(notes, messages, []);
+    expect(c.items.map((i) => [i.kind, i.body])).toEqual([
+      ["message", "first"],
+      ["message", "ok"],
+      ["message", "second"],
+    ]);
+  });
+
+  it("leaves an unreadable text alone with no notification close by, or in another conversation", () => {
+    const [c] = groupConversations([note("Zoe", "much later", 30)], [sms("+1302", "�", 0, "in", "Zoe")], []);
+    expect(c.items.map((i) => i.body)).toEqual(["�", "much later"]);
+    const convs = groupConversations([note("Sam", "hi", 0.2)], [sms("+1302", "�", 0, "in", "Zoe")], []);
+    expect(convs.find((x) => x.contact === "Zoe")?.items.map((i) => i.body)).toEqual(["�"]);
   });
 
   it("keeps two genuinely identical texts: one message can't absorb two notifications", () => {
@@ -392,6 +420,34 @@ describe("missedCallFor", () => {
     expect(missedCallFor([missed("Priya", 0)], { name: "zoe 💜", address: "+13025550173" })).toBeNull();
     expect(missedCallFor([note("zoe 💜", "hey", 0)], { name: "zoe 💜", address: null })).toBeNull();
   });
+
+  it("never matches a name two people share: calling back the wrong Sam is worse than no Call back", () => {
+    const known = [
+      { name: "Sam", address: "+13025550111" },
+      { name: "Sam", address: "+13025550112" },
+    ];
+    const fromSam = missed("Sam", 0);
+    expect(missedCallFor([fromSam], { name: "Sam", address: "+13025550112" }, known)).toBeNull();
+    expect(missedCallFor([fromSam], { name: "Sam", address: null }, known)).toBeNull();
+    // The number still matches when iOS titles the call with it.
+    const byNumber = missed("(302) 555-0112", 1);
+    expect(missedCallFor([fromSam, byNumber], { name: "Sam", address: "+13025550112" }, known)).toBe(byNumber);
+  });
+
+  it("matches a unique name only when its one number is this person's", () => {
+    const known = [{ name: "Zoe", address: "+13025550173" }];
+    const fromZoe = missed("Zoe", 0);
+    expect(missedCallFor([fromZoe], { name: "Zoe", address: "+13025550173" }, known)).toBe(fromZoe);
+    expect(missedCallFor([fromZoe], { name: "Zoe", address: null }, known)).toBe(fromZoe);
+    // A different Zoe (another number under the same name): not her missed call.
+    expect(missedCallFor([fromZoe], { name: "Zoe", address: "+13025550999" }, known)).toBeNull();
+  });
+
+  it("prefers a number match over a newer name match", () => {
+    const byNumber = missed("(302) 555-0173", 0);
+    const byName = missed("Zoe", 5);
+    expect(missedCallFor([byName, byNumber], { name: "Zoe", address: "+13025550173" })).toBe(byNumber);
+  });
 });
 
 describe("message order", () => {
@@ -410,9 +466,28 @@ describe("message order", () => {
     expect(c.items.map((i) => i.body)).toEqual(["dinner at 7?", "yes!"]);
   });
 
+  it("keeps a reply below your text when the phone's clock runs behind the PC's", () => {
+    // You sent at 12:00 (PC clock); they replied 30 s later, but the phone's clock is 2 min slow.
+    const mine = { ...sms("+13025550100", "running late?", 0, "out"), receivedAt: T0 };
+    const reply = { ...sms("+13025550100", "no, on time", 0), receivedAt: T0 + 30_000, sentAt: local(T0 + 30_000 - 2 * min) };
+    expect(messageTime(reply).getTime()).toBe(T0 + 30_000);
+    const [c] = groupConversations([], [reply, mine], []);
+    expect(c.items.map((i) => i.body)).toEqual(["running late?", "no, on time"]);
+  });
+
+  it("orders texts that arrived together by arrival", () => {
+    const a = { ...sms("+13025550100", "first", 0), receivedAt: T0, sentAt: local(T0 - 1 * min) };
+    const b = { ...sms("+13025550100", "second", 0), receivedAt: T0, sentAt: local(T0 - 2 * min) };
+    const [c] = groupConversations([], [b, a], []);
+    expect(c.items.map((i) => i.body)).toEqual(["first", "second"]);
+  });
+
   it("uses the phone's time for older texts caught up later", () => {
     const old = { ...sms("+13025550100", "earlier", 60), sentAt: local(T0) };
     expect(messageTime(old).getTime()).toBe(T0);
+    // Just past the live window, it's a catch-up: the phone's time.
+    const lateCatchUp = { ...sms("+13025550100", "earlier", 0), receivedAt: T0 + LIVE_TEXT_SKEW_MS + 2_000, sentAt: local(T0) };
+    expect(messageTime(lateCatchUp).getTime()).toBe(T0);
   });
 
   it("falls back to when tug got it without a usable phone time", () => {
@@ -450,5 +525,33 @@ describe("notificationTime", () => {
   it("falls back to the receive time without a usable phone time", () => {
     expect(notificationTime(note("Zoe", "hi", 0)).getTime()).toBe(T0);
     expect(notificationTime(note("Zoe", "hi", 0, { postedAt: "not a date" })).getTime()).toBe(T0);
+  });
+});
+
+describe("actionLabels", () => {
+  it("never calls a ringing call's unlabelled negative action Dismiss: it declines the call", () => {
+    expect(actionLabels({ category: "incomingCall", positiveLabel: "", negativeLabel: "" })).toEqual({
+      positive: "Answer",
+      negative: "Decline",
+    });
+  });
+
+  it("keeps the phone's own words when it gives them", () => {
+    expect(actionLabels({ category: "incomingCall", positiveLabel: "Accept", negativeLabel: "Decline" })).toEqual({
+      positive: "Accept",
+      negative: "Decline",
+    });
+    expect(actionLabels({ category: "social", positiveLabel: "", negativeLabel: "Clear" }).negative).toBe("Clear");
+  });
+
+  it("missed calls say Call back; other unlabelled actions are Accept / Dismiss", () => {
+    expect(actionLabels({ category: "missedCall", positiveLabel: "Dial", negativeLabel: "" })).toEqual({
+      positive: "Call back",
+      negative: "Dismiss",
+    });
+    expect(actionLabels({ category: "social", positiveLabel: "", negativeLabel: "" })).toEqual({
+      positive: "Accept",
+      negative: "Dismiss",
+    });
   });
 });

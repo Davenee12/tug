@@ -7,6 +7,12 @@
 // with a little inertia. Buoys and logs can be hopped over (Space, or Boost on the phone); other
 // boats are too tall to hop. Coins add points; a life ring gives back a life. Three lives, a short
 // grace period after each hit, and the water speeds up, so a run lasts a minute or three.
+//
+// The course is a pure function of the seed: each row has its own random numbers (from the seed
+// and the row's number) and is placed by distance, not time, so the same seed is the same course
+// at any frame rate, whatever happens to the boat. That's what makes the daily challenge the same
+// for everyone, and a two-player race fair (both lanes share a seed). The only thing a run changes
+// is that a boat that's been hit may find a life ring where a row would have been.
 
 /** The playfield, in field units. The canvas scales it to fit and draws the harbor around it. */
 export const FIELD_W = 100;
@@ -61,9 +67,31 @@ export interface Thing {
 
 export type GameEvent = "hit" | "coin" | "ring" | "hop" | "over";
 
+/**
+ * How the water handles today (the daily challenge's weather; calm everywhere else). Kept to a
+ * few plain numbers so the weather can only change what these say.
+ */
+export interface Handling {
+  /** Water speed, as a share of the usual (snow: slower). */
+  speedScale: number;
+  /** How quickly the boat answers the helm, per second (icy: lower, so it slides). */
+  response: number;
+  /** The phone's slider: how quickly the boat follows it, seconds (icy: slower). */
+  followTau: number;
+  /** A steady push sideways from the wind, field units a second (positive is to the right). */
+  drift: number;
+  /** How hard waves rock the boat from side to side (rain), field units a second at the crest. */
+  waves: number;
+}
+
+export const CALM: Handling = { speedScale: 1, response: RESPONSE, followTau: FOLLOW_TAU, drift: 0, waves: 0 };
+
 export interface Run {
-  /** The random generator's state (mulberry32). */
+  /** The course's seed: never changes during the run (each row draws from its own generator). */
   seed: number;
+  /** Rows spawned so far: the next row's number. */
+  rows: number;
+  handling: Handling;
   /** Seconds played. */
   t: number;
   distance: number;
@@ -111,9 +139,22 @@ export function random(run: { seed: number }): number {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
-export function newRun(seed: number): Run {
+/**
+ * A row's own generator, from the course seed and the row's number (a 32-bit mix), so a row never
+ * depends on what earlier rows or the boat did.
+ */
+export function rowRandom(seed: number, row: number): { seed: number } {
+  let h = (seed ^ Math.imul(row + 1, 0x9e3779b1)) | 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return { seed: (h ^ (h >>> 16)) | 0 };
+}
+
+export function newRun(seed: number, handling: Handling = CALM): Run {
   return {
     seed: seed | 0,
+    rows: 0,
+    handling,
     t: 0,
     distance: 0,
     speed: SPEED_START,
@@ -151,13 +192,36 @@ export function spawnGap(t: number): number {
   return 64 - (64 - 30) * progress(t);
 }
 
+/** How far the water has gone after `t` seconds at the usual speed (the speed curve, integrated). */
+export function distanceAt(t: number): number {
+  const s = Math.max(0, t);
+  return SPEED_MAX * s - (SPEED_MAX - SPEED_START) * SPEED_TAU * (1 - Math.exp(-s / SPEED_TAU));
+}
+
+/**
+ * When a run at the usual speed reaches distance `d`: the course's difficulty is set by distance
+ * through this, so it's the same course at any frame rate and on slower (snowy) water.
+ */
+export function timeAtDistance(d: number): number {
+  if (!(d > 0)) return 0;
+  // Newton's method from above: distanceAt is increasing and convex, so it closes in steadily.
+  let t = d / SPEED_START;
+  for (let i = 0; i < 8; i++) t -= (distanceAt(t) - d) / speedAt(t);
+  return Math.max(0, t);
+}
+
 /**
  * The helm with inertia: sideways speed eases towards what the steering asks for, never past it
- * (an exact first-order lag, so it behaves the same at any frame rate).
+ * (an exact first-order lag, so it behaves the same at any frame rate). Icy water answers slower.
  */
-export function steerVelocity(vx: number, steer: number, dt: number): number {
+export function steerVelocity(vx: number, steer: number, dt: number, response = RESPONSE): number {
   const target = clamp(Number.isFinite(steer) ? steer : 0, -1, 1) * MAX_VX;
-  return vx + (target - vx) * (1 - Math.exp(-RESPONSE * dt));
+  return vx + (target - vx) * (1 - Math.exp(-response * dt));
+}
+
+/** The swell rocking the boat, -1 to 1, from the run's clock (two waves, so it never feels regular). */
+export function waveAt(t: number): number {
+  return 0.7 * Math.sin((2 * Math.PI * t) / 2.6) + 0.3 * Math.sin((2 * Math.PI * t) / 1.15 + 1.3);
 }
 
 /** Where the phone's slider puts the boat: full left to full right across the open water. */
@@ -171,8 +235,8 @@ export function padTarget(position: number): number {
  * there fast and never overshoots. Solved exactly, so it behaves the same at any frame rate.
  * Returns the new position and velocity.
  */
-export function follow(x: number, vx: number, target: number, dt: number): [number, number] {
-  const w = 1 / FOLLOW_TAU;
+export function follow(x: number, vx: number, target: number, dt: number, tau = FOLLOW_TAU): [number, number] {
+  const w = 1 / tau;
   const e = x - target;
   const k = vx + w * e;
   const decay = Math.exp(-w * dt);
@@ -212,10 +276,12 @@ export function widestGap(row: Array<Pick<Thing, "kind" | "x" | "w">>): number {
   return Math.max(widest, FIELD_W - edge);
 }
 
-function thing(run: Run, kind: Kind, x: number, y = SPAWN_Y): Thing {
+type Rng = { seed: number };
+
+function thing(run: Run, rng: Rng, kind: Kind, x: number, y = SPAWN_Y): Thing {
   const size: Record<Kind, [number, number]> = {
     buoy: [6, 6],
-    log: [18 + random(run) * 12, 4.5],
+    log: [18 + random(rng) * 12, 4.5],
     boat: [8, 15],
     coin: [4.4, 4.4],
     ring: [6.5, 6.5],
@@ -231,41 +297,54 @@ function thing(run: Run, kind: Kind, x: number, y = SPAWN_Y): Thing {
     w,
     h,
     // Other boats wander across the harbor and come at you a little faster than the water.
-    vx: kind === "boat" ? (random(run) < 0.5 ? -1 : 1) * (4 + random(run) * 6) : 0,
+    vx: kind === "boat" ? (random(rng) < 0.5 ? -1 : 1) * (4 + random(rng) * 6) : 0,
     vy: kind === "boat" ? 8 : 0,
     hit: false,
   };
 }
 
-const anywhere = (run: Run) => MARGIN + random(run) * (FIELD_W - 2 * MARGIN);
+const anywhere = (rng: Rng) => MARGIN + random(rng) * (FIELD_W - 2 * MARGIN);
 
-/** One row of obstacles and pickups at the top of the field. Every row leaves `MIN_GAP` open. */
+/**
+ * The next row of obstacles and pickups, due at distance `run.nextSpawn`, and when the one after
+ * it is due. Every row leaves `MIN_GAP` open. A row is a pure function of the seed and its number
+ * (plus whether the boat has lost a life, which can swap the row for a life ring).
+ */
 export function spawnRow(run: Run): Thing[] {
-  const p = progress(run.t);
+  const due = run.nextSpawn;
+  const rng = rowRandom(run.seed, run.rows++);
+  const t = timeAtDistance(due);
+  const p = progress(t);
+  // Due part-way through a step: start as far down as the water has carried it since.
+  const y = SPAWN_Y + Math.max(0, run.distance - due);
   const row: Thing[] = [];
-  if (run.lives < LIVES && random(run) < 0.05) {
-    row.push(thing(run, "ring", anywhere(run)));
+  // Rolled whatever the lives, so the rest of the row (and where the next one is) is the same for
+  // everyone.
+  const ringRoll = random(rng);
+  const gapRoll = random(rng);
+  if (run.lives < LIVES && ringRoll < 0.05) {
+    row.push(thing(run, rng, "ring", anywhere(rng), y));
   } else {
-    const roll = random(run);
+    const roll = random(rng);
     if (roll < 0.2) {
       // A trail of coins.
-      const x = anywhere(run);
-      for (let i = 0; i < 4; i++) row.push(thing(run, "coin", x, SPAWN_Y - i * 7));
+      const x = anywhere(rng);
+      for (let i = 0; i < 4; i++) row.push(thing(run, rng, "coin", x, y - i * 7));
     } else if (roll < 0.45) {
-      row.push(thing(run, "buoy", anywhere(run)));
+      row.push(thing(run, rng, "buoy", anywhere(rng), y));
     } else if (roll < 0.62) {
-      const a = anywhere(run);
-      const b = a < FIELD_W / 2 ? a + 30 + random(run) * 20 : a - 30 - random(run) * 20;
-      row.push(thing(run, "buoy", a), thing(run, "buoy", b));
+      const a = anywhere(rng);
+      const b = a < FIELD_W / 2 ? a + 30 + random(rng) * 20 : a - 30 - random(rng) * 20;
+      row.push(thing(run, rng, "buoy", a, y), thing(run, rng, "buoy", b, y));
     } else if (roll < 0.82) {
-      row.push(thing(run, "log", anywhere(run)));
+      row.push(thing(run, rng, "log", anywhere(rng), y));
     } else {
-      row.push(thing(run, "boat", anywhere(run)));
+      row.push(thing(run, rng, "boat", anywhere(rng), y));
     }
     // Later on, a second obstacle in the same row, placed so open water remains.
-    if (random(run) < p * 0.6) {
+    if (random(rng) < p * 0.6) {
       for (let tries = 0; tries < 5; tries++) {
-        const extra = thing(run, random(run) < 0.7 ? "buoy" : "log", anywhere(run), SPAWN_Y - 4);
+        const extra = thing(run, rng, random(rng) < 0.7 ? "buoy" : "log", anywhere(rng), y - 4);
         if (widestGap([...row, extra]) >= MIN_GAP) {
           row.push(extra);
           break;
@@ -274,9 +353,10 @@ export function spawnRow(run: Run): Thing[] {
       }
     }
     // Now and then a coin as a reward for threading the gap.
-    if (random(run) < 0.3) row.push(thing(run, "coin", anywhere(run), SPAWN_Y - 10));
+    if (random(rng) < 0.3) row.push(thing(run, rng, "coin", anywhere(rng), y - 10));
   }
   run.things.push(...row);
+  run.nextSpawn = due + spawnGap(t) * (0.85 + 0.3 * gapRoll);
   return row;
 }
 
@@ -287,19 +367,23 @@ export function score(run: Pick<Run, "distance" | "bonus">): number {
 /** Advance the run by `dt` seconds (keep steps small: the caller splits a frame into ≤ 1/60 s). */
 export function step(run: Run, input: Input, dt: number): Run {
   if (run.over || dt <= 0) return run;
+  const h = run.handling;
   run.t += dt;
-  run.speed = speedAt(run.t);
+  run.speed = speedAt(run.t) * h.speedScale;
   const dy = run.speed * dt;
   run.distance += dy;
 
   // The phone's slider: follow its position closely. The helm (keyboard, mouse): with inertia.
   // Either way the banks stop the boat.
   if (input.target != null && Number.isFinite(input.target)) {
-    [run.x, run.vx] = follow(run.x, run.vx, clamp(input.target, MARGIN, FIELD_W - MARGIN), dt);
+    [run.x, run.vx] = follow(run.x, run.vx, clamp(input.target, MARGIN, FIELD_W - MARGIN), dt, h.followTau);
   } else {
-    run.vx = steerVelocity(run.vx, input.steer, dt);
+    run.vx = steerVelocity(run.vx, input.steer, dt, h.response);
     run.x += run.vx * dt;
   }
+  // Wind and waves push the boat sideways (the slider's spring holds its place against them).
+  const push = h.drift + h.waves * waveAt(run.t);
+  if (push !== 0) run.x += push * dt;
   if (run.x < MARGIN) {
     run.x = MARGIN;
     run.vx = Math.max(0, run.vx);
@@ -329,10 +413,7 @@ export function step(run: Run, input: Input, dt: number): Run {
     }
   }
 
-  while (run.distance >= run.nextSpawn) {
-    spawnRow(run);
-    run.nextSpawn += spawnGap(run.t) * (0.85 + 0.3 * random(run));
-  }
+  while (run.distance >= run.nextSpawn) spawnRow(run);
 
   const taken = new Set<number>();
   for (const th of run.things) {
@@ -422,6 +503,24 @@ export interface Layout {
 export function layout(width: number, height: number): Layout {
   const scale = Math.max(0.01, Math.min(height / FIELD_H, width / FIELD_W));
   return { scale, left: (width - FIELD_W * scale) / 2, top: (height - FIELD_H * scale) / 2 };
+}
+
+/** The strip of quay between two players' lanes, in field units. */
+export const LANE_GAP = 14;
+
+/**
+ * Two lanes side by side (a two-player race), the same size, centred together with a strip of quay
+ * between them. A field is taller than wide, so at tug's usual window shapes two fit at the size
+ * one would be.
+ */
+export function laneLayouts(width: number, height: number): [Layout, Layout] {
+  const scale = Math.max(0.01, Math.min(height / FIELD_H, width / (2 * FIELD_W + LANE_GAP)));
+  const left = (width - (2 * FIELD_W + LANE_GAP) * scale) / 2;
+  const top = (height - FIELD_H * scale) / 2;
+  return [
+    { scale, left, top },
+    { scale, left: left + (FIELD_W + LANE_GAP) * scale, top },
+  ];
 }
 
 /** A pointer's x (CSS pixels in the panel) in field units. */

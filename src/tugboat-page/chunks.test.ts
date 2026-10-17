@@ -64,14 +64,24 @@ describe("retries and messages", () => {
   it("knows which errors are final", () => {
     expect(isFatal("closed")).toBe(true);
     expect(isFatal("in-use")).toBe(true);
+    expect(isFatal("full")).toBe(true);
+    expect(messageFor("full")).toContain("two players");
+    // The Player 2 code without a race to join, or Tugboat's own code on a second phone mid-race.
+    expect(isFatal("no-race")).toBe(true);
+    expect(messageFor("no-race")).toMatch(/Two players in Tugboat Run, then scan the Player 2 code\.$/);
+    expect(isFatal("player-2-code")).toBe(true);
+    expect(messageFor("player-2-code")).toMatch(/scan the Player 2 code/);
     expect(isFatal("network")).toBe(false);
     expect(isFatal("bad-chunk")).toBe(false);
+    // Windows Security refusing the folder won't fix itself by retrying in a loop.
+    expect(isFatal("blocked")).toBe(true);
   });
 
   it("speaks plainly", () => {
     expect(messageFor("closed")).toMatch(/scan the new code/);
     expect(messageFor("network")).toMatch(/same Wi-Fi/);
     expect(messageFor("anything")).toBe("Something went wrong. Try again.");
+    expect(messageFor("blocked")).toMatch(/^Windows Security blocked tug from saving to Pictures\. Allow tug under Controlled folder access/);
   });
 
   it("formats sizes", () => {
@@ -86,6 +96,8 @@ describe("retrying a failed upload", () => {
   it("offers Try again for a dropped connection or a full disk", () => {
     expect(canRetryUpload("network")).toBe(true);
     expect(canRetryUpload("no-space")).toBe(true);
+    // Once tug is allowed in Windows Security, Try again works.
+    expect(canRetryUpload("blocked")).toBe(true);
     expect(canRetryUpload("error")).toBe(true);
   });
 

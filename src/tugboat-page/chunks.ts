@@ -58,7 +58,7 @@ export function retryDelay(attempt: number): number {
 
 /** Errors that retrying won't fix. Anything else (a dropped connection) is retried. */
 export function isFatal(code: string): boolean {
-  return ["closed", "unauthorized", "in-use", "too-big", "no-space", "changed", "not-found"].includes(code);
+  return ["closed", "unauthorized", "in-use", "full", "no-race", "player-2-code", "too-big", "no-space", "blocked", "changed", "not-found"].includes(code);
 }
 
 /** A failed upload worth offering "Try again" for: not one the PC refused for good (too big, or
@@ -78,10 +78,18 @@ export function messageFor(code: string): string {
       return "This link has expired. Open Tugboat in tug and scan the code again.";
     case "in-use":
       return "Tugboat is already open on another device. Close Tugboat in tug and open it again for a new code.";
+    case "full":
+      return "This race already has two players. Scan the code again when one of them is done.";
+    case "no-race":
+      return "There's no two-player race waiting for this phone. On your PC, choose Two players in Tugboat Run, then scan the Player 2 code.";
+    case "player-2-code":
+      return "Another phone is already using this code. To join the race, scan the Player 2 code on your PC.";
     case "too-big":
       return "This file is too big to send.";
     case "no-space":
       return "Your PC is out of space.";
+    case "blocked":
+      return "Windows Security blocked tug from saving to Pictures. Allow tug under Controlled folder access on your PC, then try again.";
     case "changed":
       return "This file changed on your PC. Send it again from tug.";
     case "not-found":

@@ -15,11 +15,23 @@ export interface PageOffer {
   type: string;
 }
 
+/** The PC's clipboard ("Send clipboard to iPhone"): its text, or a picture fetched like a file on offer. */
+export interface PageClip {
+  id: number;
+  text: string | null;
+  image: PageOffer | null;
+}
+
 export interface PageState {
   offers: PageOffer[];
   text: { id: number; text: string } | null;
   /** tug's game on the PC wants this phone as its controller. */
   game: boolean;
+  /** The PC's clipboard, until this page says it has it. */
+  clip: PageClip | null;
+  /** This phone joined a two-player race as the second controller: it only steers (no files or
+   * text), and waits on the PC for the next race when there isn't one. */
+  guest?: boolean;
 }
 
 /** What the PC answers each controller input with. */
@@ -27,6 +39,8 @@ export interface PadReply {
   paused: boolean;
   /** Times the boat was hit this run: the phone buzzes when it goes up. */
   hits: number;
+  /** In a two-player race, which player this phone is (its colour). */
+  player?: 1 | 2;
 }
 
 interface UploadReply {
@@ -46,6 +60,8 @@ export class TugboatError extends Error {
 export interface TugboatApi {
   state(): Promise<PageState>;
   sendText(text: string): Promise<void>;
+  /** Tell the PC this page has its clipboard id (until then the PC doesn't say it was sent). */
+  clipAck(id: number): Promise<void>;
   /** Send a file; resolves with the name it was saved under on the PC. */
   upload(file: File, onProgress: (sent: number) => void, signal: AbortSignal): Promise<string>;
   /** Tell the PC to drop a half-sent file. */
@@ -146,6 +162,10 @@ export class TugboatClient implements TugboatApi {
 
   async sendText(text: string): Promise<void> {
     await this.call("POST", "/api/text", { text });
+  }
+
+  async clipAck(id: number): Promise<void> {
+    await this.call("POST", "/api/clip", { id });
   }
 
   pad(input: PadInput, probe?: PadProbe): Promise<PadReply> {

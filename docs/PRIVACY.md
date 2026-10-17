@@ -51,13 +51,29 @@ Disconnect any time in Settings › Connectors, which removes the stored sign-in
 - **Tugboat** (phone ↔ PC transfers) runs a small server on your local network only while the
   Tugboat panel is open. Everything is encrypted with a key from the QR code, only the phone that
   scanned it can join, and nothing goes over the internet. It stops when you close it or after 10
-  idle minutes. tug never changes your Windows Firewall.
+  idle minutes. tug never changes your Windows Firewall. Your clipboard is read only when you press
+  **Send clipboard to iPhone**, held in memory (never saved) for at most 2 minutes until your phone
+  has it, and never written to tug's logs. Text you paste on the phone is kept out of Windows'
+  clipboard history and cloud clipboard sync.
+- **Voice typing** is **off by default**. When you turn it on and hold its shortcut, tug listens to
+  your microphone only while the keys are down, and Windows' own speech recognizer turns it into
+  text **on this PC**: the recording is never sent anywhere, never saved to disk, and dropped as
+  soon as the words are typed. tug's logs note how long you spoke and how many characters were
+  typed, never what you said. It downloads nothing.
 - **Developer tools** are **off by default**. When you turn them on, AI tools and the `tug` command
   on your PC can connect through a local channel (a Windows named pipe) that only your Windows
   account can open; there's no network port. AI tools you connect can read only what you allow
   with the switches in Settings › Developer tools (verification codes, music control and sending
   texts start off), and a text is only ever sent after you click **Send** in tug. What an AI tool
   does with what it reads is up to that tool and its provider's privacy policy.
+- **Hide previews while sharing or presenting** (Settings › Notifications, on by default) looks at
+  this PC only: whether Windows reports a full-screen app or presentation mode, whether the display
+  is duplicated, and whether a meeting app's or browser's sharing bar is open. To spot those bars,
+  tug reads the title of every open browser window (Chrome, Edge, Brave, Vivaldi, Opera) and Teams
+  window, which can include the page you're on; it compares it on the spot and never keeps or logs
+  a window title, and its log names only which kind of signal it saw. When hiding starts, tug takes
+  back its text and notification pop-ups still on screen or in Action Center (they stay in tug's
+  Feed); its own pop-ups, like low battery, stay.
 
 ## Deleting your data
 

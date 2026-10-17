@@ -1,6 +1,6 @@
 [package]
 name = "tug"
-version = "0.5.16"
+version = "0.5.17"
 description = "Bluetooth LE companion that mirrors iPhone notifications and media controls to Windows"
 authors = ["tug contributors"]
 license = "MIT"
@@ -29,7 +29,6 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
-tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.23"
@@ -48,6 +47,9 @@ hkdf = "0.13"
 hmac = "0.13"
 sha2 = "0.11"
 qrcode = { version = "0.14", default-features = false }
+# Tugboat's shared clipboard: a picture on the clipboard goes to the phone as a PNG. Already in the
+# tree through Tauri's icon handling, so this adds no new crate.
+png = "0.18"
 tauri-plugin-dialog = "2"
 # Developer tools (v0.5.12): the local bridge the `tug` command and MCP server talk to.
 tug-bridge = { path = "crates/tug-bridge" }
@@ -79,6 +81,10 @@ windows = { version = "0.62", features = [
   "Web_Http",
   "Web_Http_Headers",
   "Win32_Foundation",
+  # Hide previews while sharing or presenting: whether the display is duplicated (QueryDisplayConfig)
+  # and whether the foreground window really covers its monitor (MonitorFromWindow).
+  "Win32_Devices_Display",
+  "Win32_Graphics_Gdi",
   # The PC's region (GetUserDefaultGeoName): whether a bare 10-digit number is a +1 number.
   "Win32_Globalization",
   # Code fill: clearing an auto-copied code (only if it's still on the clipboard), the
@@ -100,7 +106,21 @@ windows = { version = "0.62", features = [
   "Win32_System_WindowsProgramming",
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",
+  # Quick actions: the taskbar jump list (ICustomDestinationList, IShellLinkW tasks with a title)
+  # and the AppUserModelID the window and the list share.
+  "Win32_Storage_EnhancedStorage",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_UI_Shell_Common",
+  "Win32_UI_Shell_PropertiesSystem",
   "Win32_UI_WindowsAndMessaging",
+  # Voice typing: the microphone (wave-in), Windows' offline speech recognizer (SAPI 5, a COM API),
+  # and its small on-screen listening indicator (GDI).
+  "Win32_Graphics_Gdi",
+  "Win32_Media_Audio",
+  "Win32_Media_Speech",
+  "Win32_System_Com",
 ] }
 windows-collections = "0.3"
 # Same version Tauri already pulls in (see Cargo.lock), so the WebView2 controller handed back by

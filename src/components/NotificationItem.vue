@@ -2,10 +2,13 @@
 import { computed, ref } from "vue";
 import { Bell, BellOff, ExternalLink } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { appLabel, clockTime, notificationTime } from "../lib/format";
+import { actionLabels, appLabel, clockTime, MESSAGES_APP, notificationTime } from "../lib/format";
+import { textContent } from "../lib/messageType";
 import { mayHaveWebsite, webLinkFor, type WebLink } from "../lib/weblinks";
+import { useCallButtonGate } from "../lib/useCallButtonGate";
 import type { PhoneNotification } from "../types/protocol";
 import AppAvatar from "./AppAvatar.vue";
+import MediaChip from "./MediaChip.vue";
 
 // `compact`: inside an expanded app stack, where the avatar and app name are already shown.
 const props = defineProps<{ n: PhoneNotification; compact?: boolean }>();
@@ -23,9 +26,20 @@ const webLink = computed<WebLink | null>(() => {
   const site = mayHaveWebsite(props.n.appId) ? tug.websiteFor(props.n.appId) : null;
   return site ? { url: site, label: appLabel(props.n) } : null;
 });
+// A text's photo ("Attachment: 1 Photo") reads as a chip under any caption (lib/attachments).
+const content = computed(() => (props.n.appId === MESSAGES_APP && props.n.message ? textContent(props.n.message) : null));
+const hasChip = computed(() => !!content.value && (!!content.value.media || content.value.unreadable));
+const messageText = computed(() => (hasChip.value ? (content.value?.text ?? "") : props.n.message));
 const expanded = ref(false);
 const busy = ref<"positive" | "negative" | null>(null);
 const isCall = computed(() => props.n.category === "incomingCall");
+// A ringing call's buttons: Space never presses them; Enter only once it has rung a moment untouched.
+const ringing = computed(() => isCall.value && props.n.live);
+const { onCallKey } = useCallButtonGate(ringing);
+function onActionKey(e: KeyboardEvent, positive: boolean) {
+  if (ringing.value) onCallKey(e, positive ? "answer" : "decline");
+}
+const labels = computed(() => actionLabels(props.n));
 
 async function act(positive: boolean) {
   busy.value = positive ? "positive" : "negative";
@@ -46,15 +60,17 @@ async function act(positive: boolean) {
         <span v-if="n.removedAt" class="text-[12px] text-muted-soft">· cleared on iPhone</span>
         <span class="ml-auto shrink-0 font-mono text-[12px] text-muted-soft">{{ time }}</span>
       </div>
-      <p v-if="n.title" :class="['text-ink', compact ? 'text-[14px] font-medium' : 'mt-0.5 text-[15px] font-medium']">{{ n.title }}</p>
-      <p v-if="n.subtitle" class="text-[14px] text-body-strong">{{ n.subtitle }}</p>
+      <p v-if="n.title" :class="['preview-private text-ink', compact ? 'text-[14px] font-medium' : 'mt-0.5 text-[15px] font-medium']">{{ n.title }}</p>
+      <p v-if="n.subtitle" class="preview-private text-[14px] text-body-strong">{{ n.subtitle }}</p>
       <p
-        v-if="n.message"
-        :class="['selectable mt-0.5 cursor-text whitespace-pre-line text-[14px] text-body', expanded ? '' : 'line-clamp-4']"
+        v-if="messageText"
+        :class="['preview-private selectable mt-0.5 cursor-text whitespace-pre-line text-[14px] text-body', expanded ? '' : 'line-clamp-4']"
         @click="expanded = !expanded"
       >
-        {{ n.message }}
+        {{ messageText }}
       </p>
+      <MediaChip v-if="hasChip && content" class="mt-1 text-[14px] text-body" :media="content.media" :unreadable="content.unreadable" />
+
 
       <div :class="['flex items-center gap-2', compact ? 'mt-1.5' : 'mt-2.5']">
         <template v-if="n.live">
@@ -62,12 +78,23 @@ async function act(positive: boolean) {
             v-if="n.flags.positiveAction"
             :class="[isCall ? 'btn-primary' : 'btn-secondary', 'btn-sm']"
             :disabled="busy !== null"
+            :data-call-button="ringing ? '' : undefined"
+            @keydown="onActionKey($event, true)"
+            @keyup="onActionKey($event, true)"
             @click="act(true)"
           >
-            {{ n.category === "missedCall" ? "Call back" : n.positiveLabel || "Accept" }}
+            {{ labels.positive }}
           </button>
-          <button v-if="n.flags.negativeAction" class="btn-secondary btn-sm" :disabled="busy !== null" @click="act(false)">
-            {{ n.negativeLabel || "Dismiss" }}
+          <button
+            v-if="n.flags.negativeAction"
+            class="btn-secondary btn-sm"
+            :disabled="busy !== null"
+            :data-call-button="ringing ? '' : undefined"
+            @keydown="onActionKey($event, false)"
+            @keyup="onActionKey($event, false)"
+            @click="act(false)"
+          >
+            {{ labels.negative }}
           </button>
         </template>
         <button

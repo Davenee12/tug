@@ -37,7 +37,7 @@ use tug_bridge::protocol::{
 use tug_bridge::server::{BoxFuture, Handler};
 
 use crate::ble::BleHandle;
-use crate::state::{now_ms, Shared};
+use crate::state::{now_ms, RevCounter, Shared};
 use crate::tugboat::TugboatService;
 use confirm::{ConfirmRequest, Confirmations, Resolution, CONFIRM_TIMEOUT_MS};
 use rate_limit::RateLimiter;
@@ -107,6 +107,9 @@ pub struct PermissionState {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DevToolsStatus {
+    /// Numbers each copy in the order it was composed (`state::RevCounter`): an event and a
+    /// command's answer can arrive in either order, and the UI keeps the newest.
+    pub rev: u64,
     pub enabled: bool,
     pub permissions: Vec<PermissionState>,
     pub clients: Vec<ClientRecord>,
@@ -131,6 +134,8 @@ pub struct DevTools {
     confirms: Mutex<Confirmations>,
     waiters: Mutex<HashMap<u64, oneshot::Sender<Resolution>>>,
     running: AtomicBool,
+    /// Numbers status copies (see `DevToolsStatus::rev`).
+    revs: RevCounter,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -155,6 +160,7 @@ impl DevTools {
             confirms: Mutex::new(Confirmations::default()),
             waiters: Mutex::new(HashMap::new()),
             running: AtomicBool::new(false),
+            revs: RevCounter::default(),
         });
         // Load the token if Developer tools were set up before (made fresh if switched on and
         // the file went missing).
@@ -219,7 +225,12 @@ impl DevTools {
         std::fs::metadata(&cli).ok().filter(|m| m.len() > 0).map(|_| cli)
     }
 
+    /// The status as a command answers it, numbered after every copy composed before it.
     pub fn status(&self) -> DevToolsStatus {
+        self.revs.stamp(|rev| self.compose(rev), |_| ())
+    }
+
+    fn compose(&self, rev: u64) -> DevToolsStatus {
         let perms = self.permissions();
         let cli = Self::cli_path();
         let cli_dir = cli
@@ -227,6 +238,7 @@ impl DevTools {
             .and_then(|p| p.parent())
             .map(|d| d.to_string_lossy().into_owned());
         DevToolsStatus {
+            rev,
             enabled: self.is_enabled(),
             permissions: Permission::ALL
                 .into_iter()
@@ -245,10 +257,16 @@ impl DevTools {
         }
     }
 
+    /// Compose, number and emit under one lock, so racing updates reach the window in order.
     fn emit_status(&self) {
-        if let Err(e) = self.app.emit(STATUS_EVENT, self.status()) {
-            log::warn!("emit {STATUS_EVENT} failed: {e}");
-        }
+        self.revs.stamp(
+            |rev| self.compose(rev),
+            |s| {
+                if let Err(e) = self.app.emit(STATUS_EVENT, s) {
+                    log::warn!("emit {STATUS_EVENT} failed: {e}");
+                }
+            },
+        );
     }
 
     /// The master switch. Switching on makes the token (once); switching off drops any

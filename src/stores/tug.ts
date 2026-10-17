@@ -18,7 +18,9 @@ import {
   type Conversation,
   type Thread,
 } from "../lib/format";
-import { replyAddress, replyReadsConversation, toastSpec } from "../lib/toastSpec";
+import { replyAddress, replyReadsConversation, sendOutcome, toastSpec } from "../lib/toastSpec";
+import { clearHistory as clearHistoryNow } from "../lib/clearHistory";
+import { DEFAULT_REPLIES, parseReplyDefaults } from "../lib/smartReplies";
 import { shouldPopUp, type PopupEvent } from "../lib/popup";
 import { isVip, vipIndex } from "../lib/vips";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
@@ -35,10 +37,10 @@ import {
   shouldAutoCopy,
 } from "../lib/codeFill";
 import { MESSAGES_APP } from "../lib/format";
-import { batteryAlert } from "../lib/battery";
-import { copyText } from "../lib/clipboard";
+import { toastBody } from "../lib/attachments";
+import { batteryAlert, restoreBatteryAlerted, saveBatteryAlerted } from "../lib/battery";
 import { isAddressLike, normalizeAddress } from "../lib/address";
-import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync } from "../lib/messageSync";
+import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync, warmDue } from "../lib/messageSync";
 import { canSeeWindow } from "../lib/attention";
 import { grantedOnceCache } from "../lib/permission";
 import { arrivedDuringGap, GAP_COLLECT_MS, gapSummaryText, planGapPopups } from "../lib/reconnectPopups";
@@ -57,6 +59,7 @@ import type {
   PairingRequest,
   PhoneNotification,
   SearchResults,
+  ShareState,
   SpotifyDevice,
   SpotifyPlayer,
   SpotifyPlaylist,
@@ -87,6 +90,20 @@ import {
 } from "../lib/phoneSwitches";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 import { coalesce, nextFrame } from "../lib/coalesce";
+import { isCurrent, NewestRev, SnapshotGuard } from "../lib/ordering";
+import { retryDelay, settleAll, START_FAILED, STILL_LOADING, type StartupRead } from "../lib/startup";
+import {
+  awaitingShareAnswer,
+  NOT_SHARING,
+  previewsHidden,
+  SHARE_UNKNOWN,
+  SHARE_WATCH_START,
+  shareBanner,
+  type ShareWatch,
+  shareWatchAnswered,
+  shareWatchAsked,
+  stillRevealed,
+} from "../lib/sharePrivacy";
 import { useTugboatStore } from "./tugboat";
 import { useDevToolsStore } from "./devtools";
 
@@ -173,9 +190,17 @@ export const useTugStore = defineStore("tug", () => {
   const statusKnown = ref(false);
   const nowPlaying = ref<NowPlaying>(EMPTY_NOW_PLAYING);
   /** Now Playing updates, applied once per frame (lib/coalesce), so a song change renders once. */
-  const nowPlayingUpdates = coalesce<NowPlaying>((np) => (nowPlaying.value = np), nextFrame);
+  const nowPlayingUpdates = coalesce<NowPlaying>((np) => applyNowPlaying(np), nextFrame);
+  /** The newest Now Playing event so far, so an older one can't take a newer one's place in the frame wait. */
+  const nowPlayingRev = new NewestRev();
+  /** Only ever replace Now Playing with a copy at least as new (see lib/ordering). */
+  function applyNowPlaying(np: NowPlaying) {
+    if (isCurrent(np, nowPlaying.value)) nowPlaying.value = np;
+  }
   /** Newest first. */
   const notifications = ref<PhoneNotification[]>([]);
+  /** Keeps a notification list read from undoing an event that landed while it was in flight. */
+  const rowGuard = new SnapshotGuard();
   /** Messages from message access (MAP), oldest first. */
   const messages = ref<SmsMessage[]>([]);
   const contacts = ref<Contact[]>([]);
@@ -202,6 +227,9 @@ export const useTugStore = defineStore("tug", () => {
     typeCodeHotkey: true,
     typeCodeKeys: DEFAULT_CODE_HOTKEY,
     showGames: true,
+    smartReplies: true,
+    smartReplyDefaults: [...DEFAULT_REPLIES],
+    hidePreviewsWhileSharing: true,
   });
   /** The type-the-code shortcut as the backend registered it (Settings shows "in use" from this). */
   const codeHotkey = ref<CodeHotkeyStatus>({ state: "off", keys: DEFAULT_CODE_HOTKEY });
@@ -315,6 +343,8 @@ export const useTugStore = defineStore("tug", () => {
     return contactPhotos.value[key] ?? null;
   }
   const advertiseEnabled = ref(true);
+  /** Presses of the visibility switch, so only the newest may put it back. */
+  let advertisePresses = 0;
   /** Start with Windows. Mirrors the real autostart registry entry, not a stored setting. */
   const autostartEnabled = ref(false);
   const zoom = ref(1);
@@ -328,6 +358,8 @@ export const useTugStore = defineStore("tug", () => {
   const showConnect = ref(false);
   /** "Skip for now" on the panel's switches: let it yield with optional switches still off. */
   const connectSkipped = ref(false);
+  /** Pair again (the iPhone forgot this PC) is under way: its buttons wait, so one press is one removal. */
+  const pairingAgain = ref(false);
   watch(
     [statusKnown, status, connectSkipped],
     () => {
@@ -367,6 +399,8 @@ export const useTugStore = defineStore("tug", () => {
   const pickerOpen = ref(false);
   /** Universal search (Ctrl+K or the search box). */
   const searchOpen = ref(false);
+  /** What universal search opens with, once (a Ctrl+K text that couldn't be sent comes back). */
+  const searchDraft = ref("");
   /** Ringing calls whose card was answered or hidden here; their Feed row stays until the phone drops them. */
   const callsHandled = ref<number[]>([]);
   /** The call ringing on the phone right now (newest first), for the incoming-call card. */
@@ -409,6 +443,58 @@ export const useTugStore = defineStore("tug", () => {
   const canSee = computed(() =>
     canSeeWindow({ visibility: pageVisible.value ? "visible" : "hidden", focused: windowFocused.value, overlayOpen: overlayOpen.value }),
   );
+
+  // --- Hide previews while sharing or presenting (lib/sharePrivacy; the backend's share_privacy/
+  // decides, and hides pop-up text itself). One source: the backend's answer plus this setting. ---
+  const screenShare = ref<ShareState>(NOT_SHARING);
+  /** "Show anyway" for the share in progress; forgotten when sharing stops. */
+  const shareRevealed = ref(false);
+  /** Which ask of `screen_share_watch` is newest, and whether it has been answered. */
+  const shareWatch = ref<ShareWatch>(SHARE_WATCH_START);
+  const previewsHiddenNow = computed(() =>
+    previewsHidden(
+      settings.value.hidePreviewsWhileSharing,
+      screenShare.value,
+      shareRevealed.value,
+      awaitingShareAnswer(shareWatch.value, pageVisible.value, settings.value.hidePreviewsWhileSharing),
+    ),
+  );
+  const shareBannerText = computed(() =>
+    shareBanner(settings.value.hidePreviewsWhileSharing, screenShare.value, shareRevealed.value),
+  );
+  function setScreenShare(s: ShareState) {
+    screenShare.value = s;
+    shareRevealed.value = stillRevealed(shareRevealed.value, s);
+  }
+  function showPreviewsAnyway() {
+    shareRevealed.value = true;
+  }
+  function hidePreviewsAgain() {
+    shareRevealed.value = false;
+  }
+  /**
+   * The backend looks every 2 s only while the window is on screen (or while hiding is on, until it
+   * clears); hidden in the tray with nothing hidden, it doesn't look at all. Tell it when that changes.
+   */
+  let shareWatching: boolean | null = null;
+  function syncShareWatch() {
+    const on = pageVisible.value && settings.value.hidePreviewsWhileSharing;
+    if (on === shareWatching) return;
+    shareWatching = on;
+    // Until this ask is answered, previews on screen count as hidden (no flash of an old answer).
+    shareWatch.value = shareWatchAsked(shareWatch.value);
+    const episode = shareWatch.value.episode;
+    void api
+      .screenShareWatch(on)
+      .then(setScreenShare)
+      // No answer at all: stay hidden, and say tug couldn't check (with Show anyway).
+      .catch(() => (on ? setScreenShare(SHARE_UNKNOWN) : undefined))
+      .finally(() => (shareWatch.value = shareWatchAnswered(shareWatch.value, episode)));
+  }
+  watch([pageVisible, () => settings.value.hidePreviewsWhileSharing], () => {
+    if (started) syncShareWatch();
+  });
+
   const onWindowBlur = () => {
     windowFocused.value = false;
     leftWindow();
@@ -416,7 +502,6 @@ export const useTugStore = defineStore("tug", () => {
   const onWindowFocus = () => {
     windowFocused.value = true;
     cameBack();
-    checkSwitches();
   };
   // Registered in init() and removed in dispose(), so it's torn down with the rest (see teardown).
   const onVisibilityChange = () => {
@@ -426,8 +511,6 @@ export const useTugStore = defineStore("tug", () => {
       // The minute clock skips its ticks while hidden: catch the code rows up now.
       if (clockTimer !== undefined) clock.value = Date.now();
       cameBack();
-      // tug coming to the front is when a switch flipped on the phone should show: check now.
-      checkSwitches();
     }
   };
 
@@ -497,8 +580,9 @@ export const useTugStore = defineStore("tug", () => {
   // Not "no contacts saved": names kept from before a re-pair hid a Sync Contacts that was off.
   const switchesPending = computed(() => !!status.value.device && anySwitchPending(switches.value));
   /**
-   * Ask the phone about its switches now (window to the front, "Check again"). At most one per
-   * SWITCH_CHECK_GAP_MS: focus and visibility both fire on the same return.
+   * Ask the phone about its switches now ("Check again"). At most one per SWITCH_CHECK_GAP_MS.
+   * Coming back to tug's window doesn't ask: Sync Contacts is a whole phonebook connection, so the
+   * backend checks it on its own schedule, and every few seconds while the switches are on screen.
    */
   let lastSwitchCheck: number | null = null;
   function checkSwitches() {
@@ -517,6 +601,19 @@ export const useTugStore = defineStore("tug", () => {
     () =>
       pageVisible.value &&
       (view.value === "settings" ? settingsSection.value === "iphone" : showConnect.value),
+  );
+  // Sync Contacts is checked quickly only while the switches are actually on screen (not during
+  // setup's fresh window with tug in the tray): each check is a phonebook connection.
+  let switchesRenew: number | undefined;
+  watch(
+    () => connectPanelVisible.value && !!status.value.device,
+    (on) => {
+      void api.setSwitchesVisible(on).catch(() => undefined);
+      // The backend lets it lapse after 90 s unless renewed, like `setWatching`.
+      window.clearInterval(switchesRenew);
+      if (on) switchesRenew = window.setInterval(() => void api.setSwitchesVisible(true).catch(() => undefined), 45_000);
+    },
+    { immediate: true },
   );
   watch(
     () =>
@@ -544,6 +641,15 @@ export const useTugStore = defineStore("tug", () => {
   const seenSince = ref(Date.now());
   /** Code-text rows the user cleared from the Feed (hidden, not deleted); persisted in `ui.clearedCodes`. */
   const clearedCodes = ref<number[]>([]);
+  /**
+   * The one-time hint under a conversation ("Texts you send from tug show here…") was dismissed;
+   * persisted in `ui.sentHintDismissed`. True until settings load, so it never flashes.
+   */
+  const sentHintDismissed = ref(true);
+  function dismissSentHint() {
+    sentHintDismissed.value = true;
+    void attempt(() => api.setSetting("ui.sentHintDismissed", "true"));
+  }
   /** Ticks each minute so the code Feed drops rows once their texts age out of the recency window. */
   const clock = ref(Date.now());
   let clockTimer: number | undefined;
@@ -637,22 +743,28 @@ export const useTugStore = defineStore("tug", () => {
   /** Whether the settings let a pop-up through right now, for a given event (see lib/popup). */
   const popupAllowed = (event: PopupEvent) => shouldPopUp(event, settings.value, new Date());
 
-  // Low phone battery: one pop-up at 20% and one at 10% per discharge (see lib/battery).
+  // Low phone battery: one pop-up at 20% and one at 10% per discharge (see lib/battery). The mark
+  // is saved (ui.batteryAlerted), so restarting tug mid-discharge doesn't announce 20% again.
   let batteryAlerted: number | null = null;
+  function setBatteryAlerted(alerted: number | null) {
+    if (alerted === batteryAlerted) return;
+    batteryAlerted = alerted;
+    void api.setSetting("ui.batteryAlerted", saveBatteryAlerted(alerted, Date.now())).catch(() => undefined);
+  }
   async function checkBattery(level: number | null) {
     await ready;
     const r = batteryAlert(level, batteryAlerted);
     // An alert that couldn't be shown (switch off, Do not disturb…) isn't used up: it comes
     // when it can. Only a shown alert (or a charge, which resets it) moves the mark.
     if (r.alert == null) {
-      batteryAlerted = r.alerted;
+      setBatteryAlerted(r.alerted);
       return;
     }
     // A low-battery alert is a system pop-up (no app, no VIP): held by Windows pop-ups off, DND or
     // quiet hours, like any other.
     if (!settings.value.lowBattery) return;
     if (!popupAllowed({ appId: "", isCall: false, isVip: false }) || !(await hasToastPermission())) return;
-    batteryAlerted = r.alerted;
+    setBatteryAlerted(r.alerted);
     // Through tug's own Windows toast like every other pop-up: the generic notification call
     // never showed on the test PC at 20%. Its id sits outside notification ids, so pressing it
     // just opens tug.
@@ -666,6 +778,8 @@ export const useTugStore = defineStore("tug", () => {
       code: null,
       callBack: false,
       clear: false,
+      app: "",
+      kind: "info",
     };
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
     void api.showToast(spec).catch(() => undefined);
@@ -717,14 +831,38 @@ export const useTugStore = defineStore("tug", () => {
     void hasToastPermission().then((ok) => ok && showInfoToast(CODE_FILL_TOAST_ID, title, body));
   }
 
+  /** Presses of the type-the-code switch and shortcut picker, so only the newest may put them back. */
+  let codeHotkeyPresses = 0;
+
   /** Settings › Notifications: turn the shortcut on or off, or pick another; the backend says if it's taken. */
   async function setCodeHotkey(enabled: boolean, keys: string) {
+    const press = ++codeHotkeyPresses;
     const id = knownHotkey(keys);
+    const before = { typeCodeHotkey: settings.value.typeCodeHotkey, typeCodeKeys: settings.value.typeCodeKeys };
+    const beforeStatus = codeHotkey.value;
     settings.value = { ...settings.value, typeCodeHotkey: enabled, typeCodeKeys: id };
-    await attempt(() => api.setSetting("ui.typeCodeHotkey", JSON.stringify(enabled)));
-    await attempt(() => api.setSetting("ui.typeCodeKeys", id));
+    // Still the newest choice? A later press owns the switch; an older failure mustn't undo it.
+    // By press, not by value: on → off → on shows this press's value again after two newer ones.
+    const stillMine = () =>
+      press === codeHotkeyPresses && settings.value.typeCodeHotkey === enabled && settings.value.typeCodeKeys === id;
+    const revert = () => {
+      if (stillMine()) settings.value = { ...settings.value, ...before };
+    };
+    // Register first: if Windows' side fails outright, nothing was saved and the switch goes back
+    // (a shortcut another app holds isn't a failure; it comes back as "inUse" and Settings says so).
     const s = await attempt(() => api.setCodeHotkey(enabled, id));
-    if (s) codeHotkey.value = s;
+    if (!s) return revert();
+    if (stillMine()) codeHotkey.value = s;
+    const saved =
+      (await attempt(() => api.setSetting("ui.typeCodeHotkey", JSON.stringify(enabled)).then(() => true))) === true &&
+      (await attempt(() => api.setSetting("ui.typeCodeKeys", id).then(() => true))) === true;
+    if (saved || !stillMine()) return;
+    // Not saved, so it wouldn't survive a restart: put the shortcut back as it was, quietly. (No
+    // newer press happened during the saves: `stillMine` said so just above.)
+    revert();
+    const back = await api.setCodeHotkey(before.typeCodeHotkey, before.typeCodeKeys).catch(() => null);
+    // A press during that call owns the shortcut and its status now.
+    if (press === codeHotkeyPresses) codeHotkey.value = back ?? beforeStatus;
   }
 
   /** Calls always ring through; everything else is rate-limited and the overflow summed up once. */
@@ -743,7 +881,7 @@ export const useTugStore = defineStore("tug", () => {
 
   /** A pop-up that only says something; pressing it opens tug (its id matches no notification). */
   function showInfoToast(id: number, title: string, body: string) {
-    const spec: ToastSpec = { id, title, body, name: "", replyTo: null, markRead: false, code: null, callBack: false, clear: false };
+    const spec: ToastSpec = { id, title, body, name: "", replyTo: null, markRead: false, code: null, callBack: false, clear: false, app: "", kind: "info" };
     void api.showToast(spec).catch(() => undefined);
   }
 
@@ -800,7 +938,13 @@ export const useTugStore = defineStore("tug", () => {
     if (!admitToast(event.isCall)) return;
     // With buttons for what applies (reply, mark read, copy code, call back, clear); the
     // backend falls back to a plain pop-up itself if Windows won't take that one.
-    let spec = toastSpec(n, messages.value, contacts.value);
+    // A text from a person also gets up to three suggested replies (Settings, lib/smartReplies).
+    let spec = toastSpec(n, messages.value, contacts.value, {
+      enabled: settings.value.smartReplies,
+      defaults: settings.value.smartReplyDefaults,
+    });
+    // A photo text says "📷 Photo" and where to see it, not "Attachment: 1 Photo" (lib/attachments).
+    if (n.appId === MESSAGES_APP) spec = { ...spec, body: toastBody(spec.body) };
     // Already on the clipboard: "482193 copied, from Chase", no Copy button.
     if (copied && code !== null) spec = copiedToastSpec(spec, code, spec.name || appLabel(n));
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
@@ -839,6 +983,8 @@ export const useTugStore = defineStore("tug", () => {
       code,
       callBack: false,
       clear: false,
+      app: "Messages",
+      kind: "message",
     };
     const spec = copied && code === found ? copiedToastSpec(plain, code, name) : plain;
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
@@ -946,6 +1092,8 @@ export const useTugStore = defineStore("tug", () => {
     }
     const gone = new Set(removedNotifications.map((n) => n.id));
     const hiddenMessages = new Set(removedMessages.map((m) => m.id));
+    // A list read already under way mustn't bring them back.
+    for (const id of gone) rowGuard.touched(id);
     notifications.value = notifications.value.filter((n) => !gone.has(n.id));
     messages.value = messages.value.filter((m) => !hiddenMessages.has(m.id));
     if (selectedThread.value === c.key) selectedThread.value = null;
@@ -955,7 +1103,10 @@ export const useTugStore = defineStore("tug", () => {
         flash.value = null;
         void attempt(async () => {
           await api.setConversationHidden(senders, c.addresses, at);
-          for (const n of removedNotifications) upsert(notifications.value, n);
+          for (const n of removedNotifications) {
+            rowGuard.touched(n.id);
+            upsert(notifications.value, n);
+          }
           for (const m of removedMessages) upsertMessage(m);
           messages.value.sort(byArrival);
           selectedThread.value = c.key;
@@ -966,13 +1117,32 @@ export const useTugStore = defineStore("tug", () => {
 
   /** Copy a one-time code; once it's used, its notification has done its job on the phone too. */
   async function copyCode(code: string, from: PhoneNotification[] = []): Promise<boolean> {
-    if (!(await copyText(code))) {
+    // The same private path as auto-copy: kept out of Win+V clipboard history and cloud sync, and
+    // taken off again after 2 minutes if it's still there.
+    const copied = await api.copyCodePrivately(code).then(
+      () => true,
+      () => false,
+    );
+    if (!copied) {
       notify("error", "Couldn't copy to the clipboard.");
       return false;
     }
     notify("info", `Copied ${code}`);
     void clearItems(from, { quiet: true });
     return true;
+  }
+
+  /**
+   * Copy the newest code (Ctrl+Shift+C, the taskbar's Copy latest code). With none in the last
+   * 10 minutes, say so rather than do nothing.
+   */
+  async function copyLatestCode(): Promise<boolean> {
+    const latest = latestCode();
+    if (!latest) {
+      notify("info", "No code in the last 10 minutes");
+      return false;
+    }
+    return copyCode(latest.code, latest.from);
   }
 
   /** The newest code that arrived in the last few minutes, from a notification or a text. */
@@ -995,6 +1165,18 @@ export const useTugStore = defineStore("tug", () => {
   function readConversation(notifications: PhoneNotification[], messageIds: number[]) {
     void clearItems(notifications, { quiet: true });
     if (messageIds.length) api.markRead(messageIds).catch(() => undefined);
+  }
+
+  /**
+   * The user is typing a text: have message access open by the time they press Send, so the send
+   * doesn't wait on a reconnect. At most every WARM_GAP_MS; the backend ignores it when it's open.
+   */
+  let lastWarm: number | null = null;
+  function warmTexts() {
+    const now = Date.now();
+    if (!status.value.device || !warmDue(lastWarm, now)) return;
+    lastWarm = now;
+    void api.warmTexts().catch(() => undefined);
   }
 
   /**
@@ -1061,9 +1243,11 @@ export const useTugStore = defineStore("tug", () => {
     }
   }
 
+  /** Names with numbers tug knows (contacts, recent calls): a missed call matches a name only if it's unique here. */
+  const knownPeople = computed(() => [...contacts.value, ...calls.value.map((c) => ({ name: c.name, address: c.number }))]);
   /** A missed call from this person still on the phone, to call back from (no hands-free needed). */
   function missedCallFrom(name: string | null, address: string | null): PhoneNotification | null {
-    return missedCallFor(notifications.value, { name, address });
+    return missedCallFor(notifications.value, { name, address }, knownPeople.value);
   }
 
   /** How tug can call this person right now: back from their missed call, by dialing, or not yet. */
@@ -1177,8 +1361,13 @@ export const useTugStore = defineStore("tug", () => {
       typeCodeHotkey: raw["ui.typeCodeHotkey"] !== "false",
       typeCodeKeys: knownHotkey(raw["ui.typeCodeKeys"]),
       showGames: raw["ui.showGames"] !== "false",
+      smartReplies: raw["ui.smartReplies"] !== "false",
+      smartReplyDefaults: parseReplyDefaults(raw["ui.smartReplyDefaults"]),
+      hidePreviewsWhileSharing: raw["ui.hidePreviewsWhileSharing"] !== "false",
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
+    batteryAlerted = restoreBatteryAlerted(raw["ui.batteryAlerted"], Date.now());
+    sentHintDismissed.value = raw["ui.sentHintDismissed"] === "true";
     // A missing key is a fresh install: null (not ""), so the first launch records the version
     // silently instead of greeting a brand-new user with a card about changes they never saw.
     // Before 0.5.9 nothing recorded a seen version. Someone who finished the old setup wizard
@@ -1266,99 +1455,167 @@ export const useTugStore = defineStore("tug", () => {
         },
       ),
     );
-    teardown.push(
-      ...(await Promise.all([
-        on("device-status", (s) => {
-          const wasConnected = status.value.connection === "connected";
-          // The start of an outage: what's posted after it and replayed on reconnect is a gap arrival.
-          if (wasConnected && s.connection !== "connected") linkLostAt = Date.now();
-          if (s.battery !== status.value.battery) void checkBattery(s.battery);
-          status.value = s;
-          // Notification UIDs die with the connection, so nothing stays actionable.
-          if (wasConnected && s.connection !== "connected") {
-            for (const n of notifications.value) n.live = false;
-          }
-          statusKnown.value = true;
-        }),
-        // A song change arrives as several updates a few ms apart: one render per frame, not each.
-        on("now-playing", (np) => nowPlayingUpdates.push(np)),
-        on("notification", (n) => {
-          const added = upsert(notifications.value, n);
-          // Seen only if someone is looking (MessageThreads marks the one on screen on coming back).
-          if (canSee.value && view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
-          if (added && arrivedDuringGap(n, linkLostAt, Date.now())) queueGapPopup(n);
-          else if (added) void maybeToast(n);
-        }),
-        on("notification-removed", (id) => {
-          const n = notifications.value.find((x) => x.id === id);
-          if (n) Object.assign(n, { removedAt: Date.now(), live: false });
-        }),
-        on("app-name", ({ appId, appName }) => {
-          for (const n of notifications.value) if (n.appId === appId) n.appName = appName;
-        }),
-        on("discovered-devices", (list) => (discovered.value = list)),
-        on("message", (m) => {
-          const added = upsertMessage(m);
-          // Only live arrivals pop up; the startup backlog (loaded below) must stay quiet.
-          if (added && messagesReady) void maybeToastMessage(m);
-        }),
-        on("contacts", (list) => {
-          contacts.value = list;
-          // A resync may have added, changed or removed photos: drop the cache so avatars re-ask.
-          contactPhotos.value = {};
-          photoRequests.clear();
-          // Names are joined into messages server-side; re-read them for what's loaded.
-          void refreshLoadedMessageNames();
-          // Notifications under a contact's old name come back under the new one.
-          void refreshLoadedNotifications();
-        }),
-        on("calls", (list) => (calls.value = list)),
-        on("pairing-request", (req) => (pairingRequest.value = req)),
-        on("pairing-request-closed", () => (pairingRequest.value = null)),
-        on("open-latest-conversation", openLatestConversation),
-        on("open-settings", () => openSettings()),
-        on("toast-pressed", onToastPressed),
-        on("code-filled", onCodeFilled),
-      ])),
-    );
-    const [s, np, first, msgs, people, recent] = await Promise.all([
-      api.getStatus(),
-      api.getNowPlaying(),
-      api.listNotifications(PAGE),
-      api.listMessages(2000),
-      api.getContacts(),
-      api.getCalls(),
+    const listeners = await Promise.allSettled([
+      on("device-status", (s) => applyStatus(s, true)),
+      // A song change arrives as several updates a few ms apart: one render per frame, not each.
+      on("now-playing", (np) => {
+        if (nowPlayingRev.accept(np)) nowPlayingUpdates.push(np);
+      }),
+      on("notification", (n) => {
+        rowGuard.touched(n.id);
+        const added = upsert(notifications.value, n);
+        // Seen only if someone is looking (MessageThreads marks the one on screen on coming back).
+        if (canSee.value && view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
+        if (added && arrivedDuringGap(n, linkLostAt, Date.now())) queueGapPopup(n);
+        else if (added) void maybeToast(n);
+      }),
+      on("notification-removed", (id) => {
+        const at = Date.now();
+        rowGuard.removed(id, at);
+        const n = notifications.value.find((x) => x.id === id);
+        if (n) Object.assign(n, { removedAt: at, live: false });
+      }),
+      on("app-name", ({ appId, appName }) => {
+        for (const n of notifications.value) if (n.appId === appId) n.appName = appName;
+      }),
+      on("discovered-devices", (list) => (discovered.value = list)),
+      on("message", (m) => {
+        const added = upsertMessage(m);
+        // Only live arrivals pop up; the startup backlog (loaded below) must stay quiet.
+        if (added && messagesReady) void maybeToastMessage(m);
+      }),
+      on("contacts", (list) => {
+        contacts.value = list;
+        // A resync may have added, changed or removed photos: drop the cache so avatars re-ask.
+        contactPhotos.value = {};
+        photoRequests.clear();
+        // Names are joined into messages server-side; re-read them for what's loaded.
+        void refreshLoadedMessageNames();
+        // Notifications under a contact's old name come back under the new one.
+        void refreshLoadedNotifications();
+      }),
+      on("calls", (list) => (calls.value = list)),
+      on("pairing-request", (req) => (pairingRequest.value = req)),
+      on("pairing-request-closed", () => (pairingRequest.value = null)),
+      on("open-latest-conversation", openLatestConversation),
+      on("open-settings", () => openSettings()),
+      on("toast-pressed", onToastPressed),
+      on("code-filled", onCodeFilled),
+      on("screen-share", setScreenShare),
     ]);
-    if (calls.value.length === 0) calls.value = recent;
-    // Merge rather than replace: events may have arrived while these loaded.
-    for (const n of first) upsert(notifications.value, n);
-    messages.value = [...missingMessages(messages.value, msgs), ...messages.value].sort(byArrival);
-    if (contacts.value.length === 0) contacts.value = people;
-    status.value = s;
-    statusKnown.value = true;
-    // Any update that came in while these loaded lands first, as it would have without the frame wait.
-    nowPlayingUpdates.flush();
-    nowPlaying.value = np;
-    hasMore.value = first.length === PAGE;
-    // The backlog is in; from here a newly delivered code text is a live arrival that may pop up.
-    messagesReady = true;
-    // Let code rows age out of the Feed's recency window even when nothing else changes. Not while
-    // tug is hidden (nobody sees the Feed); coming back catches up at once (onVisibilityChange).
-    clockTimer = window.setInterval(() => {
-      if (!document.hidden) clock.value = Date.now();
-    }, 60_000);
-    await attempt(loadSettings);
-    // The backend registered the type-the-code shortcut at startup; Settings shows how that went.
-    const hotkey = await attempt(api.codeHotkeyStatus);
-    if (hotkey) codeHotkey.value = hotkey;
-    // Settings and contacts are in: pop-ups held since the listeners went in can be judged now.
-    markReady();
+    for (const r of listeners) if (r.status === "fulfilled") teardown.push(r.value);
+    // Without its listeners the window would never hear about anything again: say so plainly.
+    if (listeners.some((r) => r.status === "rejected")) notify("error", START_FAILED);
+    try {
+      // Each read applies itself, so one failing doesn't throw away the others; what failed is
+      // read again shortly (lib/startup), and nothing below waits on it.
+      const failed = await settleAll(startupReads);
+      if (failed.length) retryStartup(failed, 0);
+      // The backlog is in (or being retried); from here a newly delivered code text is a live
+      // arrival that may pop up.
+      messagesReady = true;
+      // Let code rows age out of the Feed's recency window even when nothing else changes. Not
+      // while tug is hidden (nobody sees the Feed); coming back catches up at once.
+      window.clearInterval(clockTimer);
+      clockTimer = window.setInterval(() => {
+        if (!document.hidden) clock.value = Date.now();
+      }, 60_000);
+      await attempt(loadSettings);
+      // Settings are in: start (or skip) the sharing check for the window (lib/sharePrivacy).
+      syncShareWatch();
+      // The backend registered the type-the-code shortcut at startup; Settings shows how that went.
+      const hotkey = await attempt(api.codeHotkeyStatus);
+      if (hotkey) codeHotkey.value = hotkey;
+    } finally {
+      // Settings and contacts are in (or couldn't be read): pop-ups held since the listeners went
+      // in are judged now. Always, or every pop-up would wait forever.
+      markReady();
+    }
     // Settings are in (so lastSeenVersion is known): decide whether to greet with "What's new".
     void checkWhatsNew();
     // A phone that's already low when tug starts gets its alert now, not one step later:
-    // device-status only checks when the level changes, and the first status set it silently.
+    // device-status only checks when the level changes, and the startup read sets it silently.
     void checkBattery(status.value.battery);
     void loadSpotify();
+  }
+
+  /**
+   * Take a device status, from an event (`live`) or a read, unless it's older than the one shown
+   * (events and reads can arrive out of order; see lib/ordering).
+   */
+  function applyStatus(s: DeviceStatus, live: boolean) {
+    if (!isCurrent(s, status.value)) return;
+    const wasConnected = status.value.connection === "connected";
+    const lost = wasConnected && s.connection !== "connected";
+    // The start of an outage: what's posted after it and replayed on reconnect is a gap arrival.
+    if (lost) linkLostAt = Date.now();
+    if (live && s.battery !== status.value.battery) void checkBattery(s.battery);
+    status.value = s;
+    // Notification UIDs die with the connection, so nothing stays actionable.
+    if (lost) {
+      rowGuard.allDead();
+      for (const n of notifications.value) n.live = false;
+    }
+    statusKnown.value = true;
+  }
+
+  /** Read a list of notifications and merge it in, without undoing events that land meanwhile. */
+  async function mergeNotificationRead(read: () => Promise<PhoneNotification[]>): Promise<PhoneNotification[]> {
+    const token = rowGuard.begin();
+    try {
+      const rows = await read();
+      const has = (id: number) => notifications.value.some((x) => x.id === id);
+      for (const n of rowGuard.merge(rows, token, has)) upsert(notifications.value, n);
+      return rows;
+    } finally {
+      rowGuard.end(token);
+    }
+  }
+
+  /**
+   * What the window reads at startup. Listeners go in first, so each read is merged with what
+   * events already brought (never replacing something newer), and each can be retried alone.
+   */
+  const startupReads: StartupRead[] = [
+    async () => applyStatus(await api.getStatus(), false),
+    async () => {
+      const np = await api.getNowPlaying();
+      // Any update that came in while this loaded lands first, as it would have without the frame wait.
+      nowPlayingUpdates.flush();
+      applyNowPlaying(np);
+    },
+    async () => {
+      const first = await mergeNotificationRead(() => api.listNotifications(PAGE));
+      hasMore.value = first.length === PAGE;
+    },
+    async () => {
+      const msgs = await api.listMessages(2000);
+      messages.value = [...missingMessages(messages.value, msgs), ...messages.value].sort(byArrival);
+    },
+    async () => {
+      const people = await api.getContacts();
+      if (contacts.value.length === 0) contacts.value = people;
+    },
+    async () => {
+      const recent = await api.getCalls();
+      if (calls.value.length === 0) calls.value = recent;
+    },
+  ];
+
+  /** Startup reads that failed are read again on their own, until they work or tug unmounts. */
+  let startupRetry: number | undefined;
+  let startupGeneration = 0;
+  function retryStartup(failed: StartupRead[], tries: number) {
+    const generation = startupGeneration;
+    window.clearTimeout(startupRetry);
+    startupRetry = window.setTimeout(() => {
+      void settleAll(failed).then((still) => {
+        if (generation !== startupGeneration || !still.length) return;
+        // Once, when a retry fails too: something is really in the way, so don't pretend.
+        if (tries === 0) notify("error", STILL_LOADING);
+        retryStartup(still, tries + 1);
+      });
+    }, retryDelay(tries));
   }
 
   function dispose() {
@@ -1367,6 +1624,9 @@ export const useTugStore = defineStore("tug", () => {
     // Everything with a lifetime gets cleared here, so init() can be called again cleanly (a
     // remount or dev hot-reload) without a leaked timer firing or an interval double-polling.
     window.clearTimeout(toastSummary);
+    window.clearTimeout(startupRetry);
+    startupRetry = undefined;
+    startupGeneration++;
     window.clearTimeout(gapTimer);
     gapTimer = undefined;
     gapQueue = [];
@@ -1376,6 +1636,8 @@ export const useTugStore = defineStore("tug", () => {
     spotifySongTimer = undefined;
     window.clearTimeout(flashTimer);
     window.clearInterval(watchRenew);
+    window.clearInterval(switchesRenew);
+    switchesRenew = undefined;
     window.clearInterval(clockTimer);
     nowPlayingUpdates.cancel();
     window.clearTimeout(switchTimer);
@@ -1386,17 +1648,37 @@ export const useTugStore = defineStore("tug", () => {
     watchRenew = undefined;
     clockTimer = undefined;
     messagesReady = false;
+    shareWatching = null;
     ready = new Promise<void>((resolve) => (markReady = resolve));
     started = false;
   }
 
-  async function loadMore() {
-    if (!hasMore.value) return;
-    const last = notifications.value.at(-1);
-    const page = await attempt(() => api.listNotifications(PAGE, last?.id));
-    if (!page) return;
-    for (const n of page) upsert(notifications.value, n);
-    hasMore.value = page.length === PAGE;
+  /**
+   * The next page of older notifications. One page at a time: a second call while one is out
+   * waits for that one instead of asking for the same page again. True if a page came in. The
+   * page is merged like any list read (events that land meanwhile win, lib/ordering).
+   */
+  let loadingMore: Promise<boolean> | null = null;
+  function loadMore(): Promise<boolean> {
+    if (loadingMore) return loadingMore;
+    if (!hasMore.value) return Promise.resolve(false);
+    loadingMore = (async () => {
+      const list = notifications.value;
+      const last = list.at(-1);
+      let replaced = false;
+      const page = await attempt(() =>
+        mergeNotificationRead(async () => {
+          const rows = await api.listNotifications(PAGE, last?.id);
+          // The list was replaced meanwhile (history cleared): this page belongs to the old one.
+          replaced = list !== notifications.value;
+          return replaced ? [] : rows;
+        }),
+      );
+      if (!page || replaced) return false;
+      hasMore.value = page.length === PAGE;
+      return true;
+    })().finally(() => (loadingMore = null));
+    return loadingMore;
   }
 
   /** Re-read what's loaded (names are resolved server-side, e.g. after a contact is renamed). */
@@ -1412,10 +1694,13 @@ export const useTugStore = defineStore("tug", () => {
     for (const m of messages.value) if (names.has(m.id)) m.contactName = names.get(m.id) ?? null;
   }
 
+  /**
+   * Re-read what's loaded. A removal or update that lands while this is in flight wins over the
+   * read's older copy (lib/ordering), so a cleared notification can't come back.
+   */
   async function refreshLoadedNotifications() {
     const count = Math.min(Math.max(notifications.value.length, PAGE), 500);
-    const fresh = await api.listNotifications(count).catch(() => null);
-    if (fresh) for (const n of fresh) upsert(notifications.value, n);
+    await mergeNotificationRead(() => api.listNotifications(count)).catch(() => null);
   }
 
   /** Universal search: people, texts and notifications. */
@@ -1423,9 +1708,23 @@ export const useTugStore = defineStore("tug", () => {
     return attempt(() => api.searchAll(query, 30));
   }
 
-  async function setSetting<K extends keyof UiSettings>(key: K, value: UiSettings[K]) {
+  /** Presses per setting, so only the newest press on a switch may put it back. */
+  const settingPresses = new Map<keyof UiSettings, number>();
+
+  /** Show the change at once; if it can't be saved, the switch goes back (the error says why). */
+  async function setSetting<K extends keyof UiSettings>(key: K, value: UiSettings[K]): Promise<boolean> {
+    const press = (settingPresses.get(key) ?? 0) + 1;
+    settingPresses.set(key, press);
+    const previous = settings.value[key];
     settings.value = { ...settings.value, [key]: value };
-    await attempt(() => api.setSetting(`ui.${key}`, typeof value === "string" ? value : JSON.stringify(value)));
+    const raw = typeof value === "string" ? value : JSON.stringify(value);
+    const ok = (await attempt(() => api.setSetting(`ui.${key}`, raw).then(() => true))) === true;
+    // Only the newest press puts it back: comparing values isn't enough, because on → off → on
+    // shows the first press's value again, and its late failure would undo the third.
+    if (!ok && settingPresses.get(key) === press && settings.value[key] === value) {
+      settings.value = { ...settings.value, [key]: previous };
+    }
+    return ok;
   }
 
   /** App zoom from Settings (Ctrl +/−/0 does the same from anywhere). */
@@ -1710,26 +2009,43 @@ export const useTugStore = defineStore("tug", () => {
     }
   }
 
+  // Shuffle and repeat are optimistic. Spotify's player read lags a change by about a second, so
+  // reading straight after a successful change brought the old value back and the button flipped
+  // back on screen. Keep what was pressed; once things have settled, read again to catch anything
+  // else that changed, unless another press came in meanwhile (that one reads for itself).
+  const PLAYER_SETTLE_MS = 1500;
+  let playerPresses = 0;
+  let playerSettleTimer: number | undefined;
+  function settlePlayerLater(press: number) {
+    window.clearTimeout(playerSettleTimer);
+    playerSettleTimer = window.setTimeout(() => {
+      if (press === playerPresses) void refreshSpotifyPlayer();
+    }, PLAYER_SETTLE_MS);
+  }
+
   /** Cycle Spotify repeat (off → all → one → off), optimistic with revert on failure. */
   async function cycleSpotifyRepeat() {
     const p = spotifyPlayer.value;
     if (!p) return;
+    const press = ++playerPresses;
     const previous = p.repeat;
     const mode = nextRepeat(previous);
     p.repeat = mode;
     const ok = await attempt(() => api.spotifySetRepeat(mode).then(() => true));
-    if (ok !== true && spotifyPlayer.value) spotifyPlayer.value.repeat = previous;
-    else void refreshSpotifyPlayer();
+    // A newer press owns the button now; only the newest one puts it back.
+    if (ok !== true && press === playerPresses && spotifyPlayer.value) spotifyPlayer.value.repeat = previous;
+    if (ok === true) settlePlayerLater(press);
   }
 
   async function toggleSpotifyShuffle() {
     const p = spotifyPlayer.value;
     if (!p) return;
+    const press = ++playerPresses;
     const previous = p.shuffle;
     p.shuffle = !previous;
     const ok = await attempt(() => api.spotifySetShuffle(!previous).then(() => true));
-    if (ok !== true && spotifyPlayer.value) spotifyPlayer.value.shuffle = previous;
-    else void refreshSpotifyPlayer();
+    if (ok !== true && press === playerPresses && spotifyPlayer.value) spotifyPlayer.value.shuffle = previous;
+    if (ok === true) settlePlayerLater(press);
   }
 
   async function toggleSpotifyLike() {
@@ -1799,6 +2115,8 @@ export const useTugStore = defineStore("tug", () => {
   );
 
   return {
+    sentHintDismissed,
+    dismissSentHint,
     status,
     statusKnown,
     switches,
@@ -1870,12 +2188,18 @@ export const useTugStore = defineStore("tug", () => {
     composeTo,
     pickerOpen,
     searchOpen,
+    searchDraft,
     unreadTexts,
     ringing,
     hideCall,
     respondToCall,
     overlayOpen,
     canSee,
+    screenShare,
+    previewsHidden: previewsHiddenNow,
+    shareBanner: shareBannerText,
+    showPreviewsAnyway,
+    hidePreviewsAgain,
     settingsSection,
     openSettings,
     closeSettings,
@@ -1883,6 +2207,7 @@ export const useTugStore = defineStore("tug", () => {
     setZoom,
     showConnect,
     connectSkipped,
+    pairingAgain,
     // What's new
     appVersion,
     whatsNewOpen,
@@ -1911,34 +2236,40 @@ export const useTugStore = defineStore("tug", () => {
     startConversation,
     clearItems,
     readConversation,
+    warmTexts,
     markAllRead,
     copyCode,
+    copyLatestCode,
     latestCode,
     codeFeed,
     clearCode,
     deleteConversation,
     appNameFor,
     /**
-     * Send through the iPhone. The pending message appears via the `message` event. "failed" means
-     * it's shown as "Not sent" with Retry (so the composer shouldn't keep the text too); "error"
-     * means nothing was recorded, so the composer keeps the text.
+     * Send through the iPhone. The pending message appears via the `message` event. "sent" means
+     * the phone took it (the same rule as a pop-up reply, `replyReadsConversation`); "unconfirmed"
+     * means it may have sent but the phone never said, shown as "May have sent"; "failed" means
+     * it's shown as "Not sent" with Retry. For all three the composer shouldn't keep the text too;
+     * "error" means nothing was recorded, so the composer keeps the text.
      */
-    async sendMessage(address: string, text: string): Promise<"sent" | "failed" | "error"> {
+    async sendMessage(address: string, text: string): Promise<"sent" | "unconfirmed" | "failed" | "error"> {
       try {
-        const m = await api.sendMessage(address, text);
-        if (m.status !== "failed") return "sent";
-        notify("error", NOT_SENT);
-        return "failed";
+        const outcome = sendOutcome(await api.sendMessage(address, text));
+        if (outcome === "failed") notify("error", NOT_SENT);
+        return outcome;
       } catch (e) {
         notify("error", errorMessage(e));
         return "error";
       }
     },
-    /** Try a failed send again: the same message, to the number it was meant for. */
+    /**
+     * Try a failed send again: the same message, to the number it was meant for. True only when
+     * the phone took it; an unconfirmed retry ("May have sent") is false, like a failed one.
+     */
     async retryMessage(id: number): Promise<boolean> {
       try {
-        const m = await api.retryMessage(id);
-        if (m.status !== "failed") return true;
+        const outcome = sendOutcome(await api.retryMessage(id));
+        if (outcome !== "failed") return outcome === "sent";
         notify("error", NOT_SENT);
       } catch (e) {
         notify("error", errorMessage(e));
@@ -1976,14 +2307,38 @@ export const useTugStore = defineStore("tug", () => {
       return ok === true;
     },
     forget: () => attempt(api.forgetDevice),
+    /**
+     * The iPhone forgot this PC: remove the dead Windows pairing (the bonds tug made, the same as
+     * Start over) and go back to the Connect panel to pair fresh. One press, one removal: presses
+     * while it runs are ignored.
+     */
+    async pairAgain() {
+      if (pairingAgain.value) return;
+      pairingAgain.value = true;
+      try {
+        await attempt(api.forgetDevice);
+        // Show the pairing steps: Settings › iPhone has them; anywhere else in Settings would hide
+        // the Connect panel that now stands in for the Feed.
+        if (view.value === "settings" && settingsSection.value !== "iphone") closeSettings();
+      } finally {
+        pairingAgain.value = false;
+      }
+    },
     /** Pair the iPhone's Classic (texts) side from inside tug; true on success. */
     async pairTexts(): Promise<boolean> {
       const ok = await attempt(() => api.pairTexts().then(() => true));
       return ok === true;
     },
     async setAdvertising(enabled: boolean) {
+      const press = ++advertisePresses;
+      const previous = advertiseEnabled.value;
       advertiseEnabled.value = enabled;
-      await attempt(() => api.setAdvertising(enabled));
+      const ok = await attempt(() => api.setAdvertising(enabled).then(() => true));
+      // Didn't take: the switch goes back rather than claim tug is (or isn't) visible. Only for
+      // the newest press: an older one failing late mustn't undo what was pressed since.
+      if (ok !== true && press === advertisePresses && advertiseEnabled.value === enabled) {
+        advertiseEnabled.value = previous;
+      }
     },
     async setAutostart(enabled: boolean) {
       // Show the change at once, then confirm against what the registry actually holds, so a
@@ -1998,10 +2353,15 @@ export const useTugStore = defineStore("tug", () => {
       pairingRequest.value = null;
       await attempt(() => api.confirmPairing(accept));
     },
-    async clearHistory() {
-      await attempt(api.clearHistory);
-      notifications.value = [];
-      hasMore.value = false;
+    /** Settings › Clear history; true only if it worked (lists emptied, "History cleared"). */
+    async clearHistory(): Promise<boolean> {
+      const emptyLists = () => {
+        notifications.value = [];
+        messages.value = [];
+        calls.value = [];
+        hasMore.value = false;
+      };
+      return clearHistoryNow(() => api.clearHistory(), { emptyLists, say: notify }, errorMessage);
     },
   };
 });

@@ -1,5 +1,6 @@
 import type { CallRecord, Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 import { isAddressLike, normalizeAddress } from "./address";
+import { isUnreadable } from "./attachments";
 
 /** The iPhone's Messages app: texts (SMS/iMessage) that MAP can also read and send. */
 export const MESSAGES_APP = "com.apple.MobileSMS";
@@ -285,17 +286,33 @@ export interface Conversation {
 }
 
 /**
+ * How far behind tug's own clock a received text's phone time can be and still count as a live
+ * text, ordered by when tug got it. The phone's clock and the PC's are set independently, so they
+ * can disagree by seconds or minutes.
+ */
+export const LIVE_TEXT_SKEW_MS = 5 * 60 * 1000;
+
+/**
  * When a message belongs in its conversation. Sent ones use the PC's clock (they have no phone
- * time). Received ones use the earlier of the phone's time and the PC's: the phone's clock can run
- * a few seconds ahead of the PC's (and its time carries no zone), which put a quick reply above the
- * text it answers; a received text can't have been sent after tug got it. Older texts caught up
- * later keep the phone's (earlier) time.
+ * time), so received ones near them are ordered on the same clock: a text tug got within a few
+ * minutes (`LIVE_TEXT_SKEW_MS`) of its phone time is placed by when tug got it (tug's receive
+ * order), whichever way the phone's clock is off. Otherwise a phone running ahead put a quick reply
+ * above the text it answers, and one running behind put it above your own message sent just
+ * before. Texts caught up later (the phone's time well before tug got them) keep the phone's time,
+ * so they land where they were sent. Ties go by arrival order (see `groupConversations`).
  */
 export function messageTime(m: Pick<SmsMessage, "sentAt" | "receivedAt">): Date {
   const received = new Date(m.receivedAt);
   const d = m.sentAt ? new Date(m.sentAt) : null;
   if (!d || Number.isNaN(d.getTime())) return received;
-  return d.getTime() < received.getTime() ? d : received;
+  return received.getTime() - d.getTime() > LIVE_TEXT_SKEW_MS ? d : received;
+}
+
+/** Conversation order: by time, then by arrival (messages are stored, and so numbered, in order). */
+function itemOrder(a: ConversationItem, b: ConversationItem): number {
+  const t = a.at.getTime() - b.at.getTime();
+  if (t !== 0 || a.kind !== "message" || b.kind !== "message") return t;
+  return a.m.id - b.m.id;
 }
 
 /** A notification and a MAP message are the same text if body matches within this window. */
@@ -376,13 +393,19 @@ export function groupConversations(
         i.body.trim() === body.trim() &&
         Math.abs(i.at.getTime() - at.getTime()) < SAME_MESSAGE_MS,
     );
+    // The phone sends some texts over MAP as a lone U+FFFD while their notification has the words:
+    // the notification nearest in time fills that text instead of showing beside a "�".
+    const stand = twin ? undefined : unreadableTwin(c.items, absorbed, at, body);
     if (twin) absorbed.add(twin.id);
-    else c.items.push({ kind: "notification", id: `n${n.id}`, at, body, n });
+    else if (stand) {
+      absorbed.add(stand.id);
+      stand.body = body;
+    } else c.items.push({ kind: "notification", id: `n${n.id}`, at, body, n });
   }
 
   const out = [...convs.values()].filter((c) => c.items.length > 0);
   for (const c of out) {
-    c.items.sort((a, b) => a.at.getTime() - b.at.getTime());
+    c.items.sort(itemOrder);
     c.latest = c.items[c.items.length - 1];
     if (c.appId === MESSAGES_APP) {
       const fromContacts = numbersFor.get(nameKey(c.contact)) ?? [];
@@ -390,6 +413,21 @@ export function groupConversations(
     }
   }
   return out.sort((a, b) => b.latest.at.getTime() - a.latest.at.getTime());
+}
+
+/** How far apart an unreadable text and the notification that fills it may be (it usually lands ~10 s after). */
+const UNREADABLE_MATCH_MS = 3 * 60 * 1000;
+
+/** The received text with no readable characters closest in time to a notification, if any is close. */
+function unreadableTwin(items: ConversationItem[], absorbed: Set<string>, at: Date, body: string) {
+  if (!body.trim() || isUnreadable(body)) return undefined;
+  let best: Extract<ConversationItem, { kind: "message" }> | undefined;
+  for (const i of items) {
+    if (i.kind !== "message" || i.m.direction !== "in" || absorbed.has(i.id) || !isUnreadable(i.body)) continue;
+    const gap = Math.abs(i.at.getTime() - at.getTime());
+    if (gap < UNREADABLE_MATCH_MS && (!best || gap < Math.abs(best.at.getTime() - at.getTime()))) best = i;
+  }
+  return best;
 }
 
 /** Fill `addresses` (most recent first) and pick a default reply number, if one is safe. */
@@ -541,6 +579,22 @@ const CLEAR_WORDS = new Set([
   "清除", "删除", "刪除", "消去", "削除", "지우기", "삭제", "ล้าง", "hapus", "xóa", "مسح", "נקה",
 ]);
 
+/**
+ * The words on a notification's two phone actions. iOS usually labels them; when it doesn't, a
+ * ringing call's are Answer and Decline (never "Dismiss": that button declines the call), a
+ * missed call's positive one is Call back, and anything else gets Accept / Dismiss.
+ */
+export function actionLabels(n: Pick<PhoneNotification, "category" | "positiveLabel" | "negativeLabel">): {
+  positive: string;
+  negative: string;
+} {
+  const ringing = n.category === "incomingCall";
+  return {
+    positive: n.category === "missedCall" ? "Call back" : n.positiveLabel || (ringing ? "Answer" : "Accept"),
+    negative: n.negativeLabel || (ringing ? "Decline" : "Dismiss"),
+  };
+}
+
 /** Whether a negative-action label is a plain clear, in English or another major language. */
 export function isClearLabel(label: string): boolean {
   return isDismissLabel(label) || CLEAR_WORDS.has(label.trim().toLowerCase());
@@ -568,23 +622,47 @@ export function canClear(n: PhoneNotification): boolean {
 
 const lastDigits = (s: string | null | undefined) => (s ?? "").replace(/\D/g, "").slice(-10);
 
+/** Someone tug knows a number for: a contact, or a call in the phone's recent calls. */
+export interface KnownPerson {
+  name: string | null;
+  address: string | null;
+}
+
 /**
  * The phone's missed-call notification from this person that's still on the iPhone. iOS puts
  * a "Dial" action on it, so tug can have the phone call them back without a hands-free link
- * (confirmed on a real iPhone). Matched on the name the phone shows, or the number; newest wins.
+ * (confirmed on a real iPhone). Calling back the wrong person is worse than not offering it, so:
+ * matched on the number first (iOS titles an unknown caller with it); on the name the phone shows
+ * only when that name isn't shared, i.e. `known` (contacts, recent calls) has at most one number
+ * for it, and that number is this person's when theirs is known. Newest wins.
  */
 export function missedCallFor(
   notifications: PhoneNotification[],
   person: { name: string | null; address: string | null },
+  known: KnownPerson[] = [],
 ): PhoneNotification | null {
   const name = person.name ? nameKey(person.name) : null;
   const digits = lastDigits(person.address);
-  let best: PhoneNotification | null = null;
+  const hasNumber = digits.length >= 7;
+  let nameIsSafe = false;
+  if (name) {
+    const numbers = new Set(
+      known
+        .filter((k) => k.name && nameKey(k.name) === name)
+        .map((k) => lastDigits(k.address))
+        .filter((d) => d.length >= 7),
+    );
+    nameIsSafe = numbers.size === 0 || (numbers.size === 1 && (!hasNumber || numbers.has(digits)));
+  }
+  let byNumber: PhoneNotification | null = null;
+  let byName: PhoneNotification | null = null;
   for (const n of notifications) {
     if (n.category !== "missedCall" || !n.live || n.removedAt != null || !n.flags.positiveAction) continue;
-    const title = nameKey(n.title);
-    const matches = (name && title === name) || (digits.length >= 7 && lastDigits(n.title) === digits);
-    if (matches && (!best || n.receivedAt > best.receivedAt)) best = n;
+    if (hasNumber && lastDigits(n.title) === digits) {
+      if (!byNumber || n.receivedAt > byNumber.receivedAt) byNumber = n;
+    } else if (nameIsSafe && nameKey(n.title) === name) {
+      if (!byName || n.receivedAt > byName.receivedAt) byName = n;
+    }
   }
-  return best;
+  return byNumber ?? byName;
 }

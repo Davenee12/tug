@@ -15,6 +15,7 @@ mod device_info;
 mod device_kind;
 mod devtools;
 mod diagnostics;
+mod forgotten;
 mod frontend_log;
 pub mod hfp;
 mod link_policy;
@@ -25,6 +26,10 @@ mod messages;
 mod pc_audio;
 #[cfg(test)]
 mod perf;
+mod pin_confirm;
+mod quick_actions;
+mod session_end;
+mod share_privacy;
 mod spotify;
 mod startup;
 mod state;
@@ -33,6 +38,7 @@ mod text;
 pub mod toast;
 mod tray;
 mod tugboat;
+mod voice;
 mod wake;
 mod webview_watch;
 mod wedge;
@@ -49,9 +55,51 @@ use store::Store;
 /// the tray", so starting with Windows doesn't throw the window in the user's face at login.
 pub const MINIMIZED_ARG: &str = "--minimized";
 
+/// This launch's command line (the program path first), never panicking: `std::env::args()`
+/// panics on an argument that isn't valid Unicode (a lone UTF-16 surrogate from a shortcut or
+/// another program), and the release build aborts on a panic, so tug would vanish at launch. Such
+/// an argument is read lossily (U+FFFD for what can't be decoded); none of tug's own flags can
+/// contain one, so it simply matches nothing.
+pub fn launch_args() -> impl Iterator<Item = String> {
+    lossy_args(std::env::args_os())
+}
+
+fn lossy_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> impl Iterator<Item = String> {
+    args.into_iter().map(|a| a.to_string_lossy().into_owned())
+}
+
 /// Whether this launch asked to start minimized (autostart adds `MINIMIZED_ARG`).
 fn launched_minimized() -> bool {
-    std::env::args().any(|a| a == MINIMIZED_ARG)
+    launch_args().any(|a| a == MINIMIZED_ARG)
+}
+
+/// Run by the uninstaller (windows/hooks.nsh) before tug's files are removed: takes this tug's
+/// own `bin` folder off the user's PATH, however long PATH is (NSIS can only handle 1023
+/// characters). It takes no path from the caller, touches only the user's own PATH, and does
+/// nothing when the folder isn't on it, so running it by hand can't do anything Settings ›
+/// Developer tools › Remove from PATH couldn't.
+pub const REMOVE_FROM_PATH_ARG: &str = "--remove-from-path";
+
+/// The uninstaller's step, if that's what this launch is for: `Some(exit code)`, and the app
+/// doesn't start. `None` for every other launch.
+pub fn run_uninstall_step(args: impl Iterator<Item = String>) -> Option<i32> {
+    if !is_uninstall_step(args) {
+        return None;
+    }
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| d.join("bin")));
+    // Never fall through to starting the app from the uninstaller.
+    let Some(dir) = dir else { return Some(1) };
+    Some(match devtools::path_env::remove(&dir.to_string_lossy()) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    })
+}
+
+/// Only exactly `tug.exe --remove-from-path` (nothing before it) is the uninstaller's step.
+fn is_uninstall_step(mut args: impl Iterator<Item = String>) -> bool {
+    args.next().as_deref() == Some(REMOVE_FROM_PATH_ARG)
 }
 
 /// Open tug.db. When it won't open (corrupt, locked by a sync app, read-only, a failed upgrade),
@@ -82,17 +130,20 @@ pub fn run() {
     let log_dir = startup::log_dir(&context.config().identifier);
     startup::install_panic_hook(log_dir.clone());
     let setup_log_dir = log_dir.clone();
+    // Before any window exists, so tug's taskbar button carries the id its jump list is under.
+    quick_actions::init(&context.config().identifier);
     let built = tauri::Builder::default()
         // Must be first: a second launch focuses the running window instead of
         // starting a rival that can't advertise (Windows allows one provider per service).
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show(app)))
-        // Start with Windows (Settings › General). The autostart entry carries `--minimized`
-        // so an automatic launch comes up hidden in the tray; the switch reads the registry
-        // (via `autolaunch().is_enabled()`), so that state is the single source of truth.
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![MINIMIZED_ARG]),
+        // A jump-list task is such a launch: its `--action` is carried out here.
+        .plugin(tauri_plugin_single_instance::init(
+            |app, args, _cwd| match quick_actions::parse_args(&args) {
+                Some(action) => quick_actions::receive(app, action),
+                None => tray::show(app),
+            },
         ))
+        // Start with Windows (Settings › General) is tug's own HKCU Run entry (autostart.rs),
+        // carrying `--minimized` so an automatic launch comes up hidden in the tray.
         .plugin(
             // Logs land in %LOCALAPPDATA%\dev.davejames.tug\logs for hardware debugging.
             // Keep a few rotated files: the default (one 40 KB file) had already thrown away
@@ -108,9 +159,24 @@ pub fn run() {
         // Tugboat's "Choose files" picker (opened from Rust; the page never sees it).
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
+            // Pop-ups left by the last run can't be answered (nothing hears a press while tug is
+            // closed). A normal Quit withdraws them; when Windows shut down it was left to now.
+            // Off the main thread and time-limited; this run's own pop-ups wait for it (at most
+            // `toast::STALE_WITHDRAW_LIMIT`) so it can't take them back. Before the BLE actor and
+            // the MAP worker start, so nothing can pop up ahead of the gate.
+            toast::withdraw_stale_at_startup(app.handle());
+            // Running elevated: move an old all-users Start with Windows entry back to this user.
+            std::thread::spawn(autostart::tidy_at_startup);
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let store = Arc::new(open_store(&dir, setup_log_dir.as_deref()));
+            // Taskbar quick actions: a task clicked while tug wasn't running started this launch;
+            // the UI carries it out once it has loaded. Then (re)build the jump list itself.
+            if let Some(action) = quick_actions::parse_args(launch_args()) {
+                quick_actions::queue(action);
+            }
+            let show_games = store.setting(quick_actions::SHOW_GAMES_SETTING).ok().flatten();
+            quick_actions::install(quick_actions::show_games(show_games.as_deref()));
             let shared = Arc::new(Shared::new(app.handle().clone(), store.clone()));
             let ble = ble::start(shared.clone());
             let _ = shared.map.set(map::service::start(shared.clone()));
@@ -130,6 +196,12 @@ pub fn run() {
             // Code fill's type-the-code shortcut: registered now (on unless switched off), so it
             // works from a tray-only start too.
             code_fill::start(app.handle(), &shared.store);
+            // Hide previews while sharing or presenting: a thread that sleeps until the window is
+            // on screen or a pop-up finds something to hide.
+            #[cfg(windows)]
+            share_privacy::start(app.handle(), &shared.store);
+            // Voice typing: off by default; when the owner turned it on, its shortcut is back now.
+            voice::start(app.handle(), &shared.store);
             app.manage(AppState {
                 shared,
                 ble,
@@ -157,6 +229,8 @@ pub fn run() {
             // shown now.
             if let Some(window) = app.get_webview_window("main") {
                 webview_watch::watch(&window);
+                // Notice Windows signing out or shutting down, so exit doesn't hold it up.
+                session_end::watch(&window);
             }
             // The window is created hidden (see tauri.conf.json). Start in the tray only when
             // asked to (autostart adds `--minimized`) AND there's a tray to come back from;
@@ -251,7 +325,10 @@ pub fn run() {
             commands::copy_text,
             commands::copy_code,
             commands::code_hotkey_status,
+            commands::take_quick_actions,
             commands::set_code_hotkey,
+            commands::voice_status,
+            commands::set_voice_typing,
             commands::set_conversation_hidden,
             commands::set_unread,
             commands::open_windows_settings,
@@ -265,10 +342,13 @@ pub fn run() {
             commands::mark_read,
             commands::set_watching,
             commands::check_switches,
+            commands::set_switches_visible,
+            commands::warm_texts,
             commands::get_calls,
             commands::refresh_calls,
             commands::dial,
             commands::show_toast,
+            commands::screen_share_watch,
             commands::copy_diagnostics,
             commands::bt_inventory,
             commands::open_logs_folder,
@@ -305,6 +385,7 @@ pub fn run() {
             commands::tugboat_pick_files,
             commands::tugboat_remove_offer,
             commands::tugboat_send_text,
+            commands::tugboat_send_clipboard,
             commands::tugboat_open_folder,
             commands::game_pad_open,
             commands::game_pad_close,
@@ -337,16 +418,92 @@ pub fn run() {
                 return;
             }
         }
-        // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
         if let tauri::RunEvent::Exit = event {
-            toast::withdraw_all(app);
-            // Tugboat never outlives tug: stop listening and remove unfinished uploads.
+            // Windows signing out or shutting down runs this from WM_ENDSESSION and waits for it:
+            // then only what can't wait is done, and the rest is left to the next start.
+            let started = std::time::Instant::now();
+            let ending = session_end::ending();
+            let plan = session_end::ExitPlan::for_exit(ending);
+            // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
+            if plan.withdraw_toasts {
+                toast::withdraw_all(app);
+            }
+            // Tugboat never outlives tug: stop listening (and remove unfinished uploads).
             if let Some(state) = app.try_state::<AppState>() {
-                state.tugboat.shutdown_now();
+                state.tugboat.shutdown_now(plan.clean_tugboat);
                 // Hand the phone's audio back to the phone rather than leave it routed to a PC
                 // that stopped listening.
-                state.pc_audio.shutdown_now();
+                state.pc_audio.shutdown_now(plan.audio_wait);
             }
+            log::info!(
+                "exit: tidied up in {} ms{}",
+                started.elapsed().as_millis(),
+                if ending { " (Windows is ending the session)" } else { "" }
+            );
         }
     });
+}
+
+#[cfg(test)]
+mod uninstall_step_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_exact_flag_is_the_uninstall_step() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter();
+        assert!(is_uninstall_step(args(&["--remove-from-path"])));
+        assert!(!is_uninstall_step(args(&[])));
+        assert!(!is_uninstall_step(args(&[MINIMIZED_ARG])));
+        assert!(!is_uninstall_step(args(&[MINIMIZED_ARG, "--remove-from-path"])));
+        assert!(!is_uninstall_step(args(&["--REMOVE-FROM-PATH"])));
+        // Every ordinary launch starts the app.
+        assert_eq!(run_uninstall_step(args(&[MINIMIZED_ARG])), None);
+    }
+}
+
+#[cfg(test)]
+mod launch_args_tests {
+    use std::ffi::OsString;
+
+    use super::*;
+
+    /// An argument that isn't valid Unicode: a lone UTF-16 surrogate on Windows, a stray byte
+    /// elsewhere. `std::env::args()` panics on one.
+    fn not_unicode() -> OsString {
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[0x0041, 0xD800, 0x0042])
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(vec![b'A', 0xFF, b'B'])
+        }
+    }
+
+    #[test]
+    fn a_non_unicode_argument_is_read_lossily_not_a_panic() {
+        assert!(
+            not_unicode().to_str().is_none(),
+            "the test argument really isn't Unicode"
+        );
+        let args: Vec<String> = lossy_args([
+            OsString::from(r"C:\tug\tug.exe"),
+            not_unicode(),
+            OsString::from("--action"),
+            OsString::from("settings"),
+        ])
+        .collect();
+        assert_eq!(args[1], "A\u{FFFD}B");
+        // tug's own flags still read normally around it.
+        assert_eq!(
+            quick_actions::parse_args(&args),
+            Some(quick_actions::QuickAction::Settings)
+        );
+        assert!(!args.iter().any(|a| a == MINIMIZED_ARG));
+        assert_eq!(run_uninstall_step(args.into_iter().skip(1)), None);
+        // This process's own command line reads without panicking.
+        assert!(launch_args().count() >= 1);
+    }
 }

@@ -50,8 +50,19 @@ pub struct Report {
     pub progress: Vec<CallProgress>,
 }
 
+/// The RFCOMM socket, closed however the link ends: a clean finish, an error, or the caller's
+/// timeout dropping `run` mid-exchange (`map::service` bounds a dial at 15 s), which would otherwise
+/// leave the phone's hands-free channel open until Windows noticed. Mirrors `ObexLink`'s `Drop`.
+struct Socket(StreamSocket);
+
+impl Drop for Socket {
+    fn drop(&mut self) {
+        let _ = self.0.Close();
+    }
+}
+
 struct Link {
-    socket: StreamSocket,
+    _socket: Socket,
     reader: DataReader,
     writer: DataWriter,
     buf: String,
@@ -80,8 +91,9 @@ impl Link {
         if access != DeviceAccessStatus::Allowed {
             return Err(HfpError::Blocked);
         }
-        let socket = StreamSocket::new()?;
+        let socket = Socket(StreamSocket::new()?);
         let connected = socket
+            .0
             .ConnectWithProtectionLevelAsync(
                 &service.ConnectionHostName()?,
                 &service.ConnectionServiceName()?,
@@ -93,11 +105,11 @@ impl Link {
             Err(e) if e.code().0 == E_ACCESSDENIED => return Err(HfpError::Blocked),
             Err(e) => return Err(e.into()),
         }
-        let reader = DataReader::CreateDataReader(&socket.InputStream()?)?;
+        let reader = DataReader::CreateDataReader(&socket.0.InputStream()?)?;
         reader.SetInputStreamOptions(InputStreamOptions::Partial)?;
-        let writer = DataWriter::CreateDataWriter(&socket.OutputStream()?)?;
+        let writer = DataWriter::CreateDataWriter(&socket.0.OutputStream()?)?;
         Ok(Self {
-            socket,
+            _socket: socket,
             reader,
             writer,
             buf: String::new(),
@@ -134,10 +146,6 @@ impl Link {
         .await
         .map_err(|_| HfpError::Timeout)?
     }
-
-    fn close(self) {
-        let _ = self.socket.Close();
-    }
 }
 
 /// Connect, set up the hands-free link and, with a number, dial it; then stay `hold` to hear
@@ -146,9 +154,8 @@ pub async fn run(device_id: &str, number: Option<&str>, hold: Duration) -> Resul
     // Refuse a bad number before touching the phone.
     let dial = number.map(at::dial).transpose()?;
     let mut link = Link::open(device_id).await?;
-    let result = drive(&mut link, dial, hold).await;
-    link.close();
-    result
+    drive(&mut link, dial, hold).await
+    // `link` drops here (or wherever this future is dropped), closing the socket.
 }
 
 async fn drive(link: &mut Link, dial: Option<String>, hold: Duration) -> Result<Report, HfpError> {

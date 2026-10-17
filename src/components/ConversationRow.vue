@@ -3,6 +3,7 @@
 import { X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { relativeTime, type Conversation, type ConversationItem } from "../lib/format";
+import { itemContent, previewOf } from "../lib/messageType";
 import AppAvatar from "./AppAvatar.vue";
 
 defineProps<{ c: Conversation; active: boolean }>();
@@ -21,7 +22,7 @@ const outgoing = (i: ConversationItem) => i.kind === "message" && i.m.direction 
       <AppAvatar :app-id="c.appId" :label="c.contact" :photo-key="c.address ?? undefined" person size="sm" />
       <span class="min-w-0 flex-1">
         <span class="flex items-baseline gap-2">
-          <span :class="['truncate text-[14px] text-ink', tug.newCount(c.key, c.notifications) ? 'font-semibold' : 'font-medium']">
+          <span :class="['preview-private truncate text-[14px] text-ink', tug.newCount(c.key, c.notifications) ? 'font-semibold' : 'font-medium']">
             {{ c.contact }}
           </span>
           <span
@@ -32,9 +33,9 @@ const outgoing = (i: ConversationItem) => i.kind === "message" && i.m.direction 
           </span>
         </span>
         <span class="flex items-center gap-2">
-          <span class="min-w-0 flex-1 truncate text-[13px] text-muted">
+          <span class="preview-private min-w-0 flex-1 truncate text-[13px] text-muted">
             <template v-if="!c.items.length">New message</template>
-            <template v-else-if="outgoing(c.latest)">You: </template>{{ c.latest.body }}
+            <template v-else-if="outgoing(c.latest)">You: </template>{{ c.items.length ? previewOf(itemContent(c.latest)) : "" }}
           </span>
           <span
             v-if="tug.newCount(c.key, c.notifications)"

@@ -67,6 +67,18 @@ impl BleError {
         }
     }
 
+    /// What this error says about the bond, for `crate::forgotten`.
+    pub fn bond_signal(&self) -> crate::forgotten::Attempt {
+        use crate::forgotten::Attempt;
+        match self {
+            _ if self.is_stale_bond() => Attempt::StaleBond,
+            // ATT: 0x05 insufficient authentication, 0x08 authorization, 0x0F encryption.
+            Self::Protocol(Some(0x05 | 0x08 | 0x0F)) | Self::AccessDenied => Attempt::Refused,
+            Self::NotFound(_) => Attempt::Locked,
+            _ => Attempt::Other,
+        }
+    }
+
     /// The ATT error code the peripheral answered with, when it answered with one.
     pub fn att_code(&self) -> Option<u8> {
         match self {
@@ -411,6 +423,32 @@ mod tests {
         assert!(!BleError::Unreachable.is_timeout());
         assert!(!BleError::Protocol(Some(0x0E)).is_timeout());
         assert_eq!(BleError::TimedOut.att_code(), None);
+    }
+
+    #[test]
+    fn errors_say_what_they_mean_for_the_bond() {
+        use crate::forgotten::Attempt;
+        let stale = BleError::Win(windows::core::Error::from(STALE_BOND));
+        assert_eq!(stale.bond_signal(), Attempt::StaleBond);
+        for refused in [
+            BleError::Protocol(Some(0x05)),
+            BleError::Protocol(Some(0x08)),
+            BleError::Protocol(Some(0x0F)),
+            BleError::AccessDenied,
+        ] {
+            assert_eq!(refused.bond_signal(), Attempt::Refused, "{refused:?}");
+        }
+        assert_eq!(BleError::NotFound("ANCS").bond_signal(), Attempt::Locked);
+        // Out of range, a stall, or an unrelated refusal says nothing about the bond.
+        for other in [
+            BleError::Unreachable,
+            BleError::TimedOut,
+            BleError::Protocol(Some(0x0E)),
+            BleError::Protocol(None),
+            BleError::NotAnIphone,
+        ] {
+            assert_eq!(other.bond_signal(), Attempt::Other, "{other:?}");
+        }
     }
 
     #[test]

@@ -19,6 +19,8 @@
 //! its Start-menu shortcut (no COM activator, so the press and any typed text are lost)
 //! and the window simply opens. To keep that from happening with stale buttons, tug takes
 //! its notification pop-ups back when it quits, and when the phone clears a notification.
+//! When previews start hiding (screen shared or presented, `share_privacy`), the phone's pop-ups
+//! and their follow-ups are taken back too, since they were shown in full; tug's own stay.
 
 pub mod xml;
 
@@ -32,6 +34,7 @@ use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::messages::StoredMessage;
+use crate::share_privacy::PopupGroup;
 
 pub use xml::ToastSpec;
 
@@ -42,6 +45,20 @@ const GROUP_NOTIFICATIONS: &str = "n";
 /// Follow-ups ("Sent to Zoe", "Couldn't send"): tag `note-<id>`.
 #[cfg_attr(not(windows), allow(dead_code))]
 const GROUP_NOTES: &str = "note";
+/// tug's own pop-ups (`Info`: low battery and the like), apart from the phone's so hiding
+/// previews can take the phone's back and leave these (`share_privacy::withdraw_when_hiding`).
+#[cfg_attr(not(windows), allow(dead_code))]
+const GROUP_OWN: &str = "tug";
+
+/// The Action Center group for each kind of pop-up.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn group_name(group: PopupGroup) -> &'static str {
+    match group {
+        PopupGroup::Phone => GROUP_NOTIFICATIONS,
+        PopupGroup::FollowUp => GROUP_NOTES,
+        PopupGroup::Own => GROUP_OWN,
+    }
+}
 /// A "Sent" note leaves Action Center on its own after this long.
 #[cfg(windows)]
 const SENT_NOTE_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
@@ -163,13 +180,128 @@ pub fn blocked(app: &AppHandle) -> bool {
     }
 }
 
-/// Pop up one phone notification with the actions its spec allows.
+/// Pop-ups this run asked for while the last run's leftovers were still being withdrawn at
+/// startup. Withdrawing removes the whole notification group, so a pop-up shown before it finished
+/// would be taken back with them; these wait instead, and show the moment it's done (or its time
+/// limit passes). Open unless startup closed it, so nothing else ever waits on it. Pure.
+#[derive(Debug, Default)]
+struct StartupGate {
+    closed: bool,
+    held: Vec<ToastSpec>,
+}
+
+impl StartupGate {
+    const fn new() -> Self {
+        Self {
+            closed: false,
+            held: Vec::new(),
+        }
+    }
+
+    /// Hold pop-ups from now until `open`.
+    fn close(&mut self) {
+        self.closed = true;
+    }
+
+    /// The spec to show now, or `None` when it's held (a newer pop-up for the same notification
+    /// replaces a held one, as it would on screen).
+    fn admit(&mut self, spec: ToastSpec) -> Option<ToastSpec> {
+        if !self.closed {
+            return Some(spec);
+        }
+        self.held.retain(|s| s.id != spec.id);
+        self.held.push(spec);
+        None
+    }
+
+    /// The phone cleared this notification (or the history was cleared) before it showed.
+    fn forget(&mut self, id: Option<i64>) {
+        match id {
+            Some(id) => self.held.retain(|s| s.id != id),
+            None => self.held.clear(),
+        }
+    }
+
+    /// The leftovers are gone: show what waited, oldest first, and stop holding.
+    fn open(&mut self) -> Vec<ToastSpec> {
+        self.closed = false;
+        std::mem::take(&mut self.held)
+    }
+}
+
+static GATE: Mutex<StartupGate> = Mutex::new(StartupGate::new());
+
+fn gate() -> std::sync::MutexGuard<'static, StartupGate> {
+    GATE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// How long this run's pop-ups wait for the last run's to be withdrawn. Normally that takes a few
+/// milliseconds; a Windows call that hangs mustn't hold tug's pop-ups back for long.
+pub const STALE_WITHDRAW_LIMIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// At startup: withdraw the pop-ups the last run left (nothing hears their presses while tug is
+/// closed; a normal Quit takes them back, a Windows shutdown leaves it to now). Call before
+/// anything that can pop up starts. Returns at once: the withdrawal runs on its own thread, and
+/// this run's pop-ups are held until it's done or `STALE_WITHDRAW_LIMIT` passes.
+pub fn withdraw_stale_at_startup(app: &AppHandle) {
+    gate().close();
+    let handle = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("tug-toast-tidy".into())
+        .spawn(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let for_helper = handle.clone();
+            let helper = std::thread::Builder::new()
+                .name("tug-toast-withdraw".into())
+                .spawn(move || {
+                    remove_groups(&for_helper, &[GROUP_NOTIFICATIONS, GROUP_OWN]);
+                    let _ = tx.send(());
+                });
+            if helper.is_ok() && rx.recv_timeout(STALE_WITHDRAW_LIMIT).is_err() {
+                log::warn!(
+                    "withdrawing the last run's pop-ups took over {}s; showing this run's anyway",
+                    STALE_WITHDRAW_LIMIT.as_secs()
+                );
+            }
+            let held = gate().open();
+            for spec in held {
+                show_now(&handle, spec);
+            }
+        });
+    if spawned.is_err() {
+        log::warn!("couldn't start withdrawing the last run's pop-ups");
+        gate().open();
+    }
+}
+
+/// Pop up one phone notification with the actions its spec allows. While the screen is shared
+/// or presented (and the setting is on), it says only which app it's from (`share_privacy`).
+/// Decided here, for every pop-up, so no path from the window can skip it. Held for a moment at
+/// startup while the last run's pop-ups are withdrawn (`withdraw_stale_at_startup`).
 pub fn show(app: &AppHandle, spec: ToastSpec) {
+    let admitted = gate().admit(spec);
+    if let Some(spec) = admitted {
+        show_now(app, spec);
+    }
+}
+
+fn show_now(app: &AppHandle, spec: ToastSpec) {
+    let spec = if spec.kind != xml::ToastKind::Info && crate::share_privacy::previews_hidden_now() {
+        crate::share_privacy::redact(&spec)
+    } else {
+        spec
+    };
+    // The spec as shown, so a follow-up can't name someone the pop-up didn't.
     remember(&spec);
+    if !spec.replies.is_empty() {
+        // How many, never which: suggestions are drawn from the text they answer.
+        log::debug!("pop-up {} offers {} suggested replies", spec.id, spec.replies.len());
+    }
     #[cfg(windows)]
     {
         let xml = xml::notification_toast(&spec, sound_on(app));
-        match show_native(app, &xml, &spec.id.to_string(), GROUP_NOTIFICATIONS, None) {
+        let group = group_name(crate::share_privacy::popup_group(spec.kind));
+        match show_native(app, &xml, &spec.id.to_string(), group, None) {
             Ok(()) => return,
             Err(e) => log::warn!("actionable pop-up failed ({}); showing a plain one", e.message()),
         }
@@ -187,6 +319,7 @@ fn plain(app: &AppHandle, title: &str, body: &str) {
 
 /// The phone cleared this notification: take its pop-up back, so no stale buttons linger.
 pub fn withdraw(app: &AppHandle, id: i64) {
+    gate().forget(Some(id));
     #[cfg(windows)]
     if let Err(e) = native::remove(&aumid(app), &id.to_string(), GROUP_NOTIFICATIONS) {
         log::debug!("pop-up {id} not withdrawn: {}", e.message());
@@ -196,14 +329,39 @@ pub fn withdraw(app: &AppHandle, id: i64) {
 }
 
 /// tug is quitting: once it's gone nothing would hear a press (and a typed reply would be
-/// lost), so take its notification pop-ups out of Action Center.
+/// lost), so take its notification pop-ups (and its own, which have buttons too) out of Action
+/// Center. (Also Clear history.) Pop-ups still held at startup are dropped too.
 pub fn withdraw_all(app: &AppHandle) {
+    gate().forget(None);
+    remove_groups(app, &[GROUP_NOTIFICATIONS, GROUP_OWN]);
+}
+
+/// Previews just started hiding: the pop-ups already on screen or in Action Center were shown in
+/// full, so take back the phone's and the follow-ups (they stay in tug's Feed) and leave tug's
+/// own (`share_privacy::withdraw_when_hiding`).
+pub fn withdraw_while_hiding(app: &AppHandle) {
+    let groups: Vec<&str> = PopupGroup::ALL
+        .into_iter()
+        .filter(|g| crate::share_privacy::withdraw_when_hiding(*g))
+        .map(group_name)
+        .collect();
+    remove_groups(app, &groups);
+    log::info!("share privacy: took back pop-ups already shown");
+}
+
+/// Take these pop-up groups out of Action Center (not pop-ups still held at startup).
+fn remove_groups(app: &AppHandle, groups: &[&str]) {
     #[cfg(windows)]
-    if let Err(e) = native::remove_group(&aumid(app), GROUP_NOTIFICATIONS) {
-        log::debug!("pop-ups not withdrawn: {}", e.message());
+    {
+        let aumid = aumid(app);
+        for group in groups {
+            if let Err(e) = native::remove_group(&aumid, group) {
+                log::debug!("pop-ups ({group}) not withdrawn: {}", e.message());
+            }
+        }
     }
     #[cfg(not(windows))]
-    let _ = app;
+    let _ = (app, groups);
 }
 
 #[cfg(windows)]
@@ -268,7 +426,6 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
             pressed(PressKind::Open);
         }
         ToastAction::Reply { to, .. } => {
-            let who = name_for(id).unwrap_or_else(|| to.clone());
             let text = input.unwrap_or_default();
             if text.trim().is_empty() {
                 // Send with nothing typed: open the conversation instead.
@@ -276,54 +433,21 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 pressed(PressKind::Open);
                 return;
             }
-            let text = text.trim().to_string();
-            // A double-press, or pressing Send again from Action Center before Windows dismissed
-            // the pop-up, must not text them twice: take the pop-up down and drop a repeat.
-            if !first_reply(id, &text) {
-                log::info!("ignored a repeated reply press (row {id})");
-                return;
+            if let Some(stored) = reply(&app, &shared, id, &to, text.trim(), ReplyFrom::Typed).await {
+                pressed_with(PressKind::Replied, Some(stored));
             }
-            withdraw(&app, id);
-            // Saved and shown as "Sending…" before it's queued (#99); the stored row comes back so
-            // the window can show it even if it missed the live event (#98).
-            let sent = crate::map::service::send_text(&shared, &to, &text).await;
-            match sent {
-                // A send the phone refused is saved as failed (with Retry in the conversation), not
-                // returned as an error: say so, and still hand the row to the window.
-                Ok(stored) if stored.status == crate::messages::Status::Failed => {
-                    log::info!("reply from a pop-up not sent (row {id}, message {})", stored.id);
-                    let body =
-                        format!("Use Retry in the conversation when your iPhone is nearby.\n\u{201c}{text}\u{201d}");
-                    note(&app, id, &format!("Couldn't send to {who}"), &body, false);
-                    pressed_with(PressKind::Replied, Some(stored));
-                }
-                Ok(stored) if stored.status == crate::messages::Status::Unconfirmed => {
-                    log::info!("reply from a pop-up may have sent (row {id}, message {})", stored.id);
-                    note(
-                        &app,
-                        id,
-                        &format!("May have sent to {who}"),
-                        "Check your iPhone to be sure.",
-                        false,
-                    );
-                    pressed_with(PressKind::Replied, Some(stored));
-                }
-                Ok(stored) => {
-                    log::info!("sent a reply from a pop-up (row {id}, message {})", stored.id);
-                    note(&app, id, &format!("Sent to {who}"), &text, true);
-                    pressed_with(PressKind::Replied, Some(stored));
-                }
-                Err(e) => {
-                    log::info!("reply from a pop-up not sent (row {id}): {e}");
-                    let body = format!("{e}\n\u{201c}{text}\u{201d}");
-                    note(&app, id, &format!("Couldn't send to {who}"), &body, false);
-                }
+        }
+        // A suggested reply's button: its text, through exactly the same send as a typed reply
+        // (same repeat guard, same "Sending…" row, same Sent / May have sent / Couldn't send note).
+        ToastAction::Suggested { to, text, .. } => {
+            if let Some(stored) = reply(&app, &shared, id, &to, &text, ReplyFrom::Suggested).await {
+                pressed_with(PressKind::Replied, Some(stored));
             }
         }
         ToastAction::Read { .. } => pressed(PressKind::Read),
         ToastAction::Copy { code, .. } => match copy(&app, code).await {
             Ok(()) => pressed(PressKind::Copied),
-            Err(e) => note(&app, id, "Couldn't copy the code", &e, false),
+            Err(e) => note(&app, id, "Couldn't copy the code", "Couldn't copy the code", &e, false),
         },
         ToastAction::CallBack { .. } => {
             let who = name_for(id).unwrap_or_else(|| "them".into());
@@ -340,13 +464,24 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 .await
             {
                 Ok(()) => pressed(PressKind::CalledBack),
-                Err(e) => note(&app, id, &format!("Couldn't call {who} back"), &e, false),
+                Err(e) => note(
+                    &app,
+                    id,
+                    &format!("Couldn't call {who} back"),
+                    "Couldn't call back",
+                    &e,
+                    false,
+                ),
             }
         }
         ToastAction::Clear { .. } => {
-            // A ringing call's negative action is Decline: only its own button sends that.
-            if category().as_deref() == Some("incomingCall") {
-                return log::warn!("clear pressed on ringing call row {id}; ignored");
+            match category().as_deref() {
+                // Gone from tug (Clear history): nothing to act on, and the phone's notification
+                // is no longer tied to this pop-up.
+                None => return log::info!("clear pressed on row {id}, which tug no longer has; ignored"),
+                // A ringing call's negative action is Decline: only its own button sends that.
+                Some("incomingCall") => return log::warn!("clear pressed on ringing call row {id}; ignored"),
+                Some(_) => {}
             }
             if let Err(e) = ble
                 .request(|reply| Command::PerformAction {
@@ -356,27 +491,135 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 })
                 .await
             {
-                note(&app, id, "Couldn't clear it on your iPhone", &e, false);
+                note(
+                    &app,
+                    id,
+                    "Couldn't clear it on your iPhone",
+                    "Couldn't clear it on your iPhone",
+                    &e,
+                    false,
+                );
             }
         }
     }
 }
 
-/// The clipboard wants the main (STA) thread, and presses arrive on a thread-pool thread.
+/// How a pop-up reply was written, for the log only (never the text itself).
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+enum ReplyFrom {
+    Typed,
+    Suggested,
+}
+
+#[cfg(windows)]
+impl ReplyFrom {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Typed => "reply",
+            Self::Suggested => "suggested reply",
+        }
+    }
+}
+
+/// Send `text` to `to` as a reply to pop-up `id`: a typed reply and a suggested one take this one
+/// path, so both get the same repeat guard, the same honest follow-up and the same stored row.
+/// Returns the stored row for the window (None when the press was a repeat or nothing was saved).
+#[cfg(windows)]
+async fn reply(
+    app: &AppHandle,
+    shared: &crate::state::Shared,
+    id: i64,
+    to: &str,
+    text: &str,
+    from: ReplyFrom,
+) -> Option<StoredMessage> {
+    let who = name_for(id).unwrap_or_else(|| to.to_string());
+    let what = from.label();
+    // A double-press, or pressing Send again from Action Center before Windows dismissed
+    // the pop-up, must not text them twice: take the pop-up down and drop a repeat.
+    if !first_reply(id, text) {
+        log::info!("ignored a repeated {what} press (row {id})");
+        return None;
+    }
+    withdraw(app, id);
+    // Saved and shown as "Sending…" before it's queued (#99); the stored row comes back so
+    // the window can show it even if it missed the live event (#98).
+    match crate::map::service::send_text(shared, to, text).await {
+        // A send the phone refused is saved as failed (with Retry in the conversation), not
+        // returned as an error: say so, and still hand the row to the window.
+        Ok(stored) if stored.status == crate::messages::Status::Failed => {
+            log::info!("{what} from a pop-up not sent (row {id}, message {})", stored.id);
+            let body = format!("Use Retry in the conversation when your iPhone is nearby.\n\u{201c}{text}\u{201d}");
+            note(
+                app,
+                id,
+                &format!("Couldn't send to {who}"),
+                "Couldn't send",
+                &body,
+                false,
+            );
+            Some(stored)
+        }
+        Ok(stored) if stored.status == crate::messages::Status::Unconfirmed => {
+            log::info!("{what} from a pop-up may have sent (row {id}, message {})", stored.id);
+            note(
+                app,
+                id,
+                &format!("May have sent to {who}"),
+                "May have sent",
+                "Check your iPhone to be sure.",
+                false,
+            );
+            Some(stored)
+        }
+        Ok(stored) => {
+            log::info!("sent a {what} from a pop-up (row {id}, message {})", stored.id);
+            note(app, id, &format!("Sent to {who}"), "Sent", text, true);
+            Some(stored)
+        }
+        Err(e) => {
+            log::info!("{what} from a pop-up not sent (row {id}): {e}");
+            let body = format!("{e}\n\u{201c}{text}\u{201d}");
+            note(
+                app,
+                id,
+                &format!("Couldn't send to {who}"),
+                "Couldn't send",
+                &body,
+                false,
+            );
+            None
+        }
+    }
+}
+
+/// The clipboard wants the main (STA) thread, and presses arrive on a thread-pool thread. A code
+/// goes the same private way as auto-copy (`commands::copy_code`): kept out of Win+V clipboard
+/// history and cloud sync, and taken off again after a while if it's still there.
 #[cfg(windows)]
 async fn copy(app: &AppHandle, code: String) -> Result<(), String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
+    let copied = code.clone();
     app.run_on_main_thread(move || {
-        let _ = tx.send(crate::clipboard::set_text(&code));
+        let _ = tx.send(crate::clipboard::set_text_private(&copied));
     })
     .map_err(|e| e.to_string())?;
-    rx.await.map_err(|_| "The clipboard didn't answer".to_string())?
+    rx.await.map_err(|_| "The clipboard didn't answer".to_string())??;
+    crate::code_fill::clear_later(code);
+    Ok(())
 }
 
 /// A short follow-up about notification `id`. One per notification (a newer one replaces
-/// it), in its own group so the phone clearing the notification doesn't take it back.
+/// it), in its own group so the phone clearing the notification doesn't take it back. While
+/// previews are hidden it says only `generic` ("Sent"): no name, no text.
 #[cfg(windows)]
-fn note(app: &AppHandle, id: i64, title: &str, body: &str, quiet: bool) {
+fn note(app: &AppHandle, id: i64, title: &str, generic: &str, body: &str, quiet: bool) {
+    let hidden = crate::share_privacy::previews_hidden_now().then(|| crate::share_privacy::redact_note(generic));
+    let (title, body) = match &hidden {
+        Some((t, b)) => (t.as_str(), b.as_str()),
+        None => (title, body),
+    };
     let xml = xml::note_toast(id, title, body, quiet || !sound_on(app));
     let tag = format!("note-{id}");
     if let Err(e) = show_native(app, &xml, &tag, GROUP_NOTES, quiet.then_some(SENT_NOTE_TTL)) {
@@ -402,6 +645,61 @@ mod reply_tests {
             super::first_reply(9_002, "on my way"),
             "another notification is separate"
         );
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::{StartupGate, ToastSpec};
+
+    fn spec(id: i64, title: &str) -> ToastSpec {
+        ToastSpec {
+            id,
+            title: title.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn open_unless_startup_closed_it() {
+        let mut g = StartupGate::default();
+        assert_eq!(g.admit(spec(1, "a")).map(|s| s.id), Some(1));
+        assert!(g.open().is_empty());
+    }
+
+    #[test]
+    fn this_runs_first_pop_ups_wait_for_the_withdrawal_then_show() {
+        // Seen in review: the last run's pop-ups were withdrawn on a thread that could finish
+        // after this run's first pop-ups, taking them back too. They wait instead.
+        let mut g = StartupGate::default();
+        g.close();
+        assert!(g.admit(spec(1, "first")).is_none());
+        assert!(g.admit(spec(2, "second")).is_none());
+        // A newer pop-up for the same notification replaces the held one.
+        assert!(g.admit(spec(1, "first, updated")).is_none());
+        let shown: Vec<_> = g.open().into_iter().map(|s| (s.id, s.title)).collect();
+        assert_eq!(
+            shown,
+            vec![(2, "second".to_string()), (1, "first, updated".to_string())]
+        );
+        // Once open, pop-ups show at once.
+        assert_eq!(g.admit(spec(3, "later")).map(|s| s.id), Some(3));
+        assert!(g.open().is_empty());
+    }
+
+    #[test]
+    fn a_notification_cleared_while_held_never_shows() {
+        let mut g = StartupGate::default();
+        g.close();
+        g.admit(spec(1, "a"));
+        g.admit(spec(2, "b"));
+        g.forget(Some(1));
+        assert_eq!(g.open().into_iter().map(|s| s.id).collect::<Vec<_>>(), vec![2]);
+        // Clear history (or quitting) drops everything held.
+        g.close();
+        g.admit(spec(3, "c"));
+        g.forget(None);
+        assert!(g.open().is_empty());
     }
 }
 
@@ -439,6 +737,33 @@ mod tests {
             Some(&*format!("p{}", 1000 + KEEP as i64 + 4))
         );
         assert!(SPECS.lock().unwrap().len() <= KEEP);
+    }
+
+    #[test]
+    fn hiding_previews_takes_back_the_phones_pop_ups_and_follow_ups_only() {
+        use crate::share_privacy::{popup_group, withdraw_when_hiding};
+        use xml::ToastKind;
+        // Each kind's Action Center group: tug's own apart from the phone's.
+        for kind in [
+            ToastKind::Message,
+            ToastKind::Notification,
+            ToastKind::Call,
+            ToastKind::MissedCall,
+        ] {
+            assert_eq!(group_name(popup_group(kind)), GROUP_NOTIFICATIONS, "{kind:?}");
+        }
+        assert_eq!(group_name(popup_group(ToastKind::Info)), GROUP_OWN);
+        let taken_back: Vec<&str> = PopupGroup::ALL
+            .into_iter()
+            .filter(|g| withdraw_when_hiding(*g))
+            .map(group_name)
+            .collect();
+        assert_eq!(taken_back, [GROUP_NOTIFICATIONS, GROUP_NOTES]);
+        // Every group has its own name, so removing one never takes another's pop-ups.
+        let mut names: Vec<&str> = PopupGroup::ALL.into_iter().map(group_name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), PopupGroup::ALL.len());
     }
 
     #[test]

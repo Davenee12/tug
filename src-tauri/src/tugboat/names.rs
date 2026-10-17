@@ -62,7 +62,18 @@ pub fn sanitize(name: &str) -> String {
     if ALWAYS_HIDDEN.iter().any(|ext| lower.ends_with(&format!(".{ext}"))) {
         out.push_str(DOWNLOAD_SUFFIX);
     }
+    // tug's own temp files look like `~$….tugboat.tmp` and are swept away at the next start: a
+    // file from the phone mustn't look like one.
+    if is_reserved_temp_name(&out) {
+        out.insert(0, '_');
+    }
     out
+}
+
+/// The shape of tug's own temp files in the Tugboat folder (any case: Windows ignores it).
+fn is_reserved_temp_name(name: &str) -> bool {
+    use super::session::{TEMP_PREFIX, TEMP_SUFFIX};
+    name.starts_with(TEMP_PREFIX) && name.to_lowercase().ends_with(TEMP_SUFFIX)
 }
 
 /// `"IMG_1.HEIC"` → `("IMG_1", ".HEIC")`. A leading dot alone isn't an extension.
@@ -165,6 +176,25 @@ mod tests {
         assert_eq!(sanitize("photo.jpg"), "photo.jpg");
         assert_eq!(sanitize("lnk"), "lnk");
         assert_eq!(sanitize("notes.lnkx"), "notes.lnkx");
+    }
+
+    #[test]
+    fn never_names_a_file_like_tugs_own_temp_files() {
+        // The sweep at the next start would delete these.
+        assert_eq!(sanitize("~$abc.tugboat.tmp"), "_~$abc.tugboat.tmp");
+        assert_eq!(sanitize("~$X.TUGBOAT.TMP"), "_~$X.TUGBOAT.TMP");
+        assert_eq!(sanitize("~$probe-1.tugboat.tmp"), "_~$probe-1.tugboat.tmp");
+        // Look-alikes that the sweep leaves alone keep their names.
+        assert_eq!(sanitize("~$report.docx"), "~$report.docx");
+        assert_eq!(sanitize("notes.tugboat.tmp"), "notes.tugboat.tmp");
+        // And the renamed one really is safe from the sweep.
+        let dir = std::env::temp_dir().join(format!("tugboat-names-{}", super::super::crypto::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let name = sanitize("~$abc.tugboat.tmp");
+        std::fs::write(dir.join(&name), b"from the phone").unwrap();
+        super::super::session::sweep_temp(&dir);
+        assert!(dir.join(&name).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

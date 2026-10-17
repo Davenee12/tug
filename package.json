@@ -1,7 +1,7 @@
 {
   "name": "tug",
   "private": true,
-  "version": "0.5.16",
+  "version": "0.5.17",
   "license": "MIT",
   "type": "module",
   "scripts": {

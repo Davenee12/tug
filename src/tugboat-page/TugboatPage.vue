@@ -1,16 +1,22 @@
 <script setup lang="ts">
-// The page the iPhone opens from tug's QR code. Phone → PC: photos, videos, files and text.
-// PC → phone: files dragged onto tug, and text to copy. Plain words, big targets, light/dark.
+// The page the iPhone opens from tug's QR code. Phone → PC: photos, videos, files, and text pasted
+// into "Paste to PC". PC → phone: the PC's clipboard ("Send clipboard to iPhone"), files dragged onto
+// tug, and text to copy. Plain words, big targets, light/dark.
 // When tug's game asks, the page becomes its controller (Controller.vue) until the game closes.
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { Check, Copy, Download, FileUp, Gamepad2, Image as ImageIcon, LoaderCircle, Send, WifiOff, X } from "lucide-vue-next";
 import TugMark from "../components/TugMark.vue";
 import Controller from "./Controller.vue";
-import { TugboatError, type TugboatApi, type PageOffer, type PageState } from "./client";
+import { TugboatError, type TugboatApi, type PageClip, type PageOffer, type PageState } from "./client";
 import { MAX_DOWNLOAD, MAX_UPLOAD, canRetryUpload, formatSize, isFatal, messageFor } from "./chunks";
-import { copyText } from "./copy";
+import { ackOutcome, copyWith, isNewClip, needsAck, showClip, type ShownClip } from "./clip";
+import { copyEnv, selectText } from "./copy";
 
-const props = defineProps<{ api: TugboatApi | null }>();
+const props = defineProps<{
+  api: TugboatApi | null;
+  /** Opened from a race's Player 2 code: its keys only steer, so the page is only a controller. */
+  guest?: boolean;
+}>();
 
 const POLL_MS = 2000;
 
@@ -35,12 +41,16 @@ async function poll() {
     if (s.text?.id !== pcText.value?.id) copied.value = false;
     pcText.value = s.text;
     game.value = s.game;
+    // The PC's clipboard: show a new one; keep telling the PC we have it until it has heard.
+    if (isNewClip(clip.value ?? (dismissedClip === null ? null : { id: dismissedClip }), s.clip)) receiveClip(s.clip);
+    else if (needsAck(clip.value)) void ackClip();
+    guest.value = props.guest === true || s.guest === true;
     // The game closed: next time it asks, the controller opens again by itself.
     if (!s.game) padDismissed.value = false;
     connection.value = "ok";
   } catch (e) {
     const code = e instanceof TugboatError ? e.code : "network";
-    if (isFatal(code) && code !== "too-big" && code !== "no-space") fatal.value = code;
+    if (isFatal(code) && code !== "too-big" && code !== "no-space" && code !== "blocked") fatal.value = code;
     else connection.value = "network";
   } finally {
     polling = false;
@@ -57,6 +67,8 @@ function schedule() {
 
 // --- tug's game wants a controller ---
 const game = ref(false);
+/** This phone is a two-player race's second controller: no files or text, only the race. */
+const guest = ref(props.guest === true);
 /** "Stop using as a controller" was tapped: stay on this page until the game asks again. */
 const padDismissed = ref(false);
 const controller = computed(() => props.api !== null && game.value && !padDismissed.value && !fatal.value);
@@ -83,6 +95,7 @@ onUnmounted(() => {
   document.removeEventListener("visibilitychange", onVisibility);
   window.clearTimeout(pollTimer);
   for (const d of Object.values(downloads)) if (d.url) URL.revokeObjectURL(d.url);
+  if (clip.value?.url) URL.revokeObjectURL(clip.value.url);
 });
 
 // --- Sending files to the PC ---
@@ -176,11 +189,86 @@ async function sendText() {
 
 const copied = ref(false);
 const copyFailed = ref(false);
-function copyPcText() {
+const pcTextEl = ref<HTMLElement | null>(null);
+async function copyPcText() {
   if (!pcText.value) return;
-  const ok = copyText(pcText.value.text);
+  const ok = (await copyWith(pcText.value.text, copyEnv())) === "copied";
   copied.value = ok;
   copyFailed.value = !ok;
+  if (!ok) selectText(pcTextEl.value);
+}
+
+// --- The PC's clipboard ("Send clipboard to iPhone" on the PC) ---
+// The PC holds it for up to 2 minutes and only says it was sent once this page tells it so: right
+// away for text, once fetched for a picture. The page keeps showing it after that.
+const clip = ref<ShownClip | null>(null);
+/** The last clipboard put away with ✕, so the PC repeating it doesn't bring it back. */
+let dismissedClip: number | null = null;
+const clipCopy = ref<"idle" | "copied" | "select">("idle");
+const clipTextEl = ref<HTMLElement | null>(null);
+let acking = false;
+
+function receiveClip(incoming: PageClip) {
+  if (clip.value?.url) URL.revokeObjectURL(clip.value.url);
+  clip.value = showClip(incoming);
+  clipCopy.value = "idle";
+  if (clip.value.phase === "ready") void ackClip();
+  else if (clip.value.phase === "loading") void fetchClipImage();
+}
+
+async function fetchClipImage() {
+  const c = clip.value;
+  if (!c?.image || !props.api) return;
+  const id = c.id;
+  Object.assign(c, { phase: "loading", got: 0, error: undefined });
+  try {
+    const blob = await props.api.download(c.image, (got) => {
+      if (clip.value?.id === id) clip.value.got = got;
+    });
+    if (clip.value?.id !== id) return;
+    clip.value.url = URL.createObjectURL(blob);
+    clip.value.phase = "ready";
+    void ackClip();
+  } catch (e) {
+    if (clip.value?.id !== id) return;
+    const code = e instanceof TugboatError ? e.code : "error";
+    clip.value.phase = "failed";
+    clip.value.error = code === "not-found" ? "Your PC isn't sending this picture any more." : messageFor(code);
+  }
+}
+
+/** Tell the PC this page has its clipboard. Retried at each check-in until the PC has heard. */
+async function ackClip() {
+  const c = clip.value;
+  if (!props.api || !c || !needsAck(c) || acking) return;
+  acking = true;
+  try {
+    await props.api.clipAck(c.id);
+    if (clip.value?.id === c.id) clip.value.acked = true;
+  } catch (e) {
+    const code = e instanceof TugboatError ? e.code : "network";
+    const outcome = ackOutcome(code);
+    if (outcome === "fatal") fatal.value = code;
+    else if (outcome === "done" && clip.value?.id === c.id) clip.value.acked = true;
+  } finally {
+    acking = false;
+  }
+}
+
+/** The big Copy button. On this plain-HTTP page the browser may refuse: then the text is selected
+ * for a press-and-hold Copy, and the page says so. */
+async function copyClip() {
+  const text = clip.value?.text;
+  if (text === null || text === undefined) return;
+  clipCopy.value = await copyWith(text, copyEnv());
+  if (clipCopy.value === "select") selectText(clipTextEl.value);
+}
+
+function dismissClip() {
+  if (!clip.value) return;
+  dismissedClip = clip.value.id;
+  if (clip.value.url) URL.revokeObjectURL(clip.value.url);
+  clip.value = null;
 }
 
 // --- Files from the PC ---
@@ -267,131 +355,189 @@ const fatalMessage = computed(() =>
         <button class="btn-primary btn-sm shrink-0" @click="padDismissed = false">Use as controller</button>
       </div>
 
-      <!-- Phone → PC -->
-      <section class="mt-6" aria-labelledby="send-title">
-        <h2 id="send-title" class="headline text-[22px]">Send to your PC</h2>
-        <div class="mt-3 grid grid-cols-2 gap-3">
-          <!-- The inputs cover their buttons: iOS ignores taps forwarded to hidden file inputs. -->
-          <label class="btn-primary relative overflow-hidden px-3 whitespace-nowrap">
-            <ImageIcon :size="20" />
-            Photos &amp; videos
-            <input type="file" multiple accept="image/*,video/*" class="absolute inset-0 cursor-pointer opacity-0" aria-label="Photos and videos" @change="pick" />
-          </label>
-          <label class="btn-secondary relative overflow-hidden px-3 whitespace-nowrap">
-            <FileUp :size="20" />
-            Files
-            <input type="file" multiple class="absolute inset-0 cursor-pointer opacity-0" aria-label="Files" @change="pick" />
-          </label>
-        </div>
-        <p class="mt-2.5 text-[14px] text-muted">Keep this page open while sending.</p>
+      <!-- A race's second phone: nothing but the race (never files, text or the clipboard). -->
+      <div v-if="guest && !game" class="card mt-5 flex items-center gap-3" role="status">
+        <Gamepad2 :size="22" class="shrink-0 text-accent-teal" />
+        <p class="flex-1 text-[15px] text-ink">You're the second controller for Tugboat Run. Keep this page open: you'll join the next two-player race on the PC.</p>
+      </div>
 
-        <ul v-if="uploads.length" class="mt-3 space-y-2">
-          <li v-for="u in uploads" :key="u.key" class="card flex items-center gap-3 py-3">
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-[15px] text-ink">{{ u.savedAs ?? u.file.name }}</p>
-              <p class="mt-0.5 text-[13px]" :class="u.state === 'failed' ? 'text-error' : 'text-muted'">
-                <template v-if="u.state === 'saved'">Saved on your PC · {{ formatSize(u.file.size) }}</template>
-                <template v-else-if="u.state === 'failed'">{{ u.error }}</template>
-                <template v-else-if="u.state === 'waiting'">Waiting · {{ formatSize(u.file.size) }}</template>
-                <template v-else>{{ formatSize(u.sent) }} of {{ formatSize(u.file.size) }}</template>
-              </p>
-              <div v-if="u.state === 'sending'" class="mt-2 h-1.5 overflow-hidden rounded-full bg-track">
-                <div class="h-full rounded-full bg-primary transition-[width] duration-300" :style="{ width: `${percent(u)}%` }" />
-              </div>
-            </div>
-            <Check v-if="u.state === 'saved'" :size="20" class="shrink-0 text-success" aria-label="Saved" />
-            <button v-if="u.state === 'failed' && u.retry" class="btn-secondary btn-sm shrink-0" @click="retry(u)">Try again</button>
+      <template v-if="!guest">
+        <!-- The PC's clipboard, sent with "Send clipboard to iPhone": the reason the page was opened. -->
+        <section v-if="clip" class="mt-6" aria-labelledby="clip-title">
+          <div class="flex items-center gap-2">
+            <h2 id="clip-title" class="headline flex-1 text-[22px]">Your PC's clipboard</h2>
             <button
-              v-if="u.state !== 'saved'"
+              v-if="clip.acked || clip.phase === 'failed'"
               class="-mr-1 shrink-0 rounded-lg p-2 text-muted active:bg-card-strong"
-              :aria-label="u.state === 'failed' ? 'Dismiss' : 'Stop sending'"
-              @click="cancel(u)"
+              aria-label="Put away"
+              @click="dismissClip"
             >
               <X :size="18" />
             </button>
-          </li>
-        </ul>
-        <p v-if="sending" class="sr-only" role="status">Sending</p>
-      </section>
-
-      <!-- Text both ways -->
-      <section class="mt-8" aria-labelledby="text-title">
-        <h2 id="text-title" class="headline text-[22px]">Text</h2>
-        <div v-if="pcText" class="card mt-3">
-          <p class="text-[13px] font-medium text-muted">Text from your PC</p>
-          <p class="mt-1 max-h-48 overflow-y-auto break-words whitespace-pre-wrap text-[16px] text-ink select-text">{{ pcText.text }}</p>
-          <div class="mt-3 flex items-center gap-3">
-            <button class="btn-secondary btn-sm" @click="copyPcText">
-              <Check v-if="copied" :size="16" class="text-success" />
-              <Copy v-else :size="16" />
-              {{ copied ? "Copied" : "Copy" }}
-            </button>
-            <span v-if="copyFailed" class="text-[13px] text-muted">Press and hold the text to copy it.</span>
           </div>
-        </div>
-        <textarea
-          v-model="draft"
-          rows="3"
-          class="mt-3 block w-full resize-y rounded-xl border border-hairline bg-canvas px-3.5 py-3 text-[16px] text-ink outline-none placeholder:text-muted focus:border-primary"
-          placeholder="Paste text to send to your PC"
-          aria-label="Text to send to your PC"
-          @input="textState = 'idle'"
-        />
-        <div class="mt-2.5 flex items-center gap-3">
-          <button class="btn-primary btn-sm" :disabled="!draft.trim() || textState === 'sending'" @click="sendText">
-            <LoaderCircle v-if="textState === 'sending'" :size="16" class="animate-spin" />
-            <Send v-else :size="16" />
-            Send
-          </button>
-          <span v-if="textState === 'sent'" class="text-[14px] text-muted" role="status">Sent to your PC.</span>
-          <span v-else-if="textState === 'failed'" class="text-[14px] text-error" role="alert">Couldn't send. Try again.</span>
-        </div>
-      </section>
-
-      <!-- PC → phone -->
-      <section class="mt-8" aria-labelledby="receive-title">
-        <h2 id="receive-title" class="headline text-[22px]">From your PC</h2>
-        <p v-if="!offers.length" class="mt-2 text-[15px] text-muted">Drag files onto tug on your PC and they'll show up here.</p>
-        <ul v-else class="mt-3 space-y-2">
-          <li v-for="o in offers" :key="o.id" class="card flex items-center gap-3 py-3">
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-[15px] text-ink">{{ o.name }}</p>
-              <p class="mt-0.5 text-[13px]" :class="downloads[o.id]?.state === 'failed' ? 'text-error' : 'text-muted'">
-                <template v-if="o.size > MAX_DOWNLOAD">Over 1 GB, too big for a phone browser.</template>
-                <template v-else-if="downloads[o.id]?.state === 'failed'">{{ downloads[o.id].error }}</template>
-                <template v-else-if="downloads[o.id]?.state === 'loading'">
-                  {{ formatSize(downloads[o.id].got) }} of {{ formatSize(o.size) }}
-                </template>
-                <template v-else>{{ formatSize(o.size) }}</template>
-              </p>
-              <div v-if="downloads[o.id]?.state === 'loading'" class="mt-2 h-1.5 overflow-hidden rounded-full bg-track">
-                <div
-                  class="h-full rounded-full bg-primary transition-[width] duration-300"
-                  :style="{ width: `${o.size ? Math.round((downloads[o.id].got / o.size) * 100) : 100}%` }"
-                />
-              </div>
-            </div>
-            <template v-if="o.size <= MAX_DOWNLOAD">
-              <!-- Saving needs its own tap once the file is ready (Safari wants a gesture). -->
-              <a
-                v-if="downloads[o.id]?.state === 'ready'"
-                :href="downloads[o.id].url"
-                :download="o.name"
-                class="btn-primary btn-sm shrink-0"
-              >
-                <Download :size="16" />
-                Save
-              </a>
-              <span v-else-if="downloads[o.id]?.state === 'loading'" class="shrink-0 p-2 text-muted">
-                <LoaderCircle :size="18" class="animate-spin" />
-              </span>
-              <button v-else class="btn-secondary btn-sm shrink-0" @click="fetchOffer(o)">
-                {{ downloads[o.id]?.state === "failed" ? "Try again" : "Get" }}
+          <div class="card mt-3">
+            <template v-if="clip.text !== null">
+              <p ref="clipTextEl" class="max-h-64 overflow-y-auto break-words whitespace-pre-wrap text-[17px] text-ink select-text">{{ clip.text }}</p>
+              <button class="btn-primary mt-4 w-full min-h-14 text-[18px]" @click="copyClip">
+                <Check v-if="clipCopy === 'copied'" :size="20" />
+                <Copy v-else :size="20" />
+                {{ clipCopy === "copied" ? "Copied" : "Copy" }}
               </button>
+              <p v-if="clipCopy === 'select'" class="mt-3 text-[14px] text-body" role="status">
+                Your browser didn't let tug copy it on this page. The text is selected: press and hold it, then tap Copy.
+              </p>
             </template>
-          </li>
-        </ul>
-      </section>
+            <template v-else-if="clip.image">
+              <template v-if="clip.phase === 'ready' && clip.url">
+                <!-- Pictures can't be copied for you from a page like this: press and hold it instead. -->
+                <img :src="clip.url" alt="The picture from your PC's clipboard" class="mx-auto block max-h-[60vh] w-auto max-w-full rounded-lg" />
+                <p class="mt-3 text-[14px] text-body">Press and hold the picture to copy it or save it to Photos.</p>
+                <a :href="clip.url" :download="clip.image.name" class="btn-secondary btn-sm mt-3">
+                  <Download :size="16" />
+                  Save
+                </a>
+              </template>
+              <template v-else-if="clip.phase === 'failed'">
+                <p class="text-[15px] text-error">{{ clip.error }}</p>
+                <button class="btn-secondary btn-sm mt-3" @click="fetchClipImage">Try again</button>
+              </template>
+              <template v-else>
+                <p class="flex items-center gap-2 text-[15px] text-muted" role="status">
+                  <LoaderCircle :size="16" class="animate-spin" />
+                  Getting the picture… {{ formatSize(clip.got) }} of {{ formatSize(clip.image.size) }}
+                </p>
+              </template>
+            </template>
+          </div>
+        </section>
+
+        <!-- Phone → PC -->
+        <section class="mt-6" aria-labelledby="send-title">
+          <h2 id="send-title" class="headline text-[22px]">Send to your PC</h2>
+          <div class="mt-3 grid grid-cols-2 gap-3">
+            <!-- The inputs cover their buttons: iOS ignores taps forwarded to hidden file inputs. -->
+            <label class="btn-primary relative overflow-hidden px-3 whitespace-nowrap">
+              <ImageIcon :size="20" />
+              Photos &amp; videos
+              <input type="file" multiple accept="image/*,video/*" class="absolute inset-0 cursor-pointer opacity-0" aria-label="Photos and videos" @change="pick" />
+            </label>
+            <label class="btn-secondary relative overflow-hidden px-3 whitespace-nowrap">
+              <FileUp :size="20" />
+              Files
+              <input type="file" multiple class="absolute inset-0 cursor-pointer opacity-0" aria-label="Files" @change="pick" />
+            </label>
+          </div>
+          <p class="mt-2.5 text-[14px] text-muted">Keep this page open while sending.</p>
+
+          <ul v-if="uploads.length" class="mt-3 space-y-2">
+            <li v-for="u in uploads" :key="u.key" class="card flex items-center gap-3 py-3">
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-[15px] text-ink">{{ u.savedAs ?? u.file.name }}</p>
+                <p class="mt-0.5 text-[13px]" :class="u.state === 'failed' ? 'text-error' : 'text-muted'">
+                  <template v-if="u.state === 'saved'">Saved on your PC · {{ formatSize(u.file.size) }}</template>
+                  <template v-else-if="u.state === 'failed'">{{ u.error }}</template>
+                  <template v-else-if="u.state === 'waiting'">Waiting · {{ formatSize(u.file.size) }}</template>
+                  <template v-else>{{ formatSize(u.sent) }} of {{ formatSize(u.file.size) }}</template>
+                </p>
+                <div v-if="u.state === 'sending'" class="mt-2 h-1.5 overflow-hidden rounded-full bg-track">
+                  <div class="h-full rounded-full bg-primary transition-[width] duration-300" :style="{ width: `${percent(u)}%` }" />
+                </div>
+              </div>
+              <Check v-if="u.state === 'saved'" :size="20" class="shrink-0 text-success" aria-label="Saved" />
+              <button v-if="u.state === 'failed' && u.retry" class="btn-secondary btn-sm shrink-0" @click="retry(u)">Try again</button>
+              <button
+                v-if="u.state !== 'saved'"
+                class="-mr-1 shrink-0 rounded-lg p-2 text-muted active:bg-card-strong"
+                :aria-label="u.state === 'failed' ? 'Dismiss' : 'Stop sending'"
+                @click="cancel(u)"
+              >
+                <X :size="18" />
+              </button>
+            </li>
+          </ul>
+          <p v-if="sending" class="sr-only" role="status">Sending</p>
+        </section>
+
+        <!-- Phone → PC: text onto the PC's clipboard -->
+        <section class="mt-8" aria-labelledby="paste-title">
+          <h2 id="paste-title" class="headline text-[22px]">Paste to PC</h2>
+          <p class="mt-1 text-[14px] text-muted">Press and hold in the box, tap Paste, then Send. It goes on your PC's clipboard.</p>
+          <textarea
+            v-model="draft"
+            rows="3"
+            class="mt-3 block w-full resize-y rounded-xl border border-hairline bg-canvas px-3.5 py-3 text-[16px] text-ink outline-none placeholder:text-muted focus:border-primary"
+            placeholder="Paste here"
+            aria-label="Text to put on your PC's clipboard"
+            @input="textState = 'idle'"
+          />
+          <div class="mt-2.5 flex items-center gap-3">
+            <button class="btn-primary btn-sm" :disabled="!draft.trim() || textState === 'sending'" @click="sendText">
+              <LoaderCircle v-if="textState === 'sending'" :size="16" class="animate-spin" />
+              <Send v-else :size="16" />
+              Send
+            </button>
+            <span v-if="textState === 'sent'" class="text-[14px] text-muted" role="status">Sent to your PC.</span>
+            <span v-else-if="textState === 'failed'" class="text-[14px] text-error" role="alert">Couldn't send. Try again.</span>
+          </div>
+        </section>
+
+        <!-- PC → phone -->
+        <section class="mt-8" aria-labelledby="receive-title">
+          <h2 id="receive-title" class="headline text-[22px]">From your PC</h2>
+          <div v-if="pcText" class="card mt-3">
+            <p class="text-[13px] font-medium text-muted">Text from your PC</p>
+            <p ref="pcTextEl" class="mt-1 max-h-48 overflow-y-auto break-words whitespace-pre-wrap text-[16px] text-ink select-text">{{ pcText.text }}</p>
+            <div class="mt-3 flex items-center gap-3">
+              <button class="btn-secondary btn-sm shrink-0" @click="copyPcText">
+                <Check v-if="copied" :size="16" class="text-success" />
+                <Copy v-else :size="16" />
+                {{ copied ? "Copied" : "Copy" }}
+              </button>
+              <span v-if="copyFailed" class="text-[13px] text-muted">It's selected: press and hold the text, then tap Copy.</span>
+            </div>
+          </div>
+          <p v-if="!offers.length && !pcText" class="mt-2 text-[15px] text-muted">Drag files onto tug on your PC and they'll show up here.</p>
+          <ul v-else class="mt-3 space-y-2">
+            <li v-for="o in offers" :key="o.id" class="card flex items-center gap-3 py-3">
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-[15px] text-ink">{{ o.name }}</p>
+                <p class="mt-0.5 text-[13px]" :class="downloads[o.id]?.state === 'failed' ? 'text-error' : 'text-muted'">
+                  <template v-if="o.size > MAX_DOWNLOAD">Over 1 GB, too big for a phone browser.</template>
+                  <template v-else-if="downloads[o.id]?.state === 'failed'">{{ downloads[o.id].error }}</template>
+                  <template v-else-if="downloads[o.id]?.state === 'loading'">
+                    {{ formatSize(downloads[o.id].got) }} of {{ formatSize(o.size) }}
+                  </template>
+                  <template v-else>{{ formatSize(o.size) }}</template>
+                </p>
+                <div v-if="downloads[o.id]?.state === 'loading'" class="mt-2 h-1.5 overflow-hidden rounded-full bg-track">
+                  <div
+                    class="h-full rounded-full bg-primary transition-[width] duration-300"
+                    :style="{ width: `${o.size ? Math.round((downloads[o.id].got / o.size) * 100) : 100}%` }"
+                  />
+                </div>
+              </div>
+              <template v-if="o.size <= MAX_DOWNLOAD">
+                <!-- Saving needs its own tap once the file is ready (Safari wants a gesture). -->
+                <a
+                  v-if="downloads[o.id]?.state === 'ready'"
+                  :href="downloads[o.id].url"
+                  :download="o.name"
+                  class="btn-primary btn-sm shrink-0"
+                >
+                  <Download :size="16" />
+                  Save
+                </a>
+                <span v-else-if="downloads[o.id]?.state === 'loading'" class="shrink-0 p-2 text-muted">
+                  <LoaderCircle :size="18" class="animate-spin" />
+                </span>
+                <button v-else class="btn-secondary btn-sm shrink-0" @click="fetchOffer(o)">
+                  {{ downloads[o.id]?.state === "failed" ? "Try again" : "Get" }}
+                </button>
+              </template>
+            </li>
+          </ul>
+        </section>
+      </template>
     </template>
 
     <footer class="mt-auto pt-10 text-center text-[13px] text-muted">tug</footer>

@@ -5,6 +5,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   ArrowDownToLine,
   Check,
+  ClipboardCopy,
   Copy,
   FileText,
   FolderOpen,
@@ -21,7 +22,17 @@ import { useTugboatStore } from "../stores/tugboat";
 import { useFocusTrap } from "../lib/focusTrap";
 import { api } from "../lib/ipc";
 import { copyText } from "../lib/clipboard";
-import { capitalised, closeWarning, formatSize, percent, showConnectHelp, skippedMessage } from "../lib/tugboat";
+import {
+  capitalised,
+  clipLine,
+  closeWarning,
+  codeCaption,
+  folderBlockMessage,
+  formatSize,
+  percent,
+  showConnectHelp,
+  skippedMessage,
+} from "../lib/tugboat";
 
 const tug = useTugStore();
 const tugboat = useTugboatStore();
@@ -112,6 +123,13 @@ async function sendText() {
 }
 
 const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.length > 0);
+// Windows Security (Controlled folder access) refused Pictures: say so, and where files go now.
+const blockNote = computed(() => folderBlockMessage(s.value));
+
+// The last clipboard sent with "Send clipboard" (here, Ctrl+K or the tray): only "on your iPhone"
+// once the phone said it has it, with the time left while it waits.
+const clipText = computed(() => clipLine(s.value.clip, s.value, now.value));
+const clipWaiting = computed(() => s.value.clip?.state === "waiting");
 </script>
 
 <template>
@@ -179,7 +197,13 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
             <p class="font-display text-[22px] leading-tight text-ink">{{ capitalised(phoneName) }} connected</p>
             <p class="flex items-center gap-2 text-[13px] text-muted">
               <span :class="['size-2 rounded-full', s.phoneActive ? 'bg-accent-teal' : 'bg-muted-soft']" />
-              {{ s.phoneActive ? `Tugboat is open on your ${phoneName}` : `Open Tugboat on your ${phoneName} to send` }}
+              {{
+                s.phoneActive
+                  ? `Tugboat is open on your ${phoneName}`
+                  : clipWaiting
+                    ? `Open Tugboat on your ${phoneName} to receive your clipboard`
+                    : `Open Tugboat on your ${phoneName} to send`
+              }}
             </p>
             <button class="mt-1 text-[13px] font-medium text-muted underline-offset-2 active:text-ink" @click="showCode = true">
               Show the code again
@@ -199,7 +223,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
                 <path :d="s.qr.path" class="fill-ink" />
               </svg>
             </div>
-            <p class="mt-4 text-center text-[15px] font-medium text-ink">Scan with your phone's camera to send photos, files and text.</p>
+            <p class="mt-4 text-center text-[15px] font-medium text-ink">{{ codeCaption(s.clip) }}</p>
 
             <div v-if="help" class="mt-4 rounded-lg bg-surface-soft px-3.5 py-3 text-[13px] text-body" role="status">
               <p class="font-medium text-ink">Can't connect?</p>
@@ -233,6 +257,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
         <div class="min-h-0 px-6 py-5 md:overflow-y-auto">
           <section aria-labelledby="tugboat-from">
             <h3 id="tugboat-from" class="caption-upper text-muted-soft">From your {{ phoneName }}</h3>
+            <p v-if="blockNote" class="mt-2 rounded-lg bg-surface-soft px-3.5 py-3 text-[13px] text-ink" role="status">{{ blockNote }}</p>
             <p v-if="!hasIncoming" class="mt-2 text-[14px] text-muted">Photos, files and text you send from the phone show up here.</p>
 
             <ul v-if="s.texts.length" class="mt-3 space-y-2">
@@ -317,12 +342,25 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
               </div>
               <p v-if="s.sentText" class="mt-2 truncate text-[12px] text-muted">On your {{ phoneName }} now: “{{ s.sentText }}”</p>
             </div>
+
+            <div class="mt-4 flex items-center gap-3">
+              <button class="btn-secondary btn-sm shrink-0" :disabled="tugboat.clipSending" @click="tugboat.sendClipboard()">
+                <ClipboardCopy :size="14" />
+                Send clipboard
+              </button>
+              <p v-if="clipText" class="flex min-w-0 items-center gap-1.5 text-[12px] text-muted" role="status">
+                <Check v-if="s.clip?.state === 'delivered'" :size="12" class="shrink-0 text-success" />
+                <LoaderCircle v-else-if="clipWaiting && s.phoneActive" :size="12" class="shrink-0 animate-spin" />
+                <span>{{ clipText }}</span>
+              </p>
+              <p v-else class="text-[12px] text-muted-soft">Text or a picture you've copied on this PC.</p>
+            </div>
           </section>
         </div>
       </div>
 
       <footer class="flex items-center gap-3 border-t border-hairline-soft px-6 py-3 text-[12px] text-muted">
-        <span class="min-w-0 truncate">Received files go to Pictures › Tugboat</span>
+        <span class="min-w-0 truncate">Received files go to {{ s.folderBlock === "fallback" ? "Downloads" : "Pictures" }} › Tugboat</span>
         <button class="btn-secondary btn-sm shrink-0" @click="tugboat.openFolder()">
           <FolderOpen :size="14" />
           Open folder

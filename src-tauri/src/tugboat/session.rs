@@ -12,10 +12,11 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use super::auth::{Auth, Authorized, Rejected};
+use super::auth::{Auth, Authorized, GuestPolicy, Rejected};
+use super::clip::{self, Ack, ClipEvent, ClipState, ClipStatus, Outbox, Payload, Prepared};
 use super::crypto::{self, ad, Keys};
 use super::names;
-use super::pad::{self, Pad, PadEvent, PadReply};
+use super::pad::{self, Pad, PadEvent, PadReply, SeatNo, FIRST, SECOND};
 use super::upload::{Plan, PlanError, Received};
 
 /// Largest file the PC offers to the phone: the page assembles it in memory before saving.
@@ -47,6 +48,8 @@ pub trait Sink: Send + Sync {
     /// The game controller changed (steering, boost, the phone arriving or going). Only the game
     /// listens; nothing else acts on it.
     fn pad(&self, event: PadEvent);
+    /// The PC's clipboard reached the phone, or no phone took it in time and it was dropped.
+    fn clip(&self, event: ClipEvent);
 }
 
 /// Why an API request failed. Mapped to an HTTP status and a short code (never content).
@@ -57,6 +60,13 @@ pub enum ApiError {
     Unauthorized,
     /// Another device already has this session.
     InUse,
+    /// A two-player game already has its two phones: a third is turned away.
+    Full,
+    /// A phone with the Player 2 code, but no two-player game is asking for a second phone.
+    NoRace,
+    /// A second phone scanned Tugboat's own code (another phone has it) while a two-player game
+    /// asks for a second phone: it wants the Player 2 code.
+    Player2Code,
     NotFound,
     BadRequest,
     /// A chunk didn't decrypt, or had the wrong length.
@@ -74,6 +84,9 @@ pub enum ApiError {
     NoGame,
     /// Controller inputs faster than any real phone sends them.
     Busy,
+    /// Windows wouldn't let tug write where files are saved (Controlled folder access in Windows
+    /// Security protects Pictures from apps it doesn't know), and the fallback was refused too.
+    Blocked,
     Io,
 }
 
@@ -82,7 +95,7 @@ impl ApiError {
         match self {
             ApiError::Closed => 410,
             ApiError::Unauthorized => 401,
-            ApiError::InUse => 403,
+            ApiError::InUse | ApiError::Blocked | ApiError::Full | ApiError::NoRace | ApiError::Player2Code => 403,
             ApiError::NotFound => 404,
             ApiError::BadRequest | ApiError::BadChunk => 400,
             ApiError::TooBig => 413,
@@ -98,6 +111,9 @@ impl ApiError {
             ApiError::Closed => "closed",
             ApiError::Unauthorized => "unauthorized",
             ApiError::InUse => "in-use",
+            ApiError::Full => "full",
+            ApiError::NoRace => "no-race",
+            ApiError::Player2Code => "player-2-code",
             ApiError::NotFound => "not-found",
             ApiError::BadRequest => "bad-request",
             ApiError::BadChunk => "bad-chunk",
@@ -108,20 +124,83 @@ impl ApiError {
             ApiError::Changed => "changed",
             ApiError::NoGame => "no-game",
             ApiError::Busy => "busy",
+            ApiError::Blocked => "blocked",
             ApiError::Io => "io",
         }
     }
 }
 
+/// ERROR_ACCESS_DENIED: what Controlled folder access (and a folder tug may not write to) gives.
+const ACCESS_DENIED: i32 = 5;
+/// ERROR_DISK_FULL.
+const DISK_FULL: i32 = 112;
+
+/// An I/O failure as the page hears it. Access denied is `Io` here, never `Blocked`: Windows also
+/// says it when antivirus holds a file tug is renaming, or about tug's own incoming folder, and
+/// "Windows Security blocked tug" would send the person to the wrong setting. Only the folder
+/// check (`save_folder_checked`, through `Probe` and `choose_folder`) can say `Blocked`.
 fn io_err(context: &str, e: std::io::Error) -> ApiError {
     // The error kind only: paths here name the user's files.
     log::warn!("tugboat: {context} failed: {:?}", e.kind());
-    if e.raw_os_error() == Some(112) {
-        // ERROR_DISK_FULL
-        return ApiError::NoSpace;
+    match e.raw_os_error() {
+        Some(DISK_FULL) => ApiError::NoSpace,
+        _ => ApiError::Io,
     }
-    ApiError::Io
 }
+
+/// Where received files are going, once the first upload checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FolderBlock {
+    /// Windows refused the usual folder, so files go to the fallback (`Downloads\Tugboat`).
+    Fallback,
+    /// Windows refused both: nothing can be saved until tug is allowed.
+    Blocked,
+}
+
+/// The outcome of trying to write in a folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Probe {
+    Ok,
+    /// Access denied (Controlled folder access, or permissions).
+    Denied,
+    /// Some other failure (a missing drive, say): reported as it is, no fallback.
+    Failed(ApiError),
+}
+
+impl Probe {
+    fn from(result: std::io::Result<()>) -> Probe {
+        match result {
+            Ok(()) => Probe::Ok,
+            Err(e) if e.raw_os_error() == Some(ACCESS_DENIED) => Probe::Denied,
+            Err(e) => Probe::Failed(io_err("check the Tugboat folder", e)),
+        }
+    }
+}
+
+/// Which folder to save in, from how writing to the usual one (and, if that was refused, the
+/// fallback) went. Pure, so the choice is tested without Windows Security.
+pub fn choose_folder(preferred: Probe, fallback: Option<Probe>) -> Result<Option<FolderBlock>, ApiError> {
+    match (preferred, fallback) {
+        (Probe::Ok, _) => Ok(None),
+        (Probe::Failed(e), _) => Err(e),
+        (Probe::Denied, Some(Probe::Ok)) => Ok(Some(FolderBlock::Fallback)),
+        (Probe::Denied, _) => Err(ApiError::Blocked),
+    }
+}
+
+/// Make sure tug can create a file in `dir`: create the folder, then a uniquely named probe file
+/// (named like the cross-drive temp files, so `sweep_temp` removes one ever left behind), and
+/// delete it.
+pub fn probe_folder(dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let probe = dir.join(format!("{TEMP_PREFIX}probe-{}{TEMP_SUFFIX}", crypto::new_id()));
+    OpenOptions::new().write(true).create_new(true).open(&probe)?;
+    let _ = fs::remove_file(&probe);
+    Ok(())
+}
+
+type Prober = dyn Fn(&Path) -> std::io::Result<()> + Send + Sync;
 
 // --- Messages the page sends and receives (inside sealed bodies) ---
 
@@ -154,6 +233,21 @@ pub struct TextRequest {
     pub text: String,
 }
 
+/// The phone has the PC's clipboard `id` (`POST /api/clip`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipAckRequest {
+    pub id: u32,
+}
+
+/// The PC's clipboard, as the page gets it: text, or a picture to fetch like a file on offer.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageClip {
+    pub id: u32,
+    pub text: Option<String>,
+    pub image: Option<PageOffer>,
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PageOffer {
@@ -178,6 +272,12 @@ pub struct StateReply {
     pub text: Option<PageText>,
     /// tug's game wants this phone as its controller: the page offers the controller.
     pub game: bool,
+    /// The PC's clipboard, sent with "Send clipboard to iPhone", until the phone says it has it.
+    pub clip: Option<PageClip>,
+    /// This phone is the second controller of a two-player game: it only ever steers (no files, no
+    /// text), and waits for the next race when there isn't one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub guest: bool,
 }
 
 // --- What the Tugboat panel shows (mirrored in src/types/protocol.ts) ---
@@ -227,6 +327,8 @@ pub struct Snapshot {
     /// Chunks of a file from the phone arrived just now. An upload the phone abandoned (Safari
     /// closed mid-file) stays unfinished in `incoming`, so "unfinished" isn't "moving".
     pub receiving: bool,
+    /// The last clipboard sent to the phone (its kind and state, never its contents).
+    pub clip: Option<ClipStatus>,
 }
 
 /// A file offered to the phone that couldn't be added, and why (for the panel's message).
@@ -261,13 +363,30 @@ struct Upload {
     at: i64,
 }
 
+/// Where an offered file's bytes come from.
+enum Source {
+    /// A file on the PC (dragged onto tug or picked), read chunk by chunk.
+    File(PathBuf),
+    /// A picture from the clipboard, held in memory only while it's on its way (never on disk).
+    Memory(Arc<Vec<u8>>),
+}
+
 struct Offer {
     id: String,
     name: String,
-    path: PathBuf,
+    source: Source,
     size: u64,
     mime: &'static str,
     downloads: u32,
+    /// Part of a clipboard on its way to the phone: fetched through the clipboard card, not listed
+    /// with the files (on the page or in the panel), and withdrawn once delivered or dropped.
+    clip: bool,
+}
+
+impl Offer {
+    fn is_file(&self, path: &Path) -> bool {
+        matches!(&self.source, Source::File(p) if p == path)
+    }
 }
 
 struct State {
@@ -286,12 +405,30 @@ struct State {
     next_text_id: u32,
     /// The game controller channel, while tug's game asks for one.
     pad: Option<Pad>,
+    /// Where files are saved, once the first upload checked tug may write there.
+    save_to: Option<PathBuf>,
+    /// Windows refused the usual folder (files go to the fallback), or both.
+    block: Option<FolderBlock>,
+    /// Refused requests, so a flood is logged as a count (`tally.rs`).
+    refused: super::tally::Tally,
+    /// The PC's clipboard on its way to the phone (see clip.rs).
+    clip: Outbox,
+    next_clip_id: u32,
+    /// When the second phone of a two-player game was last heard from.
+    guest_seen: Option<Instant>,
 }
 
 pub struct Session {
     pub keys: Keys,
-    /// `Pictures\Tugboat`.
+    /// The keys of the Player 2 code (`crypto::guest_secret`): a two-player game's second phone
+    /// signs and seals with these, and they're good for the two controller requests only.
+    guest_keys: Keys,
+    /// `Pictures\Tugboat`: where received files go, unless Windows won't let tug write there.
     pub folder: PathBuf,
+    /// `Downloads\Tugboat`: used when Windows refuses `folder` (Controlled folder access).
+    fallback: Option<PathBuf>,
+    /// Checks tug can write in a folder (`probe_folder`; replaced in tests).
+    prober: Box<Prober>,
     /// Where unfinished uploads are written (tug's local app data, not the Pictures folder, so a
     /// OneDrive-synced Pictures never uploads half-received files). Emptied on start and stop.
     pub incoming: PathBuf,
@@ -313,7 +450,10 @@ impl Session {
     pub fn new(secret: &[u8], folder: PathBuf, incoming: PathBuf, sink: Arc<dyn Sink>) -> Session {
         Session {
             keys: Keys::derive(secret),
+            guest_keys: Keys::derive(&crypto::guest_secret(secret)),
             folder,
+            fallback: None,
+            prober: Box::new(probe_folder),
             incoming,
             state: Mutex::new(State {
                 auth: Auth::new(),
@@ -328,11 +468,89 @@ impl Session {
                 pc_text: None,
                 next_text_id: 1,
                 pad: None,
+                save_to: None,
+                block: None,
+                refused: super::tally::Tally::default(),
+                clip: Outbox::new(),
+                next_clip_id: 1,
+                guest_seen: None,
             }),
             closed: AtomicBool::new(false),
             sink,
             finishing: Mutex::new(()),
         }
+    }
+
+    /// Where to save when Windows refuses the usual folder.
+    pub fn with_fallback(mut self, fallback: Option<PathBuf>) -> Session {
+        self.fallback = fallback;
+        self
+    }
+
+    /// Replace the write check (tests stand in for Windows Security with it).
+    #[cfg(test)]
+    pub fn with_prober(mut self, prober: impl Fn(&Path) -> std::io::Result<()> + Send + Sync + 'static) -> Session {
+        self.prober = Box::new(prober);
+        self
+    }
+
+    /// The folder received files are saved in (the usual one until a check said otherwise).
+    pub fn save_folder(&self) -> PathBuf {
+        self.state().save_to.clone().unwrap_or_else(|| self.folder.clone())
+    }
+
+    /// Whether Windows refused the usual folder (and the fallback).
+    pub fn folder_block(&self) -> Option<FolderBlock> {
+        self.state().block
+    }
+
+    /// The folder to save this upload in: decided by the first upload (can tug write in the usual
+    /// folder? if Windows refuses, in the fallback?) and kept for the session. Refused both ways,
+    /// it's checked again next time, so allowing tug in Windows Security works without reopening
+    /// Tugboat.
+    fn save_folder_checked(&self) -> Result<PathBuf, ApiError> {
+        if let Some(dir) = self.state().save_to.clone() {
+            return Ok(dir);
+        }
+        let preferred = Probe::from((self.prober)(&self.folder));
+        let fallback = match (preferred, &self.fallback) {
+            (Probe::Denied, Some(dir)) => Some(Probe::from((self.prober)(dir))),
+            _ => None,
+        };
+        let chosen = choose_folder(preferred, fallback);
+        let mut st = self.state();
+        let before = st.block;
+        let result = match chosen {
+            Ok(None) => {
+                st.block = None;
+                st.save_to = Some(self.folder.clone());
+                Ok(self.folder.clone())
+            }
+            Ok(Some(block)) => {
+                let dir = self.fallback.clone().expect("a fallback was checked");
+                st.block = Some(block);
+                st.save_to = Some(dir.clone());
+                Ok(dir)
+            }
+            Err(ApiError::Blocked) => {
+                st.block = Some(FolderBlock::Blocked);
+                Err(ApiError::Blocked)
+            }
+            Err(e) => Err(e),
+        };
+        let after = st.block;
+        drop(st);
+        if after != before {
+            match after {
+                Some(FolderBlock::Fallback) => {
+                    log::warn!("tugboat: Windows blocked saving to Pictures; saving to Downloads instead")
+                }
+                Some(FolderBlock::Blocked) => log::warn!("tugboat: Windows blocked saving received files"),
+                None => {}
+            }
+            self.sink.changed(true);
+        }
+        result
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -349,15 +567,29 @@ impl Session {
     /// End the session: every later request gets "closed", even on a connection still open.
     pub fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+        let held = self.state().refused.flush();
+        if held > 0 {
+            log::debug!("tugboat: {held} more requests refused before closing");
+        }
     }
 
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
     }
 
-    /// Time since the last request (or action in the panel).
+    /// Time since the last request (or action in the panel). A race's second phone counts only
+    /// when it steers, never for its check-ins.
     pub fn idle_for(&self) -> Duration {
         self.state().last_activity.elapsed()
+    }
+
+    /// Pretend nothing happened for `by` (tests of the idle timer).
+    #[cfg(test)]
+    pub fn age_activity(&self, by: Duration) {
+        let mut st = self.state();
+        if let Some(t) = st.last_activity.checked_sub(by) {
+            st.last_activity = t;
+        }
     }
 
     /// The advertised address changed: the next phone to scan the new code becomes the phone (it
@@ -368,6 +600,7 @@ impl Session {
         st.auth.unbind();
         st.phone = None;
         st.last_seen = None;
+        st.guest_seen = None;
         if let Some(p) = st.pad.as_mut() {
             p.rebound();
         }
@@ -397,7 +630,10 @@ impl Session {
 
     // --- Requests from the phone ---
 
-    /// Check a request's `Authorization` header. The first good one binds the session.
+    /// Check a request's `Authorization` header. The first one signed with the session's keys binds
+    /// the session. While a two-player game asks for two controllers, one second phone holding the
+    /// Player 2 code's keys may join too, for steering only: its page's check-in and its inputs,
+    /// nothing else (`auth.rs` refuses the guest keys for anything more).
     pub fn authorize(
         &self,
         header: Option<&str>,
@@ -409,8 +645,29 @@ impl Session {
             return Err(ApiError::Closed);
         }
         let mut st = self.state();
-        let result = st.auth.check(&self.keys, header, method, path);
+        let duo = st.pad.as_ref().is_some_and(|p| p.players() == 2);
+        let policy = GuestPolicy {
+            may_join: duo,
+            // Exactly two phones at a time; one that has gone quiet makes room for the next.
+            may_replace: st.guest_seen.is_none_or(|t| t.elapsed() >= ACTIVE),
+        };
+        let result = st
+            .auth
+            .check_with(&self.keys, &self.guest_keys, header, method, path, policy);
         match result {
+            Ok(ok) if ok.guest => {
+                // Not Tugboat's activity: a guest page left open checks in every couple of seconds
+                // forever, and would keep Tugboat open with nobody using it. Only its steering
+                // counts (`pad_input`).
+                st.guest_seen = Some(Instant::now());
+                if ok.first {
+                    log::info!("tugboat: second controller joined");
+                    if let Some(p) = st.pad.as_mut() {
+                        p.rebound_seat(SECOND);
+                    }
+                }
+                Ok(ok)
+            }
             Ok(ok) => {
                 let was_active = st.last_seen.is_some_and(|t| t.elapsed() < ACTIVE);
                 st.last_seen = Some(Instant::now());
@@ -426,10 +683,20 @@ impl Session {
                 Ok(ok)
             }
             Err(why) => {
-                // Logged without anything from the request itself.
-                log::debug!("tugboat: request refused ({why:?})");
+                // Logged without anything from the request itself, and at most once a minute
+                // with a count: any device on the network can send refused requests endlessly.
+                if let Some(held) = st.refused.note(Instant::now()) {
+                    log::debug!("tugboat: request refused ({why:?}){}", super::tally::more(held));
+                }
                 Err(match why {
+                    // Tugboat's own code on a second phone during a race: it wants the Player 2 code.
+                    Rejected::OtherDevice if policy.may_join => ApiError::Player2Code,
                     Rejected::OtherDevice => ApiError::InUse,
+                    // The Player 2 code asking for files, text or the clipboard.
+                    Rejected::GuestOnly => ApiError::InUse,
+                    // The race already has its two phones.
+                    Rejected::GuestTaken => ApiError::Full,
+                    Rejected::NoGuestSeat => ApiError::NoRace,
                     Rejected::Replayed => ApiError::Stale,
                     Rejected::Malformed | Rejected::BadMac => ApiError::Unauthorized,
                 })
@@ -437,10 +704,20 @@ impl Session {
         }
     }
 
+    /// The keys a request was signed with: the guest's for a two-player game's second phone, the
+    /// session's for everything else. Its body and its reply are sealed with the same ones.
+    fn keys_for(&self, req: &Authorized) -> &Keys {
+        if req.guest {
+            &self.guest_keys
+        } else {
+            &self.keys
+        }
+    }
+
     /// Open a sealed JSON request body.
     pub fn open_json<T: for<'de> Deserialize<'de>>(&self, req: &Authorized, body: &[u8]) -> Result<T, ApiError> {
         let plain = self
-            .keys
+            .keys_for(req)
             .open(&ad::request(&req.client, req.seq), body)
             .ok_or_else(|| {
                 log::debug!("tugboat: request body failed to decrypt");
@@ -452,97 +729,223 @@ impl Session {
     /// Seal a JSON response to `req`.
     pub fn seal_json<T: Serialize>(&self, req: &Authorized, value: &T) -> Vec<u8> {
         let json = serde_json::to_vec(value).expect("reply types always serialize");
-        self.keys.seal(&ad::response(&req.client, req.seq), &json)
+        self.keys_for(req).seal(&ad::response(&req.client, req.seq), &json)
     }
 
-    /// What the page polls for: files on offer and the latest text from the PC.
-    pub fn page_state(&self) -> StateReply {
-        let st = self.state();
+    /// What the page polls for: files on offer, the latest text from the PC, and the PC's clipboard
+    /// while it's on its way. A two-player game's second phone only hears whether there's a race to
+    /// steer in: it returns before the clipboard is looked at (`for_page` counts as serving it), and
+    /// never gets the clipboard, files or text.
+    pub fn page_state(&self, req: &Authorized) -> StateReply {
+        let mut st = self.state();
+        if req.guest {
+            return StateReply {
+                offers: Vec::new(),
+                text: None,
+                game: st.pad.as_ref().is_some_and(|p| p.open_for(SECOND)),
+                clip: None,
+                guest: true,
+            };
+        }
+        let clip = match st.clip.for_page(Instant::now()) {
+            Some((id, Payload::Text(t))) => Some((id, Some(t.clone()), None)),
+            Some((id, Payload::Image { offer })) => Some((id, None, Some(offer.clone()))),
+            None => None,
+        };
+        let clip = clip.map(|(id, text, offer)| PageClip {
+            id,
+            text,
+            image: offer.and_then(|o| st.offers.iter().find(|x| x.id == o).map(page_offer)),
+        });
         StateReply {
-            offers: st
-                .offers
-                .iter()
-                .map(|o| PageOffer {
-                    id: o.id.clone(),
-                    name: o.name.clone(),
-                    size: o.size,
-                    chunk_size: OFFER_CHUNK,
-                    chunks: offer_plan(o.size).chunks(),
-                    mime: o.mime.to_string(),
-                })
-                .collect(),
+            offers: st.offers.iter().filter(|o| !o.clip).map(page_offer).collect(),
             text: st.pc_text.as_ref().map(|t| PageText {
                 id: t.id,
                 text: t.text.clone(),
             }),
             game: st.pad.is_some(),
+            clip,
+            guest: false,
         }
+    }
+
+    // --- The shared clipboard (see clip.rs) ---
+
+    /// Send the PC's clipboard to the phone (one press, one clipboard). A picture becomes an offer
+    /// held in memory, fetched like any file; a newer press replaces one the phone hasn't taken.
+    /// Returns the clipboard's id.
+    pub fn send_clip(&self, prepared: Prepared) -> u32 {
+        let (payload, offer, kind, size) = match prepared {
+            Prepared::Text(t) => {
+                let chars = t.chars().count();
+                (Payload::Text(t), None, "text", chars)
+            }
+            Prepared::Image(png) => {
+                let size = png.len();
+                let offer = Offer {
+                    id: crypto::new_id(),
+                    name: clip::IMAGE_NAME.to_string(),
+                    size: size as u64,
+                    source: Source::Memory(Arc::new(png)),
+                    mime: "image/png",
+                    downloads: 0,
+                    clip: true,
+                };
+                (
+                    Payload::Image {
+                        offer: offer.id.clone(),
+                    },
+                    Some(offer),
+                    "picture",
+                    size,
+                )
+            }
+        };
+        let mut st = self.state();
+        st.last_activity = Instant::now();
+        st.offers.extend(offer);
+        let id = st.next_clip_id;
+        st.next_clip_id += 1;
+        if let Some(old) = st.clip.send(id, payload, Instant::now(), now_ms()) {
+            withdraw(&mut st, &old);
+        }
+        drop(st);
+        // Lengths only, never the contents.
+        let unit = if kind == "text" { "chars" } else { "bytes" };
+        log::info!("tugboat: clipboard sent to the phone ({kind}, {size} {unit})");
+        self.sink.changed(true);
+        id
+    }
+
+    /// The phone says it has clipboard `id`. A picture counts only once the phone really fetched
+    /// all of it. The PC lets go of the contents straight away.
+    pub fn clip_ack(&self, id: u32) -> Result<(), ApiError> {
+        let mut st = self.state();
+        if let Some((waiting, offer)) = st.clip.waiting_offer() {
+            if waiting == id && st.offers.iter().any(|o| o.id == offer && o.downloads == 0) {
+                return Err(ApiError::Incomplete);
+            }
+        }
+        match st.clip.ack(id, Instant::now()) {
+            Ack::Delivered { kind, freed } => {
+                if let Some(offer) = freed {
+                    st.offers.retain(|o| o.id != offer);
+                }
+                drop(st);
+                log::info!("tugboat: the phone has the clipboard");
+                self.sink.clip(ClipEvent {
+                    kind,
+                    state: ClipState::Delivered,
+                });
+                self.sink.changed(true);
+                Ok(())
+            }
+            Ack::Already => Ok(()),
+            Ack::Unknown => Err(ApiError::NotFound),
+        }
+    }
+
+    /// Whether the clipboard waiting for the phone has been handed to its page yet.
+    #[cfg(test)]
+    pub fn clip_served(&self) -> bool {
+        self.state().clip.served()
+    }
+
+    /// Drop a clipboard no phone took within two minutes (called every couple of seconds).
+    pub fn clip_tick(&self) {
+        let mut st = self.state();
+        let Some(dropped) = st.clip.tick(Instant::now()) else {
+            return;
+        };
+        withdraw(&mut st, &dropped);
+        drop(st);
+        log::info!("tugboat: no phone took the clipboard in time, dropped it");
+        self.sink.clip(ClipEvent {
+            kind: dropped.kind(),
+            state: ClipState::Expired,
+        });
+        self.sink.changed(true);
     }
 
     // --- The game controller (see pad.rs) ---
 
-    /// tug's game wants a controller: the phone page offers it at its next check-in. Returns
-    /// whether the channel was newly opened (the caller starts watching it).
-    pub fn pad_open(&self) -> bool {
+    /// tug's game wants a controller (`players` 1), or two (a two-player game, 2): the phone pages
+    /// offer it at their next check-in. Asking again changes how many; going back to one lets the
+    /// second phone go (the game hears it's gone). Returns whether the channel was newly opened
+    /// (the caller starts watching it).
+    pub fn pad_open(&self, players: u8) -> bool {
         let mut st = self.state();
         st.last_activity = Instant::now();
-        if st.pad.is_some() {
+        if let Some(p) = st.pad.as_mut() {
+            let was = p.players();
+            let gone = p.set_players(players, Instant::now());
+            let now = p.players();
+            drop(st);
+            if was != now {
+                log::info!("tugboat: game controller for {now} player(s)");
+            }
+            if let Some(e) = gone {
+                self.sink.pad(e);
+            }
             return false;
         }
-        st.pad = Some(Pad::new(Instant::now()));
+        st.pad = Some(Pad::new(Instant::now(), players));
         drop(st);
-        log::info!("tugboat: game controller on");
+        log::info!("tugboat: game controller on ({} player(s))", players.clamp(1, 2));
         true
     }
 
-    /// The game closed: inputs are refused from now on, and the game hears the phone has gone.
+    /// The game closed: inputs are refused from now on, and the game hears the phones have gone.
     pub fn pad_close(&self) {
         let was = self.state().pad.take();
         if let Some(p) = was {
             log::info!("tugboat: game controller off");
-            // The latency probe, once per session (never per input).
-            if let Some(s) = p.latency().summary() {
-                log::debug!("tugboat: controller touch-to-PC latency: {s}");
-            }
-            if p.connected() {
-                self.sink.pad(PadEvent {
-                    connected: false,
-                    steer: 0.0,
-                    boost: false,
-                });
+            for seat in [FIRST, SECOND] {
+                // The latency probe, once per session (never per input).
+                if let Some(s) = p.latency(seat).summary() {
+                    log::debug!("tugboat: controller {seat} touch-to-PC latency: {s}");
+                }
+                if p.connected(seat) {
+                    self.sink.pad(PadEvent::gone(seat));
+                }
             }
         }
     }
 
-    /// Check the channel is open and the phone isn't flooding it, before its body is read.
-    pub fn pad_admit(&self) -> Result<(), ApiError> {
+    /// Check the channel is open for this phone and it isn't flooding it, before its body is read.
+    pub fn pad_admit(&self, req: &Authorized) -> Result<(), ApiError> {
+        let seat = seat_of(req);
         let mut st = self.state();
-        let pad = st.pad.as_mut().ok_or(ApiError::NoGame)?;
-        if pad.admit(Instant::now()) {
+        let pad = st.pad.as_mut().filter(|p| p.open_for(seat)).ok_or(ApiError::NoGame)?;
+        if pad.admit(seat, Instant::now()) {
             Ok(())
         } else {
             Err(ApiError::Busy)
         }
     }
 
-    /// One controller input from the bound phone: open it, check it, and hand the game the new
-    /// state. It can't do anything else: no files, no clipboard, no panel.
+    /// One controller input from the bound phone (or a two-player game's second phone): open it,
+    /// check it, and hand the game the new state. It can't do anything else: no files, no
+    /// clipboard, no panel.
     pub fn pad_input(&self, req: &Authorized, body: &[u8]) -> Result<PadReply, ApiError> {
         if body.len() > pad::MAX_BODY {
             return Err(ApiError::TooBig);
         }
         let plain = self
-            .keys
+            .keys_for(req)
             .open(&ad::request(&req.client, req.seq), body)
             .ok_or(ApiError::BadRequest)?;
         let decoded = pad::decode(&plain).map_err(|e| match e {
             pad::PadError::TooBig => ApiError::TooBig,
             pad::PadError::Malformed | pad::PadError::OutOfRange => ApiError::BadRequest,
         })?;
+        let seat = seat_of(req);
         let mut st = self.state();
-        let pad = st.pad.as_mut().ok_or(ApiError::NoGame)?;
-        let event = pad.input(req.seq, decoded, Instant::now());
-        let reply = pad.reply();
+        let pad = st.pad.as_mut().filter(|p| p.open_for(seat)).ok_or(ApiError::NoGame)?;
+        let event = pad.input(seat, req.seq, decoded, Instant::now());
+        let reply = pad.reply(seat);
+        // A guest's steering is someone playing (its check-ins aren't: see `authorize`).
+        st.last_activity = Instant::now();
         drop(st);
         if let Some(e) = event {
             self.sink.pad(e);
@@ -556,31 +959,44 @@ impl Session {
         let Some(pad) = st.pad.as_mut() else {
             return false;
         };
-        let event = pad.tick(Instant::now());
+        let events = pad.tick(Instant::now());
         drop(st);
-        if let Some(e) = event {
-            log::info!("tugboat: game controller went quiet");
+        for e in events {
+            log::info!("tugboat: game controller {} went quiet", e.seat);
             self.sink.pad(e);
         }
         true
     }
 
-    /// What the next replies tell the phone (paused, and hits so far for a buzz).
-    pub fn pad_feedback(&self, reply: PadReply) {
+    /// What the next replies tell a phone (paused, its hits so far for a buzz, its player).
+    pub fn pad_feedback(&self, seat: SeatNo, reply: PadReply) {
         if let Some(p) = self.state().pad.as_mut() {
-            p.set_reply(reply);
+            p.set_reply(seat, reply);
         }
     }
 
-    /// The latency probe's summary so far (for the manual test harness).
+    /// The latency probe's summary so far for the first phone (for the manual test harness).
     #[cfg(test)]
     pub fn pad_latency(&self) -> Option<String> {
-        self.state().pad.as_ref().and_then(|p| p.latency().summary())
+        self.state().pad.as_ref().and_then(|p| p.latency(FIRST).summary())
     }
 
-    /// The controller as the game should show it now.
-    pub fn pad_event(&self) -> Option<PadEvent> {
-        self.state().pad.as_ref().map(Pad::event)
+    /// A two-player game is asking for a second phone: the Player 2 code is worth showing.
+    pub fn wants_guest(&self) -> bool {
+        self.state().pad.as_ref().is_some_and(|p| p.players() == 2)
+    }
+
+    /// The controllers as the game should show them now (seat 2 only in a two-player game).
+    pub fn pad_events(&self) -> Vec<PadEvent> {
+        let st = self.state();
+        let Some(p) = st.pad.as_ref() else {
+            return Vec::new();
+        };
+        [FIRST, SECOND]
+            .into_iter()
+            .filter(|s| p.open_for(*s))
+            .map(|s| p.event(s))
+            .collect()
     }
 
     /// Start (or resume) receiving a file. Idempotent: asking again for the same id reports
@@ -613,11 +1029,13 @@ impl Session {
             PlanError::BadChunkSize => ApiError::BadRequest,
         })?;
         fs::create_dir_all(&self.incoming).map_err(|e| io_err("create the incoming folder", e))?;
-        fs::create_dir_all(&self.folder).map_err(|e| io_err("create the Tugboat folder", e))?;
+        // Before a byte is sent: can tug save there at all? (Controlled folder access refuses
+        // Pictures to apps it doesn't know, and would otherwise fail only once the file is in.)
+        let folder = self.save_folder_checked()?;
         // Enough room for this file, with a margin. Files already arriving reserved theirs when
         // they started (set_len below), so the free figure already allows for them.
         // Both where it's written and where it ends up (they differ if Pictures is on another drive).
-        for dir in [&self.incoming, &self.folder] {
+        for dir in [&self.incoming, &folder] {
             if let Some(free) = free_space(dir) {
                 if free < req.size + DISK_MARGIN {
                     return Err(ApiError::NoSpace);
@@ -753,7 +1171,8 @@ impl Session {
     /// rename that over the reserved name, so the real name never holds a half-copied file (and a
     /// crash mid-copy leaves only a temp file, swept on the next start).
     fn copy_across_drives(&self, id: &str, part: &Path, final_path: &Path) -> std::io::Result<()> {
-        let tmp = self.folder.join(format!("{TEMP_PREFIX}{id}{TEMP_SUFFIX}"));
+        let dir = final_path.parent().unwrap_or(&self.folder);
+        let tmp = dir.join(format!("{TEMP_PREFIX}{id}{TEMP_SUFFIX}"));
         let copied = fs::copy(part, &tmp).and_then(|_| {
             set_hidden(&tmp, true);
             fs::rename(&tmp, final_path)
@@ -776,9 +1195,10 @@ impl Session {
     /// Claim a free name in the Tugboat folder by creating it empty (`create_new` fails if another
     /// file got there first, so nothing is ever overwritten).
     fn reserve_name(&self, name: &str) -> Result<(String, PathBuf), ApiError> {
+        let folder = self.save_folder();
         for _ in 0..20 {
-            let candidate = names::unique(name, |n| self.folder.join(n).exists());
-            let path = self.folder.join(&candidate);
+            let candidate = names::unique(name, |n| folder.join(n).exists());
+            let path = folder.join(&candidate);
             match OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(_) => return Ok((candidate, path)),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -806,21 +1226,40 @@ impl Session {
 
     /// One sealed chunk of a file on offer.
     pub fn read_offer_chunk(&self, id: &str, index: u32) -> Result<Vec<u8>, ApiError> {
-        let (path, size) = {
+        enum Src {
+            File(PathBuf),
+            Memory(Arc<Vec<u8>>),
+        }
+        let (from, size) = {
             let st = self.state();
             let o = st.offers.iter().find(|o| o.id == id).ok_or(ApiError::NotFound)?;
-            (o.path.clone(), o.size)
+            let from = match &o.source {
+                Source::File(p) => Src::File(p.clone()),
+                Source::Memory(b) => Src::Memory(b.clone()),
+            };
+            (from, o.size)
         };
         let plan = offer_plan(size);
         let len = plan.expected_len(index).ok_or(ApiError::BadRequest)?;
-        let mut f = File::open(&path).map_err(|_| ApiError::Changed)?;
-        if f.metadata().map(|m| m.len()).ok() != Some(size) {
-            return Err(ApiError::Changed);
-        }
-        let mut buf = vec![0u8; len];
-        f.seek(SeekFrom::Start(plan.offset(index)))
-            .and_then(|_| f.read_exact(&mut buf))
-            .map_err(|_| ApiError::Changed)?;
+        let start = plan.offset(index);
+        let buf = match from {
+            Src::Memory(bytes) => usize::try_from(start)
+                .ok()
+                .and_then(|s| bytes.get(s..s + len))
+                .ok_or(ApiError::BadRequest)?
+                .to_vec(),
+            Src::File(path) => {
+                let mut f = File::open(&path).map_err(|_| ApiError::Changed)?;
+                if f.metadata().map(|m| m.len()).ok() != Some(size) {
+                    return Err(ApiError::Changed);
+                }
+                let mut buf = vec![0u8; len];
+                f.seek(SeekFrom::Start(start))
+                    .and_then(|_| f.read_exact(&mut buf))
+                    .map_err(|_| ApiError::Changed)?;
+                buf
+            }
+        };
         let sealed = self.keys.seal(&ad::down(id, index), &buf);
         let mut st = self.state();
         let urgent = if index + 1 == plan.chunks() {
@@ -905,22 +1344,26 @@ impl Session {
                 });
                 continue;
             }
-            added.push(Offer {
-                id: crypto::new_id(),
-                mime: mime_for(&name),
-                name,
-                path: path.clone(),
-                size: meta.len(),
-                downloads: 0,
-            });
+            added.push((
+                path,
+                Offer {
+                    id: crypto::new_id(),
+                    mime: mime_for(&name),
+                    name,
+                    source: Source::File(path.clone()),
+                    size: meta.len(),
+                    downloads: 0,
+                    clip: false,
+                },
+            ));
         }
         let mut st = self.state();
         st.last_activity = Instant::now();
-        for o in added {
-            if st.offers.iter().any(|x| x.path == o.path) {
+        for (path, o) in added {
+            if st.offers.iter().any(|x| x.is_file(path)) {
                 continue;
             }
-            if st.offers.len() >= MAX_OFFERS {
+            if st.offers.iter().filter(|x| !x.clip).count() >= MAX_OFFERS {
                 skipped.push(Skipped {
                     name: o.name,
                     reason: SkipReason::TooMany,
@@ -1000,6 +1443,7 @@ impl Session {
             outgoing: st
                 .offers
                 .iter()
+                .filter(|o| !o.clip)
                 .map(|o| TugboatOffer {
                     id: o.id.clone(),
                     name: o.name.clone(),
@@ -1011,6 +1455,7 @@ impl Session {
             sent_text: st.pc_text.as_ref().map(|t| t.text.clone()),
             sending: st.downloading.values().any(|t| t.elapsed() < MOVING),
             receiving: st.last_upload.is_some_and(|t| t.elapsed() < MOVING),
+            clip: st.clip.status(),
         }
     }
 
@@ -1025,6 +1470,35 @@ impl Session {
     }
 }
 
+fn page_offer(o: &Offer) -> PageOffer {
+    PageOffer {
+        id: o.id.clone(),
+        name: o.name.clone(),
+        size: o.size,
+        chunk_size: OFFER_CHUNK,
+        chunks: offer_plan(o.size).chunks(),
+        mime: o.mime.to_string(),
+    }
+}
+
+/// A clipboard is done with (delivered, dropped or replaced): withdraw its picture, if it had one,
+/// so its bytes go too.
+fn withdraw(st: &mut State, payload: &Payload) {
+    if let Some(offer) = payload.offer() {
+        st.offers.retain(|o| o.id != offer);
+        st.downloading.remove(offer);
+    }
+}
+
+/// Which seat a controller request is for: the session's own phone is seat 1, the guest seat 2.
+fn seat_of(req: &Authorized) -> SeatNo {
+    if req.guest {
+        SECOND
+    } else {
+        FIRST
+    }
+}
+
 fn offer_plan(size: u64) -> Plan {
     // Offers are capped at 1 GB, far inside what a plan allows.
     Plan {
@@ -1033,9 +1507,11 @@ fn offer_plan(size: u64) -> Plan {
     }
 }
 
-/// Temp files from a cross-drive save are `~$<id>.tugboat.tmp` in the Tugboat folder.
-const TEMP_PREFIX: &str = "~$";
-const TEMP_SUFFIX: &str = ".tugboat.tmp";
+/// Temp files from a cross-drive save are `~$<id>.tugboat.tmp` in the Tugboat folder (and the
+/// write check's probe files `~$probe-<id>.tugboat.tmp`). `names::sanitize` never gives a file
+/// from the phone a name of this shape, so the sweep can't delete one.
+pub const TEMP_PREFIX: &str = "~$";
+pub const TEMP_SUFFIX: &str = ".tugboat.tmp";
 
 /// Remove temp files a crash left mid-copy in the Tugboat folder (cross-drive saves).
 pub fn sweep_temp(folder: &Path) {
@@ -1186,6 +1662,162 @@ mod tests {
         assert_eq!(ApiError::Closed.status(), 410);
         assert_eq!(ApiError::InUse.status(), 403);
         assert_eq!(ApiError::NoSpace.code(), "no-space");
+    }
+
+    #[test]
+    fn only_the_folder_check_says_windows_security_blocked_it() {
+        // Access denied while saving (antivirus holding the file mid-rename) or in tug's incoming
+        // folder is a plain I/O failure, not "Windows Security blocked tug".
+        let denied = || std::io::Error::from_raw_os_error(ACCESS_DENIED);
+        assert_eq!(io_err("save a received file", denied()), ApiError::Io);
+        assert_eq!(io_err("create the incoming folder", denied()), ApiError::Io);
+        // The folder check is where it means Controlled folder access.
+        assert_eq!(Probe::from(Err(denied())), Probe::Denied);
+        assert_eq!(choose_folder(Probe::from(Err(denied())), None), Err(ApiError::Blocked));
+        assert_eq!(ApiError::Blocked.code(), "blocked");
+        let full = std::io::Error::from_raw_os_error(DISK_FULL);
+        assert_eq!(io_err("write a chunk", full), ApiError::NoSpace);
+        let other = std::io::Error::from_raw_os_error(32); // sharing violation
+        assert_eq!(io_err("write a chunk", other), ApiError::Io);
+    }
+
+    #[test]
+    fn chooses_the_fallback_only_when_windows_refuses() {
+        assert_eq!(choose_folder(Probe::Ok, None), Ok(None));
+        assert_eq!(
+            choose_folder(Probe::Denied, Some(Probe::Ok)),
+            Ok(Some(FolderBlock::Fallback))
+        );
+        assert_eq!(
+            choose_folder(Probe::Denied, Some(Probe::Denied)),
+            Err(ApiError::Blocked)
+        );
+        assert_eq!(choose_folder(Probe::Denied, None), Err(ApiError::Blocked));
+        // Another failure isn't papered over by quietly saving somewhere else.
+        assert_eq!(
+            choose_folder(Probe::Failed(ApiError::NoSpace), None),
+            Err(ApiError::NoSpace)
+        );
+    }
+
+    struct Quiet;
+    impl Sink for Quiet {
+        fn changed(&self, _urgent: bool) {}
+        fn text(&self, _text: &str) {}
+        fn pad(&self, _event: PadEvent) {}
+        fn clip(&self, _event: ClipEvent) {}
+    }
+
+    fn temp(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("tugboat-{tag}-{}", crypto::new_id()))
+    }
+
+    fn upload(size: u64) -> UploadRequest {
+        UploadRequest {
+            name: "IMG_0001.HEIC".into(),
+            size,
+            chunk_size: 64 * 1024,
+        }
+    }
+
+    /// Windows Security stand-in: refuses `blocked` folders with ERROR_ACCESS_DENIED, else the
+    /// real check.
+    fn refusing(blocked: Vec<PathBuf>) -> impl Fn(&Path) -> std::io::Result<()> + Send + Sync {
+        move |dir: &Path| {
+            if blocked.iter().any(|b| b == dir) {
+                Err(std::io::Error::from_raw_os_error(ACCESS_DENIED))
+            } else {
+                probe_folder(dir)
+            }
+        }
+    }
+
+    #[test]
+    fn a_blocked_pictures_folder_falls_back_to_downloads() {
+        let (pictures, downloads, incoming) = (temp("pictures"), temp("downloads"), temp("incoming"));
+        let s = Session::new(&[7u8; 32], pictures.clone(), incoming.clone(), Arc::new(Quiet))
+            .with_fallback(Some(downloads.clone()))
+            .with_prober(refusing(vec![pictures.clone()]));
+        assert_eq!(s.folder_block(), None);
+        s.begin_upload("fileAAAAAAAAAAAAAAAAAA", &upload(10)).unwrap();
+        assert_eq!(s.folder_block(), Some(FolderBlock::Fallback));
+        assert_eq!(s.save_folder(), downloads);
+        // The probe left nothing behind.
+        assert_eq!(fs::read_dir(&downloads).unwrap().count(), 0);
+        for dir in [&downloads, &incoming] {
+            let _ = fs::remove_dir_all(dir);
+        }
+        assert!(!pictures.exists());
+    }
+
+    #[test]
+    fn blocked_both_ways_says_so_before_anything_is_sent_and_checks_again() {
+        let (pictures, downloads, incoming) = (temp("pictures"), temp("downloads"), temp("incoming"));
+        let allowed = Arc::new(AtomicBool::new(false));
+        let gate = allowed.clone();
+        let refuse = refusing(vec![pictures.clone(), downloads.clone()]);
+        let s = Session::new(&[7u8; 32], pictures.clone(), incoming.clone(), Arc::new(Quiet))
+            .with_fallback(Some(downloads.clone()))
+            .with_prober(move |dir: &Path| {
+                if gate.load(Ordering::SeqCst) {
+                    probe_folder(dir)
+                } else {
+                    refuse(dir)
+                }
+            });
+        let id = "fileBBBBBBBBBBBBBBBBBB";
+        assert_eq!(s.begin_upload(id, &upload(10)), Err(ApiError::Blocked));
+        assert_eq!(s.folder_block(), Some(FolderBlock::Blocked));
+        assert_eq!(s.uploads_in_progress(), 0, "nothing was set up for the file");
+        // The person allows tug in Windows Security and tries again: no need to reopen Tugboat.
+        allowed.store(true, Ordering::SeqCst);
+        s.begin_upload(id, &upload(10)).unwrap();
+        assert_eq!(s.folder_block(), None);
+        assert_eq!(s.save_folder(), pictures);
+        for dir in [&pictures, &incoming] {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn a_guests_check_ins_dont_keep_tugboat_open_but_its_steering_does() {
+        use super::super::auth::header;
+        let secret = [5u8; 16];
+        let incoming = temp("incoming");
+        let s = Session::new(&secret, temp("pictures"), incoming.clone(), Arc::new(Quiet));
+        let guest = Keys::derive(&crypto::guest_secret(&secret));
+        let owner = Keys::derive(&secret);
+        let client = "guestAAAAAAAAAAAAAAAAA";
+        let mut seq = 1_790_000_000_000u64 * 1024;
+        let mut sign = |keys: &Keys, who: &str, method: &str, path: &str| {
+            seq += 1;
+            (header(keys, who, seq, method, path), seq)
+        };
+        s.pad_open(2);
+        // Small enough that the clock (time since boot) can always go back this far.
+        let quiet = Duration::from_secs(30);
+        s.age_activity(quiet);
+        // An abandoned guest page keeps checking in: Tugboat still counts as idle.
+        for _ in 0..3 {
+            let (h, _) = sign(&guest, client, "GET", "/api/state");
+            let ok = s.authorize(Some(&h), "GET", "/api/state", None).unwrap();
+            assert!(ok.guest);
+            assert!(s.page_state(&ok).guest);
+        }
+        assert!(s.idle_for() >= quiet, "a guest's check-ins aren't activity");
+        // Its steering is.
+        let (h, n) = sign(&guest, client, "POST", "/api/pad");
+        let ok = s.authorize(Some(&h), "POST", "/api/pad", None).unwrap();
+        assert!(s.idle_for() >= quiet, "authorizing alone isn't activity");
+        let body = guest.seal(&ad::request(client, n), br#"{"steer":10,"boost":false}"#);
+        s.pad_input(&ok, &body).unwrap();
+        assert!(s.idle_for() < Duration::from_secs(5));
+        // The owner's check-ins still count, as before.
+        s.age_activity(quiet);
+        let (h, _) = sign(&owner, "ownerBBBBBBBBBBBBBBBBB", "GET", "/api/state");
+        s.authorize(Some(&h), "GET", "/api/state", None).unwrap();
+        assert!(s.idle_for() < Duration::from_secs(5));
+        let _ = fs::remove_dir_all(&incoming);
     }
 
     #[test]

@@ -6,6 +6,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
+import { isCurrent } from "../lib/ordering";
 import type { DevToolsConfirm, DevToolsStatus } from "../types/protocol";
 
 export const useDevToolsStore = defineStore("devtools", () => {
@@ -18,7 +19,12 @@ export const useDevToolsStore = defineStore("devtools", () => {
   let teardown: UnlistenFn[] = [];
   let started = false;
 
+  /**
+   * Take a status from an event or a command's answer, unless it's older than the one shown (they
+   * can arrive in either order; lib/ordering), so an older copy can't bring back a closed card.
+   */
   function apply(s: DevToolsStatus) {
+    if (!isCurrent(s, status.value)) return;
     status.value = s;
     confirm.value = s.pending;
   }

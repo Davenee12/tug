@@ -18,14 +18,17 @@ import {
 } from "lucide-vue-next";
 import { useTugStore, type SpotifyTab } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
+import { createLoader, latestOnly } from "../lib/latest";
 import {
   idFromUri,
+  mergeSearchPage,
   playlistDetail,
   SPOTIFY_BETA_LABEL,
   SPOTIFY_BETA_NOTE,
   SPOTIFY_RECONNECT,
   uniqueAlbums,
   uniqueSongs,
+  type SearchKind,
 } from "../lib/spotify";
 import { api, errorMessage } from "../lib/ipc";
 import type { PickerRow } from "../lib/playback";
@@ -64,17 +67,23 @@ type Detail =
   | { kind: "album"; title: string; subtitle: string; art: string | null; uri: string; tracks: SpotifyTrack[] }
   | { kind: "artist"; title: string; art: string | null; uri: string; albums: SpotifyAlbum[] }
   | { kind: "playlist"; title: string; subtitle: string; art: string | null; uri: string; tracks: SpotifyTrack[] };
-const detail = ref<Detail | null>(null);
-const detailLoading = ref(false);
+// Newest wins (lib/latest): opening album A then B shows B even if A answers last, and Back (or a
+// tab) leaves at once, even mid-load, without the late answer bringing the view back.
+const {
+  value: detail,
+  loading: detailLoading,
+  load: loadDetail,
+  clear: closeDetail,
+} = createLoader<Detail>((e) => tug.notify("error", errorMessage(e)));
+/** A detail view is up (or on its way): it covers the tabs, and Back leaves it. */
+const inDetail = computed(() => detail.value !== null || detailLoading.value);
 
 async function openAlbum(uri: string) {
   const id = idFromUri(uri);
   if (!id) return;
-  detailLoading.value = true;
-  detail.value = null;
-  try {
+  await loadDetail(async () => {
     const d = await api.spotifyAlbum(id);
-    detail.value = {
+    return {
       kind: "album",
       title: d.album.name,
       subtitle: [d.album.artists, d.album.year].filter(Boolean).join(" · "),
@@ -82,26 +91,16 @@ async function openAlbum(uri: string) {
       uri: d.album.uri,
       tracks: d.tracks,
     };
-  } catch (e) {
-    tug.notify("error", errorMessage(e));
-  } finally {
-    detailLoading.value = false;
-  }
+  });
 }
 
 async function openArtist(uri: string) {
   const id = idFromUri(uri);
   if (!id) return;
-  detailLoading.value = true;
-  detail.value = null;
-  try {
+  await loadDetail(async () => {
     const d = await api.spotifyArtist(id);
-    detail.value = { kind: "artist", title: d.artist.name, art: d.artist.imageUrl, uri: d.artist.uri, albums: d.albums };
-  } catch (e) {
-    tug.notify("error", errorMessage(e));
-  } finally {
-    detailLoading.value = false;
-  }
+    return { kind: "artist", title: d.artist.name, art: d.artist.imageUrl, uri: d.artist.uri, albums: d.albums };
+  });
 }
 
 async function openPlaylist(p: SpotifyPlaylist) {
@@ -110,31 +109,38 @@ async function openPlaylist(p: SpotifyPlaylist) {
     void tug.playContext(p.uri, p.name);
     return;
   }
-  detailLoading.value = true;
-  detail.value = null;
-  try {
+  await loadDetail(async () => {
     const tracks = await api.spotifyPlaylistItems(p.id);
-    detail.value = { kind: "playlist", title: p.name, subtitle: playlistDetail(p), art: p.imageUrl, uri: p.uri, tracks };
-  } catch (e) {
-    tug.notify("error", errorMessage(e));
-  } finally {
-    detailLoading.value = false;
-  }
+    return { kind: "playlist", title: p.name, subtitle: playlistDetail(p), art: p.imageUrl, uri: p.uri, tracks };
+  });
+}
+
+function showTab(t: SpotifyTab) {
+  closeDetail();
+  tab.value = t;
 }
 
 // --- Search -------------------------------------------------------------------------------
 const query = ref("");
 const results = ref<SpotifySearch | null>(null);
+/** The query the results on screen are for ("Show more" pages that, not what's typed since). */
+let resultsQuery = "";
 const searching = ref(false);
 const offsets = ref({ tracks: 0, albums: 0, artists: 0, playlists: 0 });
 const selected = ref(0); // keyboard selection among track results
 let searchTimer: number | undefined;
-let searchSeq = 0;
+// Every search and every "Show more" is a request; only the newest search's answers land.
+const searchRuns = latestOnly();
+let searchLive = () => false;
+/** The "Show more" in flight, if any: the buttons wait for it (a double click mustn't skip a page). */
+const loadingMore = ref<SearchKind | null>(null);
 
 watch(query, (q) => {
   window.clearTimeout(searchTimer);
   selected.value = 0;
   if (!q.trim()) {
+    searchRuns.cancel();
+    loadingMore.value = null;
     results.value = null;
     searching.value = false;
     return;
@@ -146,35 +152,44 @@ watch(query, (q) => {
 async function runSearch() {
   const q = query.value.trim();
   if (!q) return;
-  const mine = ++searchSeq;
+  const live = (searchLive = searchRuns.begin());
+  loadingMore.value = null;
   searching.value = true;
   try {
     const r = await api.spotifySearch(q, ["track", "album", "artist", "playlist"], 0);
-    if (mine !== searchSeq) return;
+    if (!live()) return;
     // Offsets count what Spotify returned (so "Show more" pages on), not what's shown.
     offsets.value = { tracks: r.tracks.length, albums: r.albums.length, artists: r.artists.length, playlists: r.playlists.length };
     results.value = { ...r, tracks: uniqueSongs(r.tracks), albums: uniqueAlbums(r.albums) };
+    resultsQuery = q;
   } catch (e) {
-    if (mine === searchSeq) tug.notify("error", errorMessage(e));
+    if (live()) tug.notify("error", errorMessage(e));
   } finally {
-    if (mine === searchSeq) searching.value = false;
+    if (live()) searching.value = false;
   }
 }
 
-async function showMore(kind: "track" | "album" | "artist" | "playlist") {
-  const q = query.value.trim();
-  if (!q || !results.value) return;
-  const key = `${kind}s` as "tracks" | "albums" | "artists" | "playlists";
+const SEARCH_TYPE: Record<SearchKind, "track" | "album" | "artist" | "playlist"> = {
+  tracks: "track",
+  albums: "album",
+  artists: "artist",
+  playlists: "playlist",
+};
+
+async function showMore(key: SearchKind) {
+  if (!results.value || !resultsQuery || loadingMore.value) return;
+  // Belongs to the search on screen: a newer search (or clearing the box) drops it.
+  const live = searchLive;
+  loadingMore.value = key;
   try {
-    const r = await api.spotifySearch(q, [kind], offsets.value[key]);
-    const cur = results.value;
-    const fresh =
-      key === "tracks" ? uniqueSongs(r.tracks, cur.tracks) : key === "albums" ? uniqueAlbums(r.albums, cur.albums) : r[key];
-    cur[key] = [...cur[key], ...(fresh as never[])] as never;
-    cur.more[key] = r.more[key];
+    const r = await api.spotifySearch(resultsQuery, [SEARCH_TYPE[key]], offsets.value[key]);
+    if (!live() || !results.value) return;
+    results.value = mergeSearchPage(results.value, key, r);
     offsets.value[key] += r[key].length;
   } catch (e) {
-    tug.notify("error", errorMessage(e));
+    if (live()) tug.notify("error", errorMessage(e));
+  } finally {
+    if (live()) loadingMore.value = null;
   }
 }
 
@@ -201,15 +216,20 @@ const topTracks = ref<SpotifyTrack[] | null>(null);
 const topArtists = ref<SpotifyArtist[] | null>(null);
 const queue = ref<{ currentlyPlaying: SpotifyTrack | null; queue: SpotifyTrack[] } | null>(null);
 const tabLoading = ref(false);
+// One tab load counts at a time, the newest: switching the range twice (or Songs/Artists, or the
+// tab) while one is out can't land the older answer last or end the newer one's spinner.
+const tabRuns = latestOnly();
 
 async function load<T>(setter: (v: T) => void, call: () => Promise<T>) {
+  const live = tabRuns.begin();
   tabLoading.value = true;
   try {
-    setter(await call());
+    const v = await call();
+    if (live()) setter(v);
   } catch (e) {
-    tug.notify("error", errorMessage(e));
+    if (live()) tug.notify("error", errorMessage(e));
   } finally {
-    tabLoading.value = false;
+    if (live()) tabLoading.value = false;
   }
 }
 
@@ -238,7 +258,10 @@ async function loadQueue() {
 watch(
   [tab, topMode, topRange],
   ([t]) => {
-    detail.value = null;
+    closeDetail();
+    // Whatever the last tab was loading no longer counts.
+    tabRuns.cancel();
+    tabLoading.value = false;
     // Connected before tug asked for these scopes: the tab shows how to fix it, not an error.
     if ((t === "recent" || t === "top") && tug.spotify.needsReconnect) return;
     if (t === "recent") void loadRecent();
@@ -281,7 +304,7 @@ async function pickDevice(row: PickerRow) {
 }
 
 const TAB_BTN = "flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-medium";
-const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-medium text-accent-teal active:bg-surface-card";
+const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-medium text-accent-teal active:bg-surface-card disabled:text-muted-soft";
 </script>
 
 <template>
@@ -339,8 +362,9 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
         <button
           v-for="t in TABS"
           :key="t.id"
-          :class="[TAB_BTN, tab === t.id && !detail ? 'bg-ink text-on-dark' : 'text-muted active:bg-surface-card']"
-          @click="detail = null; tab = t.id"
+          :class="[TAB_BTN, tab === t.id && !inDetail ? 'bg-ink text-on-dark' : 'text-muted active:bg-surface-card']"
+          :aria-current="tab === t.id && !inDetail ? 'page' : undefined"
+          @click="showTab(t.id)"
         >
           <component :is="t.icon" :size="14" />
           {{ t.label }}
@@ -349,8 +373,8 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
 
       <div class="min-h-0 flex-1 overflow-y-auto">
         <!-- Detail view (album / artist / playlist songs) -->
-        <section v-if="detail || detailLoading" class="p-2">
-          <button class="mb-1 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] text-muted active:bg-surface-card" @click="detail = null">
+        <section v-if="inDetail" class="p-2">
+          <button class="mb-1 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] text-muted active:bg-surface-card" @click="closeDetail">
             <ArrowLeft :size="15" /> Back
           </button>
           <div v-if="detailLoading" class="flex items-center justify-center gap-2 py-12 text-[13px] text-muted">
@@ -444,7 +468,9 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
                 >
                   <SpotifyTrackRow :track="t" :owned-playlists="ownedPlaylists" @open-album="openAlbum" @open-artist="openArtist" />
                 </div>
-                <button v-if="results.more.tracks" :class="SHOW_MORE" @click="showMore('track')">Show more songs</button>
+                <button v-if="results.more.tracks" :class="SHOW_MORE" :disabled="loadingMore !== null" @click="showMore('tracks')">
+                  {{ loadingMore === "tracks" ? "Loading…" : "Show more songs" }}
+                </button>
               </template>
 
               <!-- Artists -->
@@ -460,7 +486,9 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
                   <span class="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{{ a.name }}</span>
                   <User :size="15" class="shrink-0 text-muted-soft" />
                 </button>
-                <button v-if="results.more.artists" :class="SHOW_MORE" @click="showMore('artist')">Show more artists</button>
+                <button v-if="results.more.artists" :class="SHOW_MORE" :disabled="loadingMore !== null" @click="showMore('artists')">
+                  {{ loadingMore === "artists" ? "Loading…" : "Show more artists" }}
+                </button>
               </template>
 
               <!-- Albums -->
@@ -479,7 +507,9 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
                   </span>
                   <Disc3 :size="15" class="shrink-0 text-muted-soft" />
                 </button>
-                <button v-if="results.more.albums" :class="SHOW_MORE" @click="showMore('album')">Show more albums</button>
+                <button v-if="results.more.albums" :class="SHOW_MORE" :disabled="loadingMore !== null" @click="showMore('albums')">
+                  {{ loadingMore === "albums" ? "Loading…" : "Show more albums" }}
+                </button>
               </template>
 
               <!-- Playlists -->
@@ -497,7 +527,9 @@ const SHOW_MORE = "mx-3 my-1 rounded-lg px-3 py-2 text-left text-[13px] font-med
                     <span class="block truncate text-[12px] text-muted-soft">{{ playlistDetail(p) }}</span>
                   </span>
                 </button>
-                <button v-if="results.more.playlists" :class="SHOW_MORE" @click="showMore('playlist')">Show more playlists</button>
+                <button v-if="results.more.playlists" :class="SHOW_MORE" :disabled="loadingMore !== null" @click="showMore('playlists')">
+                  {{ loadingMore === "playlists" ? "Loading…" : "Show more playlists" }}
+                </button>
               </template>
             </template>
           </div>

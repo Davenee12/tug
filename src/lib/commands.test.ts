@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseActions, type ActionContext, type Person } from "./commands";
+import { afterPaletteSend, parseActions, type ActionContext, type Person } from "./commands";
 import type { PhoneNotification } from "../types/protocol";
 
 const people: Person[] = [
@@ -79,6 +79,16 @@ describe("parseActions", () => {
     expect(parseActions("dropbox invoice", people)).toEqual([]);
   });
 
+  it("sends the clipboard to the phone from its words, and only those", () => {
+    const send = [{ kind: "send-clipboard", label: "Send clipboard to iPhone" }];
+    for (const words of ["clipboard", "Send clipboard", "send clipboard to iPhone", "paste to phone", "copy to iphone", "share clipboard"]) {
+      expect(parseActions(words, people)).toEqual(send);
+    }
+    // A search that merely mentions the clipboard stays a search, and "send to phone" is still Tugboat.
+    expect(parseActions("clipboard manager", people)).toEqual([]);
+    expect(parseActions("send to phone", people)).toEqual([{ kind: "open", target: "tugboat", label: "Tugboat" }]);
+  });
+
   it("opens Tugboat Run from its words, never from 'play', and only while games are shown", () => {
     const games = { showGames: true };
     for (const words of ["game", "Games", "tugboat run", "boat game"]) {
@@ -147,6 +157,15 @@ describe("parseActions", () => {
     expect(parseActions("dnd on", people, { ...ctx, doNotDisturb: true })[0]).toMatchObject({ enabled: true });
     expect(parseActions("do not disturb off", people, ctx)[0]).toMatchObject({ enabled: false });
     expect(parseActions("dndx", people, ctx)).toEqual([]);
+  });
+
+  it("toggles voice typing and shows the resulting state", () => {
+    expect(parseActions("voice typing", people, ctx)[0]).toMatchObject({ kind: "voice", enabled: true, label: "Turn on voice typing" });
+    expect(parseActions("Voice", people, ctx)[0]).toMatchObject({ kind: "voice", enabled: true });
+    expect(parseActions("dictation", people, { ...ctx, voiceTyping: true })[0]).toMatchObject({ enabled: false, label: "Turn off voice typing" });
+    expect(parseActions("voice typing on", people, { ...ctx, voiceTyping: true })[0]).toMatchObject({ enabled: true });
+    expect(parseActions("voice to code off", people, ctx)[0]).toMatchObject({ enabled: false });
+    expect(parseActions("voice typing please", people, ctx).some((a) => a.kind === "voice")).toBe(false);
   });
 
   it("jumps the feed to an app's notifications, matched on its name", () => {
@@ -262,5 +281,16 @@ describe("spotify search actions", () => {
   it("opens the Spotify panel, only when connected", () => {
     expect(parseActions("spotify", people, on)[0]).toMatchObject({ kind: "open", target: "spotify" });
     expect(parseActions("spotify", people, {})).toEqual([]);
+  });
+});
+
+describe("afterPaletteSend", () => {
+  it("opens the conversation when the text was recorded, even as Not sent", () => {
+    expect(afterPaletteSend("sent")).toBe("open-conversation");
+    expect(afterPaletteSend("failed")).toBe("open-conversation");
+    expect(afterPaletteSend("unconfirmed")).toBe("open-conversation");
+  });
+  it("brings the typed text back when nothing was recorded", () => {
+    expect(afterPaletteSend("error")).toBe("restore-query");
   });
 });

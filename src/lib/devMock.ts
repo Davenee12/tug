@@ -14,7 +14,8 @@
 //   http://localhost:1420/?latephone  fresh install, no iPhone discoverable yet: it appears a rescan
 //                                     later (the find step re-inquires every ~15 s)
 //   http://localhost:1420/?forgotten  the iPhone forgot this PC while Windows still holds the bond:
-//                                     the "Your iPhone has forgotten this PC" notice, with Remove
+//                                     "iPhone forgot this PC" in the sidebar and "Your iPhone forgot
+//                                     this PC" with Pair again (back to the find step)
 //   http://localhost:1420/?nudge      connected, notifications on, but texts/contacts off: the Feed's
 //                                     dismissible "Get more from tug" nudge
 //   http://localhost:1420/?whatsnew   the "What's new" card on launch, previewing the newest entry in
@@ -40,9 +41,15 @@
 //   http://localhost:1420/?tugboatwait   the Tugboat panel showing its QR code, no phone yet ("Can't
 //                                     connect?" help appears after 30 s)
 //   http://localhost:1420/?tugboatnonet  the Tugboat panel with no network a phone could use
+//   http://localhost:1420/?tugboatclip   "Send clipboard to iPhone" with no phone yet: the code with its
+//                                     clipboard hint, a phone scanning it 4 s later and taking the clipboard
+//                                     (with ?tugboat, Ctrl+K "send clipboard" arrives in about a second)
 //   http://localhost:1420/?game       Tugboat Run open, ready to start
 //   http://localhost:1420/?gamephone  Tugboat Run with a phone controller: the code, a phone scanning
 //                                     it, then the phone starting the run and steering
+//   http://localhost:1420/?game2p     Tugboat Run, two players with two phones (add &p2drop: Player 2's
+//                                     phone goes quiet mid-race). Any game URL takes &weather=rain,
+//                                     snow, night, windy, storm or off for the daily challenge
 //   http://localhost:1420/?devtools   Settings › Developer tools, switched on, with two connected tools
 //   http://localhost:1420/?devconfirm the "wants to text" confirmation card an AI tool's send_text shows
 //   http://localhost:1420/?codefill   code fill: a bank's code arrives 1.5 s after load (as a notification and
@@ -57,11 +64,14 @@
 //   http://localhost:1420/?pcaudiofail   "Play on this PC" times out: the calm sentence and Try again
 //   http://localhost:1420/?pcaudiodrop   it turns on, then the phone drops it 6 s later: Reconnect
 //   http://localhost:1420/?pcaudioold    Windows too old for it: no button, Settings says so
+//   http://localhost:1420/?sharing    the screen is being shared: the Feed and Messages blur texts and names under
+//                                     the "Previews hidden" banner (Show anyway). &presenting for a slide show,
+//                                     &stop to have sharing end after 10 s (the banner clears), &call for a call
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { RELEASE_NOTES } from "./whatsNew";
-import type { CallRecord, CodeHotkeyStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
+import type { CallRecord, CodeHotkeyStatus, VoiceStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -78,6 +88,10 @@ const model = params.has("nomodel") ? null : params.get("model") || "iPhone16,2"
 // card read the release being built. ?whatsnew also fakes an older last-seen version (below).
 const whatsNewPreview = params.has("whatsnew");
 const appVersion = RELEASE_NOTES[0].version;
+// ?quickaction=new-message (tugboat, copy-code, game, settings): tug was started from that taskbar
+// jump-list task, so it's waiting when the UI first takes quick actions. &again repeats it 4 s
+// later, as a click on the task while tug is running would.
+const quickActionWaiting: string[] = params.get("quickaction") ? [String(params.get("quickaction"))] : [];
 const now = Date.now();
 const min = 60_000;
 
@@ -172,12 +186,14 @@ const status: DeviceStatus = noPhone
       connection: "disconnected",
       battery: null,
       services: { notifications: false, media: false, battery: false, messages: false },
-      lastError: "Your iPhone isn't accepting this PC's pairing",
+      lastError: "iPhone is out of range or not connected",
       lastErrorAt: now - min,
       pairingStale: true,
       awaitingPhoneAllow: false,
       awaitingUnlock: false,
       reconnecting: false,
+      // As seen on hardware: the link coming and going had already made it "away".
+      away: true,
       messagesError: null,
       contactsError: null,
       contactsShared: false,
@@ -364,6 +380,9 @@ const messages: SmsMessage[] = noPhone
       // so the dev view shows the blue/green tinting when the phone distinguishes them.
       sms("in", "are you coming tonight?", 40),
       sms("out", "yeah! leaving soon", 38),
+      // Photos arrive as words over MAP ("Attachment: 2 Photos"); the thread shows photo chips.
+      sms("in", "Attachment: 2 Photos", 6),
+      sms("in", "the view from up here\nAttachment: 1 Photo", 5),
       sms("in", "did you see the photos I sent?", 4),
       sms("in", "omw, 10 mins 🚗", 1),
       // The spammer's earlier text, read over MAP: same conversation as their notification.
@@ -641,14 +660,19 @@ const dropFolder = "C:\\Users\\Dave\\Pictures\\Tugboat";
 const dropOn = params.has("tugboat") || params.has("drop");
 const dropWait = params.has("tugboatwait") || params.has("dropwait");
 const dropNoNet = params.has("tugboatnonet") || params.has("dropnonet");
+const dropClip = params.has("tugboatclip");
 const dropState: TugboatStatus = {
   phase: "off",
   url: null,
   address: null,
   qr: null,
+  guestUrl: null,
+  guestQr: null,
   phone: null,
   phoneActive: false,
   folder: dropFolder,
+  // `&cfa`: Windows Security's Controlled folder access refused Pictures (files go to Downloads).
+  folderBlock: params.has("cfa") ? "fallback" : null,
   incoming: [],
   outgoing: [],
   texts: [],
@@ -656,6 +680,7 @@ const dropState: TugboatStatus = {
   sending: false,
   receiving: false,
   ended: null,
+  clip: null,
 };
 const sendDrop = () => void emit("tugboat-status", structuredClone(dropState));
 function startDrop() {
@@ -696,6 +721,39 @@ function startDrop() {
     sendDrop();
   }, 1000);
 }
+/** "Send clipboard to iPhone": waits for the phone (one scans the code after 4 s if none is there),
+ * which takes it a second later. Only then does it say the phone has it, like the real one. */
+let clipTimers: number[] = [];
+function sendClipboardMock() {
+  startDrop();
+  clipTimers.forEach((t) => window.clearTimeout(t));
+  clipTimers = [];
+  const id = (dropState.clip?.id ?? 0) + 1;
+  dropState.clip = { id, kind: "text", state: "waiting", expiresAt: Date.now() + 120_000 };
+  const deliver = () => {
+    if (dropState.clip?.id !== id || dropState.phase === "off") return;
+    dropState.clip = { ...dropState.clip, state: "delivered" };
+    sendDrop();
+    void emit("tugboat-clip", { kind: "text", state: "delivered" });
+  };
+  if (dropState.phase === "connected" && dropState.phoneActive) clipTimers.push(window.setTimeout(deliver, 1200));
+  else {
+    clipTimers.push(
+      window.setTimeout(() => {
+        if (dropState.phase === "off") return;
+        Object.assign(dropState, { phase: "connected", phone: "iPhone", phoneActive: true });
+        sendDrop();
+      }, 4000),
+      window.setTimeout(deliver, 5000),
+    );
+  }
+}
+if (dropClip) {
+  setTimeout(async () => {
+    const { useTugboatStore } = await import("../stores/tugboat");
+    void useTugboatStore().sendClipboard();
+  }, 400);
+}
 if (dropOn || dropWait || dropNoNet) {
   setTimeout(async () => {
     const { useTugboatStore } = await import("../stores/tugboat");
@@ -703,52 +761,119 @@ if (dropOn || dropWait || dropNoNet) {
   }, 400);
 }
 
-// --- Tugboat Run (?game, ?gamephone) ---
+// --- Tugboat Run (?game, ?gamephone, ?game2p) ---
 // ?game opens the game. ?gamephone also opens "Use your phone as a controller": Tugboat shows its
 // code, a phone scans it 1.5 s later, its controller connects a second after that, presses Boost
 // (which starts the run) and steers in slow S-bends until the game closes the channel.
+// ?game2p opens Two players and adds phones: the first phone joins at 1.5 s, the second at 3 s,
+// the first presses Boost (starting the race) and both steer; add &p2drop and the second phone goes
+// quiet 10 s into the race ("Player 2 disconnected — waiting…").
+// The daily challenge's weather: &weather=rain, snow, night, windy, storm or off (a made-up forecast
+// for the preview only, so the start screen and the water can be checked without real weather).
 let padOpen = false;
-let padScript: number | undefined;
+let padPlayers = 1;
+const padScripts: number[] = [];
 const padTimers: number[] = [];
-function gamePadOpen() {
-  if (padOpen) return;
+const twoPhones = params.has("game2p");
+function phoneScript(seat: 1 | 2, phase: number, boosts: boolean) {
+  const t0 = performance.now();
+  let tick = 0;
+  padScripts.push(
+    window.setInterval(() => {
+      const t = (performance.now() - t0) / 1000;
+      tick++;
+      // Boost for a moment at the start (starts the run) and every few seconds after.
+      const boost = boosts ? tick % 30 < 3 : tick % 40 === 20;
+      void emit("game-pad", { seat, connected: true, steer: Math.round(Math.sin(t * 1.3 + phase) * 80) / 100, boost });
+    }, 100),
+  );
+}
+/** The Player 2 code, while a two-player game asks for a second phone (made-up guest secret). */
+function showGuestCode(on: boolean) {
+  const live = on && dropState.url !== null;
+  Object.assign(dropState, {
+    guestUrl: live ? "http://192.168.1.20:53211/#g.Vqxkt-aRKhZYKPCr8ybaRQ" : null,
+    guestQr: live ? mockQr(29) : null,
+  });
+}
+function gamePadOpen(players: number) {
+  padPlayers = players;
+  if (padOpen) {
+    showGuestCode(players === 2);
+    sendDrop();
+    return;
+  }
   padOpen = true;
   startDrop();
+  showGuestCode(players === 2);
   sendDrop();
-  if (!params.has("gamephone")) return;
+  if (!params.has("gamephone") && !twoPhones) return;
   padTimers.push(
     window.setTimeout(() => {
       Object.assign(dropState, { phase: "connected", phone: "iPhone", phoneActive: true });
       sendDrop();
     }, 1500),
-    window.setTimeout(() => {
-      const t0 = performance.now();
-      let tick = 0;
-      padScript = window.setInterval(() => {
-        const t = (performance.now() - t0) / 1000;
-        tick++;
-        // Boost for a moment at the start (starts the run) and every few seconds after.
-        const boost = tick % 30 < 3;
-        void emit("game-pad", { connected: true, steer: Math.round(Math.sin(t * 1.3) * 80) / 100, boost });
-      }, 100);
-    }, 2500),
+    window.setTimeout(() => phoneScript(1, 0, !twoPhones), 2500),
   );
+  if (!twoPhones) return;
+  padTimers.push(
+    window.setTimeout(() => {
+      if (padPlayers === 2) phoneScript(2, 2, false);
+    }, 3000),
+    // The first phone starts the race once both are in.
+    window.setTimeout(() => void emit("game-pad", { seat: 1, connected: true, steer: 0, boost: true }), 4200),
+  );
+  if (params.has("p2drop")) {
+    padTimers.push(
+      window.setTimeout(() => {
+        window.clearInterval(padScripts.pop());
+        void emit("game-pad", { seat: 2, connected: false, steer: 0, boost: false });
+      }, 14_000),
+    );
+  }
 }
 function gamePadClose() {
   padOpen = false;
+  showGuestCode(false);
+  sendDrop();
   for (const t of padTimers.splice(0)) window.clearTimeout(t);
-  window.clearInterval(padScript);
-  padScript = undefined;
-  void emit("game-pad", { connected: false, steer: 0, boost: false });
+  for (const s of padScripts.splice(0)) window.clearInterval(s);
+  void emit("game-pad", { seat: 1, connected: false, steer: 0, boost: false });
+  void emit("game-pad", { seat: 2, connected: false, steer: 0, boost: false });
 }
-if (params.has("game") || params.has("gamephone")) {
+const mockWeather = params.get("weather");
+if (mockWeather && mockWeather !== "off") {
+  const place = { name: "Springfield", latitude: 44.05, longitude: -123.02 };
+  settings["ui.weather"] = JSON.stringify(place);
+  const kind: Record<string, { code: number; day: boolean; wind: number; windDir: number }> = {
+    rain: { code: 63, day: true, wind: 19, windDir: 250 },
+    storm: { code: 95, day: true, wind: 45, windDir: 230 },
+    snow: { code: 73, day: true, wind: 8, windDir: 20 },
+    night: { code: 1, day: false, wind: 6, windDir: 180 },
+    windy: { code: 2, day: true, wind: 38, windDir: 270 },
+  };
+  const k = kind[mockWeather] ?? kind.rain;
+  const hour = new Date().toISOString().slice(0, 13);
+  const forecast = {
+    fetchedAt: Date.now(),
+    now: { time: `${hour}:00`, temp: 9, feels: 7, code: k.code, day: k.day, wind: k.wind, windDir: k.windDir, humidity: 80 },
+    hours: [],
+    days: [],
+  };
+  // The weather store paints from its cache and skips the download while it's fresh.
+  localStorage.setItem("tug.weather.v1", JSON.stringify({ place, forecast }));
+} else if (mockWeather === "off") {
+  settings["ui.weather"] = "off";
+}
+if (params.has("game") || params.has("gamephone") || twoPhones) {
   setTimeout(async () => {
     const { useGameStore } = await import("../stores/game");
     await useGameStore().show();
-    if (!params.has("gamephone")) return;
+    if (!params.has("gamephone") && !twoPhones) return;
+    const click = (text: string) => Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes(text))?.click();
     setTimeout(() => {
-      const button = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes("Use your phone as a controller"));
-      button?.click();
+      if (twoPhones) click("Two players");
+      setTimeout(() => click(twoPhones ? "Use phones as controllers" : "Use your phone as a controller"), 100);
     }, 300);
   }, 400);
 }
@@ -842,7 +967,30 @@ function setPcAudio(on: boolean): PcAudioStatus {
   return sendPc();
 }
 // The type-the-code shortcut as the backend registered it at startup (default on, Ctrl+Shift+V).
+// ?sharing: what share_privacy reports while the screen is shared (or a slide show, &presenting).
+const shareState: ShareState = params.has("sharing")
+  ? { active: true, reason: params.has("presenting") ? "presenting" : "sharing" }
+  : { active: false, reason: null };
+
 const codeHotkey: CodeHotkeyStatus = { state: params.has("hotkeybusy") ? "inUse" : "on", keys: "ctrl+shift+v" };
+// Voice typing (voice/ in Rust): off by default; `/?voice` starts it on (`&micblocked`,
+// `&nospeech` for a PC without a speech language, `&voicebusy` for a taken shortcut).
+const voiceOn = params.has("voice");
+const voiceLanguages = params.has("nospeech")
+  ? []
+  : [
+      { id: "409", name: "English (US)" },
+      { id: "809", name: "English (UK)" },
+      { id: "407", name: "German (Germany)" },
+    ];
+const voice: VoiceStatus = {
+  enabled: voiceOn,
+  state: !voiceOn ? "off" : params.has("nospeech") ? "unavailable" : params.has("voicebusy") ? "inUse" : "on",
+  keys: "ctrl+alt+space",
+  language: voiceLanguages[0]?.id ?? null,
+  languages: [],
+  micBlocked: params.has("micblocked"),
+};
 
 mockIPC(
   (cmd, args) => {
@@ -861,7 +1009,7 @@ mockIPC(
       case "plugin:app|version":
         return appVersion;
       // Sync Contacts is read by asking the phone: ?contactsoff&flip turns it on at the next check
-      // ("Check again", or the window coming to the front), as if the switch had just been flipped.
+      // ("Check again"), as if the switch had just been flipped.
       case "check_switches":
         if (status.contactsOff && params.has("flip")) {
           Object.assign(status, { contactsOff: false, contactsShared: true });
@@ -869,7 +1017,11 @@ mockIPC(
         }
         return null;
       case "set_watching":
+      case "set_switches_visible":
+      case "warm_texts":
         return null;
+      case "screen_share_watch":
+        return settings["ui.hidePreviewsWhileSharing"] === "false" ? { active: false, reason: null } : { ...shareState };
       case "get_status":
         return status;
       case "get_now_playing":
@@ -960,7 +1112,7 @@ mockIPC(
       case "tugboat_status":
         return structuredClone(dropState);
       case "tugboat_stop":
-        Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null });
+        Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, guestUrl: null, guestQr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null, clip: null });
         return null;
       case "tugboat_pick_files": {
         startDrop();
@@ -980,11 +1132,16 @@ mockIPC(
         dropState.sentText = String(a.text ?? "") || null;
         sendDrop();
         return null;
+      case "tugboat_send_clipboard":
+        // The real one reads the Windows clipboard in Rust; the preview pretends it held some text.
+        sendClipboardMock();
+        sendDrop();
+        return structuredClone(dropState);
       case "tugboat_open_folder":
         console.log("[devMock] open Tugboat folder", a.path ?? dropFolder);
         return null;
       case "game_pad_open":
-        gamePadOpen();
+        gamePadOpen(Number(a.players ?? 1));
         return structuredClone(dropState);
       case "game_pad_close":
         gamePadClose();
@@ -1106,7 +1263,7 @@ mockIPC(
         return null;
       }
       case "forget_device":
-        // Start over / Remove: clear the device and drop back to the find step.
+        // Start over / Remove / Pair again: clear the device and drop back to the find step.
         status.device = null;
         status.connection = "noDevice";
         status.pairingStale = false;
@@ -1152,11 +1309,25 @@ mockIPC(
         return null;
       case "code_hotkey_status":
         return { ...codeHotkey };
+      // Taskbar quick actions (quick_actions/ in Rust): taking them empties the queue.
+      case "take_quick_actions":
+        return quickActionWaiting.splice(0);
       case "set_code_hotkey": {
         const keys = String(a.keys);
         const taken = params.has("hotkeybusy") && keys === "ctrl+shift+v";
         Object.assign(codeHotkey, { keys, state: !a.enabled ? "off" : taken ? "inUse" : "on" });
         return { ...codeHotkey };
+      }
+      case "voice_status":
+        if (a.languages) voice.languages = voiceLanguages;
+        return { ...voice };
+      case "set_voice_typing": {
+        const keys = String(a.keys);
+        const lang = voiceLanguages.find((l) => l.id === a.language)?.id ?? voiceLanguages[0]?.id ?? null;
+        const taken = params.has("voicebusy") && keys === "ctrl+alt+space";
+        const state = !a.enabled ? "off" : lang === null ? "unavailable" : taken ? "inUse" : "on";
+        Object.assign(voice, { enabled: Boolean(a.enabled), keys, language: lang, languages: voiceLanguages, state });
+        return { ...voice };
       }
       // Windows pop-ups don't exist in a browser; log what tug would have shown.
       case "show_toast":
@@ -1293,6 +1464,14 @@ if (setup && params.has("btoff")) {
   }, 20000);
 }
 
+// ?sharing&stop: sharing ends 10 s in, and the banner and blur must go with it.
+if (params.has("sharing") && params.has("stop")) {
+  setTimeout(() => {
+    Object.assign(shareState, { active: false, reason: null });
+    void emit("screen-share", { ...shareState });
+  }, 10000);
+}
+
 if (params.has("pairing")) {
   setTimeout(() => void emit("pairing-request", { deviceName: "Jordan's iPhone", pin: "482 913", confirmOnPhone: false }), 600);
 }
@@ -1349,6 +1528,13 @@ if (params.has("call")) {
     history.unshift(missed);
     void emit("notification", missed);
   }, 31500);
+}
+
+if (params.get("quickaction") && params.has("again")) {
+  setTimeout(() => {
+    quickActionWaiting.push(String(params.get("quickaction")));
+    void emit("quick-action", null);
+  }, 4000);
 }
 
 // ?codefill: a verification code arrives as an ANCS notification and as a MAP text (as a bank's

@@ -62,20 +62,22 @@ pub(super) fn tag_end(s: &str) -> Option<usize> {
     None
 }
 
-/// A listing `datetime` as phone-local ISO (`2026-10-04T18:30:12`). MAP allows a
-/// UTC offset after the local time (`20261004T183012-0400`) or a `Z`; the local
-/// part is kept either way, matching how notification times are stored. Anything
-/// else is `None`.
+/// A listing `datetime` as ISO. Usually phone-local (`2026-10-04T18:30:12`), as notification times
+/// are stored. MAP allows a UTC offset after the local time (`20261004T183012-0400`): the local
+/// part is kept. A trailing `Z` means the time itself is UTC, not local, so it keeps its `Z`
+/// (`2026-10-04T18:30:12Z`), as call times do (`map::calls`); read without it, a UTC time was taken
+/// for the PC's local time and the text landed hours off. Anything else is `None`.
 pub fn datetime_to_iso(s: &str) -> Option<String> {
     let s = s.trim();
     let local = s.get(..15)?;
     let zone = &s[15..];
-    let zone_ok = match zone.as_bytes() {
-        [] | [b'Z'] => true,
-        [b'+' | b'-', rest @ ..] => rest.len() == 4 && rest.iter().all(u8::is_ascii_digit),
-        _ => false,
-    };
-    zone_ok.then(|| crate::ancs::ancs_date_to_iso(local)).flatten()
+    let iso = || crate::ancs::ancs_date_to_iso(local);
+    match zone.as_bytes() {
+        [] => iso(),
+        [b'Z'] => iso().map(|t| format!("{t}Z")),
+        [b'+' | b'-', rest @ ..] if rest.len() == 4 && rest.iter().all(u8::is_ascii_digit) => iso(),
+        _ => None,
+    }
 }
 
 /// `key="value"` / `key='value'` pairs, entity-decoded.
@@ -176,12 +178,17 @@ mod tests {
     }
 
     #[test]
-    fn datetimes_with_or_without_a_zone_keep_their_time() {
+    fn datetimes_keep_their_time_and_utc_keeps_its_z() {
         let local = Some("2026-10-04T18:30:12".to_string());
         assert_eq!(datetime_to_iso("20261004T183012"), local);
         assert_eq!(datetime_to_iso("20261004T183012-0400"), local);
         assert_eq!(datetime_to_iso("20261004T183012+0530"), local);
-        assert_eq!(datetime_to_iso("20261004T183012Z"), local);
+        // UTC is UTC: the Z stays, so it isn't read as the PC's local time.
+        assert_eq!(
+            datetime_to_iso("20261004T183012Z").as_deref(),
+            Some("2026-10-04T18:30:12Z")
+        );
+        assert_eq!(datetime_to_iso("20261004T1830xxZ"), None);
         assert_eq!(datetime_to_iso("20261004T183012-04"), None);
         assert_eq!(datetime_to_iso("20261004T1830"), None);
         assert_eq!(datetime_to_iso("2026-10-04 18:30"), None);

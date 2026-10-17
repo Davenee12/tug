@@ -71,8 +71,15 @@ pub fn phone_line(p: &PhoneStatus) -> String {
 }
 
 pub fn status_lines(s: &StatusResult) -> Vec<String> {
-    let mut out = vec![format!("tug {} is running.", s.version), phone_line(&s.phone)];
-    if let Some(np) = &s.phone.now_playing {
+    let mut out = vec![format!("tug {} is running.", s.version)];
+    match &s.phone {
+        Some(p) => out.push(phone_line(p)),
+        None => out.push(format!(
+            "iPhone: hidden (\"{}\" is off in tug › Settings › Developer tools).",
+            Permission::PhoneStatus.label()
+        )),
+    }
+    if let Some(np) = s.phone.as_ref().and_then(|p| p.now_playing.as_ref()) {
         let title = np.title.as_deref().map_or_else(|| "Unknown".into(), printable);
         let by = np
             .artist
@@ -266,14 +273,23 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         let lines = status_lines(&StatusResult {
             version: "0.5.12".into(),
-            permissions: perms,
-            phone: p,
+            permissions: perms.clone(),
+            phone: Some(p),
         });
         assert_eq!(lines[0], "tug 0.5.12 is running.");
         assert!(lines.iter().any(|l| l == "Now playing: Song — Band (paused)."));
         assert!(lines
             .iter()
             .any(|l| l.contains("Off: Verification codes, Music controls, Send texts.")));
+
+        // Phone status switched off: tug sends no phone, and the line says why.
+        let lines = status_lines(&StatusResult {
+            version: "0.5.12".into(),
+            permissions: perms,
+            phone: None,
+        });
+        assert!(lines[1].starts_with("iPhone: hidden ("), "{lines:?}");
+        assert!(!lines.iter().any(|l| l.starts_with("Now playing")));
     }
 
     #[test]

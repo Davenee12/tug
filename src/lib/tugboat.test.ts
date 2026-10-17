@@ -1,8 +1,177 @@
 import { describe, expect, it } from "vitest";
-import { TUGBOAT_OFF, HELP_AFTER_MS, capitalised, closeWarning, percent, showConnectHelp, skippedMessage, transferring } from "./tugboat";
-import type { TugboatOffer, TugboatStatus } from "../types/protocol";
+import {
+  TUGBOAT_OFF,
+  HELP_AFTER_MS,
+  capitalised,
+  clipEventMessage,
+  clipLine,
+  clipNeedsPanel,
+  clipPhone,
+  closeWarning,
+  codeCaption,
+  folderBlockMessage,
+  controllerChannel,
+  openUnlessAbandoned,
+  percent,
+  phoneTextMessage,
+  showConnectHelp,
+  skippedMessage,
+  timeLeft,
+  transferring,
+} from "./tugboat";
+import type { TugboatClip, TugboatOffer, TugboatStatus } from "../types/protocol";
+
+describe("openUnlessAbandoned (the game's phone controller)", () => {
+  it("keeps it open when it's still wanted", async () => {
+    const log: string[] = [];
+    const ok = await openUnlessAbandoned(
+      async () => void log.push("open"),
+      async () => void log.push("close"),
+      () => true,
+    );
+    expect(ok).toBe(true);
+    expect(log).toEqual(["open"]);
+  });
+
+  it("closes it once the open lands if the game closed while it was opening", async () => {
+    const log: string[] = [];
+    let wanted = true;
+    let finishOpen!: () => void;
+    const pending = openUnlessAbandoned(
+      () => new Promise<void>((r) => (finishOpen = () => (log.push("open"), r()))),
+      async () => void log.push("close"),
+      () => wanted,
+    );
+    wanted = false; // the game was closed mid-open
+    finishOpen();
+    expect(await pending).toBe(false);
+    expect(log).toEqual(["open", "close"]);
+  });
+
+  it("a failing close doesn't throw, and a failing open does", async () => {
+    await expect(openUnlessAbandoned(async () => {}, async () => Promise.reject("gone"), () => false)).resolves.toBe(false);
+    await expect(openUnlessAbandoned(async () => Promise.reject("no network"), async () => {}, () => true)).rejects.toBe("no network");
+  });
+});
+
+describe("controllerChannel (Tugboat Run's phone controller, one backend slot)", () => {
+  /** The backend: one channel, set by whichever open or close lands last; opens answer when told. */
+  function backend() {
+    const answers: Array<() => void> = [];
+    const b = {
+      open: false,
+      closes: 0,
+      io: {
+        open: () =>
+          new Promise<void>((resolve) =>
+            answers.push(() => {
+              b.open = true;
+              resolve();
+            }),
+          ),
+        close: async () => {
+          b.open = false;
+          b.closes++;
+        },
+      },
+      answer: (i: number) => answers[i](),
+    };
+    return b;
+  }
+
+  it("on, off, on with the first open answering last leaves the channel open", async () => {
+    const b = backend();
+    const ui = { on: false, closed: false };
+    const channel = controllerChannel(b.io, () => ui);
+    ui.on = true;
+    const first = channel.open();
+    ui.on = false; // switched off while it opened
+    await b.io.close();
+    ui.on = true; // and on again
+    const second = channel.open();
+    b.answer(1);
+    expect(await second).toBe(true);
+    b.answer(0); // the first open lands last: the controller is wanted, so it stays open
+    expect(await first).toBe(true);
+    expect(b.open).toBe(true);
+    expect(b.closes, "only the switch-off closed it").toBe(1);
+  });
+
+  it("closes it once the open lands if it was switched off, or the game closed, meanwhile", async () => {
+    for (const change of [{ on: false }, { closed: true }]) {
+      const b = backend();
+      const ui = { on: true, closed: false };
+      const opening = controllerChannel(b.io, () => ui).open();
+      Object.assign(ui, change);
+      b.answer(0);
+      expect(await opening).toBe(false);
+      expect(b.open).toBe(false);
+    }
+  });
+});
+
+describe("the shared clipboard", () => {
+  const clip = (state: TugboatClip["state"], kind: TugboatClip["kind"] = "text"): TugboatClip => ({ id: 1, kind, state, expiresAt: 200_000 });
+
+  it("opens the panel unless the phone's page is open right now", () => {
+    expect(clipNeedsPanel({ phase: "connected", phoneActive: true })).toBe(false);
+    expect(clipNeedsPanel({ phase: "connected", phoneActive: false })).toBe(true);
+    expect(clipNeedsPanel({ phase: "waiting", phoneActive: false })).toBe(true);
+    expect(clipNeedsPanel({ phase: "noNetwork", phoneActive: false })).toBe(true);
+  });
+
+  it("names the phone, or says iPhone before one has connected", () => {
+    expect(clipPhone(null)).toBe("iPhone");
+    expect(clipPhone("Android phone")).toBe("Android phone");
+  });
+
+  it("only says the clipboard is on the phone once the phone said so", () => {
+    expect(clipEventMessage({ kind: "text", state: "delivered" }, "iPhone")).toEqual({ kind: "info", text: "Your clipboard is on your iPhone" });
+    expect(clipEventMessage({ kind: "image", state: "delivered" }, null)?.text).toBe("The picture from your clipboard is on your iPhone");
+    expect(clipEventMessage({ kind: "text", state: "expired" }, "iPhone")).toEqual({
+      kind: "error",
+      text: "Your clipboard wasn't sent: Tugboat wasn't opened on your iPhone within 2 minutes.",
+    });
+    expect(clipEventMessage({ kind: "text", state: "waiting" }, "iPhone")).toBeNull();
+  });
+
+  it("describes the last clipboard in the panel, with the time left while it waits", () => {
+    const idle = { phone: "iPhone", phoneActive: false };
+    expect(clipLine(null, idle, 0)).toBeNull();
+    expect(clipLine(clip("waiting"), idle, 200_000 - 102_000)).toBe("Your clipboard is waiting for Tugboat to open on your iPhone · 1:42 left");
+    expect(clipLine(clip("waiting"), { phone: "iPhone", phoneActive: true }, 0)).toBe("Sending your clipboard to your iPhone…");
+    expect(clipLine(clip("delivered", "image"), idle, 0)).toBe("The picture from your clipboard is on your iPhone.");
+    expect(clipLine(clip("expired"), { phone: null, phoneActive: false }, 0)).toBe("Not sent: Tugboat wasn't opened on your iPhone within 2 minutes.");
+  });
+
+  it("counts down without going below zero", () => {
+    expect(timeLeft(120_000, 0)).toBe("2:00");
+    expect(timeLeft(120_000, 119_001)).toBe("0:01");
+    expect(timeLeft(120_000, 130_000)).toBe("0:00");
+  });
+
+  it("asks for a scan to receive a waiting clipboard", () => {
+    expect(codeCaption(clip("waiting"))).toBe("Scan to receive your clipboard on your iPhone.");
+    expect(codeCaption(clip("delivered"))).toMatch(/^Scan with your phone's camera/);
+    expect(codeCaption(null)).toMatch(/^Scan with your phone's camera/);
+  });
+
+  it("confirms text from the phone quietly, and only once it's on the clipboard", () => {
+    expect(phoneTextMessage(true, "iPhone")).toEqual({ kind: "info", text: "Copied from your iPhone" });
+    expect(phoneTextMessage(false, null)).toEqual({ kind: "error", text: "Text from your phone arrived, but couldn't go on the clipboard" });
+  });
+});
 
 describe("Tugboat panel decisions", () => {
+  it("says when Windows Security refused Pictures, and where files go instead", () => {
+    expect(folderBlockMessage({ folderBlock: null })).toBeNull();
+    expect(folderBlockMessage({ folderBlock: "fallback" })).toMatch(/going to Downloads\\Tugboat/);
+    expect(folderBlockMessage({ folderBlock: "blocked" })).toBe(
+      "Windows Security blocked tug from saving to Pictures. Allow tug under Controlled folder access.",
+    );
+    expect(TUGBOAT_OFF.folderBlock).toBeNull();
+  });
+
   it("offers connection help only after 30 s with no phone", () => {
     const waiting = { phase: "waiting" as const };
     expect(showConnectHelp(waiting, 1000, 1000 + HELP_AFTER_MS - 1)).toBe(false);

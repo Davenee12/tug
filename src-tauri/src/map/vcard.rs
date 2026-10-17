@@ -141,21 +141,7 @@ fn decode(value: &str, params: &[String]) -> String {
         .iter()
         .any(|p| p == "ENCODING=QUOTED-PRINTABLE" || p == "QUOTED-PRINTABLE");
     let text = if qp {
-        let bytes = value.as_bytes();
-        let mut out = Vec::with_capacity(bytes.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'=' && i + 2 < bytes.len() {
-                if let Ok(b) = u8::from_str_radix(&value[i + 1..i + 3], 16) {
-                    out.push(b);
-                    i += 3;
-                    continue;
-                }
-            }
-            out.push(bytes[i]);
-            i += 1;
-        }
-        String::from_utf8_lossy(&out).into_owned()
+        decode_quoted_printable(value)
     } else {
         value.to_string()
     };
@@ -163,6 +149,33 @@ fn decode(value: &str, params: &[String]) -> String {
         .replace("\\;", ";")
         .replace("\\n", " ")
         .replace("\\\\", "\\")
+}
+
+/// Quoted-printable, read as bytes: `=` and two hex digits is one byte; anything else (a lone `=`,
+/// `=` before a multi-byte character, a soft break) is kept as it came. Never slices the `&str`, so
+/// a phonebook entry like `=a€` can't land mid-character and panic (which aborts tug).
+fn decode_quoted_printable(value: &str) -> String {
+    fn hex(b: u8) -> Option<u8> {
+        (b as char).to_digit(16).map(|d| d as u8)
+    }
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'=' {
+            if let (Some(hi), Some(lo)) = (
+                bytes.get(i + 1).copied().and_then(hex),
+                bytes.get(i + 2).copied().and_then(hex),
+            ) {
+                out.push(hi << 4 | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
@@ -208,6 +221,21 @@ mod tests {
                 photo: None,
             }]
         );
+    }
+
+    #[test]
+    fn quoted_printable_never_splits_a_character() {
+        // `=` followed by a multi-byte character used to slice the string mid-character and panic,
+        // which aborts the whole app (panic = "abort").
+        assert_eq!(decode_quoted_printable("=a€"), "=a€");
+        assert_eq!(decode_quoted_printable("=€a"), "=€a");
+        assert_eq!(decode_quoted_printable("zoe =💜="), "zoe =💜=");
+        assert_eq!(decode_quoted_printable("M=C3=BCller="), "Müller=");
+        assert_eq!(decode_quoted_printable("=F0=9F=92=9C ok"), "💜 ok");
+        // Hex digits only: "=+1" isn't a byte.
+        assert_eq!(decode_quoted_printable("=+1=2"), "=+1=2");
+        let raw = "BEGIN:VCARD\nVERSION:2.1\nFN;ENCODING=QUOTED-PRINTABLE:Ana =a€ 💜=\nTEL:+13025550100\nEND:VCARD\n";
+        assert_eq!(parse(raw)[0].name, "Ana =a€ 💜=");
     }
 
     // "Hi" as JPEG-ish and PNG-ish bytes, base64-encoded, for the photo fixtures below.

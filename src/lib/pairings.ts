@@ -166,3 +166,41 @@ export function bondHint(s: DeviceStatus): BondHint {
   }
   return null;
 }
+
+/**
+ * Windows can drop an unpaired link nobody holds within seconds, which made a just-appeared iPhone
+ * vanish before it could be clicked. Setup holds a phone it has seen for a short grace after it
+ * drops out of discovery, so a blip doesn't pull the row out from under the cursor.
+ */
+export const CANDIDATE_GRACE_MS = 10_000;
+
+/** A phone setup has seen: `goneAt` is when it dropped out of discovery (null while it's there). */
+export interface HeldPhone<D> {
+  device: D;
+  goneAt: number | null;
+}
+
+/**
+ * The held phones after discovery reported `live`: those listed are held afresh, those that just
+ * dropped out start their grace now, and those whose grace is over are let go.
+ */
+export function holdPhones<D extends { id: string }>(
+  held: ReadonlyMap<string, HeldPhone<D>>,
+  live: readonly D[],
+  now: number,
+  graceMs = CANDIDATE_GRACE_MS,
+): Map<string, HeldPhone<D>> {
+  const next = new Map<string, HeldPhone<D>>();
+  for (const d of live) next.set(d.id, { device: d, goneAt: null });
+  for (const [id, h] of held) {
+    if (next.has(id)) continue;
+    const goneAt = h.goneAt ?? now;
+    if (now - goneAt < graceMs) next.set(id, { device: h.device, goneAt });
+  }
+  return next;
+}
+
+/** Phones that dropped out of discovery but are still within their grace at `now`. */
+export function phonesInGrace<D>(held: ReadonlyMap<string, HeldPhone<D>>, now: number, graceMs = CANDIDATE_GRACE_MS): D[] {
+  return [...held.values()].filter((h) => h.goneAt != null && now - h.goneAt < graceMs).map((h) => h.device);
+}

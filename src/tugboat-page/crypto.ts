@@ -11,6 +11,10 @@ import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 
 export const VERSION = "tugboat/1";
+/** HKDF info for the guest secret (the Player 2 code's): see `guestSecret`. */
+export const GUEST_LABEL = "tugboat guest v1";
+/** What starts the Player 2 code's `#` fragment, before the guest secret. */
+export const GUEST_PREFIX = "g.";
 export const NONCE_LEN = 24;
 export const TAG_LEN = 16;
 export const OVERHEAD = NONCE_LEN + TAG_LEN;
@@ -31,6 +35,15 @@ export function deriveKeys(secret: Uint8Array): Keys {
     enc: hkdf(sha256, secret, salt, utf8("encrypt"), 32),
     auth: hkdf(sha256, secret, salt, utf8("authenticate"), 32),
   };
+}
+
+/**
+ * The guest secret a session's Player 2 code carries: HKDF-SHA256 of the session secret (salt
+ * `VERSION`, info `GUEST_LABEL`), 16 bytes, one-way. The PC makes it; the page only ever gets it from
+ * the link, and derives its keys from it with `deriveKeys` like any secret. Here for the shared vector.
+ */
+export function guestSecret(secret: Uint8Array): Uint8Array {
+  return hkdf(sha256, secret, utf8(VERSION), utf8(GUEST_LABEL), 16);
 }
 
 /** `nonce || ciphertext || tag`, with a fresh random nonce unless one is given (test vector only). */

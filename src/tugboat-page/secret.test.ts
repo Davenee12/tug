@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { b64 } from "./crypto";
-import { LEGACY_SECRET_KEY, secretFromHash, takeSecret, type SecretEnv } from "./secret";
+import { LEGACY_SECRET_KEY, keyFromHash, takeKey, type SecretEnv } from "./secret";
 
 const SECRET = Uint8Array.from({ length: 16 }, (_, i) => i + 1);
 
@@ -27,20 +27,29 @@ function fakeEnv(hash: string, storage: "ok" | "blocked" | "throws" = "ok") {
 
 describe("the Tugboat secret", () => {
   it("is read from the link's fragment", () => {
-    expect(secretFromHash(`#${b64(SECRET)}`)).toEqual(SECRET);
-    expect(secretFromHash(b64(SECRET))).toEqual(SECRET);
+    expect(keyFromHash(`#${b64(SECRET)}`)).toEqual({ secret: SECRET, guest: false });
+    expect(keyFromHash(b64(SECRET))).toEqual({ secret: SECRET, guest: false });
   });
 
   it("must be exactly 16 bytes of base64url", () => {
-    expect(secretFromHash("")).toBeNull();
-    expect(secretFromHash("#")).toBeNull();
-    expect(secretFromHash(`#${b64(SECRET.subarray(0, 15))}`)).toBeNull();
-    expect(secretFromHash("#not base64!")).toBeNull();
+    expect(keyFromHash("")).toBeNull();
+    expect(keyFromHash("#")).toBeNull();
+    expect(keyFromHash(`#${b64(SECRET.subarray(0, 15))}`)).toBeNull();
+    expect(keyFromHash("#not base64!")).toBeNull();
+    expect(keyFromHash("#g.")).toBeNull();
+    expect(keyFromHash(`#g.${b64(SECRET.subarray(0, 15))}`)).toBeNull();
+  });
+
+  it("from a race's Player 2 code is the guest secret, and the page knows it's a guest", () => {
+    expect(keyFromHash(`#g.${b64(SECRET)}`)).toEqual({ secret: SECRET, guest: true });
+    const { env, urls } = fakeEnv(`#g.${b64(SECRET)}`);
+    expect(takeKey(env)).toEqual({ secret: SECRET, guest: true });
+    expect(urls, "taken out of the address bar like any secret").toEqual(["/"]);
   });
 
   it("is taken out of the address bar and kept only in memory", () => {
     const { env, urls, removed, writes } = fakeEnv(`#${b64(SECRET)}`);
-    expect(takeSecret(env)).toEqual(SECRET);
+    expect(takeKey(env)?.secret ?? null).toEqual(SECRET);
     expect(urls).toEqual(["/"]);
     expect(writes).toEqual([]);
     // A secret an earlier version of the page stored is cleared.
@@ -49,20 +58,20 @@ describe("the Tugboat secret", () => {
 
   it("isn't recovered after a reload: the page asks for a fresh scan", () => {
     const { env, urls } = fakeEnv("");
-    expect(takeSecret(env)).toBeNull();
+    expect(takeKey(env)?.secret ?? null).toBeNull();
     expect(urls, "nothing to strip").toEqual([]);
   });
 
   it("strips a malformed fragment too, without accepting it", () => {
     const { env, urls } = fakeEnv("#garbage");
-    expect(takeSecret(env)).toBeNull();
+    expect(takeKey(env)?.secret ?? null).toBeNull();
     expect(urls).toEqual(["/"]);
   });
 
   it("works when storage is blocked or throws", () => {
     for (const mode of ["blocked", "throws"] as const) {
       const { env } = fakeEnv(`#${b64(SECRET)}`, mode);
-      expect(takeSecret(env)).toEqual(SECRET);
+      expect(takeKey(env)?.secret ?? null).toEqual(SECRET);
     }
   });
 });

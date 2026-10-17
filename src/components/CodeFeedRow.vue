@@ -23,15 +23,16 @@ const when = () => relativeTime(new Date(props.entry.at));
       class="flex w-full cursor-default items-center gap-3 rounded-xl px-3 py-2.5 text-left active:bg-surface-soft"
       @click="tug.openThread(entry.conversationKey)"
       @keydown.enter.self="tug.openThread(entry.conversationKey)"
+      @keydown.space.self.prevent="tug.openThread(entry.conversationKey)"
     >
       <AppAvatar :app-id="MESSAGES_APP" :label="entry.sender" person size="sm" />
       <span class="min-w-0 flex-1">
         <span class="flex items-baseline gap-2">
-          <span class="truncate text-[14px] font-semibold text-ink">{{ entry.sender }}</span>
+          <span class="preview-private truncate text-[14px] font-semibold text-ink">{{ entry.sender }}</span>
           <span class="shrink-0 text-[12px] text-muted-soft">Verification code</span>
           <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">{{ when() }}</span>
         </span>
-        <span class="mt-0.5 block truncate text-[13px] text-body-strong">{{ entry.body }}</span>
+        <span class="preview-private mt-0.5 block truncate text-[13px] text-body-strong">{{ entry.body }}</span>
       </span>
       <CodeChip :code="entry.code.code" />
       <span
@@ -41,6 +42,7 @@ const when = () => relativeTime(new Date(props.entry.at));
         :title="`Clear this code from the Feed (the text stays in Messages)`"
         @click.stop="tug.clearCode(entry)"
         @keydown.enter.stop="tug.clearCode(entry)"
+        @keydown.space.stop.prevent="tug.clearCode(entry)"
       >
         <X :size="14" />
       </span>

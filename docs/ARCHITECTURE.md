@@ -41,7 +41,7 @@ Inside `tug.exe`:
                     └───────────▲ Tauri events (device-status, notification, message, …)  │ invoke ─┘
                                 │                                                         ▼
   ┌──────────────┐  Shared (Arc: status, now playing, calls, store, MapHandle) ┌──────────────────────┐
-  │ tug-ble      │◄────────────── commands.rs (92 Tauri commands) ────────────►│ tug-map              │
+  │ tug-ble      │◄────────────── commands.rs (105 Tauri commands) ───────────►│ tug-map              │
   │ BLE actor    │  BleHandle (mpsc + oneshot replies)    MapHandle (mpsc)     │ MAP worker           │
   │ 1 s tick     │                                                             │ MAP/MNS/PBAP/HFP     │
   └──┬───────┬───┘                                                             └──┬───────────────────┘
@@ -65,32 +65,52 @@ Inside `tug.exe`:
 | Developer bridge | `devtools/mod.rs`, `crates/tug-bridge/src/server.rs` | A named-pipe accept loop for the app's lifetime (at most 8 connections); answers "off" while switched off. |
 | Tugboat | `tugboat/` | An HTTP server, a 2 s supervisor (idle stop after 10 minutes, network changes) and per-connection tasks; exists only while the panel is open (or Tugboat Run asked for the phone as a controller). While the game's controller channel is open, a 150 ms watch notices a phone that went quiet. |
 | `tug-hotkey` | `code_fill/win.rs` (logic in `code_fill/mod.rs`) | Owns the type-the-code shortcut (RegisterHotKey belongs to the registering thread); each press types the newest code with SendInput on a short-lived `tug-code-fill` thread. |
+| `tug-share-watch` | `share_privacy/win.rs` (logic in `share_privacy/mod.rs`) | Hide previews while sharing or presenting: sleeps on a condition variable until tug's window is on screen or a pop-up finds the screen shared; then one look every 2 s (shell notification state, display topology, a pass over top-level window classes, reading the titles of browser and Teams windows only, compared on the spot and never kept or logged: about 0.3 ms) until the window hides and hiding clears. Each pop-up also takes a fresh look (on a short-lived `tug-share-look` helper, at most 500 ms) before it shows. It fails closed: no answer in time, or a failed Windows call with nothing found, hides the preview and blurs the window with a banner saying tug couldn't check; a look stuck for 2 s is replaced by a fresh one (at most three at once). When hiding starts, the phone's pop-ups and their follow-ups are taken back from the screen and Action Center (`toast::withdraw_while_hiding`); tug's own stay. |
+| `tug-voice-key`, `tug-voice` | `voice/win/` (logic in `voice/mod.rs`, `voice/text.rs`) | Only once voice typing is switched on. `tug-voice-key` owns the hold-to-talk shortcut (RegisterHotKey) and the GDI listening indicator; `tug-voice` is a COM thread that runs each hold (microphone while the key is down, Windows' offline SAPI recognizer, the text rules, SendInput) and keeps the recognizer between holds. |
 | Toasts, tray | `toast/`, `tray.rs` | Toast activations arrive on a pool thread and are handed to the async runtime; the tray runs on the main thread. |
+| `tug-jump-list` | `quick_actions/win.rs` (logic in `quick_actions/mod.rs`) | A short-lived COM thread that hands the taskbar jump list's Tasks to Windows, at startup and when Show games changes; nothing waits for it. |
 | Spotify, location | `commands.rs`, `spotify/`, `location.rs` | No background task: each command runs on `spawn_blocking`. The UI reads Spotify's player when the song changes. |
 | PC audio | `pc_audio/` | No thread of its own: AudioPlaybackConnection is agile, so `PcAudio` keeps the open connection behind a mutex and each Windows call runs on a time-limited helper (`off_thread`). Follows the connection through a status hook on `Shared` (stop on a phone switch; the opt-in automatic switch). Closed on Stop, Forget and exit. |
 
 **Talking between them.** `BleHandle` and `MapHandle` are unbounded mpsc senders of commands, with
 oneshot replies. `Shared` (`state.rs`) is the one `Arc` everything holds; `update_status` and
-`update_now_playing` emit to the UI only when something changed.
+`update_now_playing` emit to the UI only when something changed, under the lock, with a `rev` that
+counts the changes (PC audio's status has one too; Tugboat's and Developer tools' statuses number
+each copy as it's composed, `RevCounter`). Events and reads can still reach the window out
+of order (a startup read, a command's answer), so the stores keep the highest `rev`
+(`lib/ordering`), and a notification list read can't undo a removal that landed while it was in
+flight.
 
 **Events to the UI** (Rust → Vue): `device-status`, `now-playing`, `notification`,
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
 `pairing-request-closed`, `message`, `contacts`, `calls`, `open-latest-conversation`,
-`open-settings`, `toast-pressed`, `code-filled` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`,
-`game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`). The typed listener
+`open-settings`, `toast-pressed`, `code-filled`, `quick-action` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`,
+`tugboat-clip`, `tugboat-send-clipboard`, `game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`); `screen-share` (`share_privacy/`); `voice-status`, `voice-typed` (`voice/mod.rs`). The typed listener
 map is `EventPayloads` in `src/lib/ipc.ts`.
 
 ## Startup
 
-`src-tauri/src/lib.rs`: plugins (single-instance first, so a second launch just shows the window;
-autostart with `--minimized`; log with rotation; notification; dialog) → create the data folder →
-open the SQLite store and migrate → `Shared` → start the BLE actor → start the MAP worker → media
+`src-tauri/src/lib.rs`: claim tug's AppUserModelID (`quick_actions::init`, before any window) →
+plugins (single-instance first, so a second launch just shows the window or carries out its
+`--action`; log with rotation; notification; dialog) → withdraw the last run's pop-ups and, running
+elevated, move an old all-users Start with Windows entry back to this user if tug lives in that
+account's own Local AppData (both off the main thread; this run's own pop-ups wait for the
+withdrawal, at most 3 s, so it can't take them back;
+`autostart.rs` owns the HKCU Run entry, quoted, with `--minimized`) → create the data folder →
+open the SQLite store and migrate → queue this launch's `--action`, if any, and build the taskbar
+jump list (off-thread) → `Shared` → start the BLE actor → start the MAP worker → media
 keys → Spotify → Tugboat service (cleans partial uploads) → developer bridge → register state → a
 one-off cache trim → tray → WebView2 watch (reloads the page if its process dies or hangs; rebuilds the
 window if WebView2's browser process exits, except during a Windows shutdown) → show the window unless
 started minimized.
 Closing the window hides it to the tray (unless the user turned that off); on exit tug withdraws its
-toasts and stops Tugboat.
+toasts, stops Tugboat and hands PC audio back to the phone. When Windows is signing out or shutting
+down (`session_end.rs`: the main window is subclassed for WM_QUERYENDSESSION/WM_ENDSESSION, backed
+by `SM_SHUTTINGDOWN`), exit runs inside WM_ENDSESSION and Windows waits for it, so it skips the
+toast withdrawal and Tugboat's temp cleanup (both done at the next start) and doesn't wait for PC
+audio to close; a log line times the exit either way. The uninstaller runs
+`tug.exe --remove-from-path` before removing files, which takes tug's `bin` folder off the user's
+PATH whatever its length (`run_uninstall_step` in `lib.rs`) and exits without starting the app.
 
 ## Data flows
 
@@ -127,10 +147,19 @@ conversation. iOS lists only about 10 inbox texts, so after a long gap tug flags
 ```
 composer ─► invoke send_message ─► map::service::send_text
   store.insert_outgoing (pending) + emit "message"      ← shows at once, even if the worker is busy
-  ─► MapCommand::Deliver(row id) ─► worker pushes the bMessage over OBEX
+  ─► MapCommand::Deliver(row id) ─► command_queue: ahead of every refresh, check and mark-read
+  ─► worker pushes the bMessage over OBEX (on the open session: the PushMessage alone)
   ─► accepted / unconfirmed ("May have sent") / failed (Retry) ─► emit "message"
   ─► later MNS SendingSuccess/Failure ─► mns::choose_outgoing settles it
 ```
+
+A send never waits for a whole refresh: the worker looks at its queue between a refresh's steps
+(after the listing, before each download, before the contacts and calls pulls, between mark-reads),
+and a contacts or calls pull in progress is dropped (its own PBAP connection) and retried later.
+What it can't cut into is one OBEX exchange already on the wire, or a message-access connect in
+progress. Typing a text opens message access if it isn't open (`warm_texts`). The log follows each
+send by id only: `send N: queued`, `pushing after … ms in the queue`, `accepted it in … ms`, and the
+phone's own report `… ms after accepting it`.
 
 **A media command**
 
@@ -158,9 +187,53 @@ send_text: recipient::resolve ─► confirm.rs opens a card ─► emit "devtoo
 QR: http://<LAN IPv4>:<port>/#<secret>   (the secret after # is never sent)
 phone page ─POST /api/up─► PUT chunks (XChaCha20-Poly1305, keys from HKDF of the secret)
   every request MAC'd (first phone binds, replays refused) ─► tugboat/session.rs
-  ─► finish: sanitized name, " (2)" on collisions ─► Pictures\Tugboat + Mark-of-the-Web
+  first upload: can tug write to Pictures\Tugboat? Controlled folder access refusing it (access
+  denied) ─► Downloads\Tugboat, and the panel says why; refused there too ─► "blocked" to the phone
+  ─► finish: sanitized name, " (2)" on collisions ─► that folder + Mark-of-the-Web
   ─► emit "tugboat-status"
 ```
+
+**The shared clipboard (Tugboat)**
+
+```
+PC → phone: tray "Send clipboard to iPhone" (emits tugboat-send-clipboard) / Ctrl+K / the panel
+  ─► stores/tugboat.ts sendClipboard (one press, one send) ─► invoke tugboat_send_clipboard
+  ─► clipboard::read_for_sharing (Win32, off the main thread) ─► clip::prepare
+     (text ≤ 256 KB; a CF_DIB picture ─► dib.rs ─► PNG ≤ 64 MB / 24 MP, held in memory as a hidden offer)
+  ─► Tugboat starts if it's off ─► Session::send_clip ─► clip::Outbox (waiting, 2-minute window)
+  no phone on the page? the panel opens: the code says "Scan to receive your clipboard on your iPhone"
+phone page polls GET /api/state ─► { clip: { id, text | image } } ─► big Copy card
+  (a picture is fetched chunk by chunk like any offer) ─► POST /api/clip { id } (signed, sealed)
+  ─► Outbox: delivered, contents let go ─► emit "tugboat-clip" ─► "Your clipboard is on your iPhone"
+  2 minutes with no acknowledgement ─► dropped ─► "tugboat-clip" expired ─► "wasn't sent"
+phone → PC: "Paste to PC" ─► POST /api/text ─► clipboard::set_text_private (no history, no cloud
+  sync) ─► emit "tugboat-text" ─► "Copied from your iPhone"
+```
+
+The page is plain HTTP, so it isn't a secure context: browsers give it no `navigator.clipboard`.
+Copy uses `execCommand("copy")` inside the tap (`tugboat-page/clip.ts` `copyWith`), and if the browser
+refuses, the page selects the text and says to press and hold it. Pictures can't be put on the
+clipboard from such a page, so the page shows the picture to press and hold.
+
+**A taskbar quick action (jump list)**
+
+```
+right-click tug on the taskbar / in Start ─► Tasks: New message · Tugboat · Copy latest code ·
+  Play Tugboat Run (only while Show games is on) · Settings
+  each task is a shell link: tug.exe --action <id>   (the exe path made plain by shell_path: tauri's
+  current_exe is a \\?\ verbatim path, which IShellLinkW::SetPath rejects; registered by quick_actions/win.rs under the
+  AppUserModelID the process claims: the bundle identifier, which the installer stamps on the
+  Start menu shortcut; a cargo build uses "<identifier>.dev" so it never repoints the installed list)
+tug running?  the new tug.exe hands its args to the running one (single-instance) and exits
+              ─► quick_actions::receive: queue it, tray::show, emit "quick-action" (no payload)
+not running?  this launch is tug: setup queues parse_args(launch_args()) (args_os, read lossily: a non-Unicode argument can't abort tug)
+UI (App.vue), only after tug.init() has loaded history and settings, and on every nudge:
+  invoke take_quick_actions ─► the queue, drained (each click runs once; duplicates of a waiting
+  action collapse) ─► lib/quickActions ─► the same paths as Ctrl+K / Ctrl+N / Ctrl+Shift+C / Ctrl+,
+```
+
+A nudge carries nothing, so one lost to a page that's still loading loses nothing: the action
+waits in the queue until the next take.
 
 **A game controller input (Tugboat Run)**
 
@@ -180,6 +253,25 @@ phone page polls GET /api/state ─► { game: true } ─► Controller.vue (sli
 game closes ─► game_pad_close ─► inputs get 409 ─► the page goes back to Tugboat
 ```
 
+Two players: `game_pad_open(2)` opens a second seat, and `TugboatStatus` carries a second code
+(`guestUrl`/`guestQr`) for as long as it's open, which TugboatRun.vue shows as the **Player 2
+code** beside Tugboat's own (Player 1 scans Tugboat's usual code). The Player 2 code's fragment is
+`#g.` and a guest secret, `HKDF-SHA256(session secret, salt "tugboat/1", info "tugboat guest v1")`,
+16 bytes (`crypto::guest_secret`, `guestSecret` in the page's crypto.ts, pinned by
+`guestVector.json`); it can't be turned back into the session secret. The page reads the `g.`
+(`secret.ts`), derives keys from the guest secret the usual way and signs and seals with them, and
+shows only the race. `auth.rs` checks a request against the session's keys first (the owner,
+bound by the first such request as always) and then the guest's: a guest-key request may only be
+`GET /api/state` (which tells it only whether there's a race) or `POST /api/pad`, anything else is
+403 `in-use`; it can never bind the session, even as the first request; and it joins as the guest
+only while seat 2 is open (else 403 `no-race`), one at a time with its own replay window (a guest
+quiet for 8 s gives way to the next, otherwise 403 `full`). A second phone with Tugboat's own code
+during a race gets 403 `player-2-code`, never the guest seat. Its bodies and replies are sealed with
+the guest keys. Seat 1 is the session's own phone, seat 2 the guest; each seat has its own
+ordering, rate limit, silence watch, reply (`player` 1 or 2, so the phone shows its colour) and
+latency summary, and `game-pad` carries the `seat`. `game_pad_open(1)` closes seat 2 again (the
+game hears it's gone; the guest waits on its page for the next race) and the Player 2 code goes.
+
 The input channel is a small POST endpoint rather than a WebSocket: it reuses Tugboat's
 authentication, sealing, connection limits and timeouts unchanged, needs no new dependency or
 connection upgrade, and on a home network one request per input (kept alive) is well inside the
@@ -193,6 +285,24 @@ phone's probe (`age` = how long the newest touch waited before going out, `rtt` 
 trip) gives a touch-to-PC estimate of `age + rtt/2`, logged as one summary line at debug level
 when the controller closes.
 
+**Voice typing (hold to talk)**
+
+```
+hold the shortcut ─WM_HOTKEY─► tug-voice-key: note the window in front ─► tug-voice
+  privacy switch blocks the mic? ─► "Microphone blocked" (indicator + Settings)
+  wave-in (16 kHz mono, memory only) while GetAsyncKeyState says the key is down, + 200 ms
+  ─► too short / silent? stop ─► SAPI in-process recognizer, dictation, from a memory stream
+  ─► voice::text::format (spoken symbols, casing, style from the program's .exe name)
+  ─► keys let go, same window still in front? ─► SendInput (Unicode; new line = Shift+Enter in known prose and chat apps, a space elsewhere)
+  ─► emit "voice-typed" (the outcome only) ─► indicator hides or says what went wrong
+```
+
+Recognition sits behind `voice::engine::Engine`. Windows' desktop SAPI recognizer was chosen
+because it is offline, ships with Windows and needs nothing new to build. `Windows.Media.SpeechRecognition`
+was ruled out: its free-dictation grammar is recognized by Microsoft's online service and it needs
+package identity, which tug (an unpackaged installer) doesn't have. whisper.cpp (`whisper-rs`)
+would be more accurate but needs CMake and libclang that contributors don't have, plus a model
+download; it can be added later as another `Engine`.
 ## Where the testable logic lives
 
 Bluetooth can't run in CI, so decisions live in **pure modules** that take plain values and return
@@ -206,33 +316,52 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `store.rs`, `messages.rs` | SQLite + FTS5 history, settings, migrations; conversations, contacts, name learning, send states |
 | `link_policy.rs` | What a failed connect means, the sticky "away" state, waiting for link-up, keep-or-relink after wake, when to ask for a re-pair |
 | `wedge.rs` | An adapter that's connected but not answering: relink with backoff and a cap |
+| `forgotten.rs` | The iPhone forgot this PC while Windows kept the bond: a link that keeps coming up and dropping at once on a phone that has worked here before, Windows' stale-bond error twice, or refused connects while the link is also flapping. Refusals alone never count (a healthy phone refuses too, with Share System Notifications off or after Don't Allow), nor do blips while notifications are subscribed; never while it's locked, and not after a wake, radio change or adapter stall |
 | `wake.rs` | A real sleep vs a stalled thread, from two clocks and the resume flag |
-| `map/contacts_watch.rs` | When to pull the phonebook; when an empty phonebook means Sync Contacts is off |
+| `map/contacts_watch.rs` | When to check the phonebook (every 10 min, plus triggers; every 10 s while the switches are on screen), whether a check must pull the names (PBAP 1.2 version counters), when an empty phonebook means Sync Contacts is off |
+| `pin_confirm.rs` | The PIN prompt waiting on the user, by id, so one pairing's leftovers can't close the next's |
+| `map/command_queue.rs` | The message worker's priority order: sends before refreshes, mark-read last |
 | `map/obex.rs`, `bmessage.rs`, `listing.rs`, `vcard.rs`, `mns_event.rs`, `mns.rs`, `pick.rs` | OBEX framing, MAP/PBAP parsers, MNS event handling, which paired device is the iPhone |
+| `map/charset.rs`, `sms_pdu.rs` | A text's bytes to words without U+FFFD: UTF-8, then UTF-16, CESU-8, a cut-off last character, Windows-1252; native SMS PDUs |
 | `devtools/confirm.rs`, `rate_limit.rs`, `recipient.rs`, `settings.rs` | The send-confirmation state machine, per-tool limits, name → contact, switch defaults |
 | `crates/tug-bridge` (`auth`, `protocol`, `framing`, `paths`, `time`) | Bridge protocol and handshake; the whole exchange is also tested over a real pipe |
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
-| `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone |
+| `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone, two seats for a two-player game |
+| `tugboat/net.rs`, `tugboat/tally.rs`, `tugboat/session.rs` (`choose_folder`) | Which adapter the phone can reach (including a Hyper-V external switch); logging strangers' refused requests once a minute with a count; Pictures or the Downloads fallback |
+| `autostart.rs`, `session_end.rs` | Start with Windows over a `Registry` trait (tested with a fake: HKCU only, moving an old HKLM entry only for a tug in the process user's own Local AppData); what exit skips when Windows is ending the session |
+| `tugboat/clip.rs`, `tugboat/dib.rs` | The shared clipboard: one waiting clipboard at a time, delivered only on the phone's word, dropped after 2 minutes, what can be sent; a clipboard bitmap to PNG |
+| `quick_actions/mod.rs` | Taskbar quick actions: reading `--action` from a launch, the jump list's tasks (the game only with Show games on), the AppUserModelID for installed, portable and cargo builds, the take-once queue |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
+| `share_privacy/mod.rs` | Hide previews while sharing or presenting: which signals mean someone may be watching (shell state confirmed by the foreground window covering its monitor, duplicate display, known share and slideshow windows by program + class), which one names the reason, the log line, what a hidden pop-up says, and that no answer means hidden (which looks to join, start or give up on), which pop-ups to take back when hiding starts |
+| `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, keys still held, window changed) and what the pill says; spoken symbols, casing commands, code vs prose style and where "new line" may break a line, by program; keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
 
-Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attention`
-(is the window really visible), `battery`, `coalesce` (one render per frame for bursts of
+Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attachments`
+("Attachment: 1 Photo" → a photo chip), `attention`
+(is the window really visible), `battery`, `callKeys` (no keystroke answers or declines a call), `coalesce` (one render per frame for bursts of
 updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),
-`devtools`, `errorReport`, `escape`, `format` (conversation grouping and display), `health`,
-`locating`, `media` (which controls show, skip routing), `messageSync`, `messageType`, `pairings`,
+`devtools`, `errorReport`, `escape`, `feedPaging` (keep paging while the Feed's end is in view),
+`format` (conversation grouping and display), `health`, `latest` (newest request wins: late
+answers never land), `layout` (sidebar density and "wide", from sizes that follow the zoom),
+`locating`, `media` (which controls show, skip routing, seek keys), `messageSync`, `messageType`,
+`ordering` (newest state wins over late events and reads), `pairings`,
 `pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
-(unknown-sender filter), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
-they re-render), `threadWindow` (long conversations render their newest texts first),
-`toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: seeded spawning, collisions,
-scoring, the speed curve, inertia, merging the controls), `vips`, `weather`, `weblinks`, `whatsNew`.
-The phone page has its own: `tugboat-page/chunks`, `crypto` and `pad` (the controller's wire format,
-pacing and errors). Components and
+(unknown-sender filter), `sharePrivacy` (hiding previews while sharing: the banner, Show anyway, a pop-up's kind), `singleFlight` (one press, one action), `smartReplies` (suggested replies: the rules, and when there are none), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
+they re-render), `startup` (startup reads that fail are retried, never block), `threadWindow` (long conversations render their newest texts first),
+`quickActions` (routing a taskbar task, one take at a time), `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
+scoring, the speed curve, inertia, the weather's handling, merging the controls), `tugboatDaily` (the
+daily challenge: the date's seed, weather → water, the start screen's line, the streak), `tugboatRace`
+(two players: who steers what, the result, when a dropped phone pauses the race), `useCitySearch` (the
+weather card's city box), `vips`, `voice` (voice typing's Settings words and problems), `weather`, `weblinks`, `whatsNew`. Thin DOM composables such as
+`useElementSize` (an element's size in zoomed CSS pixels) and `useCallButtonGate` (a ringing call's Feed buttons) feed these rules.
+The phone page has its own: `tugboat-page/chunks`, `crypto`, `clip` (the PC's clipboard: when to
+acknowledge it, copying without a secure context) and `pad` (the controller's wire format, pacing
+and errors). Components and
 stores should call these rather than grow logic of their own.
 
 Integration tests: `tugboat/tests.rs` plays the phone over a real socket; `tug-bridge` tests run the
@@ -243,8 +372,8 @@ handshake over a real named pipe (including a low-integrity impostor). Hardware 
 
 Everything the backend sends to the UI or takes from it is a serde type in Rust **mirrored by hand**
 in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messages.rs`,
-`map/calls.rs`, `map/health.rs`, `toast/`, `code_fill/`, `spotify/`, `tugboat/`, `bt_inventory/`, `devtools/` and
-`pc_audio/policy.rs`.
+`map/calls.rs`, `map/health.rs`, `toast/`, `code_fill/`, `spotify/`, `tugboat/`, `bt_inventory/`, `devtools/`, `voice/`,
+`pc_audio/policy.rs` and `share_privacy/`.
 
 - App-facing types use `#[serde(rename_all = "camelCase")]` (fields and enum variants), so
   `contacts_off` in Rust is `contactsOff` in TypeScript.
@@ -261,7 +390,7 @@ in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messag
 | App icons, Spotify art, contact photos | `%APPDATA%\<app id>\` (`icons/` 50 MB cap, `spotify_art/` 100 MB cap, `contacts/`) |
 | Logs (2 MB × 5, rotated) | `%LOCALAPPDATA%\<app id>\logs` |
 | Bridge token, half-received Tugboat files | `%LOCALAPPDATA%\<app id>\` |
-| Files received with Tugboat | `Pictures\Tugboat` |
+| Files received with Tugboat | `Pictures\Tugboat` (`Downloads\Tugboat` while Controlled folder access refuses Pictures) |
 | Spotify refresh token | Windows Credential Manager |
 
 `<app id>` is the `identifier` in `src-tauri/tauri.conf.json`. The schema is a baseline plus an
@@ -279,7 +408,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?setup` | First run: the Connect panel, scripted end to end (add `&btoff` to start with Bluetooth off) |
 | `/?leftover` | An old Windows pairing offered with Use / Remove |
 | `/?latephone` | The iPhone appears after a rescan |
-| `/?forgotten` | "Your iPhone has forgotten this PC" |
+| `/?forgotten` | "Your iPhone forgot this PC" with Pair again |
 | `/?justpaired`, `/?contactsoff` (`&flip`), `/?textsoff`, `/?textsmissing`, `/?radiooff` | Setup and switch states |
 | `/?nudge` | Texts and contacts off: the Feed's "Get more from tug" nudge |
 | `/?lasterror`, `/?textsbroken`, `/?livetexts` | Connection health states |
@@ -292,19 +421,27 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?applemusic`, `/?norepeat`, `/?repeatignored` | Apple Music controls and repeat edge cases |
 | `/?speaker`, `/?spotifyoff` | Spotify on a Connect speaker / Spotify not connected |
 | `/?novolume` | A player that doesn't report its volume: no volume bar |
-| `/?tugboat` (`&android`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring / waiting for a phone / no usable network |
+| `/?tugboat` (`&android`, `&cfa`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring (Controlled folder access refusing Pictures) / waiting for a phone / no usable network |
+| `/?tugboatclip` | Send clipboard to iPhone with no phone yet: the code with its clipboard hint, then a phone scanning it and taking the clipboard |
 | `/?game` | Tugboat Run, ready to start |
 | `/?gamephone` | Tugboat Run with the phone controller: Tugboat's code, a phone scanning it, then the phone starting the run and steering |
+| `/?game2p` (`&p2drop`) | Tugboat Run for two players with two phones (Player 2's phone drops mid-race: the waiting card and Continue solo) |
+| `/?game&weather=rain` | The daily challenge in made-up weather for the preview: `rain`, `storm`, `snow`, `night`, `windy` or `off` |
 | `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
 | `/?pcaudio`, `/?pcaudiofail`, `/?pcaudiodrop`, `/?pcaudioold` | iPhone audio playing on this PC / Play on this PC times out / it drops after 6 s (Reconnect) / Windows too old for it |
 | `/?whatsnew` | The What's new card for the newest release |
+| `/?quickaction=new-message` (`tugboat`, `copy-code`, `game`, `settings`; `&again`) | tug started from that taskbar task (and, with `&again`, the task clicked again 4 s later while running) |
 | `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
+| `/?sharing` (`&presenting`, `&stop`) | The screen is being shared: blurred texts and names under the `Previews hidden` banner with Show anyway (a slide show / sharing ends after 10 s); add `&call` for the call card |
+| `/?voice` (`&micblocked`, `&nospeech`, `&voicebusy`) | Settings › General › Voice typing on, with the microphone blocked / no speech language / the shortcut taken |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then
-`http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`, `&game` for the controller). To drive the
-real page against a real server (real signing and sealing), see `manual_page` in `tugboat/tests.rs`
-(`TUGBOAT_GAME=1` opens the controller channel and prints each input).
+`http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`, `&game` for the controller, `&clip` /
+`&clipimage` for the PC's clipboard). To drive the real page against a real server (real signing and
+sealing), see `manual_page` in `tugboat/tests.rs` (`TUGBOAT_GAME=1` opens the controller channel and
+prints each input; `TUGBOAT_CLIP=1` sends a made-up clipboard; `TUGBOAT_HOST=<LAN address>` serves
+it where it isn't a secure context, as on a phone).
 
 ## Adding a feature safely
 
@@ -344,7 +481,10 @@ real page against a real server (real signing and sealing), see `manual_page` in
 - After the iPhone restarts, nothing connects until it's unlocked once.
 - The iPhone only shows Show Notifications / Sync Contacts for the PC after tug has asked for them.
   An empty phonebook (rather than a refusal) usually means Sync Contacts is off.
-- A PC whose iPhone forgot it keeps stale bonds that make the phone connect and drop; remove both
-  Windows entries before re-pairing.
+- A PC whose iPhone forgot it keeps stale bonds that make the phone connect and drop (about every
+  2 s, with no stale-bond error); remove both Windows entries before re-pairing. tug spots this
+  (`forgotten.rs`) and offers Pair again, which does exactly that. ATT refusals (0x05, 0x08, 0x0F)
+  or access denied don't prove it: a healthy phone returns them with Share System Notifications off
+  or after Don't Allow.
 - After registering for notifications, an open MAP session's inbox listing can go stale if the MNS
   link dies; reopening the session fixes it.

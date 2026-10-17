@@ -38,6 +38,7 @@ use crate::ams::{self, NowPlaying};
 use crate::ancs::{self, Category, EventFlags, EventId, ParseError, Response};
 use crate::ancs_queue::{Request, RequestQueue, MAX_ATTEMPTS};
 use crate::device_info;
+use crate::forgotten::{self, ForgottenWatch};
 use crate::link_policy;
 use crate::state::{
     events, keys, AdvertisingState, AppName, ConnectionState, DiscoveredDevice, PairedDevice, PairingRequest,
@@ -99,6 +100,9 @@ const CCCD_CHECK_SECS: u32 = 15;
 const CCCD_CHECK_WATCHING_SECS: u32 = 2;
 const NOT_SHARING: &str = "Your iPhone is connected but isn't sharing notifications with this PC. On the iPhone: Settings › Bluetooth › tap ⓘ next to this PC › turn on Share System Notifications.";
 const PIN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
+/// The longest a whole pairing ceremony may take (the PIN prompt's minute, plus the phone's own
+/// confirmation and key exchange) before tug cancels it and says it timed out.
+const PAIR_TIMEOUT: Duration = Duration::from_secs(120);
 /// What an action or media command says while tug is rebuilding the link on its own.
 const RECONNECTING: &str = "Reconnecting to your iPhone. Try again in a moment.";
 
@@ -146,7 +150,12 @@ enum Event {
         slept: Duration,
         cause: WakeCause,
     },
-    Advertising(GattServiceProviderAdvertisementStatus),
+    /// Stamped with the provider it came from (`Actor::advertise_gen`), so a late status from one
+    /// that was stopped or replaced can't flip the status or restart advertising.
+    Advertising {
+        gen: u64,
+        status: GattServiceProviderAdvertisementStatus,
+    },
     Radio(RadioState),
     DeviceAdded(DeviceInformation, Transport),
     DeviceUpdated(DeviceInformationUpdate),
@@ -260,6 +269,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         connect_failures: 0,
         advertise_retry_in: None,
         advertise_failures: 0,
+        advertise_gen: 0,
         carried_name: None,
         cccd_check_in: CCCD_CHECK_SECS,
         optional_retry_at: None,
@@ -275,6 +285,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         adopt_timeouts: 0,
         had_session: false,
         adopted_at: None,
+        forgotten: ForgottenWatch::default(),
     };
     actor.init().await;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -294,7 +305,7 @@ struct Actor {
     tx: UnboundedSender<Event>,
     gen: u64,
     provider: Option<GattServiceProvider>,
-    _radio: Option<Radio>,
+    _radio: Option<peripheral::RadioWatch>,
     watchers: Vec<(Transport, DeviceWatcher)>,
     discovered: HashMap<String, Discovered>,
     discovered_dirty: bool,
@@ -308,6 +319,8 @@ struct Actor {
     advertise_retry_in: Option<u32>,
     /// Attempts to start advertising that timed out in a row; drives that retry's backoff.
     advertise_failures: u32,
+    /// Stamp of the newest advertising provider (bumped for each one created).
+    advertise_gen: u64,
     /// Name of a Classic-paired iPhone whose LE side is being paired on its behalf.
     carried_name: Option<String>,
     /// Seconds until the ANCS subscription is verified on the iPhone again.
@@ -344,6 +357,8 @@ struct Actor {
     had_session: bool,
     /// When this phone was adopted (paired) this run, for its grace period before "away".
     adopted_at: Option<Instant>,
+    /// Watches for the phone having forgotten this PC while Windows still holds the bond.
+    forgotten: ForgottenWatch,
 }
 
 fn now_ms() -> i64 {
@@ -396,6 +411,18 @@ fn event_is_current(event_gen: u64, current_sub_gen: Option<u64>) -> bool {
     current_sub_gen == Some(event_gen)
 }
 
+/// Whether an advertising status belongs to the provider running now (`provider_gen`: None when
+/// advertising is stopped). Pure, so the filter is unit-tested.
+fn advertising_event_is_current(event_gen: u64, provider_gen: Option<u64>) -> bool {
+    provider_gen == Some(event_gen)
+}
+
+/// Bluetooth is off (or the adapter is gone): advertising can't start, so it isn't retried until
+/// the radio comes back On (an Unknown radio, one tug couldn't read, still gets retries).
+fn advertising_blocked(radio: RadioState) -> bool {
+    matches!(radio, RadioState::Off | RadioState::Unavailable)
+}
+
 fn guid(u: u128) -> GUID {
     GUID::from_u128(u)
 }
@@ -431,6 +458,8 @@ impl Actor {
             });
             self.device_id = Some(id);
             self.retry_in = 0;
+            // Remembered from an earlier run, where it connected: a bond that has worked here.
+            self.forgotten = ForgottenWatch::new(true);
         }
     }
 
@@ -458,6 +487,11 @@ impl Actor {
                 }
             }
             Command::StopDiscovery => self.stop_discovery(),
+            Command::ForgetRows { up_to } => {
+                if let Some(a) = self.link.as_mut().and_then(|l| l.ancs.as_mut()) {
+                    forget_cleared_rows(&mut a.rows, up_to);
+                }
+            }
             Command::RescanDiscovery => {
                 if let Err(e) = self.rescan_classic() {
                     log::debug!("rescan for the iPhone failed: {}", e.message());
@@ -472,7 +506,11 @@ impl Actor {
                     // Classic-only pairing (calls/audio): pair the same phone's LE
                     // side, which LightBlue has connected, and keep the Classic name.
                     Some((le_id, name)) => {
-                        log::info!("{name} has no LE record; pairing its connected LE side {le_id}");
+                        log::info!(
+                            "{} has no LE record; pairing its connected LE side {}",
+                            crate::device_kind::log_tag(&id),
+                            crate::device_kind::log_tag(&le_id)
+                        );
                         self.carried_name = Some(name);
                         self.pair(le_id, reply);
                     }
@@ -484,8 +522,13 @@ impl Actor {
                     let _ = reply.send(ok);
                 }
             },
+            // Its own task, like `pair`: the inquiry and the ceremony (up to PAIR_TIMEOUT) never
+            // hold the actor loop.
             Command::PairTexts { reply } => {
-                let _ = reply.send(self.pair_texts().await);
+                let shared = self.shared.clone();
+                tokio::task::spawn_local(async move {
+                    let _ = reply.send(pairing::pair_texts(shared).await);
+                });
             }
             Command::Forget { reply } => {
                 let _ = reply.send(self.forget().await);
@@ -520,11 +563,18 @@ impl Actor {
         }
         match ev {
             Event::NotificationSource { gen, data } if event_is_current(gen, current) => {
+                self.session_alive("a notification arrived");
                 self.on_notification_source(&data).await
             }
             Event::DataSource { gen, data } if event_is_current(gen, current) => self.on_data_source(&data).await,
-            Event::MediaEntity { gen, data } if event_is_current(gen, current) => self.on_media_entity(&data).await,
-            Event::MediaCommands { gen, data } if event_is_current(gen, current) => self.on_media_commands(&data),
+            Event::MediaEntity { gen, data } if event_is_current(gen, current) => {
+                self.session_alive("a media update arrived");
+                self.on_media_entity(&data).await
+            }
+            Event::MediaCommands { gen, data } if event_is_current(gen, current) => {
+                self.session_alive("a media update arrived");
+                self.on_media_commands(&data)
+            }
             Event::Battery { gen, data } if event_is_current(gen, current) => {
                 if let Some(&level) = data.first() {
                     self.shared.update_status(|s| s.battery = Some(level.min(100)));
@@ -547,6 +597,8 @@ impl Actor {
                 );
                 // A real change: drop the backoff and retry at once instead of waiting it out.
                 self.connect_failures = 0;
+                // Whatever the link did before the sleep says nothing about the bond now.
+                self.forgotten.interrupted();
                 self.link_down_at = None;
                 self.retry_in = 0;
                 self.last_poke = None;
@@ -587,7 +639,12 @@ impl Actor {
             | Event::Model { .. }
             | Event::Connection { .. }
             | Event::Name { .. } => log::debug!("ignored event from a replaced link"),
-            Event::Advertising(status) => {
+            Event::Advertising { gen, .. }
+                if !advertising_event_is_current(gen, self.provider.as_ref().map(|_| self.advertise_gen)) =>
+            {
+                log::debug!("ignored an advertising status from a stopped or replaced provider");
+            }
+            Event::Advertising { status, .. } => {
                 let name = match status {
                     GattServiceProviderAdvertisementStatus::Created => "created",
                     GattServiceProviderAdvertisementStatus::Stopped => "stopped",
@@ -611,7 +668,10 @@ impl Actor {
                 // Windows reports Aborted briefly on every start, and for real when the
                 // radio blips or another app held the service. Retry unless it recovers.
                 match status {
-                    GattServiceProviderAdvertisementStatus::Aborted => {
+                    // With Bluetooth off it can't restart; the radio coming back On restarts it.
+                    GattServiceProviderAdvertisementStatus::Aborted
+                        if !advertising_blocked(self.shared.status().radio) =>
+                    {
                         self.advertise_retry_in.get_or_insert(ADVERTISE_RETRY_SECS);
                     }
                     GattServiceProviderAdvertisementStatus::Started
@@ -624,6 +684,8 @@ impl Actor {
             }
             Event::Radio(state) => {
                 log::info!("Bluetooth radio: {state:?}");
+                // The link coming and going with the radio isn't the phone refusing this PC.
+                self.forgotten.interrupted();
                 self.shared.update_status(|s| {
                     s.radio = state;
                     // With Bluetooth off there's nothing to reconnect: the UI says it's off instead.
@@ -637,8 +699,7 @@ impl Actor {
                     }
                 });
                 if state == RadioState::On {
-                    self.retry_in = 0;
-                    self.connect_failures = 0;
+                    self.radio_came_on();
                 }
             }
             Event::DeviceAdded(info, transport) => {
@@ -693,6 +754,10 @@ impl Actor {
                 reply,
             } => {
                 log::info!("pairing finished: {result:?}");
+                // A name carried for a fallback pairing that failed mustn't name the next phone.
+                if result.is_err() {
+                    self.carried_name = None;
+                }
                 let result = match result {
                     // A Classic iPhone: adopt the LE bond derivation makes, remember Classic for texts.
                     Ok(()) => match classic {
@@ -707,7 +772,9 @@ impl Actor {
     }
 
     async fn tick(&mut self) {
-        if let Some(secs) = self.advertise_retry_in {
+        // Not while Bluetooth is off: the retry waits, and the radio coming On restarts it.
+        let blocked = advertising_blocked(self.shared.status().radio);
+        if let Some(secs) = self.advertise_retry_in.filter(|_| !blocked) {
             if secs > 0 {
                 self.advertise_retry_in = Some(secs - 1);
             } else {
@@ -810,6 +877,32 @@ impl Actor {
         self.shared.update_status(|s| s.last_error = Some(message));
     }
 
+    /// Act on a change in whether the iPhone looks to have forgotten this PC: one log line each way,
+    /// and the status (`pairing_stale`, which the UI shows as "Your iPhone forgot this PC" with Pair
+    /// again). `why` says what cleared it; callers that clear it also clear `pairing_stale` in their
+    /// own status update.
+    fn note_forgotten(&mut self, change: Option<forgotten::Change>, why: &str) {
+        match change {
+            Some(forgotten::Change::Entered { flaps, refusals }) => {
+                log::info!(
+                    "the iPhone looks to have forgotten this PC ({flaps} short connection(s) and {refusals} refused attempt(s), none working); asking to pair again"
+                );
+                self.shared.update_status(|s| s.pairing_stale = true);
+            }
+            Some(forgotten::Change::Left) => log::info!("no longer asking to pair the iPhone again: {why}"),
+            None => {}
+        }
+    }
+
+    /// Something only a working session can do just happened (a notification or media update
+    /// arrived on the live subscription): the phone hasn't forgotten this PC. Clears the verdict
+    /// and the status's "pair again" (emitted only if it changed).
+    fn session_alive(&mut self, why: &str) {
+        let change = self.forgotten.session_alive();
+        self.note_forgotten(change, why);
+        self.shared.update_status(|s| s.pairing_stale = false);
+    }
+
     /// Recovering from a stalled adapter: requests are paused until the link is rebuilt.
     fn wedged(&self) -> bool {
         self.wedge_relink_at.is_some()
@@ -852,6 +945,8 @@ impl Actor {
             settle.as_secs()
         );
         self.wedge_relink_at = Some(Instant::now() + settle);
+        // A stalled adapter explains a messy link; it isn't the phone refusing this PC.
+        self.forgotten.interrupted();
         self.shared.update_status(|s| {
             s.connection = ConnectionState::Connecting;
             s.reconnecting = true;
@@ -859,9 +954,22 @@ impl Actor {
     }
 }
 
+/// Clear history removed every notification row up to `up_to`: drop the phone uids that pointed at
+/// them, keeping ones stored since (higher ids, as ids never go back).
+fn forget_cleared_rows(rows: &mut HashMap<u32, i64>, up_to: i64) {
+    rows.retain(|_, row| *row > up_to);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_history_forgets_the_cleared_rows_only() {
+        let mut rows = HashMap::from([(7, 3), (8, 10), (9, 11)]);
+        forget_cleared_rows(&mut rows, 10);
+        assert_eq!(rows, HashMap::from([(9, 11)]));
+    }
 
     #[test]
     fn connect_retries_back_off_then_cap() {
@@ -937,6 +1045,30 @@ mod tests {
         assert_eq!(
             classify_link_up(Some(down + Duration::from_secs(1)), down),
             LinkUp::Blip
+        );
+    }
+
+    #[test]
+    fn a_late_advertising_status_from_a_stopped_or_replaced_provider_is_ignored() {
+        assert!(advertising_event_is_current(3, Some(3)), "the provider running now");
+        assert!(
+            !advertising_event_is_current(2, Some(3)),
+            "replaced: its Stopped/Aborted is stale"
+        );
+        assert!(
+            !advertising_event_is_current(3, None),
+            "advertising turned off: a late Aborted must not restart it"
+        );
+    }
+
+    #[test]
+    fn advertising_waits_for_bluetooth_to_be_on() {
+        assert!(advertising_blocked(RadioState::Off));
+        assert!(advertising_blocked(RadioState::Unavailable));
+        assert!(!advertising_blocked(RadioState::On));
+        assert!(
+            !advertising_blocked(RadioState::Unknown),
+            "a radio tug couldn't read mustn't leave it invisible for good"
         );
     }
 

@@ -43,6 +43,8 @@ export interface ActionContext {
   spotifyConnected?: boolean;
   /** Settings › General › Show games is on, so "game" offers Tugboat Run. */
   showGames?: boolean;
+  /** Voice typing is switched on (Settings › General). */
+  voiceTyping?: boolean;
 }
 
 export type Action =
@@ -61,7 +63,11 @@ export type Action =
   | { kind: "clear-all"; items: PhoneNotification[]; label: string }
   | { kind: "mark-all-read"; count: number; label: string }
   | { kind: "dnd"; enabled: boolean; label: string }
+  /** Voice typing on or off: hold a shortcut, talk, and tug types it. */
+  | { kind: "voice"; enabled: boolean; label: string }
   | { kind: "show-app"; appId: string; focusId: number; label: string }
+  /** Send what's on the PC's clipboard to the phone's Tugboat page. */
+  | { kind: "send-clipboard"; label: string }
   | { kind: "open"; target: OpenTarget; label: string };
 
 /** Panels and screens Ctrl+K can open by name. */
@@ -90,7 +96,19 @@ const OPEN: Array<[string[], OpenTarget, string]> = [
 const COPY_CODE = ["copy code", "code"];
 const CLEAR_ALL = ["clear all", "clear everything", "clear all notifications"];
 const MARK_READ = ["mark all read", "mark all as read", "mark everything read"];
+const SEND_CLIPBOARD = [
+  "clipboard",
+  "send clipboard",
+  "send clipboard to iphone",
+  "send clipboard to phone",
+  "share clipboard",
+  "paste to iphone",
+  "paste to phone",
+  "copy to iphone",
+  "copy to phone",
+];
 const DND = /^(?:do not disturb|dnd)(?:\s+(on|off))?$/i;
+const VOICE = /^(?:voice typing|voice to code|voice|dictation)(?:\s+(on|off))?$/i;
 
 const SEND = /^(?:text|msg|message|tell|send)\s+(.+)$/i;
 const CALL = /^(?:call|ring|phone)\s+(.+)$/i;
@@ -132,8 +150,11 @@ export function parseActions(query: string, people: Person[], ctx: ActionContext
   if (COPY_CODE.includes(lower)) out.push(copyCodeAction(ctx));
   if (CLEAR_ALL.includes(lower)) out.push(clearAllAction(ctx));
   if (MARK_READ.includes(lower)) out.push(markReadAction(ctx));
+  if (SEND_CLIPBOARD.includes(lower)) out.push({ kind: "send-clipboard", label: "Send clipboard to iPhone" });
   const dnd = DND.exec(lower);
   if (dnd) out.push(dndAction(dnd[1], ctx));
+  const voice = VOICE.exec(lower);
+  if (voice) out.push(voiceAction(voice[1], ctx));
   out.push(...appActions(q, ctx));
 
   const m = SEND.exec(q);
@@ -223,6 +244,12 @@ function dndAction(explicit: string | undefined, ctx: ActionContext): Action {
   return { kind: "dnd", enabled, label: `Turn ${enabled ? "on" : "off"} Do not disturb` };
 }
 
+/** Turn voice typing on or off, or set it outright with "on"/"off"; the row shows the result. */
+function voiceAction(explicit: string | undefined, ctx: ActionContext): Action {
+  const enabled = explicit ? explicit.toLowerCase() === "on" : !(ctx.voiceTyping ?? false);
+  return { kind: "voice", enabled, label: `Turn ${enabled ? "on" : "off"} voice typing` };
+}
+
 /** Typing an app's name offers to jump the feed to its notifications. Only apps that have some. */
 function appActions(query: string, ctx: ActionContext): Action[] {
   const qk = key(query);
@@ -271,4 +298,16 @@ function build(person: Person, text: string): Action {
   return text
     ? { kind: "send", person, text, label: `Send “${text}” to ${cleanName(person.name)}`, detail }
     : { kind: "open-chat", person, label: `Message ${cleanName(person.name)}`, detail };
+}
+
+/**
+ * What happens after Ctrl+K sent a text. "sent", "unconfirmed" (in the conversation as May have
+ * sent) and "failed" (in the conversation as Not sent, with Retry) open the conversation; "error"
+ * means nothing was recorded, so the palette comes back with what was typed rather than lose it
+ * (the composer keeps its text the same way).
+ */
+export function afterPaletteSend(
+  result: "sent" | "unconfirmed" | "failed" | "error",
+): "open-conversation" | "restore-query" {
+  return result === "error" ? "restore-query" : "open-conversation";
 }

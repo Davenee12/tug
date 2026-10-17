@@ -1,7 +1,7 @@
 // Pure Spotify helpers used by the UI and the Ctrl+K palette: fuzzy-matching a typed name to a
 // playlist ("play deep focus"), and the repeat-button cycle. No IPC here, so it's unit-tested.
 
-import type { RepeatMode, SpotifyAlbum, SpotifyPlaylist, SpotifyTrack } from "../types/protocol";
+import type { RepeatMode, SpotifyAlbum, SpotifyPlaylist, SpotifySearch, SpotifyTrack } from "../types/protocol";
 
 /**
  * tug's Spotify app is in Spotify's Development Mode: only accounts added to its allow-list can
@@ -149,6 +149,29 @@ export function uniqueSongs<T extends Pick<SpotifyTrack, "name" | "artists" | "a
     out.push(t);
   }
   return out;
+}
+
+export type SearchKind = "tracks" | "albums" | "artists" | "playlists";
+
+/** Items not already shown, by Spotify id (artists and playlists have no "other copies"). */
+function uniqueById<T extends { uri: string }>(incoming: T[], shown: T[]): T[] {
+  const seen = new Set(shown.map((x) => x.uri));
+  return incoming.filter((x) => (seen.has(x.uri) ? false : (seen.add(x.uri), true)));
+}
+
+/**
+ * "Show more": the results with the next page of one kind added at the end. Spotify's pages can
+ * overlap (its ranking shifts between calls), so nothing already shown is shown twice: songs and
+ * albums collapse other copies, artists and playlists match by id. Returns a new object; the
+ * caller advances its offset by what Spotify returned (`page[kind].length`), not what was added.
+ */
+export function mergeSearchPage(current: SpotifySearch, kind: SearchKind, page: SpotifySearch): SpotifySearch {
+  const next: SpotifySearch = { ...current, more: { ...current.more, [kind]: page.more[kind] } };
+  if (kind === "tracks") next.tracks = [...current.tracks, ...uniqueSongs(page.tracks, current.tracks)];
+  else if (kind === "albums") next.albums = [...current.albums, ...uniqueAlbums(page.albums, current.albums)];
+  else if (kind === "artists") next.artists = [...current.artists, ...uniqueById(page.artists, current.artists)];
+  else next.playlists = [...current.playlists, ...uniqueById(page.playlists, current.playlists)];
+  return next;
 }
 
 /** The same for albums: one entry per title and artists (deluxe/explicit copies collapse). */

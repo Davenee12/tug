@@ -1,0 +1,16 @@
+{
+  "_comment": "Tugboat's guest (Player 2) key vector, asserted by cargo test (src-tauri/src/tugboat/crypto.rs) and vitest (src/tugboat-page/crypto.test.ts). The session secret is testVector.json's.",
+  "secret": "000102030405060708090a0b0c0d0e0f",
+  "label": "tugboat guest v1",
+  "guestSecret": "56ac64b7e6912a165828f0abf326da45",
+  "fragment": "#g.Vqxkt-aRKhZYKPCr8ybaRQ",
+  "encKey": "405fa9d141efe7c98ea8823146aee865a8f5ca6d627266f46500b43b60570b12",
+  "authKey": "a39841e530014cbf95ad5082ca7d396a5c928508061ef210c7e12aa4eb0af874",
+  "mac": {
+    "client": "Z3Vlc3QtY2xpZW50LTEyMzQ",
+    "seq": 1843200000000002,
+    "method": "POST",
+    "path": "/api/pad",
+    "mac": "-EgfMbSLQ1pqblXjKsBS-g"
+  }
+}

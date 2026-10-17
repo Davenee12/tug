@@ -2,6 +2,20 @@
 
 use super::*;
 
+/// The radio being watched, with its StateChanged handler: dropping it (when the radio is read
+/// afresh, every `RADIO_RECHECK_SECS` while it isn't On) unregisters the handler, so they don't
+/// pile up and deliver every change several times over.
+pub(super) struct RadioWatch {
+    radio: Radio,
+    token: i64,
+}
+
+impl Drop for RadioWatch {
+    fn drop(&mut self) {
+        let _ = self.radio.RemoveStateChanged(self.token);
+    }
+}
+
 impl Actor {
     pub(super) async fn watch_radio(&mut self) -> Result<(), BleError> {
         let radios = winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, Radio::GetRadiosAsync()?).await?;
@@ -19,7 +33,9 @@ impl Actor {
         log::info!("Bluetooth radio: {state:?}");
         self.shared.update_status(|s| s.radio = state);
         let tx = self.tx.clone();
-        radio.StateChanged(&TypedEventHandler::<Radio, windows::core::IInspectable>::new(
+        // The previous watch (and its handler) goes first, so there's only ever one.
+        self._radio = None;
+        let token = radio.StateChanged(&TypedEventHandler::<Radio, windows::core::IInspectable>::new(
             move |r, _| {
                 if let Some(r) = r.as_ref() {
                     let _ = tx.send(Event::Radio(map(r)));
@@ -27,8 +43,21 @@ impl Actor {
                 Ok(())
             },
         ))?;
-        self._radio = Some(radio);
+        self._radio = Some(RadioWatch { radio, token });
         Ok(())
+    }
+
+    /// Bluetooth came (back) on: retry the connection at once, and restart advertising now if it's
+    /// wanted and not running (Windows aborts it when the radio goes off, and its retries waited).
+    pub(super) fn radio_came_on(&mut self) {
+        self.retry_in = 0;
+        self.connect_failures = 0;
+        self.last_poke = None;
+        self.advertise_failures = 0;
+        let wanted = self.shared.store.setting(keys::ADVERTISE).ok().flatten().as_deref() != Some("false");
+        if wanted && self.shared.status().advertising != AdvertisingState::On {
+            self.advertise_retry_in = Some(0);
+        }
     }
 
     /// Read the radio again (and watch it afresh) because it isn't On: a missed StateChanged mustn't
@@ -44,8 +73,7 @@ impl Actor {
         if now != was {
             log::info!("Bluetooth radio re-read: {was:?} -> {now:?}");
             if now == RadioState::On {
-                self.retry_in = 0;
-                self.connect_failures = 0;
+                self.radio_came_on();
             }
         }
     }
@@ -61,10 +89,19 @@ impl Actor {
         }
         self.shared
             .update_status(|s| s.advertising = AdvertisingState::Starting);
-        match self.create_provider().await {
+        self.advertise_gen += 1;
+        match self.create_provider(self.advertise_gen).await {
             Ok(provider) => {
                 self.provider = Some(provider);
                 self.advertise_failures = 0;
+            }
+            // Bluetooth is off: there's nothing wrong with the adapter, and nothing to retry until
+            // it's back (the radio coming On restarts it). Not an error, and no "may not support
+            // peripheral mode" either.
+            Err(e) if advertising_blocked(self.shared.status().radio) => {
+                log::info!("advertising waits for Bluetooth to be on ({e})");
+                self.advertise_retry_in = None;
+                self.shared.update_status(|s| s.advertising = AdvertisingState::Off);
             }
             // The PC's adapter is busy or stalled (Windows aborts advertising when it blips, and
             // starting again can then hang). Nothing sends an Aborted event for a provider that was
@@ -98,7 +135,8 @@ impl Actor {
         }
     }
 
-    pub(super) async fn create_provider(&self) -> Result<GattServiceProvider, BleError> {
+    /// `gen` stamps its status events (`Event::Advertising`).
+    pub(super) async fn create_provider(&self, gen: u64) -> Result<GattServiceProvider, BleError> {
         // Bounded: this also runs from `tick` when Windows aborts advertising, which happens when the
         // adapter blips, and an unbounded wait there would park the whole actor.
         let res = winrt::bounded_for(
@@ -133,7 +171,7 @@ impl Actor {
         >::new(move |_, args| {
             if let Some(args) = args.as_ref() {
                 if let Ok(status) = args.Status() {
-                    let _ = tx.send(Event::Advertising(status));
+                    let _ = tx.send(Event::Advertising { gen, status });
                 }
             }
             Ok(())

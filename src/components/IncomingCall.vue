@@ -3,7 +3,9 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { Phone, PhoneOff, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
+import { AnswerGate, type CallKeyTarget } from "../lib/callKeys";
 import { appLabel, cleanName, duration, initials } from "../lib/format";
+import { callerLine } from "../lib/sharePrivacy";
 import type { PhoneNotification } from "../types/protocol";
 
 // The phone is ringing: a card over everything, answered or declined on the iPhone (ANCS
@@ -12,9 +14,13 @@ const props = defineProps<{ call: PhoneNotification }>();
 const tug = useTugStore();
 const root = ref<HTMLElement | null>(null);
 const answerButton = ref<HTMLButtonElement | null>(null);
+const declineButton = ref<HTMLButtonElement | null>(null);
 const busy = ref<"answer" | "decline" | null>(null);
 
 const name = computed(() => cleanName(props.call.title) || "Unknown caller");
+// While the screen is shared or presented, the card says only that a call is ringing (lib/sharePrivacy).
+const hidden = computed(() => tug.previewsHidden);
+const shownName = computed(() => callerLine(name.value, hidden.value));
 const source = computed(() => appLabel(props.call));
 // iOS puts "mobile", "iPhone" and the like here; a bare "Incoming Call" says nothing new.
 const detail = computed(() => {
@@ -37,19 +43,33 @@ async function respond(answer: boolean) {
 }
 
 // Esc only hides the card (the phone keeps ringing), as Esc closes everything else in tug: a
-// reflex must never hang up on someone. Declining is the Decline button. Enter answers once the
-// Answer button has focus, which it gets after a beat: a keypress meant for whatever you were
-// typing when the call came in mustn't pick it up.
+// reflex must never hang up on someone. Focus stays on the card, never on Answer (a focused
+// button fires on Space or Enter), so a keypress meant for whatever you were typing when the
+// call came in can't pick it up. Space never answers or declines; Enter answers only after the
+// card has been up for a moment with no keystrokes (lib/callKeys.ts). Otherwise, click.
 useFocusTrap(root, () => tug.hideCall(props.call.id));
-let armTimer: number | undefined;
+const gate = new AnswerGate(Date.now());
+function keyTarget(e: KeyboardEvent): CallKeyTarget {
+  if (e.target === root.value) return "card";
+  if (answerButton.value && e.target === answerButton.value) return "answer";
+  if (declineButton.value && e.target === declineButton.value) return "decline";
+  return "other";
+}
+function onKey(e: KeyboardEvent) {
+  const type = e.type === "keyup" ? "keyup" : "keydown";
+  const action = gate.key({ key: e.key, repeat: e.repeat, isComposing: e.isComposing, type }, keyTarget(e), Date.now());
+  if (action === "block" || action === "answer") {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  if (action === "answer" && canAnswer.value) void respond(true);
+}
 onMounted(async () => {
   await nextTick();
   root.value?.focus();
-  armTimer = window.setTimeout(() => (canAnswer.value ? answerButton.value : root.value)?.focus(), 700);
 });
 onUnmounted(() => {
   window.clearInterval(ticker);
-  window.clearTimeout(armTimer);
 });
 </script>
 
@@ -62,6 +82,8 @@ onUnmounted(() => {
       aria-labelledby="call-name"
       aria-describedby="call-detail"
       tabindex="-1"
+      @keydown.capture="onKey"
+      @keyup.capture="onKey"
       class="animate-call-in relative w-full max-w-[380px] overflow-hidden rounded-3xl bg-surface-dark px-8 pt-9 pb-7 text-center text-on-dark outline-none"
     >
       <div class="call-glow pointer-events-none absolute inset-x-0 top-0 h-72" aria-hidden="true" />
@@ -74,27 +96,29 @@ onUnmounted(() => {
         <X :size="16" />
       </button>
 
-      <p class="caption-upper relative text-on-dark-soft">{{ source }} · Incoming call</p>
+      <p class="caption-upper relative text-on-dark-soft">{{ source }}<template v-if="!hidden"> · Incoming call</template></p>
 
       <div class="relative mx-auto mt-9 grid size-28 place-items-center" aria-hidden="true">
         <span class="animate-call-ring absolute inset-0 rounded-full border-2 border-primary/60" />
         <span class="animate-call-ring absolute inset-0 rounded-full border-2 border-primary/60 [animation-delay:1.2s]" />
         <span class="relative grid size-24 place-items-center rounded-full bg-primary/20 font-display text-[38px] text-on-dark">
-          {{ initials(name) }}
+          <Phone v-if="hidden" :size="34" />
+          <template v-else>{{ initials(name) }}</template>
         </span>
       </div>
 
       <p id="call-name" class="relative mt-8 font-display text-[44px] leading-[1.05] break-words text-on-dark" style="letter-spacing: -0.02em">
-        {{ name }}
+        {{ shownName }}
       </p>
       <p id="call-detail" class="relative mt-2 text-[14px] text-on-dark-soft">
-        <template v-if="detail">{{ detail }} · </template>ringing on your iPhone
+        <template v-if="detail && !hidden">{{ detail }} · </template>ringing on your iPhone
         <span class="font-mono text-[12px]">{{ ringingFor }}</span>
       </p>
 
       <div class="relative mt-9 flex justify-center gap-3">
         <button
           v-if="canDecline"
+          ref="declineButton"
           class="btn-on-dark h-12 rounded-full px-6"
           :disabled="busy !== null"
           @click="respond(false)"

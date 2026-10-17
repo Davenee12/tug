@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Search, Settings2, X } from "lucide-vue-next";
+import { Eye, EyeOff, Search, Settings2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { dayLabel, entryLatest, groupFeed, notificationTime, type FeedEntry } from "../lib/format";
 import { optionalNudge } from "../lib/connectFlow";
 import type { CodeEntry } from "../lib/codeFeed";
 import { preservedScrollTop } from "../lib/scroll";
 import { reuseUnchanged, sameFeedEntry } from "../lib/stableList";
+import { createFeedPager } from "../lib/feedPaging";
 import CallsPanel from "./CallsPanel.vue";
 import CodeFeedRow from "./CodeFeedRow.vue";
 import FeedEntryRow from "./FeedEntryRow.vue";
@@ -80,12 +81,26 @@ watch(entryGroups, async (next, prev) => {
 const unreadMessages = computed(() => tug.unreadTexts);
 const TITLES: Record<string, string> = { feed: "Feed", messages: "Messages", calls: "Calls" };
 
-// Infinite scroll through older history.
+// Infinite scroll through older history. A page can be all cleared notifications and add nothing to
+// the screen, so the pager keeps going while the end of the list is still in view (lib/feedPaging).
 const sentinel = ref<HTMLElement | null>(null);
+function sentinelInView(): boolean {
+  const el = sentinel.value;
+  const box = feedScroller.value;
+  if (!el || !box || !tug.hasMore) return false;
+  const r = el.getBoundingClientRect();
+  const b = box.getBoundingClientRect();
+  return r.top <= b.bottom && r.bottom >= b.top;
+}
+const pager = createFeedPager({
+  load: () => tug.loadMore(),
+  canLoad: sentinelInView,
+  settle: () => nextTick(),
+});
 let observer: IntersectionObserver | undefined;
 onMounted(() => {
   observer = new IntersectionObserver((entries) => {
-    if (entries.some((e) => e.isIntersecting)) void tug.loadMore();
+    if (entries.some((e) => e.isIntersecting)) void pager.kick();
   });
   watch(
     sentinel,
@@ -106,7 +121,8 @@ const nudgeDismissed = ref(false);
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col">
+  <!-- While the screen is shared or presented, texts, names and photos marked preview-private blur. -->
+  <div :class="['flex h-full min-h-0 flex-col', tug.previewsHidden && 'previews-hidden']">
     <!-- A container: with the side Connection panel open the Feed is narrower than the window, so the
          title shrinks and search folds to an icon by the Feed's own width, not the viewport's. -->
     <header class="@container flex items-center gap-4 border-b border-hairline px-8 pt-6 pb-4">
@@ -147,6 +163,17 @@ const nudgeDismissed = ref(false);
       </button>
     </header>
 
+    <!-- Sharing or presenting: says previews are hidden (or showing, after Show anyway) for as long
+         as it lasts, and goes the moment it stops. -->
+    <div v-if="tug.shareBanner" class="border-b border-hairline bg-surface-card px-8 py-2.5" role="status">
+      <div class="mx-auto flex w-full max-w-3xl items-center gap-3">
+        <component :is="tug.previewsHidden ? EyeOff : Eye" :size="15" class="shrink-0 text-muted" />
+        <p class="min-w-0 flex-1 text-[13px] font-medium text-ink">{{ tug.shareBanner }}</p>
+        <button v-if="tug.previewsHidden" class="btn-secondary btn-sm shrink-0" @click="tug.showPreviewsAnyway()">Show anyway</button>
+        <button v-else class="btn-secondary btn-sm shrink-0" @click="tug.hidePreviewsAgain()">Hide again</button>
+      </div>
+    </div>
+
     <!-- Optional switches still off, once notifications work: a nudge, not a blocker. -->
     <div v-if="tug.view === 'feed' && nudge.length && !nudgeDismissed" class="border-b border-hairline bg-surface-soft px-8 py-3">
       <div class="mx-auto flex w-full max-w-3xl items-start gap-3">
@@ -175,7 +202,8 @@ const nudgeDismissed = ref(false);
         </div>
       </div>
 
-      <div v-if="entryGroups.length === 0" class="flex flex-1 items-center justify-center py-10">
+      <!-- Not while older pages are still coming in: "all caught up" only once it's true. -->
+      <div v-if="entryGroups.length === 0 && !pager.busy.value" class="flex flex-1 items-center justify-center py-10">
         <div class="max-w-lg text-center">
           <p class="headline text-[28px]">{{ tug.notifications.length ? "You're all caught up" : "Quiet for now" }}</p>
           <p class="mt-2 text-[14px] text-muted">

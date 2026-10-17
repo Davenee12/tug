@@ -10,6 +10,7 @@ impl Actor {
         // Whatever stall was being recovered from, the link it was on is gone.
         self.wedge_relink_at = None;
         self.wedge.new_link();
+        self.forgotten.link_closed();
         if let Some(link) = self.link.take() {
             let _ = link.device.Close();
         }
@@ -44,6 +45,9 @@ impl Actor {
     /// "Reconnecting…" (tug is doing this on its own; the phone doesn't need the user) until the
     /// link is back or a few attempts have failed.
     pub(super) fn restart_link(&mut self) {
+        // tug is rebuilding the link for a reason of its own (a stall, a wake, closed objects): the
+        // link coming and going meanwhile isn't the phone refusing this PC.
+        self.forgotten.interrupted();
         self.drop_link();
         self.retry_in = 0;
         // An away phone stays shown as away: "Reconnecting…" would flip back on the next failure.
@@ -83,7 +87,8 @@ impl Actor {
         {
             return;
         }
-        log::info!("the iPhone is now called {name}");
+        // Never the name itself: it often names a person ("Jordan's iPhone").
+        log::info!("the iPhone has a new name");
         let _ = self.shared.store.set_setting(keys::DEVICE_NAME, name);
         self.shared.update_status(|s| {
             if let Some(d) = s.device.as_mut() {
@@ -112,7 +117,13 @@ impl Actor {
         }
         if self.link.is_none() {
             match self.open_link(&id).await {
-                Ok(link) => self.link = Some(link),
+                Ok(link) => {
+                    // Already up: Windows sends no up event for it, so time it from here.
+                    if link.connected {
+                        self.forgotten.link_up(Instant::now());
+                    }
+                    self.link = Some(link);
+                }
                 Err(e) => {
                     self.fail_connect(&e);
                     return;
@@ -146,6 +157,8 @@ impl Actor {
                 self.connected_since_adopt = true;
                 self.adopt_timeouts = 0;
                 self.had_session = true;
+                let change = self.forgotten.healthy();
+                self.note_forgotten(change, "it connected normally again");
                 if let Some(l) = self.link.as_mut() {
                     l.connected = true;
                 }
@@ -186,6 +199,14 @@ impl Actor {
                     log::debug!("connect failed with the GATT session {status:?}");
                 }
                 self.fail_connect(&e);
+                // Windows closed tug's objects for this phone (RO_E_CLOSED): nothing on them works
+                // again, so open fresh ones on the next attempt rather than retrying dead ones
+                // forever. Same phone, so keep what the failed attempt decided about the unlock.
+                if e.is_closed() {
+                    let awaiting_unlock = self.shared.status().awaiting_unlock;
+                    self.drop_link();
+                    self.shared.update_status(|s| s.awaiting_unlock = awaiting_unlock);
+                }
                 // A timed-out attempt may have left Windows' device/session objects for this phone
                 // stuck (switching back to a phone needed a restart): open fresh ones next time.
                 // Not for a phone that's simply away (link down): dropping the link would lose its
@@ -206,9 +227,15 @@ impl Actor {
                         self.adopt_timeouts = self.adopt_timeouts.saturating_add(1);
                     }
                 }
-                // One refusal can be a glitch; two in a row means the phone dropped the bond. A newly
+                // Windows' stale-bond error, or refusals while the link flaps (`on_connection`),
+                // mean the phone forgot this PC (`crate::forgotten`); refusals alone don't. A newly
                 // adopted phone that never connects and keeps timing out needs pairing again too.
-                let stale = (e.is_stale_bond() && self.connect_failures >= 2)
+                let awaiting_unlock = self.shared.status().awaiting_unlock;
+                let change = self
+                    .forgotten
+                    .attempt_failed(Instant::now(), e.bond_signal(), awaiting_unlock);
+                self.note_forgotten(change, "");
+                let stale = self.forgotten.forgotten()
                     || link_policy::suggests_pair_again(self.connected_since_adopt, self.adopt_timeouts);
                 self.shared.update_status(|s| s.pairing_stale = stale);
             }
@@ -282,6 +309,20 @@ impl Actor {
             Ok(BluetoothLEDevice::FromIdAsync(&hid)?.join()?)
         })
         .await?;
+        // Anything failing from here leaves an opened device with handlers on it: close it (and so
+        // the handlers with it) instead of leaking one per failed attempt.
+        match self.finish_open(&device).await {
+            Ok(link) => Ok(link),
+            Err(e) => {
+                let _ = device.Close();
+                Err(e)
+            }
+        }
+    }
+
+    /// The rest of `open_link`, once Windows gave tug the device.
+    async fn finish_open(&mut self, device: &BluetoothLEDevice) -> Result<Link, BleError> {
+        let device = device.clone();
         self.gen += 1;
         let gen = self.gen;
         let tx = self.tx.clone();
@@ -329,7 +370,15 @@ impl Actor {
                 None
             }
         };
-        let connected = device.ConnectionStatus()? == BluetoothConnectionStatus::Connected;
+        let connected = match device.ConnectionStatus() {
+            Ok(status) => status == BluetoothConnectionStatus::Connected,
+            Err(e) => {
+                if let Some(s) = &gatt_session {
+                    let _ = s.Close();
+                }
+                return Err(e.into());
+            }
+        };
         if let Ok(name) = device.Name() {
             self.set_device_name(&name.to_string());
         }
@@ -351,8 +400,21 @@ impl Actor {
         if self.link.is_none() {
             return;
         }
-        if connected {
-            let up = classify_link_up(self.link_down_at.take(), at);
+        // Edges on a link with no working session count toward "the phone forgot this PC" (Windows
+        // bringing the link up and the phone dropping it again at once), judged on Windows' own
+        // stamps. While notifications are subscribed the session is working and an edge is a blip:
+        // it proves the bond instead (`ForgottenWatch::edge`). A link-up after an outage is about
+        // to tear the old subscription down, so it isn't live any more.
+        let up = connected.then(|| classify_link_up(self.link_down_at, at));
+        let subscribed = self.link.as_ref().is_some_and(|l| l.ancs.is_some()) && up != Some(LinkUp::AfterOutage);
+        let awaiting_unlock = self.shared.status().awaiting_unlock;
+        let change = self.forgotten.edge(connected, at, subscribed, awaiting_unlock);
+        self.note_forgotten(change, "notifications are still subscribed");
+        if change == Some(forgotten::Change::Left) {
+            self.shared.update_status(|s| s.pairing_stale = false);
+        }
+        if let Some(up) = up {
+            self.link_down_at = None;
             // The link was down past the grace even if `tick` hasn't torn it down yet (the up beat
             // the next tick, or the actor was busy): a real outage, so the old ANCS session, rows and
             // meta must go and the reconnect's cleared-while-away sweep must run. Tear down before
@@ -683,16 +745,19 @@ impl Actor {
 
 /// Turn a watcher id into a `BluetoothLEDevice`. A phone paired through
 /// Windows Settings appears as a Classic device; its LE side shares the address.
-pub(super) async fn resolve_le_device(
-    id: &str,
-    transport: Option<Transport>,
-) -> windows::core::Result<BluetoothLEDevice> {
+/// On a helper thread and time-limited (`winrt::off_thread`): this runs on the actor from
+/// adopting a phone, and opening a device can hang like any other Windows Bluetooth call. A device
+/// that doesn't exist comes back as `BleError::Win` with a success code (WinRT's null result).
+pub(super) async fn resolve_le_device(id: &str, transport: Option<Transport>) -> Result<BluetoothLEDevice, BleError> {
     let hid = HSTRING::from(id);
-    if transport != Some(Transport::Classic) {
-        if let Ok(le) = BluetoothLEDevice::FromIdAsync(&hid)?.await {
-            return Ok(le);
+    winrt::off_thread(winrt::DISCOVERY_TIMEOUT, move || {
+        if transport != Some(Transport::Classic) {
+            if let Ok(le) = BluetoothLEDevice::FromIdAsync(&hid)?.join() {
+                return Ok(le);
+            }
         }
-    }
-    let classic = BluetoothDevice::FromIdAsync(&hid)?.await?;
-    BluetoothLEDevice::FromBluetoothAddressAsync(classic.BluetoothAddress()?)?.await
+        let classic = BluetoothDevice::FromIdAsync(&hid)?.join()?;
+        Ok(BluetoothLEDevice::FromBluetoothAddressAsync(classic.BluetoothAddress()?)?.join()?)
+    })
+    .await
 }

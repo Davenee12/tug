@@ -66,6 +66,12 @@ pub enum Command {
         enabled: bool,
         reply: Reply,
     },
+    /// Clear history removed every notification row up to this id: forget which of the phone's
+    /// notifications those rows were, so nothing acts on (or updates) a cleared row. Rows stored
+    /// after the clear are kept.
+    ForgetRows {
+        up_to: i64,
+    },
     /// Run the Bluetooth inventory now (or join the one already running); see `crate::bt_inventory`.
     Inventory {
         reply: oneshot::Sender<crate::bt_inventory::BtInventory>,
@@ -124,7 +130,10 @@ pub fn start(shared: Arc<Shared>) -> BleHandle {
                     | Command::PairTexts { reply }
                     | Command::Forget { reply }
                     | Command::SetAdvertising { reply, .. } => reply,
-                    Command::StartDiscovery | Command::StopDiscovery | Command::RescanDiscovery => continue,
+                    Command::StartDiscovery
+                    | Command::StopDiscovery
+                    | Command::RescanDiscovery
+                    | Command::ForgetRows { .. } => continue,
                     Command::Inventory { reply } => {
                         let _ = reply.send(crate::bt_inventory::BtInventory::unavailable(
                             crate::bt_inventory::Trigger::OnDemand,

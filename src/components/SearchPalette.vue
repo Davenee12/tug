@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Bell, CheckCheck, Copy, FastForward, Gamepad2, ListMusic, ListPlus, MessageSquare, Moon, Music2, Phone, Plus, QrCode, Repeat, Rewind, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, ThumbsDown, ThumbsUp, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
+import { Bell, CheckCheck, ClipboardCopy, Copy, FastForward, Gamepad2, ListMusic, ListPlus, MessageSquare, Mic, Moon, Music2, Phone, Plus, QrCode, Repeat, Rewind, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, ThumbsDown, ThumbsUp, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
 import { useGameStore } from "../stores/game";
+import { useVoiceStore } from "../stores/voice";
 import { useFocusTrap } from "../lib/focusTrap";
-import { parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
+import { afterPaletteSend, parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
 import {
   appLabel,
   canClear,
@@ -28,6 +29,7 @@ import AppAvatar from "./AppAvatar.vue";
 const tug = useTugStore();
 const tugboat = useTugboatStore();
 const game = useGameStore();
+const voice = useVoiceStore();
 const root = ref<HTMLElement | null>(null);
 const input = ref<HTMLInputElement | null>(null);
 const list = ref<HTMLElement | null>(null);
@@ -43,6 +45,11 @@ const expanded = ref<number | null>(null);
 // Esc closes from anywhere in the dialog, not only from the search box.
 useFocusTrap(root, () => close());
 onMounted(async () => {
+  // Opened with something to put back (a text that couldn't be sent): it searches like typing.
+  if (tug.searchDraft) {
+    query.value = tug.searchDraft;
+    tug.searchDraft = "";
+  }
   await nextTick();
   input.value?.focus();
 });
@@ -102,6 +109,7 @@ const ctx = computed<ActionContext>(() => {
     code: tug.latestCode(),
     clearable: feed.filter(canClear),
     doNotDisturb: tug.settings.doNotDisturb,
+    voiceTyping: voice.enabled,
     unread: conversations.filter((c) => tug.newCount(c.key, c.notifications) > 0).length,
     apps: [...apps.values()],
     canDial: tug.canDial,
@@ -161,7 +169,9 @@ function actionIcon(a: Action) {
   if (a.kind === "clear-all") return Trash2;
   if (a.kind === "mark-all-read") return CheckCheck;
   if (a.kind === "dnd") return Moon;
+  if (a.kind === "voice") return Mic;
   if (a.kind === "show-app") return Bell;
+  if (a.kind === "send-clipboard") return ClipboardCopy;
   if (a.target === "spotify") return Music2;
   if (a.target === "tugboat") return QrCode;
   if (a.target === "game") return Gamepad2;
@@ -197,8 +207,14 @@ function openConversation(address: string | null, name: string) {
 async function run(a: Action) {
   close();
   if (a.kind === "send") {
-    const ok = await tug.sendMessage(a.person.address, a.text);
-    if (ok) openConversation(a.person.address, cleanName(a.person.name));
+    const typed = query.value;
+    const result = await tug.sendMessage(a.person.address, a.text);
+    if (afterPaletteSend(result) === "open-conversation") openConversation(a.person.address, cleanName(a.person.name));
+    else if (!tug.searchOpen) {
+      // Nothing was recorded (the error says why): come back with what was typed, ready to retry.
+      tug.searchDraft = typed;
+      tug.searchOpen = true;
+    }
   } else if (a.kind === "open-chat") {
     openConversation(a.person.address, cleanName(a.person.name));
   } else if (a.kind === "media") {
@@ -221,9 +237,13 @@ async function run(a: Action) {
     if (a.count) tug.markAllRead();
   } else if (a.kind === "dnd") {
     void tug.setSetting("doNotDisturb", a.enabled);
+  } else if (a.kind === "voice") {
+    void voice.toggleFromPalette(a.enabled);
   } else if (a.kind === "show-app") {
     tug.view = "feed";
     tug.focusItem = `n${a.focusId}`;
+  } else if (a.kind === "send-clipboard") {
+    void tugboat.sendClipboard();
   } else if (a.target === "new-message") {
     tug.view = "messages";
     tug.pickerOpen = true;
@@ -289,12 +309,17 @@ function onKey(e: KeyboardEvent) {
 
 <template>
   <div class="fixed inset-0 z-50 flex items-start justify-center bg-ink/30 px-6 pt-[10vh] backdrop-blur-[2px]" @click.self="close">
+    <!-- While the screen is shared or presented, people, texts and notifications blur as in the Feed
+         (lib/sharePrivacy); Show anyway in the Feed's banner reveals them here too. -->
     <div
       ref="root"
       role="dialog"
       aria-modal="true"
       aria-label="Search"
-      class="flex max-h-[76vh] w-full max-w-[620px] flex-col overflow-hidden rounded-xl border border-hairline bg-canvas"
+      :class="[
+        'flex max-h-[76vh] w-full max-w-[620px] flex-col overflow-hidden rounded-xl border border-hairline bg-canvas',
+        tug.previewsHidden && 'previews-hidden',
+      ]"
     >
       <div class="flex items-center gap-3 border-b border-hairline-soft px-5 py-3.5">
         <Search :size="18" class="shrink-0 text-muted-soft" />
@@ -326,6 +351,7 @@ function onKey(e: KeyboardEvent) {
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">dnd</kbd>
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">new message</kbd>
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">tugboat</kbd>
+            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">send clipboard</kbd>
             <kbd v-if="tug.settings.showGames" class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">game</kbd>
           </p>
         </li>
@@ -363,25 +389,25 @@ function onKey(e: KeyboardEvent) {
               <template v-else-if="o.kind === 'person'">
                 <AppAvatar app-id="com.apple.MobileSMS" :label="o.c.name" :photo-key="o.c.address" person size="sm" />
                 <span class="min-w-0 flex-1">
-                  <span class="block truncate text-[14px] font-medium text-ink">
+                  <span class="preview-private block truncate text-[14px] font-medium text-ink">
                     <template v-for="(r, j) in highlight(cleanName(o.c.name), query)" :key="j">
                       <mark v-if="r.match" class="rounded-sm bg-accent-amber/30 text-ink">{{ r.text }}</mark>
                       <template v-else>{{ r.text }}</template>
                     </template>
                   </span>
-                  <span class="block font-mono text-[12px] text-muted-soft">{{ formatAddress(o.c.address) }}</span>
+                  <span class="preview-private block font-mono text-[12px] text-muted-soft">{{ formatAddress(o.c.address) }}</span>
                 </span>
               </template>
 
               <!-- Text message -->
               <template v-else-if="o.kind === 'message'">
-                <AppAvatar app-id="com.apple.MobileSMS" :label="messageName(o.m)" size="sm" />
+                <AppAvatar app-id="com.apple.MobileSMS" :label="messageName(o.m)" :photo-key="o.m.address" person size="sm" />
                 <span class="min-w-0 flex-1">
                   <span class="flex items-baseline gap-2">
-                    <span class="truncate text-[14px] font-medium text-ink">{{ messageName(o.m) }}</span>
+                    <span class="preview-private truncate text-[14px] font-medium text-ink">{{ messageName(o.m) }}</span>
                     <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">{{ when(messageTime(o.m)) }}</span>
                   </span>
-                  <span class="block text-[13px] text-body">
+                  <span class="preview-private block text-[13px] text-body">
                     <span v-if="o.m.direction === 'out'" class="text-muted">You: </span>
                     <template v-for="(r, j) in highlight(snippet(o.m.body, query), query)" :key="j">
                       <mark v-if="r.match" class="rounded-sm bg-accent-amber/30 text-ink">{{ r.text }}</mark>
@@ -397,12 +423,12 @@ function onKey(e: KeyboardEvent) {
                 <span class="min-w-0 flex-1">
                   <span class="flex items-baseline gap-2">
                     <span class="truncate text-[14px] font-medium text-ink">
-                      {{ appLabel(o.n) }}<template v-if="o.n.title"> · {{ cleanName(o.n.title) }}</template>
+                      {{ appLabel(o.n) }}<template v-if="o.n.title"> · <span class="preview-private">{{ cleanName(o.n.title) }}</span></template>
                     </span>
                     <span v-if="o.n.removedAt" class="shrink-0 text-[11px] text-muted-soft">cleared</span>
                     <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">{{ when(notificationTime(o.n)) }}</span>
                   </span>
-                  <span :class="['block text-[13px] text-body', expanded === o.n.id ? 'whitespace-pre-line' : '']">
+                  <span :class="['preview-private block text-[13px] text-body', expanded === o.n.id ? 'whitespace-pre-line' : '']">
                     <template
                       v-for="(r, j) in highlight(expanded === o.n.id ? o.n.message : snippet(o.n.message || o.n.subtitle, query), query)"
                       :key="j"

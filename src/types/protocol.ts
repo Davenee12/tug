@@ -22,6 +22,12 @@ export interface Services {
 }
 
 export interface DeviceStatus {
+  /**
+   * Counts the backend's status changes. Events and the startup read can arrive out of order, so
+   * the store keeps the highest (`lib/ordering`). Always sent; optional only so the store's
+   * initial status and test fixtures needn't name it.
+   */
+  rev?: number;
   radio: RadioState;
   peripheralSupported: boolean | null;
   advertising: AdvertisingState;
@@ -143,6 +149,8 @@ export type MediaCommand =
   | "dislikeTrack";
 
 export interface NowPlaying {
+  /** Counts Now Playing changes (`Stamped` in state.rs), like `DeviceStatus.rev`. Optional only for fixtures. */
+  rev?: number;
   player: string | null;
   state: PlaybackState;
   rate: number | null;
@@ -197,7 +205,7 @@ export interface SmsMessage {
   address: string;
   contactName: string | null;
   body: string;
-  /** Phone-local ISO time, when the phone reported one. */
+  /** ISO time when the phone reported one: phone-local without a zone, or UTC with Z. */
   sentAt: string | null;
   receivedAt: number;
   /**
@@ -290,6 +298,12 @@ export interface UiSettings {
   typeCodeKeys: string;
   /** The sidebar's Play button and the Ctrl+K "Tugboat Run" command (on by default). */
   showGames: boolean;
+  /** One-tap suggested replies on text pop-ups and in Messages (on by default; lib/smartReplies). */
+  smartReplies: boolean;
+  /** The suggestions for texts no rule matches (at most 3; lib/smartReplies `DEFAULT_REPLIES` unless changed). */
+  smartReplyDefaults: string[];
+  /** While the screen is shared or presented, pop-ups and the window hide texts and names (on by default; read by the backend, `share_privacy/`). */
+  hidePreviewsWhileSharing: boolean;
 }
 
 /**
@@ -305,6 +319,8 @@ export interface ToastSpec {
   name: string;
   /** A text from a person tug can answer over message access: the reply box and Send. */
   replyTo: string | null;
+  /** A text whose sender's name has several numbers: "Open in tug" (pick the number there) instead of a reply box. */
+  open?: boolean;
   /** A conversation: "Mark read". */
   markRead: boolean;
   /** A one-time code: "Copy code". */
@@ -313,6 +329,27 @@ export interface ToastSpec {
   callBack: boolean;
   /** Clearable on the phone (never a ringing call): "Clear". */
   clear: boolean;
+  /**
+   * Suggested replies, one button each, sent like a typed reply to `replyTo` (only with a reply
+   * box). At most 3, each at most 40 characters; the backend fits them in beside the other buttons.
+   */
+  replies?: string[];
+  /** The app it's from ("Messages"): all the pop-up says while previews are hidden. */
+  app: string;
+  /** What it is, for the wording while previews are hidden ("New message", "Incoming call"). */
+  kind: ToastKind;
+}
+
+/** What a pop-up is about (`ToastKind` in `toast/xml.rs`); `info` is tug's own words, never hidden. */
+export type ToastKind = "notification" | "message" | "call" | "missedCall" | "info";
+
+/** Why previews are hidden (`share_privacy::Reason`); `unknown` when tug couldn't check, so it hides to be safe. */
+export type ShareReason = "sharing" | "presenting" | "fullScreen" | "unknown";
+
+/** Whether previews are hidden right now because the screen is shared or presented (`screen-share`, `share_privacy/`). */
+export interface ShareState {
+  active: boolean;
+  reason: ShareReason | null;
 }
 
 /** A pop-up's body or button was pressed and carried out (`toast-pressed`, `toast/mod.rs`). */
@@ -332,6 +369,12 @@ export interface CodeFilled {
   /** Who the typed code came from; null unless typed. */
   from: string | null;
 }
+
+/**
+ * A task from tug's taskbar jump list (`quick_actions::QuickAction`, serialized kebab-case: the
+ * same id the task passes as `--action`), taken with `take_quick_actions`.
+ */
+export type QuickAction = "new-message" | "tugboat" | "copy-code" | "game" | "settings";
 
 /** The type-the-code shortcut (`code_hotkey_status`, `set_code_hotkey`). */
 export interface CodeHotkeyStatus {
@@ -514,18 +557,34 @@ export interface TugboatText {
 
 /** Everything the Tugboat panel shows; also the "tugboat-status" event. */
 export interface TugboatStatus {
+  /**
+   * Numbers each copy in the order the backend composed it; the store keeps the newest
+   * (`lib/ordering`). Always sent; optional for fixtures and the store's own Off placeholder.
+   */
+  rev?: number;
   phase: TugboatPhase;
   /** The QR link (with the secret), also shown as the manual fallback. */
   url: string | null;
   /** "192.168.1.20:53211". */
   address: string | null;
   qr: TugboatQr | null;
+  /**
+   * The Player 2 code's link: the guest secret (derived from the session's, never the session's
+   * own) after `#g.`. Only while a two-player game asks for a second phone; it can only steer.
+   */
+  guestUrl: string | null;
+  guestQr: TugboatQr | null;
   /** "iPhone", once one has connected. */
   phone: string | null;
   /** The phone's page is open and checking in. */
   phoneActive: boolean;
-  /** Where received files go (Pictures\Tugboat). */
+  /** Where received files go (Pictures\Tugboat, or Downloads\Tugboat when Windows refused Pictures). */
   folder: string | null;
+  /**
+   * Windows Security (Controlled folder access) refused Pictures: files go to Downloads instead
+   * ("fallback"), or can't be saved until tug is allowed ("blocked").
+   */
+  folderBlock: "fallback" | "blocked" | null;
   incoming: TugboatIncoming[];
   outgoing: TugboatOffer[];
   texts: TugboatText[];
@@ -537,6 +596,8 @@ export interface TugboatStatus {
   receiving: boolean;
   /** Why Tugboat turned itself off. */
   ended: "idle" | "hidden" | null;
+  /** The last clipboard sent to the phone: its kind and whether the phone has it, never its contents. */
+  clip: TugboatClip | null;
 }
 
 /** "tugboat-text": text from the phone went (or failed to go) onto the PC clipboard. */
@@ -544,11 +605,34 @@ export interface TugboatTextArrived {
   ok: boolean;
 }
 
+// --- Tugboat's shared clipboard (src-tauri/src/tugboat/clip.rs) ---
+
+export type TugboatClipKind = "text" | "image";
+/** Waiting for the phone; the phone has it; or no phone took it within 2 minutes (dropped). */
+export type TugboatClipState = "waiting" | "delivered" | "expired";
+
+/** The last clipboard sent with "Send clipboard to iPhone" (`ClipStatus`). */
+export interface TugboatClip {
+  id: number;
+  kind: TugboatClipKind;
+  state: TugboatClipState;
+  /** When a waiting clipboard is dropped (Unix ms). */
+  expiresAt: number;
+}
+
+/** "tugboat-clip": the clipboard reached the phone, or was dropped (`ClipEvent`). */
+export interface TugboatClipEvent {
+  kind: TugboatClipKind;
+  state: TugboatClipState;
+}
+
 /**
  * The phone as Tugboat Run's controller (`game-pad` event, `tugboat/pad.rs` `PadEvent`). Sent when
  * steering or boost changes, and when the phone arrives or goes quiet.
  */
 export interface GamePad {
+  /** Which phone: 1 is the one that opened Tugboat, 2 a second phone (two-player games only). */
+  seat: 1 | 2;
   connected: boolean;
   /** -1 (full left) to 1 (full right); 0 whenever not connected. */
   steer: number;
@@ -765,6 +849,8 @@ export interface DevToolsConfirm {
 
 /** Everything Settings › Developer tools shows (`DevToolsStatus`). */
 export interface DevToolsStatus {
+  /** Numbers each copy in the order the backend composed it; the store keeps the newest. Optional for fixtures. */
+  rev?: number;
   enabled: boolean;
   permissions: DevToolsPermission[];
   clients: DevToolsClient[];
@@ -786,10 +872,47 @@ export type PcAudioProblem = "notFound" | "denied" | "timedOut" | "failed" | "dr
 
 /** Everything the PC audio button and Settings row show (`PcAudioStatus`). */
 export interface PcAudioStatus {
+  /**
+   * Counts the changes: a command's answer and the event from the attempt can arrive in either
+   * order, so the store keeps the highest (`lib/ordering`). Optional only for fixtures.
+   */
+  rev?: number;
   /** This version of Windows can do it (Windows 10 version 2004 and later). */
   supported: boolean;
   state: PcAudioState;
   problem: PcAudioProblem | null;
   /** "Turn on automatically when my iPhone connects", for the phone tug uses now. */
   auto: boolean;
+}
+
+// ---- Voice typing (`voice/mod.rs`) ----
+
+/** A speech language installed on this PC (`VoiceLanguage`). */
+export interface VoiceLanguage {
+  /** Windows' language id in hex ("409" is English, United States). */
+  id: string;
+  /** "English (US)". */
+  name: string;
+}
+
+/** off; on (shortcut registered); inUse (another app holds it); unavailable (no speech language on this PC). */
+export type VoiceState = "off" | "on" | "inUse" | "unavailable";
+
+/** Voice typing for Settings (`voice_status`, `set_voice_typing`, the `voice-status` event). */
+export interface VoiceStatus {
+  enabled: boolean;
+  state: VoiceState;
+  /** The hold-to-talk shortcut, one of `src/lib/voiceHotkeys.json`. */
+  keys: string;
+  /** The language listened in (an id from `languages`), null when none is installed. */
+  language: string | null;
+  /** Empty until Settings asks for them. */
+  languages: VoiceLanguage[];
+  /** Windows' privacy settings keep desktop apps from the microphone. */
+  micBlocked: boolean;
+}
+
+/** What one hold did (`voice-typed`). The words themselves are never sent. */
+export interface VoiceTyped {
+  outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "noTarget" | "keysHeld" | "unavailable" | "failed";
 }
