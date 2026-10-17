@@ -29,7 +29,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcwREU0OUM5QTQ3MzE5MEYKUldRUEdYT2t5VW5lY0k1WlZIZTIwSFdDTDBzZkEvTHgvRzVrODM0SmREMUYvelBlU2prSjlJZzIK",
       "endpoints": [
         "https://github.com/Davenee12/tug/releases/latest/download/latest.json"
       ],
