@@ -20,6 +20,7 @@ import {
 } from "../lib/format";
 import { replyAddress, replyReadsConversation, sendOutcome, toastSpec } from "../lib/toastSpec";
 import { clearHistory as clearHistoryNow } from "../lib/clearHistory";
+import { foldChatAppSeen } from "../lib/seen";
 import { DEFAULT_REPLIES, parseReplyDefaults } from "../lib/smartReplies";
 import { shouldPopUp, type PopupEvent } from "../lib/popup";
 import { isVip, vipIndex } from "../lib/vips";
@@ -1342,7 +1343,12 @@ export const useTugStore = defineStore("tug", () => {
     const raw = await api.getSettings();
     zoom.value = Number(raw["ui.zoom"]) || 1;
     applyZoom(zoom.value);
-    seen.value = raw["ui.seen"] ? (JSON.parse(raw["ui.seen"]) as Record<string, number>) : {};
+    const storedSeen = raw["ui.seen"] ? (JSON.parse(raw["ui.seen"]) as Record<string, number>) : {};
+    // Once, after the upgrade that moved other chat apps out of Messages: their per-person times
+    // become their Feed stack's, so those stacks don't all show as new (lib/seen).
+    const foldedSeen = foldChatAppSeen(storedSeen);
+    seen.value = foldedSeen ?? storedSeen;
+    if (foldedSeen) void attempt(() => api.setSetting("ui.seen", JSON.stringify(foldedSeen)));
     if (raw["ui.seenSince"]) {
       seenSince.value = Number(raw["ui.seenSince"]);
     } else {
