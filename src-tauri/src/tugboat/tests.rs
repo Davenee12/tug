@@ -411,22 +411,112 @@ async fn slow_or_excess_connections_are_closed() {
     // Half a request head, then nothing (slowloris): closed once the header timeout passes.
     let mut slow = TcpStream::connect(addr).await.unwrap();
     slow.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n").await.unwrap();
-    // Fill the other slot, then a third connection is turned away at once.
+    // Fill the other slot. A third connection makes room by closing the oldest that never
+    // proved itself (the stalled one), at once rather than after its timeout.
     let mut second = TcpStream::connect(addr).await.unwrap();
     second.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let third = TcpStream::connect(addr).await.unwrap();
-    assert!(closed_within(third, 1).await, "over the cap: closed straight away");
     assert!(
-        closed_within(slow, 3).await,
+        closed_within(slow, 1).await,
+        "over the cap: the oldest unproven connection is closed"
+    );
+    assert!(
+        closed_within(second, 3).await,
         "a stalled head is closed by the header timeout"
     );
-    assert!(closed_within(second, 3).await);
+    assert!(closed_within(third, 3).await);
     // The server still answers afterwards.
     assert_eq!(send(addr, "GET", "/", None, Vec::new()).await.0, 200);
     let _ = stop.send(());
     server.await.unwrap();
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A device without the secret gets one answer per connection (no idling on keep-alive), and
+/// can't fill every slot: the phone still gets in, and its kept-alive connection stays open.
+#[tokio::test]
+async fn strangers_cant_hold_connections_or_lock_the_phone_out() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let root = temp_dir();
+    let secret = crypto::new_secret();
+    let session = Arc::new(Session::new(
+        &secret,
+        root.join("Tugboat"),
+        root.join("incoming"),
+        Arc::new(TestSink::default()),
+    ));
+    let limits = server::Limits {
+        max_connections: 3,
+        ..server::Limits::default()
+    };
+    let (addr, stop, server) = start_server(session.clone(), limits).await;
+
+    // An unauthenticated request on a keep-alive connection: answered, then the server hangs up.
+    let mut stranger = TcpStream::connect(addr).await.unwrap();
+    stranger
+        .write_all(b"GET /api/state HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n")
+        .await
+        .unwrap();
+    let mut reply = Vec::new();
+    let read = tokio::time::timeout(std::time::Duration::from_secs(3), stranger.read_to_end(&mut reply)).await;
+    assert!(read.is_ok(), "the connection was closed after the refusal");
+    let reply = String::from_utf8_lossy(&reply).to_lowercase();
+    assert!(reply.starts_with("http/1.1 401"), "{reply}");
+    assert!(reply.contains("connection: close"), "{reply}");
+
+    // Strangers fill every slot with connections that send nothing.
+    let mut idle = Vec::new();
+    for _ in 0..3 {
+        idle.push(TcpStream::connect(addr).await.unwrap());
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // The phone still gets in, and its connection carries request after request.
+    let keys = Keys::derive(&secret);
+    let client = "phoneAAAAAAAAAAAAAAAAA";
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .unwrap();
+    let conn = tokio::spawn(conn);
+    let mut seq = 1_790_000_000_000u64 * 1024;
+    for _ in 0..3 {
+        seq += 1;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/state")
+            .header("host", addr.to_string())
+            .header("authorization", auth::header(&keys, client, seq, "GET", "/api/state"))
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        sender.ready().await.expect("the phone's connection stays open");
+        let res = sender.send_request(req).await.unwrap();
+        assert_eq!(res.status().as_u16(), 200);
+        assert!(res.headers().get("connection").is_none());
+        res.into_body().collect().await.unwrap();
+    }
+    // More strangers arrive: they push out other strangers, never the phone.
+    for _ in 0..5 {
+        idle.push(TcpStream::connect(addr).await.unwrap());
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    seq += 1;
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/state")
+        .header("host", addr.to_string())
+        .header("authorization", auth::header(&keys, client, seq, "GET", "/api/state"))
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    sender.ready().await.expect("still open");
+    assert_eq!(sender.send_request(req).await.unwrap().status().as_u16(), 200);
+    assert!(!conn.is_finished());
+
+    drop(sender);
+    let _ = stop.send(());
+    server.await.unwrap();
+    std::fs::remove_dir_all(&root).ok();
 }
 
 /// The game controller channel, over a real socket: only the bound phone, only while the game

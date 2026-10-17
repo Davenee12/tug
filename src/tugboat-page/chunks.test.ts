@@ -66,12 +66,15 @@ describe("retries and messages", () => {
     expect(isFatal("in-use")).toBe(true);
     expect(isFatal("network")).toBe(false);
     expect(isFatal("bad-chunk")).toBe(false);
+    // Windows Security refusing the folder won't fix itself by retrying in a loop.
+    expect(isFatal("blocked")).toBe(true);
   });
 
   it("speaks plainly", () => {
     expect(messageFor("closed")).toMatch(/scan the new code/);
     expect(messageFor("network")).toMatch(/same Wi-Fi/);
     expect(messageFor("anything")).toBe("Something went wrong. Try again.");
+    expect(messageFor("blocked")).toMatch(/^Windows Security blocked tug from saving to Pictures\. Allow tug under Controlled folder access/);
   });
 
   it("formats sizes", () => {
@@ -86,6 +89,8 @@ describe("retrying a failed upload", () => {
   it("offers Try again for a dropped connection or a full disk", () => {
     expect(canRetryUpload("network")).toBe(true);
     expect(canRetryUpload("no-space")).toBe(true);
+    // Once tug is allowed in Windows Security, Try again works.
+    expect(canRetryUpload("blocked")).toBe(true);
     expect(canRetryUpload("error")).toBe(true);
   });
 

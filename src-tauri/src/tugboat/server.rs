@@ -2,13 +2,16 @@
 //! LAN address while Tugboat is open; every `/api` request is authenticated (`auth.rs`) and every
 //! body is sealed (`crypto.rs`), so the network only ever sees ciphertext and chunk numbers.
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::Router;
@@ -16,13 +19,13 @@ use hyper::server::conn::http1;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
+use tokio::task::{AbortHandle, Id as TaskId, JoinSet};
 
 use super::auth::Authorized;
 use super::crypto::OVERHEAD;
 use super::page;
 use super::session::{ApiError, Session, TextRequest, UploadRequest};
+use super::tally::{self, Tally};
 use super::upload::MAX_CHUNK;
 
 type Shared = State<Arc<Session>>;
@@ -47,6 +50,7 @@ fn router(session: Arc<Session>, body_timeout: Duration) -> Router {
         .route("/api/down/{id}/{index}", get(get_chunk))
         .route("/api/pad", post(pad_input))
         .fallback(|| async { StatusCode::NOT_FOUND })
+        .layer(middleware::from_fn(close_unproven))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(axum::Extension(BodyTimeout(body_timeout)))
         .with_state(session)
@@ -83,6 +87,52 @@ impl Default for Limits {
 /// Largest buffered request head a connection may hold.
 const MAX_BUF: usize = 64 * 1024;
 
+/// Whether a connection has carried a request that passed `Session::authorize` (it holds the
+/// secret). Set from inside the request through the task-local below.
+#[derive(Clone, Default)]
+struct Proof(Arc<AtomicBool>);
+
+impl Proof {
+    fn proven(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+tokio::task_local! {
+    /// The connection the current request arrived on (each connection runs in its own task).
+    static CONNECTION: Proof;
+}
+
+/// A connection that has never proved itself is closed after its first response: a device that
+/// doesn't hold the secret gets one answer per connection and can't keep a slot by idling on
+/// keep-alive. (The phone's page load, before it has the keys, costs a few extra connections.)
+async fn close_unproven(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    let proven = CONNECTION.try_with(Proof::proven).unwrap_or(true);
+    if !proven {
+        res.headers_mut()
+            .insert(header::CONNECTION, HeaderValue::from_static("close"));
+    }
+    res
+}
+
+/// One live connection, for making room when every slot is taken.
+struct Live {
+    /// Accept order: the oldest unproven connection goes first.
+    order: u64,
+    proof: Proof,
+    abort: AbortHandle,
+}
+
+/// Which connection to close to make room for a new one: the oldest that never proved itself
+/// (a stranger's, most likely). `None` if every one is the phone's.
+fn make_room(live: &HashMap<TaskId, Live>) -> Option<TaskId> {
+    live.iter()
+        .filter(|(_, c)| !c.proof.proven())
+        .min_by_key(|(_, c)| c.order)
+        .map(|(id, _)| *id)
+}
+
 /// Serve until `shutdown` resolves.
 pub async fn serve(listener: TcpListener, session: Arc<Session>, shutdown: impl Future<Output = ()> + Send + 'static) {
     serve_with(listener, session, shutdown, Limits::default()).await
@@ -98,13 +148,25 @@ pub async fn serve_with(
     limits: Limits,
 ) {
     let app = router(session, limits.body_timeout);
-    let slots = Arc::new(Semaphore::new(limits.max_connections));
     let mut connections = JoinSet::new();
+    let mut live: HashMap<TaskId, Live> = HashMap::new();
+    let mut accepted_count = 0u64;
+    // Connections that ended badly or were turned away: logged once a minute with a count, since
+    // any device on the network can make as many as it likes.
+    let ended = Arc::new(Mutex::new(Tally::default()));
+    let mut crowded = Tally::default();
     tokio::pin!(shutdown);
     loop {
         let accepted = tokio::select! {
             _ = &mut shutdown => break,
-            Some(_) = connections.join_next(), if !connections.is_empty() => continue,
+            Some(done) = connections.join_next_with_id(), if !connections.is_empty() => {
+                let id = match done {
+                    Ok((id, ())) => id,
+                    Err(e) => e.id(),
+                };
+                live.remove(&id);
+                continue;
+            }
             accepted = listener.accept() => accepted,
         };
         // Accept errors are per-connection on Windows (a reset before accept, WSAECONNRESET):
@@ -116,14 +178,36 @@ pub async fn serve_with(
         // Replies are small and latency matters (the game controller): send each at once rather
         // than waiting to batch it with more.
         let _ = stream.set_nodelay(true);
-        let Ok(slot) = slots.clone().try_acquire_owned() else {
-            log::debug!("tugboat: too many connections, closing one");
-            drop(stream);
-            continue;
-        };
+        if live.len() >= limits.max_connections {
+            // Full. Close the oldest connection that never proved it holds the secret, so devices
+            // that don't can't hold every slot and lock the phone out; if they're all the phone's,
+            // turn the newcomer away.
+            let room = make_room(&live).and_then(|id| live.remove(&id));
+            let made_room = room.is_some();
+            if let Some(old) = room {
+                old.abort.abort();
+            }
+            if let Some(held) = crowded.note(Instant::now()) {
+                log::debug!(
+                    "tugboat: too many connections, {}{}",
+                    if made_room {
+                        "closed an unproven one"
+                    } else {
+                        "turned one away"
+                    },
+                    tally::more(held)
+                );
+            }
+            if !made_room {
+                drop(stream);
+                continue;
+            }
+        }
+        let proof = Proof::default();
         let service = TowerToHyperService::new(app.clone());
-        connections.spawn(async move {
-            let _slot = slot;
+        let ended = ended.clone();
+        let conn_proof = proof.clone();
+        let abort = connections.spawn(CONNECTION.scope(conn_proof, async move {
             // Keep-alive, so the phone reuses its connections. The header timeout also bounds how
             // long a kept-alive connection may sit idle waiting for its next request: it restarts
             // with every request, so a controller sending every 200 ms or faster never meets it.
@@ -134,12 +218,28 @@ pub async fn serve_with(
                 .max_buf_size(MAX_BUF)
                 .serve_connection(TokioIo::new(stream), service);
             if let Err(e) = conn.await {
-                log::debug!("tugboat: connection ended: {e}");
+                let note = ended.lock().unwrap_or_else(|p| p.into_inner()).note(Instant::now());
+                if let Some(held) = note {
+                    log::debug!("tugboat: connection ended: {e}{}", tally::more(held));
+                }
             }
-        });
+        }));
+        live.insert(
+            abort.id(),
+            Live {
+                order: accepted_count,
+                proof,
+                abort,
+            },
+        );
+        accepted_count += 1;
     }
     connections.abort_all();
     while connections.join_next().await.is_some() {}
+    let held = ended.lock().unwrap_or_else(|p| p.into_inner()).flush() + crowded.flush();
+    if held > 0 {
+        log::debug!("tugboat: {held} more connection notes held back before closing");
+    }
 }
 
 fn error(e: ApiError) -> Response {
@@ -169,7 +269,10 @@ fn sealed(bytes: Vec<u8>) -> Response {
 fn authorize(s: &Session, method: &Method, uri: &Uri, headers: &HeaderMap) -> Result<Authorized, ApiError> {
     let auth = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
     let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok());
-    s.authorize(auth, method.as_str(), uri.path(), ua)
+    let ok = s.authorize(auth, method.as_str(), uri.path(), ua)?;
+    // This connection holds the secret: it keeps its slot and stays alive between requests.
+    let _ = CONNECTION.try_with(|p| p.0.store(true, Ordering::SeqCst));
+    Ok(ok)
 }
 
 /// Authenticate a request from its headers, *then* read its body. A slow 2 MB chunk is checked

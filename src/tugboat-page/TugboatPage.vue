@@ -40,7 +40,7 @@ async function poll() {
     connection.value = "ok";
   } catch (e) {
     const code = e instanceof TugboatError ? e.code : "network";
-    if (isFatal(code) && code !== "too-big" && code !== "no-space") fatal.value = code;
+    if (isFatal(code) && code !== "too-big" && code !== "no-space" && code !== "blocked") fatal.value = code;
     else connection.value = "network";
   } finally {
     polling = false;

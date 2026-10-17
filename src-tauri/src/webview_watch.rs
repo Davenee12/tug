@@ -305,6 +305,7 @@ mod imp {
             }
         };
         watch(&window);
+        crate::session_end::watch(&window);
         if let Some(size) = size {
             let _ = window.set_size(size);
         }

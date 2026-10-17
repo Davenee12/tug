@@ -500,7 +500,11 @@ impl Actor {
                     // Classic-only pairing (calls/audio): pair the same phone's LE
                     // side, which LightBlue has connected, and keep the Classic name.
                     Some((le_id, name)) => {
-                        log::info!("{name} has no LE record; pairing its connected LE side {le_id}");
+                        log::info!(
+                            "{} has no LE record; pairing its connected LE side {}",
+                            crate::device_kind::log_tag(&id),
+                            crate::device_kind::log_tag(&le_id)
+                        );
                         self.carried_name = Some(name);
                         self.pair(le_id, reply);
                     }

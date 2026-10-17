@@ -882,7 +882,11 @@ mod worker {
                 let device = self.pick_device().await?;
                 self.texts_device = Some(device.name.clone());
                 let session = MapSession::connect(&device.id).await?;
-                log::info!("message access connected to {}", device.name);
+                // A tag, never the name: phone names often name a person.
+                log::info!(
+                    "message access connected to {}",
+                    crate::device_kind::log_tag(&device.id)
+                );
                 // A different phone: nothing it shared (or didn't) carries over.
                 if self.device_id.as_deref().is_some_and(|id| id != device.id) {
                     self.contacts.forget();
@@ -901,7 +905,7 @@ mod worker {
                 // name ("Jordan's iPhone"). Adopt it when it's more specific.
                 let current = self.shared.status().device.map(|d| d.name).unwrap_or_default();
                 if crate::device_kind::more_specific_name(&current, &device.name) {
-                    log::info!("using the Classic name '{}' for the iPhone", device.name);
+                    log::info!("using the Classic side's name for the iPhone");
                     let _ = self.shared.store.set_setting(keys::DEVICE_NAME, &device.name);
                     let name = device.name.clone();
                     self.shared.update_status(|s| {

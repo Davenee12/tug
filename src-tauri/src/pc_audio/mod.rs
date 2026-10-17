@@ -31,10 +31,6 @@ pub const EVENT: &str = "pc-audio";
 /// (notifications, texts) goes first, and a phone that only blipped in range is left alone.
 const AUTO_DELAY: Duration = Duration::from_secs(5);
 
-/// On quit, how long to wait for Windows to close the connection, so the phone's audio returns to
-/// the phone rather than to a speaker that's gone.
-const QUIT_WAIT: Duration = Duration::from_secs(2);
-
 pub struct PcAudio {
     shared: Arc<Shared>,
     me: Weak<PcAudio>,
@@ -238,9 +234,10 @@ impl PcAudio {
         self.step(Input::TurnOff, None);
     }
 
-    /// tug is quitting: close the connection now and wait (briefly) for Windows to finish, so the
-    /// phone isn't left sending its audio to a PC that stopped listening.
-    pub fn shutdown_now(&self) {
+    /// tug is quitting: close the connection now and wait up to `wait` for Windows to finish, so
+    /// the phone isn't left sending its audio to a PC that stopped listening. When Windows is
+    /// shutting down `wait` is zero: the close is started, and shutdown isn't held up for it.
+    pub fn shutdown_now(&self, wait: Duration) {
         let live = {
             let mut inner = self.lock();
             inner.machine.step(Input::TurnOff);
@@ -248,7 +245,7 @@ impl PcAudio {
         };
         if let Some(live) = live {
             log::info!("PC audio: off (tug is quitting)");
-            live.close(QUIT_WAIT);
+            live.close(wait);
         }
     }
 

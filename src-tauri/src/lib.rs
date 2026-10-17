@@ -26,6 +26,7 @@ mod pc_audio;
 #[cfg(test)]
 mod perf;
 mod pin_confirm;
+mod session_end;
 mod spotify;
 mod startup;
 mod state;
@@ -53,6 +54,35 @@ pub const MINIMIZED_ARG: &str = "--minimized";
 /// Whether this launch asked to start minimized (autostart adds `MINIMIZED_ARG`).
 fn launched_minimized() -> bool {
     std::env::args().any(|a| a == MINIMIZED_ARG)
+}
+
+/// Run by the uninstaller (windows/hooks.nsh) before tug's files are removed: takes this tug's
+/// own `bin` folder off the user's PATH, however long PATH is (NSIS can only handle 1023
+/// characters). It takes no path from the caller, touches only the user's own PATH, and does
+/// nothing when the folder isn't on it, so running it by hand can't do anything Settings ›
+/// Developer tools › Remove from PATH couldn't.
+pub const REMOVE_FROM_PATH_ARG: &str = "--remove-from-path";
+
+/// The uninstaller's step, if that's what this launch is for: `Some(exit code)`, and the app
+/// doesn't start. `None` for every other launch.
+pub fn run_uninstall_step(args: impl Iterator<Item = String>) -> Option<i32> {
+    if !is_uninstall_step(args) {
+        return None;
+    }
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| d.join("bin")));
+    // Never fall through to starting the app from the uninstaller.
+    let Some(dir) = dir else { return Some(1) };
+    Some(match devtools::path_env::remove(&dir.to_string_lossy()) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    })
+}
+
+/// Only exactly `tug.exe --remove-from-path` (nothing before it) is the uninstaller's step.
+fn is_uninstall_step(mut args: impl Iterator<Item = String>) -> bool {
+    args.next().as_deref() == Some(REMOVE_FROM_PATH_ARG)
 }
 
 /// Open tug.db. When it won't open (corrupt, locked by a sync app, read-only, a failed upgrade),
@@ -87,13 +117,8 @@ pub fn run() {
         // Must be first: a second launch focuses the running window instead of
         // starting a rival that can't advertise (Windows allows one provider per service).
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show(app)))
-        // Start with Windows (Settings › General). The autostart entry carries `--minimized`
-        // so an automatic launch comes up hidden in the tray; the switch reads the registry
-        // (via `autolaunch().is_enabled()`), so that state is the single source of truth.
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![MINIMIZED_ARG]),
-        ))
+        // Start with Windows (Settings › General) is tug's own HKCU Run entry (autostart.rs),
+        // carrying `--minimized` so an automatic launch comes up hidden in the tray.
         .plugin(
             // Logs land in %LOCALAPPDATA%\dev.davejames.tug\logs for hardware debugging.
             // Keep a few rotated files: the default (one 40 KB file) had already thrown away
@@ -109,6 +134,15 @@ pub fn run() {
         // Tugboat's "Choose files" picker (opened from Rust; the page never sees it).
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
+            // Pop-ups left by the last run can't be answered (nothing hears a press while tug is
+            // closed). A normal Quit withdraws them; when Windows shut down it was left to now.
+            // Off the main thread, and before this run shows any of its own.
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || toast::withdraw_all(&handle));
+            }
+            // Running elevated: move an old all-users Start with Windows entry back to this user.
+            std::thread::spawn(autostart::tidy_at_startup);
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let store = Arc::new(open_store(&dir, setup_log_dir.as_deref()));
@@ -158,6 +192,8 @@ pub fn run() {
             // shown now.
             if let Some(window) = app.get_webview_window("main") {
                 webview_watch::watch(&window);
+                // Notice Windows signing out or shutting down, so exit doesn't hold it up.
+                session_end::watch(&window);
             }
             // The window is created hidden (see tauri.conf.json). Start in the tray only when
             // asked to (autostart adds `--minimized`) AND there's a tray to come back from;
@@ -340,16 +376,45 @@ pub fn run() {
                 return;
             }
         }
-        // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
         if let tauri::RunEvent::Exit = event {
-            toast::withdraw_all(app);
-            // Tugboat never outlives tug: stop listening and remove unfinished uploads.
+            // Windows signing out or shutting down runs this from WM_ENDSESSION and waits for it:
+            // then only what can't wait is done, and the rest is left to the next start.
+            let started = std::time::Instant::now();
+            let ending = session_end::ending();
+            let plan = session_end::ExitPlan::for_exit(ending);
+            // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
+            if plan.withdraw_toasts {
+                toast::withdraw_all(app);
+            }
+            // Tugboat never outlives tug: stop listening (and remove unfinished uploads).
             if let Some(state) = app.try_state::<AppState>() {
-                state.tugboat.shutdown_now();
+                state.tugboat.shutdown_now(plan.clean_tugboat);
                 // Hand the phone's audio back to the phone rather than leave it routed to a PC
                 // that stopped listening.
-                state.pc_audio.shutdown_now();
+                state.pc_audio.shutdown_now(plan.audio_wait);
             }
+            log::info!(
+                "exit: tidied up in {} ms{}",
+                started.elapsed().as_millis(),
+                if ending { " (Windows is ending the session)" } else { "" }
+            );
         }
     });
+}
+
+#[cfg(test)]
+mod uninstall_step_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_exact_flag_is_the_uninstall_step() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter();
+        assert!(is_uninstall_step(args(&["--remove-from-path"])));
+        assert!(!is_uninstall_step(args(&[])));
+        assert!(!is_uninstall_step(args(&[MINIMIZED_ARG])));
+        assert!(!is_uninstall_step(args(&[MINIMIZED_ARG, "--remove-from-path"])));
+        assert!(!is_uninstall_step(args(&["--REMOVE-FROM-PATH"])));
+        // Every ordinary launch starts the app.
+        assert_eq!(run_uninstall_step(args(&[MINIMIZED_ARG])), None);
+    }
 }

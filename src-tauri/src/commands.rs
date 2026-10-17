@@ -596,6 +596,7 @@ pub fn copy_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
         settings: &settings,
         log_lines: &log_lines,
         phone_names: &phone_names,
+        user: &diagnostics::WindowsUser::current(),
     }
     .render();
     // The latest Bluetooth inventory (privacy-safe by construction: UUIDs, names, counts).
@@ -654,31 +655,18 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
     state.shared.store.set_setting(&key, &value).map_err(|e| e.to_string())
 }
 
-/// Whether tug starts with Windows. The registry entry (via the autostart plugin) is the
-/// source of truth, so the Settings switch reads this rather than a stored preference.
+/// Whether tug starts with Windows. The registry entry (this user's Run key, see autostart.rs)
+/// is the source of truth, so the Settings switch reads this rather than a stored preference.
 #[tauri::command]
-pub fn get_autostart(app: tauri::AppHandle) -> Result<bool> {
-    use tauri_plugin_autostart::ManagerExt;
-    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+pub fn get_autostart() -> Result<bool> {
+    crate::autostart::enabled()
 }
 
-/// Turn "start with Windows" on or off. On writes an entry that launches tug with
-/// `--minimized`, so it comes up hidden in the tray.
+/// Turn "start with Windows" on or off. On writes this user's entry (quoted path) that launches
+/// tug with `--minimized`, so it comes up hidden in the tray.
 #[tauri::command]
-pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<()> {
-    use tauri_plugin_autostart::ManagerExt;
-    let manager = app.autolaunch();
-    if enabled {
-        manager.enable().map_err(|e| e.to_string())?;
-        // The plugin writes the exe path unquoted; quote it so a path with spaces (a user
-        // folder like "C:\Users\Sam Lee\...") always launches tug and nothing else.
-        if let Err(e) = crate::autostart::quote_run_value() {
-            log::warn!("autostart: couldn't quote the Run entry: {e}");
-        }
-        Ok(())
-    } else {
-        manager.disable().map_err(|e| e.to_string())
-    }
+pub fn set_autostart(enabled: bool) -> Result<()> {
+    crate::autostart::set(enabled)
 }
 
 /// The PC's region from Windows' Region setting (e.g. "US", "AU"), so the UI reads numbers typed
@@ -1068,10 +1056,14 @@ pub fn devtools_confirm(state: State<'_, AppState>, id: u64, send: bool) {
     state.devtools.confirm(id, send);
 }
 
-/// "Add tug to PATH" / "Remove from PATH" (the user's own PATH only).
+/// "Add tug to PATH" / "Remove from PATH" (the user's own PATH only). Off the main thread: telling
+/// running apps PATH changed waits up to 2 s on each one that's slow to answer.
 #[tauri::command]
-pub fn devtools_set_on_path(state: State<'_, AppState>, on: bool) -> Result<DevToolsStatus> {
-    state.devtools.add_to_path(on)
+pub async fn devtools_set_on_path(state: State<'_, AppState>, on: bool) -> Result<DevToolsStatus> {
+    let devtools = state.devtools.clone();
+    tauri::async_runtime::spawn_blocking(move || devtools.add_to_path(on))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

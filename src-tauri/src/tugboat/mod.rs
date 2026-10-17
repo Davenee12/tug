@@ -24,6 +24,7 @@ mod page;
 pub mod qr;
 pub mod server;
 pub mod session;
+mod tally;
 #[cfg(test)]
 mod tests;
 mod upload;
@@ -141,8 +142,12 @@ pub struct TugboatStatus {
     pub phone: Option<String>,
     /// The phone's page is open and checking in.
     pub phone_active: bool,
-    /// Where received files go (`Pictures\Tugboat`).
+    /// Where received files go (`Pictures\Tugboat`, or `Downloads\Tugboat` when Windows refused
+    /// Pictures).
     pub folder: Option<String>,
+    /// Windows Security (Controlled folder access) refused the Pictures folder: files go to
+    /// Downloads instead (`fallback`), or can't be saved until tug is allowed (`blocked`).
+    pub folder_block: Option<session::FolderBlock>,
     pub incoming: Vec<TugboatIncoming>,
     pub outgoing: Vec<TugboatOffer>,
     pub texts: Vec<TugboatText>,
@@ -281,6 +286,12 @@ fn tugboat_folder(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "Couldn't find your Pictures folder.".to_string())
 }
 
+/// `Downloads\Tugboat`: where files go when Windows Security won't let tug write to Pictures
+/// (Controlled folder access protects Pictures, not Downloads).
+fn fallback_folder(app: &AppHandle) -> Option<PathBuf> {
+    app.path().download_dir().ok().map(|p| p.join("Tugboat"))
+}
+
 /// The link in the QR code: the address, and the secret after the `#`. Nothing else, ever: who's
 /// bound stays on the PC, so a second phone scanning a re-shown code can't pass for the first.
 fn link(ip: Ipv4Addr, port: u16, secret: &[u8]) -> String {
@@ -384,6 +395,7 @@ impl TugboatService {
                 phone: None,
                 phone_active: false,
                 folder,
+                folder_block: None,
                 incoming: Vec::new(),
                 outgoing: Vec::new(),
                 texts: Vec::new(),
@@ -394,6 +406,8 @@ impl TugboatService {
             };
         };
         let snap = session.snapshot();
+        let folder = Some(session.save_folder().to_string_lossy().into_owned());
+        let folder_block = session.folder_block();
         let phase = match (&endpoint, &snap.phone) {
             (None, _) => Phase::NoNetwork,
             (Some(_), Some(_)) => Phase::Connected,
@@ -412,6 +426,7 @@ impl TugboatService {
             phone: snap.phone,
             phone_active: snap.phone_active,
             folder,
+            folder_block,
             incoming: snap.incoming,
             outgoing: snap.outgoing,
             texts: snap.texts,
@@ -428,19 +443,22 @@ impl TugboatService {
             return Ok(self.status());
         }
         let folder = tugboat_folder(&self.inner.app)?;
+        let fallback = fallback_folder(&self.inner.app);
         let incoming = incoming_dir(&self.inner.app)?;
         {
             let incoming = incoming.clone();
-            let folder = folder.clone();
+            let folders: Vec<PathBuf> = std::iter::once(folder.clone()).chain(fallback.clone()).collect();
             let _ = tokio::task::spawn_blocking(move || {
                 session::clean_incoming(&incoming);
-                session::sweep_temp(&folder);
+                for f in &folders {
+                    session::sweep_temp(f);
+                }
             })
             .await;
         }
         let secret = crypto::new_secret();
         let sink: Arc<dyn Sink> = Arc::new(PanelSink(Arc::downgrade(&self.inner)));
-        let session = Arc::new(Session::new(&secret, folder, incoming, sink));
+        let session = Arc::new(Session::new(&secret, folder, incoming, sink).with_fallback(fallback));
         let ip = tokio::task::spawn_blocking(net::current).await.ok().flatten();
         let endpoint = match ip {
             Some(ip) => match open_endpoint(ip, 0, &secret, session.clone()).await {
@@ -506,8 +524,10 @@ impl TugboatService {
         self.emit();
     }
 
-    /// tug is quitting: stop at once, from a sync context.
-    pub fn shutdown_now(&self) {
+    /// tug is quitting: stop at once, from a sync context. `clean` removes unfinished uploads now;
+    /// when Windows is shutting down that's left to the next start (`new`), so a big partial file
+    /// can't hold up shutdown.
+    pub fn shutdown_now(&self, clean: bool) {
         if let Some(r) = lock(&self.inner.running).take() {
             r.session.close();
             if let Some(mut e) = r.endpoint {
@@ -516,7 +536,9 @@ impl TugboatService {
                 }
                 e.task.abort();
             }
-            session::clean_incoming(&r.session.incoming);
+            if clean {
+                session::clean_incoming(&r.session.incoming);
+            }
         }
     }
 
@@ -720,9 +742,18 @@ impl TugboatService {
         }
     }
 
+    /// Where received files are saved: this session's folder (`Downloads\Tugboat` if Windows
+    /// refused Pictures), else `Pictures\Tugboat`.
+    pub fn received_folder(&self) -> Result<PathBuf, String> {
+        match self.session() {
+            Some(s) => Ok(s.save_folder()),
+            None => tugboat_folder(&self.inner.app),
+        }
+    }
+
     /// Open the Tugboat folder in Explorer, or select one file this session saved.
     pub fn open_folder(&self, file: Option<&str>) -> Result<(), String> {
-        let folder = tugboat_folder(&self.inner.app)?;
+        let folder = self.received_folder()?;
         std::fs::create_dir_all(&folder).map_err(|_| "Couldn't open the Tugboat folder.".to_string())?;
         let mut cmd = std::process::Command::new("explorer.exe");
         match file.map(Path::new) {

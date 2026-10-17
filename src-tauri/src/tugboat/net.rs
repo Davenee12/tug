@@ -1,6 +1,9 @@
 //! Which address the phone should use to reach this PC: the IPv4 address of the adapter that has
-//! the default gateway (the home Wi-Fi or Ethernet), never loopback, VPNs, Hyper-V/WSL vEthernet,
-//! Docker or link-local. Tugboat listens only on that address.
+//! the default gateway (the home Wi-Fi or Ethernet), never loopback, VPNs, WSL or the Hyper-V
+//! Default Switch, Docker or link-local. A Hyper-V *external* switch that carries the home network
+//! (and its gateway) is used, below any physical adapter. Tugboat listens only on that address.
+//! Known limit: Windows Mobile Hotspot (the PC as the hotspot, a "Wi-Fi Direct Virtual Adapter"
+//! with no gateway) isn't offered.
 
 use std::net::Ipv4Addr;
 
@@ -59,10 +62,38 @@ const VIRTUAL: &[&str] = &[
     "isatap",
 ];
 
-fn is_virtual(a: &Adapter) -> bool {
+/// What gives a Hyper-V virtual switch adapter away ("vEthernet (…)", "Hyper-V Virtual Ethernet
+/// Adapter"). On their own these say nothing about whether a phone can reach it.
+const HYPERV: &[&str] = &["vethernet", "hyper-v", "virtual"];
+
+/// Hyper-V switches that are never the home network: the Default Switch and WSL's are NAT
+/// networks private to this PC (and normally have no gateway anyway).
+const HYPERV_INTERNAL: &[&str] = &["default switch", "wsl"];
+
+/// A Hyper-V *external* switch: Windows moves the PC's own Wi-Fi or Ethernet address onto a
+/// `vEthernet (…)` adapter bound to the real one, so on such a PC the home network's address and
+/// gateway are only on the virtual adapter. It counts when it holds the default gateway, isn't the
+/// Default Switch or WSL's, and nothing else marks it as a VPN or another virtual network.
+fn is_hyperv_external(a: &Adapter) -> bool {
     let name = a.name.to_lowercase();
     let desc = a.description.to_lowercase();
-    VIRTUAL.iter().any(|v| {
+    let hyperv = name.starts_with("vethernet") || desc.contains("hyper-v virtual ethernet");
+    hyperv
+        && a.has_gateway
+        && !HYPERV_INTERNAL.iter().any(|v| name.contains(v) || desc.contains(v))
+        && !matches_virtual(a, |v| !HYPERV.contains(&v))
+}
+
+fn is_virtual(a: &Adapter) -> bool {
+    matches_virtual(a, |_| true)
+}
+
+/// Whether any `VIRTUAL` fragment that `consider` accepts appears in the adapter's name or
+/// description.
+fn matches_virtual(a: &Adapter, consider: impl Fn(&str) -> bool) -> bool {
+    let name = a.name.to_lowercase();
+    let desc = a.description.to_lowercase();
+    VIRTUAL.iter().filter(|v| consider(v)).any(|v| {
         // "tun" is too short to search for inside words ("Tuning"): only as a word, or "tun0".
         if *v == "tun" {
             let tun_word = |w: &str| {
@@ -89,7 +120,8 @@ fn cgnat(ip: Ipv4Addr) -> bool {
 
 /// A score for using `ip` on `a`, or `None` if the phone can't (or mustn't) reach it.
 fn score(a: &Adapter, ip: Ipv4Addr) -> Option<i64> {
-    if !a.up || matches!(a.kind, Kind::Loopback | Kind::Tunnel) || is_virtual(a) {
+    let hyperv_external = is_hyperv_external(a);
+    if !a.up || matches!(a.kind, Kind::Loopback | Kind::Tunnel) || (is_virtual(a) && !hyperv_external) {
         return None;
     }
     if ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || ip.is_multicast() {
@@ -104,12 +136,20 @@ fn score(a: &Adapter, ip: Ipv4Addr) -> Option<i64> {
     if a.has_gateway {
         s += 10_000;
     }
-    if matches!(a.kind, Kind::Wifi | Kind::Ethernet) {
+    if hyperv_external {
+        // Below any physical adapter on the home network: it's chosen only when the real
+        // network is reached through it (above adapters with no gateway at all, though: the
+        // gateway is what says "this is the network the phone is on").
+        s -= HYPERV_PENALTY;
+    } else if matches!(a.kind, Kind::Wifi | Kind::Ethernet) {
         s += 500;
     }
     s -= a.metric.min(400) as i64;
     Some(s)
 }
+
+/// How far a Hyper-V external switch ranks below a physical adapter that has the gateway.
+const HYPERV_PENALTY: i64 = 5_000;
 
 /// The best address to serve Tugboat on, if any adapter qualifies. Only private (home) ranges;
 /// prefers the adapter with the default gateway, then real Wi-Fi/Ethernet, then the lower
@@ -341,6 +381,106 @@ mod tests {
         let public = adapter("Ethernet", "Intel(R) Ethernet", Kind::Ethernet, [128, 3, 4, 5], true, 5);
         assert_eq!(best(std::slice::from_ref(&public)), None);
         assert_eq!(best(&[public, wifi()]), Some(Ipv4Addr::new(192, 168, 1, 20)));
+    }
+
+    /// A Hyper-V external switch bound to the PC's Wi-Fi: the home address and gateway sit on the
+    /// vEthernet adapter; the Wi-Fi adapter itself has no IPv4 address.
+    fn external_switch() -> Adapter {
+        adapter(
+            "vEthernet (External Switch)",
+            "Hyper-V Virtual Ethernet Adapter #3",
+            Kind::Ethernet,
+            [192, 168, 1, 20],
+            true,
+            25,
+        )
+    }
+
+    #[test]
+    fn uses_a_hyperv_external_switch_that_carries_the_home_network() {
+        let mut bare_wifi = wifi();
+        bare_wifi.ipv4.clear();
+        let default_switch = adapter(
+            "vEthernet (Default Switch)",
+            "Hyper-V Virtual Ethernet Adapter",
+            Kind::Ethernet,
+            [172, 17, 80, 1],
+            false,
+            15,
+        );
+        let wsl = adapter(
+            "vEthernet (WSL (Hyper-V firewall))",
+            "Hyper-V Virtual Ethernet Adapter #2",
+            Kind::Ethernet,
+            [172, 28, 0, 1],
+            false,
+            15,
+        );
+        let list = vec![default_switch, wsl, bare_wifi, external_switch()];
+        assert_eq!(best(&list), Some(Ipv4Addr::new(192, 168, 1, 20)));
+    }
+
+    #[test]
+    fn a_physical_adapter_on_the_home_network_beats_the_external_switch() {
+        let eth = adapter(
+            "Ethernet",
+            "Realtek PCIe GbE",
+            Kind::Ethernet,
+            [192, 168, 1, 30],
+            true,
+            400,
+        );
+        assert_eq!(best(&[external_switch(), eth]), Some(Ipv4Addr::new(192, 168, 1, 30)));
+        // But it beats an adapter with no gateway (a direct cable to another device).
+        let direct = adapter("Ethernet 2", "Realtek USB GbE", Kind::Ethernet, [10, 0, 0, 5], false, 5);
+        assert_eq!(best(&[direct, external_switch()]), Some(Ipv4Addr::new(192, 168, 1, 20)));
+    }
+
+    #[test]
+    fn still_skips_internal_switches_vpns_and_public_or_cgnat_addresses() {
+        // The Default Switch or WSL's, even if one had a gateway.
+        let mut default_switch = external_switch();
+        default_switch.name = "vEthernet (Default Switch)".into();
+        let mut wsl = external_switch();
+        wsl.name = "vEthernet (WSL)".into();
+        // A VPN that happens to sit on a Hyper-V switch.
+        let mut vpn = external_switch();
+        vpn.name = "vEthernet (Corp VPN)".into();
+        // No gateway: an internal or private switch, not the home network.
+        let mut internal = external_switch();
+        internal.has_gateway = false;
+        // Tailscale-style and public addresses never qualify.
+        let mut cgnat = external_switch();
+        cgnat.ipv4 = vec![Ipv4Addr::new(100, 101, 102, 103)];
+        let mut public = external_switch();
+        public.ipv4 = vec![Ipv4Addr::new(128, 3, 4, 5)];
+        for a in [default_switch, wsl, vpn, internal, cgnat, public] {
+            assert_eq!(best(std::slice::from_ref(&a)), None, "{}", a.name);
+        }
+        // TAP adapters stay out whatever they're called.
+        let tap = adapter(
+            "vEthernet (x)",
+            "TAP-Windows Adapter V9",
+            Kind::Ethernet,
+            [192, 168, 1, 40],
+            true,
+            1,
+        );
+        assert_eq!(best(&[tap]), None);
+    }
+
+    #[test]
+    fn mobile_hotspot_is_still_not_offered() {
+        // Known limit: the PC's own hotspot has no gateway and is a virtual adapter.
+        let hotspot = adapter(
+            "Local Area Connection* 10",
+            "Microsoft Wi-Fi Direct Virtual Adapter #2",
+            Kind::Wifi,
+            [192, 168, 137, 1],
+            false,
+            25,
+        );
+        assert_eq!(best(&[hotspot]), None);
     }
 
     #[test]

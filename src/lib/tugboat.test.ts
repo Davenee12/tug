@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { TUGBOAT_OFF, HELP_AFTER_MS, capitalised, closeWarning, openUnlessAbandoned, percent, showConnectHelp, skippedMessage, transferring } from "./tugboat";
+import {
+  TUGBOAT_OFF,
+  HELP_AFTER_MS,
+  capitalised,
+  closeWarning,
+  folderBlockMessage,
+  openUnlessAbandoned,
+  percent,
+  showConnectHelp,
+  skippedMessage,
+  transferring,
+} from "./tugboat";
 
 describe("openUnlessAbandoned (the game's phone controller)", () => {
   it("keeps it open when it's still wanted", async () => {
@@ -36,6 +47,15 @@ describe("openUnlessAbandoned (the game's phone controller)", () => {
 import type { TugboatOffer, TugboatStatus } from "../types/protocol";
 
 describe("Tugboat panel decisions", () => {
+  it("says when Windows Security refused Pictures, and where files go instead", () => {
+    expect(folderBlockMessage({ folderBlock: null })).toBeNull();
+    expect(folderBlockMessage({ folderBlock: "fallback" })).toMatch(/going to Downloads\\Tugboat/);
+    expect(folderBlockMessage({ folderBlock: "blocked" })).toBe(
+      "Windows Security blocked tug from saving to Pictures. Allow tug under Controlled folder access.",
+    );
+    expect(TUGBOAT_OFF.folderBlock).toBeNull();
+  });
+
   it("offers connection help only after 30 s with no phone", () => {
     const waiting = { phase: "waiting" as const };
     expect(showConnectHelp(waiting, 1000, 1000 + HELP_AFTER_MS - 1)).toBe(false);

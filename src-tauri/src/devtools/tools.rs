@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use tug_bridge::protocol::{
     BridgeError, ClientInfo, CodeResult, ErrorCode, HitKind, MediaAction, MessageHit, NowPlayingInfo, OfferResult,
     PhoneStatus, Request, SkippedFile, StatusResult,
@@ -113,11 +113,12 @@ pub(super) async fn run(
         Request::Media(action) => media(dt, action).await,
         Request::SendText { to, message } => send_text(dt, client, &to, message).await,
         Request::OfferFiles { paths } => offer_files(dt, paths).await,
-        Request::Status => json(StatusResult {
-            version: dt.app.package_info().version.to_string(),
-            permissions: dt.permissions(),
-            phone: phone_status(dt),
-        }),
+        // The phone's state only with the Phone status switch on, as for `phone_status`.
+        Request::Status => json(StatusResult::new(
+            dt.app.package_info().version.to_string(),
+            dt.permissions(),
+            || phone_status(dt),
+        )),
     }
 }
 
@@ -239,12 +240,12 @@ fn dev_notifications(
     json(hits)
 }
 
+/// Where Tugboat saves (`Pictures\Tugboat`, or `Downloads\Tugboat` while an open Tugboat is
+/// saving there because Windows Security refused Pictures).
 fn tugboat_folder(dt: &DevTools) -> Result<PathBuf, BridgeError> {
-    dt.app
-        .path()
-        .picture_dir()
-        .map(|p| p.join("Tugboat"))
-        .map_err(|_| BridgeError::new(ErrorCode::NotFound, "Couldn't find your Pictures folder."))
+    dt.tugboat
+        .received_folder()
+        .map_err(|e| BridgeError::new(ErrorCode::NotFound, e))
 }
 
 fn phone_status(dt: &DevTools) -> PhoneStatus {

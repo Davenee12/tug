@@ -16,6 +16,7 @@ export const TUGBOAT_OFF: TugboatStatus = {
   phone: null,
   phoneActive: false,
   folder: null,
+  folderBlock: null,
   incoming: [],
   outgoing: [],
   texts: [],
@@ -77,6 +78,18 @@ export function skippedMessage(skipped: TugboatSkipped[]): string | null {
         ? "folders can't be sent"
         : "folders, files over 1 GB, or too many at once";
   return `${skipped.length} items weren't added: ${why}.`;
+}
+
+/** What the panel says when Windows Security (Controlled folder access) refused Pictures, or null. */
+export function folderBlockMessage(s: Pick<TugboatStatus, "folderBlock">): string | null {
+  switch (s.folderBlock) {
+    case "fallback":
+      return "Windows Security blocked tug from saving to Pictures, so files from your phone are going to Downloads\\Tugboat. To use Pictures, allow tug under Controlled folder access.";
+    case "blocked":
+      return "Windows Security blocked tug from saving to Pictures. Allow tug under Controlled folder access.";
+    default:
+      return null;
+  }
 }
 
 /** Percent of a file received, for its progress bar. */

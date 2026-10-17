@@ -83,7 +83,8 @@ impl Actor {
         {
             return;
         }
-        log::info!("the iPhone is now called {name}");
+        // Never the name itself: it often names a person ("Jordan's iPhone").
+        log::info!("the iPhone has a new name");
         let _ = self.shared.store.set_setting(keys::DEVICE_NAME, name);
         self.shared.update_status(|s| {
             if let Some(d) = s.device.as_mut() {
