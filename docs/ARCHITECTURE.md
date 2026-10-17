@@ -41,7 +41,7 @@ Inside `tug.exe`:
                     └───────────▲ Tauri events (device-status, notification, message, …)  │ invoke ─┘
                                 │                                                         ▼
   ┌──────────────┐  Shared (Arc: status, now playing, calls, store, MapHandle) ┌──────────────────────┐
-  │ tug-ble      │◄────────────── commands.rs (106 Tauri commands) ───────────►│ tug-map              │
+  │ tug-ble      │◄────────────── commands.rs (125 Tauri commands) ───────────►│ tug-map              │
   │ BLE actor    │  BleHandle (mpsc + oneshot replies)    MapHandle (mpsc)     │ MAP worker           │
   │ 1 s tick     │                                                             │ MAP/MNS/PBAP/HFP     │
   └──┬───────┬───┘                                                             └──┬───────────────────┘
@@ -442,7 +442,8 @@ answers never land), `layout` (sidebar density and "wide", from sizes that follo
 `locating`, `media` (which controls show, skip routing, seek keys), `messageSync`, `messageType`,
 `ordering` (newest state wins over late events and reads), `pairings`,
 `pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
-titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
+titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `seen` (when each Feed entry was last looked at, with other chat apps' old per-person
+times folded onto their stack once), `senders`
 (unknown-sender filter), `sharePrivacy` (hiding previews while sharing: the banner, Show anyway, a pop-up's kind), `singleFlight` (one press, one action), `smartReplies` (suggested replies: the rules, and when there are none), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `startup` (startup reads that fail are retried, never block), `threadWindow` (long conversations render their newest texts first),
 `quickActions` (routing a taskbar task, one take at a time), `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
