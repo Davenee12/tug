@@ -273,7 +273,7 @@ impl BackupService {
         std::thread::Builder::new()
             .name("tug-backup".into())
             .spawn(move || me.open_job(folder, info, password, cancel))
-            .map_err(|_| "Couldn't start reading the backup.".to_string())?;
+            .map_err(|_| self.not_started())?;
         Ok(())
     }
 
@@ -285,36 +285,42 @@ impl BackupService {
         cancel: Arc<AtomicBool>,
     ) {
         let started = Instant::now();
-        let result = self.read_backup(&folder, info, password, &cancel);
+        // Read and compare without holding the service's lock, so Cancel and the status answer at
+        // once however big the backup is.
+        let result = self.read_backup(&folder, info, password, &cancel).and_then(|session| {
+            log::info!(
+                "backup: read {} messages in {} chats ({} reactions and {} other rows left out) in {:.1} s",
+                session.data.messages.len(),
+                session.data.chats.len(),
+                session.data.skipped_reactions,
+                session.data.skipped_events,
+                started.elapsed().as_secs_f64()
+            );
+            match import::scan(&self.inner.store, &session.data, &|p| sizes(&session, p)) {
+                Ok(scan) => Ok((session, scan)),
+                Err(_) => {
+                    log::warn!("backup: couldn't compare the backup with tug's history");
+                    self.fail(Problem::Failed);
+                    Err(Phase::Failed)
+                }
+            }
+        });
+        // One press, one action: a Cancel that landed while it read or compared still cancels.
+        let result = match result {
+            Ok(_) if cancel.load(Ordering::Relaxed) => Err(Phase::Cancelled),
+            other => other,
+        };
         let mut st = self.state();
         st.job = None;
         match result {
-            Ok(session) => {
-                let scan = import::scan(&self.inner.store, &session.data, &|p| sizes(&session, p));
-                let n = session.data.messages.len();
-                log::info!(
-                    "backup: read {n} messages in {} chats ({} reactions and {} other rows left out) in {:.1} s",
-                    session.data.chats.len(),
-                    session.data.skipped_reactions,
-                    session.data.skipped_events,
-                    started.elapsed().as_secs_f64()
-                );
-                match scan {
-                    Ok(scan) => {
-                        st.session = Some(Arc::new(session));
-                        drop(st);
-                        self.update(|s| {
-                            s.phase = Phase::Ready;
-                            s.progress = None;
-                            s.scan = Some(scan);
-                        });
-                    }
-                    Err(_) => {
-                        drop(st);
-                        log::warn!("backup: couldn't compare the backup with tug's history");
-                        self.fail(Problem::Failed);
-                    }
-                }
+            Ok((session, scan)) => {
+                st.session = Some(Arc::new(session));
+                drop(st);
+                self.update(|s| {
+                    s.phase = Phase::Ready;
+                    s.progress = None;
+                    s.scan = Some(scan);
+                });
             }
             Err(Phase::Cancelled) => {
                 drop(st);
@@ -327,9 +333,22 @@ impl BackupService {
                     s.progress = None;
                 });
             }
-            // Failed: the status already says why (read_backup set it).
+            // Failed: the status already says why.
             Err(_) => {}
         }
+    }
+
+    /// Whether reading or importing is under way (Clear history and Remove imported history wait
+    /// for it, so nothing it writes afterwards outlives them).
+    pub fn busy(&self) -> bool {
+        self.state().job.is_some()
+    }
+
+    /// The job's thread couldn't start: nothing is running after all.
+    fn not_started(&self) -> String {
+        self.state().job = None;
+        self.fail(Problem::Failed);
+        "Couldn't start. Try again.".to_string()
     }
 
     fn fail(&self, problem: Problem) {
@@ -473,8 +492,15 @@ impl BackupService {
                 extract(entry, &temp.file(&format!("sms.db{suffix}")))?;
             }
         }
+        // Opened writable only so SQLite can apply a write-ahead log the backup kept; the file is
+        // untrusted, so its schema gets no say (no triggers or views running tug's functions) and
+        // SQLite's defensive mode refuses anything that could corrupt or escape it.
         let data = rusqlite::Connection::open(&sms_db)
-            .and_then(|c| smsdb::read(&c))
+            .and_then(|c| {
+                c.pragma_update(None, "trusted_schema", "OFF")?;
+                c.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+                smsdb::read(&c)
+            })
             .map_err(|_| fail(Problem::Unreadable, "Messages database tables"))?;
         // The decrypted database has done its job; only what's in memory is needed now.
         for name in ["sms.db", "sms.db-wal", "sms.db-shm"] {
@@ -520,7 +546,7 @@ impl BackupService {
         std::thread::Builder::new()
             .name("tug-backup".into())
             .spawn(move || me.import_job(session, Options { texts, photos }, cancel))
-            .map_err(|_| "Couldn't start the import.".to_string())?;
+            .map_err(|_| self.not_started())?;
         Ok(())
     }
 
@@ -563,9 +589,10 @@ impl BackupService {
         match result {
             Ok(summary) => {
                 log::info!(
-                    "backup: imported {} texts and {} photos/videos in {} conversations ({} already in tug, {} files missing) in {secs:.1} s",
+                    "backup: imported {} texts, {} photos and {} videos in {} conversations ({} already in tug, {} files missing) in {secs:.1} s",
                     summary.texts,
                     summary.photos,
+                    summary.videos,
                     summary.conversations,
                     summary.already,
                     summary.missing

@@ -292,6 +292,13 @@ impl Store {
         if duplicate {
             return Ok(None);
         }
+        // History brought in from a backup already has it (a text that reached the phone while tug
+        // couldn't list it, listed now): the same text twice is worse than this copy's handle lost.
+        if m.source != SOURCE_IPHONE_BACKUP
+            && crate::backup::import::backup_has(&conn, m.address, m.body, m.sent_at, m.received_at)?
+        {
+            return Ok(None);
+        }
         let inserted = conn.execute(
             "INSERT OR IGNORE INTO messages (source, handle, direction, address, sender_name, body, sent_at, received_at, status, unread_on_phone, msg_type)
              VALUES (?1, ?2, 'in', ?3, ?4, ?5, ?6, ?7, 'received', ?8, ?9)",

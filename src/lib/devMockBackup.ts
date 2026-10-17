@@ -173,7 +173,14 @@ export function backupMock(
         set({
           phase: "done",
           progress: null,
-          summary: { texts: total, photos: a.photos ? photos : 0, conversations: 214, already: 9, missing: a.photos ? 3 : 0 },
+          summary: {
+            texts: total,
+            photos: a.photos ? photos - 104 : 0,
+            videos: a.photos ? 104 : 0,
+            conversations: 214,
+            already: 9,
+            missing: a.photos ? 3 : 0,
+          },
         });
       }, 150);
       return null;

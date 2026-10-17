@@ -410,6 +410,7 @@ export function groupConversations(
       const key = groupKey(m.groupId);
       let g = convs.get(key);
       if (!g) {
+        // Replaced by the newest item once every text is in (below), as `get` does for the others.
         const placeholder = { kind: "message", id: "", at: new Date(0), body: "" } as unknown as ConversationItem;
         g = {
           key,

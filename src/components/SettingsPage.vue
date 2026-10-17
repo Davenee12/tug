@@ -282,7 +282,8 @@ async function clearHistory() {
   }
   confirmClear.value = false;
   // Empties the lists and says "History cleared" only if it worked; a failure says why.
-  await tug.clearHistory();
+  // History brought in from an iPhone backup goes with it.
+  if (await tug.clearHistory()) backup.historyCleared();
 }
 </script>
 

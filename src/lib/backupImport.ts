@@ -139,8 +139,9 @@ export function progressLine(st: Pick<BackupStatus, "phase" | "stage" | "done" |
 
 /** "Added 12,431 texts and 1,204 photos from 214 conversations." */
 export function summaryLine(s: BackupSummary): string {
-  if (s.texts === 0 && s.photos === 0) return "Everything in this backup was already in tug.";
-  const what = [s.texts ? plural(s.texts, "text") : "", s.photos ? plural(s.photos, "photo") : ""].filter(Boolean).join(" and ");
+  if (s.texts === 0 && s.photos === 0 && s.videos === 0) return "Everything in this backup was already in tug.";
+  const parts = [s.texts ? plural(s.texts, "text") : "", s.photos ? plural(s.photos, "photo") : "", s.videos ? plural(s.videos, "video") : ""].filter(Boolean);
+  const what = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
   const from = s.texts && s.conversations ? ` from ${plural(s.conversations, "conversation")}` : "";
   return `Added ${what}${from}.`;
 }

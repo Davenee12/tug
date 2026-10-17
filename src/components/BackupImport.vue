@@ -23,9 +23,11 @@ import type { BackupInfo } from "../types/protocol";
 const backup = useBackupStore();
 const root = ref<HTMLElement | null>(null);
 const step = computed(() => wizardStep(backup.status, !!backup.chosen?.encrypted));
-const working = computed(() => step.value === "working");
+// Unlocking and reading hold the wizard (Cancel is the way out); an import can be closed and
+// carries on behind it.
+const working = computed(() => step.value === "working" && backup.status.phase !== "importing");
 
-// Esc closes, except while it works (Cancel is the way out then, so a stray Esc can't stop an import).
+// Esc closes (an import keeps going), except while unlocking or reading, where Cancel is the way out.
 useFocusTrap(root, () => {
   if (!working.value) void backup.closeWizard();
 });
@@ -195,7 +197,8 @@ function back() {
             This takes a minute on purpose: it's what keeps an encrypted backup safe.
           </p>
           <p v-else-if="backup.status.phase === 'importing'" class="mt-3 text-[12px] text-muted-soft">
-            You can keep using tug. If you cancel, what's in already stays, and running it again carries on.
+            You can close this and keep using tug; it carries on and tells you when it's done. If you cancel, what's in
+            already stays, and running it again carries on.
           </p>
           <div class="mt-5">
             <button class="btn-secondary btn-sm" @click="backup.cancel()">Cancel</button>
@@ -252,7 +255,9 @@ function back() {
 
         <!-- Stopped -->
         <template v-else-if="step === 'stopped'">
-          <p class="mt-2 text-[14px] text-ink">Stopped. What was brought in stays; run it again any time to carry on.</p>
+          <p class="mt-2 text-[14px] text-ink">
+            {{ backup.status.stage ? "Stopped. What was brought in stays; run it again any time to carry on." : "Stopped. Nothing was brought in." }}
+          </p>
           <div class="mt-5"><button class="btn-secondary btn-sm" @click="backup.closeWizard()">Close</button></div>
         </template>
 

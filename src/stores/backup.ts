@@ -5,7 +5,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { api, errorMessage, on } from "../lib/ipc";
-import { BACKUP_SOURCE } from "../lib/backupImport";
+import { BACKUP_SOURCE, problemMessage, summaryLine } from "../lib/backupImport";
 import { byArrival, missingMessages } from "../lib/messageSync";
 import { useTugStore } from "./tug";
 import type { AttachmentPreview, BackupImported, BackupInfo, BackupStatus, MessageGroup, SmsMessage } from "../types/protocol";
@@ -44,12 +44,18 @@ export const useBackupStore = defineStore("backup", () => {
   const heifHintDismissed = ref(true);
 
   function applyStatus(s: BackupStatus) {
-    if (s.rev < status.value.rev && s.phase === status.value.phase) return;
+    // The backend's rev only goes up: an older copy (a slow status read, a late event) never wins.
+    if (s.rev < status.value.rev) return;
     const before = status.value.phase;
     status.value = s;
     // An import that ended (done, stopped or failed partway) changed the history: catch the
     // window up, once.
-    if (before === "importing" && s.phase !== "importing") void refreshAfterImport();
+    if (before === "importing" && s.phase !== "importing") {
+      void refreshAfterImport();
+      // Closed while it worked: say how it went where the person is.
+      if (!wizardOpen.value && s.phase === "done" && s.summary) tug.notify("info", summaryLine(s.summary));
+      if (!wizardOpen.value && s.phase === "failed") tug.notify("error", problemMessage(s.problem));
+    }
   }
 
   let listening: Promise<unknown> | null = null;
@@ -118,7 +124,7 @@ export const useBackupStore = defineStore("backup", () => {
     // A finished or failed run from before starts over; one still running is shown as it is.
     if (s && ["done", "cancelled", "failed", "ready"].includes(s.phase)) await api.backupCancel().catch(() => undefined);
     if (s && s.phase !== "unlocking" && s.phase !== "reading" && s.phase !== "importing") {
-      status.value = { ...IDLE, rev: s.rev };
+      status.value = { ...IDLE, rev: Math.max(s.rev, status.value.rev) };
     }
     await refreshList();
   }
@@ -178,11 +184,22 @@ export const useBackupStore = defineStore("backup", () => {
     await api.backupCancel().catch(() => undefined);
   }
 
-  /** Close the wizard. Anything still reading is cancelled; a running import is too. */
+  /**
+   * Close the wizard. A running import carries on (reopening shows it, and tug catches the window
+   * up when it ends); anything else open (a backup read and waiting, a finished run) is closed.
+   */
   async function closeWizard() {
     wizardOpen.value = false;
     chosen.value = null;
-    if (status.value.phase !== "idle") await cancel();
+    if (status.value.phase !== "idle" && status.value.phase !== "importing") await cancel();
+  }
+
+  /** After Clear history, which takes imported history with it. */
+  function historyCleared() {
+    groups.value = [];
+    imported.value = { texts: 0, photos: 0, backupDate: null };
+    historyLoaded.clear();
+    previews.clear();
   }
 
   /** Settings › Messages › Remove imported history. */
@@ -258,6 +275,7 @@ export const useBackupStore = defineStore("backup", () => {
     closeWizard,
     removeImported,
     refreshImported,
+    historyCleared,
     preview,
     openAttachment,
     dismissHeifHint,

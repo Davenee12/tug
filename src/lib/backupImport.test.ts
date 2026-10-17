@@ -101,16 +101,19 @@ describe("backup import words", () => {
   });
 
   it("sums up what came in", () => {
-    expect(summaryLine({ texts: 12431, photos: 1204, conversations: 214, already: 0, missing: 0 })).toBe(
+    const s = { texts: 0, photos: 0, videos: 0, conversations: 0, already: 0, missing: 0 };
+    expect(summaryLine({ ...s, texts: 12431, photos: 1204, conversations: 214 })).toBe(
       "Added 12,431 texts and 1,204 photos from 214 conversations.",
     );
-    expect(summaryLine({ texts: 1, photos: 0, conversations: 1, already: 3, missing: 0 })).toBe("Added 1 text from 1 conversation.");
-    expect(summaryLine({ texts: 0, photos: 5, conversations: 0, already: 9, missing: 0 })).toBe("Added 5 photos.");
-    expect(summaryLine({ texts: 0, photos: 0, conversations: 0, already: 9, missing: 0 })).toBe(
-      "Everything in this backup was already in tug.",
+    expect(summaryLine({ ...s, texts: 12431, photos: 1100, videos: 104, conversations: 214 })).toBe(
+      "Added 12,431 texts, 1,100 photos and 104 videos from 214 conversations.",
     );
-    expect(summaryNote({ texts: 1, photos: 0, conversations: 1, already: 0, missing: 0 })).toBeNull();
-    expect(summaryNote({ texts: 1, photos: 0, conversations: 1, already: 0, missing: 2 })).toMatch(/^2 photos or videos weren't/);
+    expect(summaryLine({ ...s, texts: 1, conversations: 1, already: 3 })).toBe("Added 1 text from 1 conversation.");
+    expect(summaryLine({ ...s, photos: 5, already: 9 })).toBe("Added 5 photos.");
+    expect(summaryLine({ ...s, videos: 1 })).toBe("Added 1 video.");
+    expect(summaryLine({ ...s, already: 9 })).toBe("Everything in this backup was already in tug.");
+    expect(summaryNote({ ...s, texts: 1, conversations: 1 })).toBeNull();
+    expect(summaryNote({ ...s, texts: 1, conversations: 1, missing: 2 })).toMatch(/^2 photos or videos weren't/);
   });
 
   it("says what's in tug from a backup", () => {

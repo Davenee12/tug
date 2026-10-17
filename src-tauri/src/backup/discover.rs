@@ -158,10 +158,7 @@ pub fn describe(folder: &Path) -> Option<BackupInfo> {
         Some(BackupProblem::Incomplete)
     };
     Some(BackupInfo {
-        id: folder
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+        id: backup_id(folder),
         device_name,
         model: pick("Product Type", "ProductType"),
         ios_version: pick("Product Version", "ProductVersion"),
@@ -170,6 +167,15 @@ pub fn describe(folder: &Path) -> Option<BackupInfo> {
         encrypted,
         problem,
     })
+}
+
+/// A backup's id: one per folder. The folder's own name is the phone's id, which the same phone's
+/// backups in two places (desktop iTunes and the Apple Devices app) share, so a hash of the whole
+/// path tells them apart; opaque either way.
+fn backup_id(folder: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(folder.to_string_lossy().as_bytes());
+    digest.iter().take(10).map(|b| format!("{b:02x}")).collect()
 }
 
 /// The bytes a backup takes up (the files in its 256 hashed subfolders and the top level).
@@ -236,6 +242,25 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_same_phone_backed_up_in_two_places_is_two_backups() {
+        let root = temp_dir("discover-twice");
+        let (a, b) = (root.join("one"), root.join("two"));
+        let old = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let new = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_760_000_000);
+        for (r, when) in [(&a, old), (&b, new)] {
+            let f = r.join("00008110-000A11112222801E");
+            write_plists(&f, "Test iPhone", false, when, Dictionary::new());
+            std::fs::write(f.join("Manifest.db"), [0u8; 10]).unwrap();
+        }
+        let found = list(&[a.clone(), b.clone()]);
+        assert_eq!(found.len(), 2);
+        assert_ne!(found[0].0.id, found[1].0.id);
+        assert_eq!(found[0].0.last_backup, Some(1_760_000_000_000), "newest first");
+        assert!(found[0].1.starts_with(&b));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn roots_cover_the_apple_devices_app_and_both_itunes() {
         let roots = backup_roots(Some(Path::new("A")), Some(Path::new("P")));
         assert!(roots.contains(&Path::new("A").join("Apple").join("MobileSync").join("Backup")));
@@ -279,7 +304,8 @@ pub(crate) mod tests {
         assert_eq!(test.last_backup, Some(1_700_000_000_000));
         assert_eq!(test.problem, None);
         assert!(test.size_bytes >= 6000, "{}", test.size_bytes);
-        assert_eq!(test.id, "00008110-000A11112222801E");
+        assert_eq!(test.id.len(), 20);
+        assert!(!test.id.contains("00008110"), "opaque");
         let problem = |n: &str| found.iter().find(|(i, _)| i.device_name == n).unwrap().0.problem;
         assert_eq!(problem("Old iPhone"), Some(BackupProblem::TooOld));
         assert_eq!(problem("Busy iPhone"), Some(BackupProblem::Incomplete));

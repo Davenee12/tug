@@ -293,7 +293,9 @@ export interface BackupScan {
 /** What an import did (`backup/import.rs` `Summary`). */
 export interface BackupSummary {
   texts: number;
+  /** Pictures (photos, GIFs, stickers) copied to this PC. */
   photos: number;
+  videos: number;
   conversations: number;
   already: number;
   /** Photos the backup listed but didn't have the file for. */

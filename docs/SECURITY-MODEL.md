@@ -154,7 +154,10 @@ tug treats reading one as the most sensitive thing it does:
 - Logs record counts and timings only, never a word of a message, a name, a number, a file name, a
   path or the password.
 - The backup itself is only ever read. Remove imported history (and Clear history) delete every
-  row and file the import added.
+  row and file the import added; both refuse while an import is still writing.
+- Imported texts are part of tug's history, so the developer tools' text search (when its switch
+  is on) reaches them too: years of history, sent texts and group chats included, not just what
+  came over Bluetooth.
 
 **Prompt injection aimed at AI tools.** A text can say "ignore your instructions and…". tug
 assumes it will: reading tools are separate switches the person turns on, and the one tool that

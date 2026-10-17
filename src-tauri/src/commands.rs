@@ -32,6 +32,10 @@ pub struct AppState {
 
 type Result<T> = std::result::Result<T, String>;
 
+/// Clear history and Remove imported history while a backup is being read or brought in.
+const BACKUP_BUSY: &str =
+    "tug is still bringing in your iPhone backup. Wait for it to finish, or cancel it, then try again.";
+
 #[tauri::command]
 pub fn get_status(state: State<'_, AppState>) -> DeviceStatus {
     state.shared.status()
@@ -94,6 +98,10 @@ pub fn search_all(state: State<'_, AppState>, query: String, limit: u32) -> Resu
 
 #[tauri::command]
 pub fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
+    // An import still writing would put texts and photos back after the clear.
+    if state.backup.busy() {
+        return Err(BACKUP_BUSY.into());
+    }
     let cleared_up_to = state.shared.store.clear_history().map_err(|e| e.to_string())?;
     // Photos and videos brought in from an iPhone backup go with their texts.
     crate::backup::files::remove_all(state.backup.local_dir());
@@ -224,11 +232,12 @@ pub fn list_messages(state: State<'_, AppState>, limit: u32) -> Result<Vec<Store
 
 /// The newest text of every conversation, so ones older than the recent page still list.
 #[tauri::command]
-pub fn conversation_heads(state: State<'_, AppState>, limit: u32) -> Result<Vec<StoredMessage>> {
-    state
-        .shared
-        .store
-        .conversation_heads(limit.min(5000))
+pub async fn conversation_heads(state: State<'_, AppState>, limit: u32) -> Result<Vec<StoredMessage>> {
+    // A pass over the whole history (years of it, after an import): off the main thread.
+    let store = state.shared.store.clone();
+    tauri::async_runtime::spawn_blocking(move || store.conversation_heads(limit.min(5000)))
+        .await
+        .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
 
@@ -351,6 +360,9 @@ pub fn backup_imported(state: State<'_, AppState>) -> Result<crate::backup::impo
 /// Remove imported history: every text the import added and every photo it copied.
 #[tauri::command]
 pub async fn backup_remove_imported(state: State<'_, AppState>) -> Result<u64> {
+    if state.backup.busy() {
+        return Err(BACKUP_BUSY.into());
+    }
     let store = state.shared.store.clone();
     let dir = state.backup.local_dir().to_path_buf();
     tauri::async_runtime::spawn_blocking(move || {

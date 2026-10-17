@@ -69,8 +69,9 @@ Disconnect any time in Settings › Connectors, which removes the stored sign-in
   logs record how many texts and photos came in and how long it took, never a word of a message,
   a name, a number, a file name or the password. Once brought in, texts and photos from an
   encrypted backup are kept like the rest of tug's history (see the table above), no longer behind
-  the backup's password. **Remove imported history** in the same place deletes everything it
-  brought in.
+  the backup's password. They're part of your history in tug like any text, so if you let AI tools
+  search your texts (Developer tools), that search includes them. **Remove imported history** in
+  the same place deletes everything it brought in.
 - **Voice typing** is **off by default**. When you turn it on and hold its shortcut, tug listens to
   your microphone only while the keys are down, and Windows' own speech recognizer turns it into
   text **on this PC**: the recording is never sent anywhere, never saved to disk, and dropped as

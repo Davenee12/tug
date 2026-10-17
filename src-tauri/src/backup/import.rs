@@ -70,7 +70,9 @@ pub struct Scan {
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub texts: u64,
+    /// Pictures (photos, GIFs, stickers) and videos copied to this PC.
     pub photos: u64,
+    pub videos: u64,
     pub conversations: u64,
     /// Texts tug already had.
     pub already: u64,
@@ -296,6 +298,39 @@ impl Candidate {
     }
 }
 
+/// Whether imported history already holds this incoming Bluetooth text (same person, same words,
+/// close in time, by the same rules the import uses the other way round). Uses the partial index
+/// on incoming bodies, so it costs a lookup, not a scan.
+pub(crate) fn backup_has(
+    conn: &rusqlite::Connection,
+    address: &str,
+    body: &str,
+    sent_at: Option<&str>,
+    received_at: i64,
+) -> Result<bool> {
+    let words = compare_body(body);
+    let incoming = Candidate {
+        id: 0,
+        received_at,
+        sent_at: sent_at.and_then(parse_iso_ms),
+    };
+    let key = person_key(address);
+    let mut stmt = conn.prepare_cached(
+        "SELECT address, received_at FROM messages
+         WHERE direction = 'in' AND body IN (?1, ?2) AND source = ?3 AND hidden_at IS NULL",
+    )?;
+    let rows = stmt.query_map(params![body, words, SOURCE_IPHONE_BACKUP], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })?;
+    for row in rows {
+        let (a, at) = row?;
+        if person_key(&a) == key && incoming.distance(at).is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// tug's own view of people and texts, read once per plan.
 struct Known {
     /// person key → the address tug already uses for them.
@@ -339,8 +374,9 @@ fn load_known(store: &Store) -> Result<Known> {
     let mut texts: HashMap<(bool, String, String), Vec<Candidate>> = HashMap::new();
     {
         let mut stmt = conn.prepare(
+            // A send that failed (or never went) isn't the phone's text, even with the same words.
             "SELECT id, direction, address, body, sent_at, received_at FROM messages
-             WHERE source <> ?1 AND hidden_at IS NULL AND address <> ''",
+             WHERE source <> ?1 AND hidden_at IS NULL AND address <> '' AND status NOT IN ('failed', 'pending')",
         )?;
         let rows = stmt.query_map([SOURCE_IPHONE_BACKUP], |r| {
             Ok((
@@ -680,7 +716,11 @@ fn copy_files(
             None => match sink.store(path, ext) {
                 Ok(Some(done)) => {
                     copied.insert(a.guid.as_str(), done.clone());
-                    summary.photos += 1;
+                    if a.kind == super::smsdb::AttachmentKind::Video {
+                        summary.videos += 1;
+                    } else {
+                        summary.photos += 1;
+                    }
                     Some(done)
                 }
                 Ok(None) => {
@@ -836,7 +876,7 @@ mod tests {
         let mut sink = FakeSink::default();
         let s = run(&store, &data, all(), &mut sink);
         assert_eq!(s.texts, 9);
-        assert_eq!(s.photos, 2);
+        assert_eq!((s.photos, s.videos), (1, 1));
         assert_eq!(s.conversations, 2, "Jane and the group");
         assert_eq!(s.already, 0);
 
@@ -899,7 +939,7 @@ mod tests {
         let s = run(&store, &data, all(), &mut sink);
         assert_eq!(s.texts, 0);
         assert_eq!(s.already, 9);
-        assert_eq!(s.photos, 2);
+        assert_eq!((s.photos, s.videos), (1, 1));
         assert_eq!(store.recent_messages(100).unwrap().len(), 9);
         // And once more: nothing at all.
         let mut sink = FakeSink::default();
@@ -1023,6 +1063,49 @@ mod tests {
     }
 
     #[test]
+    fn bluetooth_listing_a_text_after_the_import_does_not_add_it_twice() {
+        let store = Store::in_memory().unwrap();
+        run(&store, &data(), all(), &mut FakeSink::default());
+        let catch_up = |handle, body, sent_at, received_at| IncomingMessage {
+            source: SOURCE_IPHONE_MAP,
+            handle,
+            address: "5550100001",
+            sender_name: None,
+            body,
+            sent_at,
+            received_at,
+            unread_on_phone: true,
+            msg_type: None,
+        };
+        // The phone lists Jane's text hours later (message access was off), in local time.
+        let late = catch_up("H7", "dinner at 7?", Some("2025-10-09T04:53:20"), T0 + 5 * 3_600_000);
+        assert!(
+            store.insert_incoming(&late).unwrap().is_none(),
+            "the backup already has it"
+        );
+        // Her photo, as Bluetooth words, also matches the imported photo text.
+        let photo = catch_up("H8", "Attachment: 2 Photos", Some("2025-10-09T08:56:20Z"), T0 + 400_000);
+        assert!(store.insert_incoming(&photo).unwrap().is_none());
+        // A new text with the same words a day later is new.
+        let again = catch_up("H9", "dinner at 7?", Some("2025-10-10T08:53:20Z"), T0 + 86_400_000);
+        assert!(store.insert_incoming(&again).unwrap().is_some());
+        assert_eq!(store.recent_messages(100).unwrap().len(), 10);
+    }
+
+    #[test]
+    fn a_failed_send_from_tug_is_not_the_phones_text() {
+        let store = Store::in_memory().unwrap();
+        let out = store
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+15550100001", "yes! see you there", T0 + 59_000)
+            .unwrap();
+        store
+            .set_outgoing_status(out.id, crate::messages::Status::Failed, None)
+            .unwrap();
+        let s = run(&store, &data(), all(), &mut FakeSink::default());
+        assert_eq!(s.already, 0, "the backup's real sent text comes in");
+    }
+
+    #[test]
     fn the_same_words_far_apart_are_two_texts() {
         let store = Store::in_memory().unwrap();
         store
@@ -1082,7 +1165,7 @@ mod tests {
             },
             &mut FakeSink::default(),
         );
-        assert_eq!((s.texts, s.photos), (0, 2));
+        assert_eq!((s.texts, s.photos, s.videos), (0, 1, 1));
         let photo = store
             .recent_messages(100)
             .unwrap()
