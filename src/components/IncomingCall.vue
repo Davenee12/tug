@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { Phone, PhoneOff, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
+import { AnswerGate, type CallKeyTarget } from "../lib/callKeys";
 import { appLabel, cleanName, duration, initials } from "../lib/format";
 import type { PhoneNotification } from "../types/protocol";
 
@@ -12,6 +13,7 @@ const props = defineProps<{ call: PhoneNotification }>();
 const tug = useTugStore();
 const root = ref<HTMLElement | null>(null);
 const answerButton = ref<HTMLButtonElement | null>(null);
+const declineButton = ref<HTMLButtonElement | null>(null);
 const busy = ref<"answer" | "decline" | null>(null);
 
 const name = computed(() => cleanName(props.call.title) || "Unknown caller");
@@ -37,19 +39,33 @@ async function respond(answer: boolean) {
 }
 
 // Esc only hides the card (the phone keeps ringing), as Esc closes everything else in tug: a
-// reflex must never hang up on someone. Declining is the Decline button. Enter answers once the
-// Answer button has focus, which it gets after a beat: a keypress meant for whatever you were
-// typing when the call came in mustn't pick it up.
+// reflex must never hang up on someone. Focus stays on the card, never on Answer (a focused
+// button fires on Space or Enter), so a keypress meant for whatever you were typing when the
+// call came in can't pick it up. Space never answers or declines; Enter answers only after the
+// card has been up for a moment with no keystrokes (lib/callKeys.ts). Otherwise, click.
 useFocusTrap(root, () => tug.hideCall(props.call.id));
-let armTimer: number | undefined;
+const gate = new AnswerGate(Date.now());
+function keyTarget(e: KeyboardEvent): CallKeyTarget {
+  if (e.target === root.value) return "card";
+  if (answerButton.value && e.target === answerButton.value) return "answer";
+  if (declineButton.value && e.target === declineButton.value) return "decline";
+  return "other";
+}
+function onKey(e: KeyboardEvent) {
+  const type = e.type === "keyup" ? "keyup" : "keydown";
+  const action = gate.key({ key: e.key, repeat: e.repeat, isComposing: e.isComposing, type }, keyTarget(e), Date.now());
+  if (action === "block" || action === "answer") {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  if (action === "answer" && canAnswer.value) void respond(true);
+}
 onMounted(async () => {
   await nextTick();
   root.value?.focus();
-  armTimer = window.setTimeout(() => (canAnswer.value ? answerButton.value : root.value)?.focus(), 700);
 });
 onUnmounted(() => {
   window.clearInterval(ticker);
-  window.clearTimeout(armTimer);
 });
 </script>
 
@@ -62,6 +78,8 @@ onUnmounted(() => {
       aria-labelledby="call-name"
       aria-describedby="call-detail"
       tabindex="-1"
+      @keydown.capture="onKey"
+      @keyup.capture="onKey"
       class="animate-call-in relative w-full max-w-[380px] overflow-hidden rounded-3xl bg-surface-dark px-8 pt-9 pb-7 text-center text-on-dark outline-none"
     >
       <div class="call-glow pointer-events-none absolute inset-x-0 top-0 h-72" aria-hidden="true" />
@@ -95,6 +113,7 @@ onUnmounted(() => {
       <div class="relative mt-9 flex justify-center gap-3">
         <button
           v-if="canDecline"
+          ref="declineButton"
           class="btn-on-dark h-12 rounded-full px-6"
           :disabled="busy !== null"
           @click="respond(false)"
