@@ -110,6 +110,8 @@ The maintainer cuts releases. A release bumps the version in `package.json`, `pa
 CHANGELOG.md entry; and adds a short, friendly entry to **`src/lib/whatsNew.ts`** (newest first,
 the version in step with `package.json`; a test checks it). Preview it with `npm run dev` and
 `/?whatsnew`. Release builds use `npm run build:release`, which strips local paths from the exe.
+Pushing the version tag builds the release in GitHub Actions and leaves it as a draft; see
+[docs/RELEASING.md](docs/RELEASING.md).
 
 ## The icon
 
