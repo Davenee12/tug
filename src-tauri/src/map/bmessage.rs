@@ -177,7 +177,11 @@ fn next_line(raw: &[u8], pos: usize) -> (&[u8], usize) {
 /// where parsing resumes after its `END:MSG` line.
 fn message_content(raw: &[u8], begin: usize, start: usize, length: Option<usize>) -> (&[u8], usize) {
     // LENGTH, when it lands exactly at the end of an END:MSG line.
-    if let Some(end) = length.map(|l| begin + l).filter(|&e| e > start && e <= raw.len()) {
+    // checked_add: LENGTH comes from the phone, and a huge one mustn't overflow.
+    if let Some(end) = length
+        .and_then(|l| begin.checked_add(l))
+        .filter(|&e| e > start && e <= raw.len())
+    {
         let block = &raw[..end];
         let block = block
             .strip_suffix(b"\r\n")
@@ -200,7 +204,7 @@ fn message_content(raw: &[u8], begin: usize, start: usize, length: Option<usize>
     }
     // No END:MSG (a cut-off object): everything left, up to LENGTH if that's shorter.
     let end = length
-        .map(|l| begin + l)
+        .and_then(|l| begin.checked_add(l))
         .filter(|&e| e > start && e < raw.len())
         .unwrap_or(raw.len());
     (&raw[start..trim_eol(raw, start, end)], raw.len())
@@ -218,14 +222,11 @@ fn trim_eol(raw: &[u8], start: usize, mut end: usize) -> usize {
     end
 }
 
-/// The text of one `BEGIN:MSG` block. A native body (`CHARSET:native`, or a GSM/CDMA `ENCODING`)
-/// is an SMS PDU in hex; anything else is decoded as UTF-8 with fallbacks.
-fn decode_content(content: &[u8], charset_param: Option<&str>, encoding: Option<&str>) -> (String, Decoding) {
-    let native = charset_param.is_some_and(|c| c.eq_ignore_ascii_case("native"))
-        || encoding.is_some_and(|e| {
-            let e = e.to_ascii_uppercase();
-            e.starts_with("G-") || e.starts_with("C-")
-        });
+/// The text of one `BEGIN:MSG` block. A native body (`CHARSET:native`) is an SMS PDU in hex; its
+/// GSM/CDMA `ENCODING` only describes that PDU, so it never makes a UTF-8 body native on its own.
+/// Anything else is decoded as UTF-8 with fallbacks.
+fn decode_content(content: &[u8], charset_param: Option<&str>, _encoding: Option<&str>) -> (String, Decoding) {
+    let native = charset_param.is_some_and(|c| c.eq_ignore_ascii_case("native"));
     if native {
         if let Some(text) = std::str::from_utf8(content).ok().filter(|t| sms_pdu::looks_like_hex(t)) {
             if let Some(decoded) = sms_pdu::decode_hex_pdus(text) {
@@ -357,6 +358,24 @@ mod tests {
         out.extend(block);
         out.extend_from_slice(b"END:BBODY\r\nEND:BENV\r\nEND:BMSG\r\n");
         out
+    }
+
+    #[test]
+    fn a_gsm_encoding_line_never_turns_a_utf8_text_into_a_pdu() {
+        // A UTF-8 body that happens to be valid PDU hex, under a G- ENCODING line: CHARSET says text.
+        let pdu = b"07917283010010F5040BC87238880900F10000993092516195800AE8329BFD4697D9EC37";
+        let mut raw = incoming(pdu, "UTF-8", None);
+        let at = raw.windows(14).position(|w| w == b"CHARSET:UTF-8\r").unwrap();
+        raw.splice(at..at, b"ENCODING:G-7BIT\r\n".iter().copied());
+        let m = parse_bytes(&raw);
+        assert_eq!(m.body.as_bytes(), pdu, "read as the text it is");
+        assert_ne!(m.decoding, Decoding::SmsPdu);
+    }
+
+    #[test]
+    fn a_huge_length_from_the_phone_doesnt_overflow() {
+        let m = parse_bytes(&incoming("see you".as_bytes(), "UTF-8", Some(usize::MAX)));
+        assert_eq!(m.body, "see you", "falls back to the END:MSG line");
     }
 
     #[test]
