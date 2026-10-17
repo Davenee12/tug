@@ -69,8 +69,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      # Third-party actions are pinned to a commit SHA (tag in the comment), as in check.yml.
-      - uses: actions/checkout@v7
+      # Actions are pinned to a commit SHA (tag in the comment), first-party ones included.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The whole history, to check a release commit is on main.
           fetch-depth: 0
@@ -94,7 +94,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -155,7 +155,7 @@ jobs:
             if [ -f release-out/SHA256SUMS.txt ]; then echo; echo 'Unsigned build:'; echo '```'; cat release-out/SHA256SUMS.txt; echo '```'; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tug-${{ steps.version.outputs.version }}-unsigned
           path: release-out
@@ -182,7 +182,7 @@ jobs:
       HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
     steps:
       # Only what the signing steps read: no package.json, no lockfile, nothing npm or cargo runs.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout-cone-mode: false
@@ -191,11 +191,11 @@ jobs:
             src-tauri/tauri.conf.json
             CHANGELOG.md
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tug-${{ needs.build.outputs.version }}-unsigned
           path: release-out
@@ -212,7 +212,7 @@ jobs:
       - name: "SignPath: upload the downloads"
         id: unsigned-downloads
         if: env.HAS_SIGNPATH == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-downloads
           path: signpath/downloads
@@ -285,7 +285,7 @@ jobs:
             if [ -f release-out/SHA256SUMS.txt ]; then echo; echo '```'; cat release-out/SHA256SUMS.txt; echo '```'; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tug-${{ needs.build.outputs.version }}
           path: release-out
@@ -300,7 +300,7 @@ jobs:
       # Creating the draft release (and, when it's published, its tag).
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tug-${{ needs.build.outputs.version }}
           path: release-out
