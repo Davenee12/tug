@@ -22,6 +22,12 @@ export interface Services {
 }
 
 export interface DeviceStatus {
+  /**
+   * Counts the backend's status changes. Events and the startup read can arrive out of order, so
+   * the store keeps the highest (`lib/ordering`). Always sent; optional only so the store's
+   * initial status and test fixtures needn't name it.
+   */
+  rev?: number;
   radio: RadioState;
   peripheralSupported: boolean | null;
   advertising: AdvertisingState;
@@ -143,6 +149,8 @@ export type MediaCommand =
   | "dislikeTrack";
 
 export interface NowPlaying {
+  /** Counts Now Playing changes (`Stamped` in state.rs), like `DeviceStatus.rev`. Optional only for fixtures. */
+  rev?: number;
   player: string | null;
   state: PlaybackState;
   rate: number | null;
@@ -786,6 +794,11 @@ export type PcAudioProblem = "notFound" | "denied" | "timedOut" | "failed" | "dr
 
 /** Everything the PC audio button and Settings row show (`PcAudioStatus`). */
 export interface PcAudioStatus {
+  /**
+   * Counts the changes: a command's answer and the event from the attempt can arrive in either
+   * order, so the store keeps the highest (`lib/ordering`). Optional only for fixtures.
+   */
+  rev?: number;
   /** This version of Windows can do it (Windows 10 version 2004 and later). */
   supported: boolean;
   state: PcAudioState;

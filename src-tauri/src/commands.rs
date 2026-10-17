@@ -14,7 +14,7 @@ use crate::spotify::{
     AlbumDetail, Artist, ArtistDetail, Device, Playlist, Queue, Spotify, SpotifyPlayer, SpotifySearch, SpotifyStatus,
     Track,
 };
-use crate::state::{DeviceStatus, Shared};
+use crate::state::{DeviceStatus, Shared, Stamped};
 use crate::store::StoredNotification;
 use crate::tugboat::session::Skipped;
 use crate::tugboat::{TugboatService, TugboatStatus};
@@ -37,8 +37,8 @@ pub fn get_status(state: State<'_, AppState>) -> DeviceStatus {
 }
 
 #[tauri::command]
-pub fn get_now_playing(state: State<'_, AppState>) -> NowPlaying {
-    state.shared.now_playing()
+pub fn get_now_playing(state: State<'_, AppState>) -> Stamped<NowPlaying> {
+    state.shared.now_playing_stamped()
 }
 
 #[tauri::command]

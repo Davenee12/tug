@@ -20,7 +20,7 @@ pub mod policy;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
-use crate::state::{keys, ConnectionState, DeviceStatus, Shared};
+use crate::state::{keys, take_newer, ConnectionState, DeviceStatus, Shared};
 pub use policy::PcAudioStatus;
 use policy::{Action, Input, Machine, PcAudioState, PhoneIds};
 
@@ -50,8 +50,11 @@ struct Inner {
     /// The phone and whether it was connected at the last status update.
     last_device: Option<String>,
     last_connected: bool,
-    /// What the UI was last sent, so it only hears about changes.
+    /// What the UI was last sent (with its `rev`), so it only hears about changes.
     sent: Option<PcAudioStatus>,
+    /// The newest device status the hook has seen (`DeviceStatus::rev`): a late hook carrying an
+    /// older status is ignored, so the automatic switch follows the real connection.
+    status_rev: u64,
 }
 
 impl PcAudio {
@@ -87,13 +90,15 @@ impl PcAudio {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// The status as the UI should hold it, with its `rev`. Anything not yet sent is sent first,
+    /// so a command's answer never carries a state the events haven't (see `publish`).
     pub fn status(&self) -> PcAudioStatus {
-        let auto = self.auto_now();
-        Self::compose(&self.lock(), auto)
+        self.publish()
     }
 
     fn compose(inner: &Inner, auto: bool) -> PcAudioStatus {
         PcAudioStatus {
+            rev: 0,
             supported: inner.supported,
             state: inner.machine.state(),
             problem: inner.machine.problem(),
@@ -101,16 +106,20 @@ impl PcAudio {
         }
     }
 
-    /// Send the status to the UI if it changed. Emitted under the lock, so two updates racing
-    /// can't reach the window in the wrong order.
-    fn publish(&self) {
-        let auto = self.auto_now();
+    /// Send the status to the UI if it changed, with the next `rev`, and return it. Composed and
+    /// emitted under the lock, so two updates racing can't reach the window in the wrong order, and
+    /// a command's answer that arrives after a newer event is recognisably older.
+    fn publish(&self) -> PcAudioStatus {
         let mut inner = self.lock();
-        let status = Self::compose(&inner, auto);
-        if inner.sent != Some(status) {
-            inner.sent = Some(status);
+        // Read under the lock too, so a stale reading can't be sent after a fresh one. (Lock
+        // order: this lock, then the status's; nothing takes them the other way round.)
+        let auto = self.auto_now();
+        let next = Self::compose(&inner, auto);
+        let (status, changed) = policy::stamp(&mut inner.sent, next);
+        if changed {
             self.shared.emit(EVENT, status);
         }
+        status
     }
 
     /// The phone the automatic switch was turned on for, if any.
@@ -250,6 +259,10 @@ impl PcAudio {
         let connected = s.connection == ConnectionState::Connected;
         let (switched, was_connected, state, supported) = {
             let mut inner = self.lock();
+            // The hook runs outside the status lock, so an older status can arrive last.
+            if !take_newer(&mut inner.status_rev, s.rev) {
+                return;
+            }
             if inner.last_device == device && inner.last_connected == connected {
                 return;
             }

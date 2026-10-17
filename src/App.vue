@@ -23,6 +23,7 @@ import ToolConfirmCard from "./components/ToolConfirmCard.vue";
 import { nextDownSince, RECONNECT_GRACE_MS, showConnectionPanel } from "./lib/connectionPanel";
 import { showsReconnecting } from "./lib/connectionStatus";
 import { skippedMessage } from "./lib/tugboat";
+import { START_FAILED } from "./lib/startup";
 
 const tug = useTugStore();
 const tugboat = useTugboatStore();
@@ -131,7 +132,10 @@ onMounted(async () => {
   try {
     await tug.init();
   } catch (e) {
-    tug.notify("error", `Couldn't start tug: ${String(e)}`);
+    // init() recovers from failed reads by itself; this is only for something unexpected. The
+    // details go to the console, the person gets words they can act on.
+    console.error("tug init failed", e);
+    tug.notify("error", START_FAILED);
   }
 });
 onUnmounted(() => {

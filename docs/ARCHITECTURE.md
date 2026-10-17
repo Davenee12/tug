@@ -71,7 +71,11 @@ Inside `tug.exe`:
 
 **Talking between them.** `BleHandle` and `MapHandle` are unbounded mpsc senders of commands, with
 oneshot replies. `Shared` (`state.rs`) is the one `Arc` everything holds; `update_status` and
-`update_now_playing` emit to the UI only when something changed.
+`update_now_playing` emit to the UI only when something changed, under the lock, with a `rev` that
+counts the changes (PC audio's status has one too). Events and reads can still reach the window out
+of order (a startup read, a command's answer), so the stores keep the highest `rev`
+(`lib/ordering`), and a notification list read can't undo a removal that landed while it was in
+flight.
 
 **Events to the UI** (Rust → Vue): `device-status`, `now-playing`, `notification`,
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
@@ -222,10 +226,11 @@ Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` besid
 updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),
 `devtools`, `errorReport`, `escape`, `format` (conversation grouping and display), `health`,
-`locating`, `media` (which controls show, skip routing), `messageSync`, `messageType`, `pairings`,
+`locating`, `media` (which controls show, skip routing), `messageSync`, `messageType`, `ordering`
+(newest state wins over late events and reads), `pairings`,
 `pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
-(unknown-sender filter), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
+(unknown-sender filter), `spotify`, `stableList`, `startup` (startup reads that fail are retried, never block) (regrouped lists keep unchanged rows, so only
 they re-render), `threadWindow` (long conversations render their newest texts first),
 `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: seeded spawning, collisions,
 scoring, the speed curve, inertia, merging the controls), `vips`, `weather`, `weblinks`, `whatsNew`.
