@@ -289,7 +289,16 @@ timeout (10 s) doubles as the idle limit for a kept-alive connection; it restart
 request, so an active controller never meets it, and only connections left idle are closed. The
 phone's probe (`age` = how long the newest touch waited before going out, `rtt` = its last round
 trip) gives a touch-to-PC estimate of `age + rtt/2`, logged as one summary line at debug level
-when the controller closes.
+when the controller closes. While the channel is open, the 150 ms watch also logs, at most once a
+second and only for a phone that sent anything, a debug line of counts (`controller 1: inputs 58,
+late 0, presses 2 in 1.0 s`), and an info line when a phone starts sending (`game controller 1
+sending`), so "the button does nothing" can be told apart from "nothing arrives".
+
+A quick tap on the phone can't be lost between sends: the press stays in every input until a reply
+to one that carried it comes back, and only then does the release go (`PressLatch` in
+`tugboat-page/pad.ts`); the game latches a fresh press until its next frame. `padBody` builds the
+sealed body, and `padVector.json` pins the page's bodies against the Rust decoder (vitest and
+cargo test both read it).
 
 **Voice typing (hold to talk)**
 

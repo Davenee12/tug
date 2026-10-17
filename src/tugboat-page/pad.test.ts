@@ -3,6 +3,7 @@ import {
   HEARTBEAT_MS,
   MAX_IN_FLIGHT,
   MIN_GAP_MS,
+  PressLatch,
   chooseLayout,
   controlsFor,
   encodeFor,
@@ -10,6 +11,7 @@ import {
   encodeStackPad,
   gameFrom,
   nextSendDelay,
+  padBody,
   padErrorAction,
   positionFromTouch,
   probe,
@@ -17,6 +19,8 @@ import {
   tiltSupport,
   tiltToSteer,
 } from "./pad";
+import { advance, newStack, padDrop } from "../lib/harborStack";
+import vector from "./padVector.json";
 
 describe("encodePad", () => {
   it("sends whole-number steering from -100 to 100 and a real boolean", () => {
@@ -169,5 +173,83 @@ describe("tiltToSteer", () => {
     expect(tiltToSteer(40, -25, 0)).toBe(-1);
     expect(tiltToSteer(null, null, 90)).toBe(0);
     expect(tiltToSteer(Number.NaN, 0, 90)).toBe(0);
+  });
+});
+
+describe("the body on the wire (padVector.json, shared with the Rust decoder)", () => {
+  it("is exactly what the page's encoder makes, Drop included", () => {
+    for (const c of vector.cases) {
+      const input = encodeFor(gameFrom(c.game), c.steer, c.held || c.pending);
+      const p = "probe" in c ? c.probe : undefined;
+      expect(JSON.stringify(padBody(input, p)), c.name).toBe(c.body);
+    }
+  });
+
+  it("never drops a field the input carries (Drop once went missing here)", () => {
+    expect(padBody({ steer: 0, boost: false, drop: true })).toEqual({ steer: 0, boost: false, drop: true });
+    expect(Object.keys(padBody({ steer: 1, boost: true }, { age: 1, rtt: 2 }))).toEqual(["steer", "boost", "age", "rtt"]);
+  });
+});
+
+describe("PressLatch: a quick tap always reaches the PC", () => {
+  it("keeps the press in every input until a reply to one carrying it comes back", () => {
+    const latch = new PressLatch();
+    expect(latch.pending).toBe(false);
+    // Down and up before the next send: the finger is already off the button.
+    latch.press();
+    const held = false;
+    const first = encodeFor("harbor-stack", 0, held || latch.pending);
+    expect(first.drop).toBe(true);
+    const mark = latch.mark();
+    // A second input goes out before the first reply (two in flight): still the press, so even if
+    // the PC gets this one first and ignores the older, it sees the drop.
+    expect(encodeFor("harbor-stack", 0, held || latch.pending).drop).toBe(true);
+    // The reply comes back: now the release can go.
+    latch.heardUpTo(mark);
+    expect(encodeFor("harbor-stack", 0, held || latch.pending).drop).toBe(false);
+  });
+
+  it("doesn't lose a second tap to the first one's reply, or a failed send", () => {
+    const latch = new PressLatch();
+    latch.press();
+    const one = latch.mark();
+    latch.press(); // a second tap before the first is confirmed
+    latch.heardUpTo(one);
+    expect(latch.pending).toBe(true);
+    // That send failed: nothing confirmed, still waiting.
+    latch.mark();
+    expect(latch.pending).toBe(true);
+    latch.heardUpTo(latch.mark());
+    expect(latch.pending).toBe(false);
+    latch.press();
+    latch.clear();
+    expect(latch.pending).toBe(false);
+  });
+
+  it("drops a container end to end: tap → wire → PC events → the game's next frame", () => {
+    // The phone: a tap whose release comes before the first send.
+    const latch = new PressLatch();
+    latch.press();
+    const press = padBody(encodeFor("harbor-stack", 0, latch.pending));
+    latch.heardUpTo(latch.mark());
+    const release = padBody(encodeFor("harbor-stack", 0, latch.pending));
+    // The PC turns each into a `game-pad` event (the Rust side of this is in pad.rs, from the same
+    // padVector.json bodies): both land between two frames.
+    const events = [press, release].map((b) => ({ connected: true, drop: b.drop === true }));
+    expect(events.map((e) => e.drop)).toEqual([true, false]);
+    let held = false;
+    let latched = false;
+    for (const e of events) {
+      const r = padDrop(held, e);
+      if (r.fresh) latched = true;
+      held = r.held;
+    }
+    // The next frame takes the latched press: exactly one drop.
+    const s = newStack(1);
+    advance(s, { drop: latched, nudge: 0 }, 1 / 60);
+    expect(s.events.filter((e) => e === "drop")).toHaveLength(1);
+    // Holding Drop doesn't drop again; only a new press does.
+    expect(padDrop(true, { connected: true, drop: true }).fresh).toBe(false);
+    expect(padDrop(false, { connected: false, drop: true }).fresh).toBe(false);
   });
 });

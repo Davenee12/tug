@@ -10,6 +10,7 @@
 // PC's clipboard arriving as text, &clipimage as a picture).
 
 import { TugboatError, type TugboatApi, type PageOffer, type PageState } from "./client";
+import { padBody } from "./pad";
 
 export function mockApi(): TugboatApi {
   const params = new URLSearchParams(location.search);
@@ -73,7 +74,8 @@ export function mockApi(): TugboatApi {
     async pad(input, probe) {
       await sleep(15);
       if (!state.game) throw new TugboatError("no-game");
-      console.debug("[mock] pad", input, probe);
+      // The body exactly as the real client seals it (so a field it leaves out shows here too).
+      console.debug("[mock] pad", JSON.stringify(padBody(input, probe)));
       // &switch: the PC closes Tugboat Run and opens Harbor Stack 8 s in (the buttons follow).
       const game = params.has("switch") && Date.now() - started > 8000 ? "harbor-stack" : state.gameId;
       return { paused: false, hits: Math.floor((Date.now() - started) / 5000), player, game };

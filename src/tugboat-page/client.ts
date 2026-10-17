@@ -4,7 +4,7 @@
 
 import { ad, authHeader, fileId, open, seal, type Keys } from "./crypto";
 import { CHUNK, MAX_DOWNLOAD, PARALLEL, chunkBounds, isFatal, missing, nextSeq, receivedBytes, retryDelay } from "./chunks";
-import type { PadGame, PadInput, PadProbe } from "./pad";
+import { padBody, type PadGame, type PadInput, type PadProbe } from "./pad";
 
 export interface PageOffer {
   id: string;
@@ -176,8 +176,7 @@ export class TugboatClient implements TugboatApi {
     // Only the fields the PC accepts, whatever else the objects carry. The browser keeps the
     // connection alive between inputs on its own (HTTP/1.1); fetch's `keepalive` flag is a
     // different thing (for requests that outlive the page) and isn't wanted here.
-    const body = probe ? { steer: input.steer, boost: input.boost, age: probe.age, rtt: probe.rtt } : { steer: input.steer, boost: input.boost };
-    return this.call<PadReply>("POST", "/api/pad", body);
+    return this.call<PadReply>("POST", "/api/pad", padBody(input, probe));
   }
 
   private idFor(file: File): string {

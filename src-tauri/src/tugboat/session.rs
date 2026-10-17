@@ -955,11 +955,17 @@ impl Session {
         let seat = seat_of(req);
         let mut st = self.state();
         let pad = st.pad.as_mut().filter(|p| p.open_for(seat)).ok_or(ApiError::NoGame)?;
+        let arrived = !pad.connected(seat);
         let event = pad.input(seat, req.seq, decoded, Instant::now());
+        let arrived = arrived && pad.connected(seat);
         let reply = pad.reply(seat);
         // A guest's steering is someone playing (its check-ins aren't: see `authorize`).
         st.last_activity = Instant::now();
         drop(st);
+        if arrived {
+            // Once per arrival (its going quiet is logged too), never per input.
+            log::info!("tugboat: game controller {seat} sending");
+        }
         if let Some(e) = event {
             self.sink.pad(e);
         }
@@ -972,8 +978,13 @@ impl Session {
         let Some(pad) = st.pad.as_mut() else {
             return false;
         };
-        let events = pad.tick(Instant::now());
+        let now = Instant::now();
+        let events = pad.tick(now);
+        let summary = pad.summary(now);
         drop(st);
+        for line in summary {
+            log::debug!("tugboat: {line}");
+        }
         for e in events {
             log::info!("tugboat: game controller {} went quiet", e.seat);
             self.sink.pad(e);

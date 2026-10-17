@@ -1,0 +1,46 @@
+{
+  "_comment": "Controller inputs end to end, asserted by vitest (src/tugboat-page/pad.test.ts: the page's encoder and padBody produce exactly these bodies) and cargo test (src-tauri/src/tugboat/pad.rs: the PC decodes them, for that game, as these presses). `pending` is a press the PC hasn't confirmed yet (PressLatch), as in a quick tap.",
+  "cases": [
+    {
+      "name": "Harbor Stack: a quick tap, the press (finger already up)",
+      "game": "harbor-stack",
+      "steer": 0,
+      "held": false,
+      "pending": true,
+      "body": "{\"steer\":0,\"boost\":false,\"drop\":true}",
+      "boost": false,
+      "drop": true
+    },
+    {
+      "name": "Harbor Stack: the same tap's release, once the PC has the press",
+      "game": "harbor-stack",
+      "steer": 0,
+      "held": false,
+      "pending": false,
+      "body": "{\"steer\":0,\"boost\":false,\"drop\":false}",
+      "boost": false,
+      "drop": false
+    },
+    {
+      "name": "Harbor Stack: holding Drop while nudging the crane slower, with the latency probe",
+      "game": "harbor-stack",
+      "steer": -0.5,
+      "held": true,
+      "pending": false,
+      "probe": { "age": 3, "rtt": 12 },
+      "body": "{\"steer\":-50,\"boost\":false,\"drop\":true,\"age\":3,\"rtt\":12}",
+      "boost": false,
+      "drop": true
+    },
+    {
+      "name": "Tugboat Run: a quick tap of Boost (the body it always had)",
+      "game": "tugboat-run",
+      "steer": 0.25,
+      "held": false,
+      "pending": true,
+      "body": "{\"steer\":25,\"boost\":true}",
+      "boost": true,
+      "drop": false
+    }
+  ]
+}

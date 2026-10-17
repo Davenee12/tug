@@ -491,6 +491,16 @@ export function nudgeFrom(c: StackControls): number {
   return c.pad?.connected ? clamp(Number.isFinite(c.pad.steer) ? c.pad.steer : 0, -1, 1) : 0;
 }
 
+/**
+ * A phone's Drop as the game reads it from `game-pad` events: `fresh` on the press itself (the
+ * rising edge), never while it's held. The caller latches a fresh press until the next frame takes
+ * it, so a tap whose press and release both land between two frames still drops exactly once.
+ */
+export function padDrop(wasHeld: boolean, e: { connected: boolean; drop: boolean }): { fresh: boolean; held: boolean } {
+  const held = e.connected && e.drop;
+  return { fresh: held && !wasHeld, held };
+}
+
 /** A key in a stack-off: whose drop it is (Player 1 ↓ or Enter, Player 2 S), or null. */
 export function stackOffKey(key: string): 1 | 2 | null {
   const k = key.length === 1 ? key.toLowerCase() : key;

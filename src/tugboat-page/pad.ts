@@ -120,6 +120,54 @@ export function encodeFor(game: PadGame, steer: number, pressed: boolean): PadIn
   return game === "harbor-stack" ? encodeStackPad(steer, pressed) : encodePad(steer, pressed);
 }
 
+/**
+ * What goes in the sealed body: exactly the fields the PC accepts, in a fixed order, whatever else
+ * the objects carry. `drop` only when the input has one (Harbor Stack), so Tugboat Run's body is
+ * what it always was. (Leaving `drop` out here is how Harbor Stack's Drop once never reached the
+ * PC: padVector.json now pins this against the Rust decoder.)
+ */
+export function padBody(input: PadInput, probe?: PadProbe): Record<string, number | boolean> {
+  const body: Record<string, number | boolean> = { steer: input.steer, boost: input.boost };
+  if (input.drop !== undefined) body.drop = input.drop;
+  if (probe) {
+    body.age = probe.age;
+    body.rtt = probe.rtt;
+  }
+  return body;
+}
+
+/**
+ * The big button's presses, latched until the PC has heard one. Only the newest state goes out,
+ * and up to two inputs are in flight (the PC ignores the older if they land out of order), so a
+ * quick tap whose press and release go out back to back could lose its press. Instead the press
+ * stays in every input until a reply to one that carried it comes back; only then can the release
+ * go. The press reaches the PC just as fast; the release waits one round trip.
+ */
+export class PressLatch {
+  private presses = 0;
+  private heard = 0;
+  /** A finger came down on the button. */
+  press() {
+    this.presses++;
+  }
+  /** A press the PC hasn't confirmed yet. */
+  get pending(): boolean {
+    return this.presses > this.heard;
+  }
+  /** An input carrying the press is going out: the mark to confirm when its reply comes back. */
+  mark(): number {
+    return this.presses;
+  }
+  /** The reply to an input sent with `mark` came back: the PC has that press. */
+  heardUpTo(mark: number) {
+    this.heard = Math.max(this.heard, mark);
+  }
+  /** Forget waiting presses (the page hid, or the game changed). */
+  clear() {
+    this.heard = this.presses;
+  }
+}
+
 export function samePad(a: PadInput | null, b: PadInput): boolean {
   return a !== null && a.steer === b.steer && a.boost === b.boost && (a.drop ?? false) === (b.drop ?? false);
 }

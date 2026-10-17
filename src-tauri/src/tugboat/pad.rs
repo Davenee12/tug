@@ -295,6 +295,11 @@ struct Seat {
     bucket: Bucket,
     reply: PadReply,
     latency: Latency,
+    /// Inputs since the last summary (`Pad::summary`), those that arrived after a newer one, and
+    /// presses of the game's button (Boost or Drop going down) among them.
+    received: u32,
+    late: u32,
+    presses: u32,
 }
 
 impl Seat {
@@ -307,9 +312,15 @@ impl Seat {
             bucket: Bucket::new(now),
             reply: PadReply::default(),
             latency: Latency::default(),
+            received: 0,
+            late: 0,
+            presses: 0,
         }
     }
 }
+
+/// How often the controller's traffic is summarised in the debug log (never per input).
+pub const SUMMARY_EVERY: Duration = Duration::from_secs(1);
 
 /// One open controller channel: one seat, or two in a two-player game.
 #[derive(Debug)]
@@ -317,6 +328,8 @@ pub struct Pad {
     players: u8,
     game: GameId,
     seats: [Seat; 2],
+    /// When the traffic was last summarised.
+    summary_at: Instant,
 }
 
 fn index(seat: SeatNo) -> usize {
@@ -329,7 +342,37 @@ impl Pad {
             players: players.clamp(1, 2),
             game,
             seats: [Seat::new(now), Seat::new(now)],
+            summary_at: now,
         }
+    }
+
+    /// At most once every `SUMMARY_EVERY`: one line per phone that sent anything since the last
+    /// summary ("controller 1: inputs 58, late 0, presses 2 in 1.0 s"), for the debug log, so a
+    /// controller that doesn't seem to work can be told apart from one whose inputs never arrive.
+    /// Counts only: never what was steered.
+    pub fn summary(&mut self, now: Instant) -> Vec<String> {
+        let span = now.saturating_duration_since(self.summary_at);
+        if span < SUMMARY_EVERY {
+            return Vec::new();
+        }
+        self.summary_at = now;
+        let mut lines = Vec::new();
+        for (i, s) in self.seats.iter_mut().enumerate() {
+            if s.received > 0 {
+                lines.push(format!(
+                    "controller {}: inputs {}, late {}, presses {} in {:.1} s",
+                    i + 1,
+                    s.received,
+                    s.late,
+                    s.presses,
+                    span.as_secs_f64()
+                ));
+            }
+            s.received = 0;
+            s.late = 0;
+            s.presses = 0;
+        }
+        lines
     }
 
     /// The game that has the channel open.
@@ -380,13 +423,19 @@ impl Pad {
     /// it shows changed (steering, boost, or the phone just arriving).
     pub fn input(&mut self, seat: SeatNo, seq: u64, decoded: Decoded, now: Instant) -> Option<PadEvent> {
         let s = &mut self.seats[index(seat)];
+        s.received = s.received.saturating_add(1);
         if seq <= s.last_seq {
+            s.late = s.late.saturating_add(1);
             return None;
         }
         if let Some(p) = decoded.probe {
             s.latency.add(p.touch_to_pc_ms());
         }
         let input = self.game.allow(decoded.input);
+        let held = |i: PadInput| i.boost || i.drop;
+        if held(input) && !(s.connected && held(s.input)) {
+            s.presses = s.presses.saturating_add(1);
+        }
         s.last_seq = seq;
         s.last_input = Some(now);
         let changed = !s.connected || input != s.input;
@@ -770,6 +819,73 @@ mod tests {
                 String::from_utf8_lossy(bad)
             );
         }
+    }
+
+    /// The phone page's own bodies (asserted against its encoder by vitest), read by the PC.
+    const VECTOR: &str = include_str!("../../../src/tugboat-page/padVector.json");
+
+    #[test]
+    fn the_pages_bodies_reach_the_game_drop_and_all() {
+        let v: serde_json::Value = serde_json::from_str(VECTOR).unwrap();
+        let t0 = Instant::now();
+        for c in v["cases"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            let game: GameId = serde_json::from_value(c["game"].clone()).unwrap();
+            let decoded = decode(c["body"].as_str().unwrap().as_bytes()).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            let steer = (c["steer"].as_f64().unwrap() * 100.0).round() as i16;
+            assert_eq!(decoded.input.steer, steer, "{name}");
+            // What the game hears: its own button, pressed or not.
+            let mut pad = Pad::new(t0, 1, game);
+            let e = pad.input(FIRST, 1, decoded, t0).unwrap();
+            assert_eq!(e.drop, c["drop"].as_bool().unwrap(), "{name}");
+            assert_eq!(e.boost, c["boost"].as_bool().unwrap(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_quick_taps_press_and_release_both_reach_harbor_stack() {
+        let v: serde_json::Value = serde_json::from_str(VECTOR).unwrap();
+        let body = |i: usize| decode(v["cases"][i]["body"].as_str().unwrap().as_bytes()).unwrap();
+        let t0 = Instant::now();
+        let mut pad = Pad::new(t0, 1, GameId::HarborStack);
+        // A heartbeat, then the tap: the press, and (after its reply) the release.
+        assert!(pad.input(FIRST, 1, body(1), t0).is_some_and(|e| e.connected && !e.drop));
+        let press = pad.input(FIRST, 2, body(0), t0).unwrap();
+        let release = pad.input(FIRST, 3, body(1), t0).unwrap();
+        assert!(press.drop && !release.drop, "the game sees the drop go down and up");
+        // Counted for the debug summary: three inputs, one press.
+        assert_eq!(
+            pad.summary(t0 + SUMMARY_EVERY),
+            vec!["controller 1: inputs 3, late 0, presses 1 in 1.0 s".to_string()]
+        );
+    }
+
+    #[test]
+    fn the_traffic_summary_comes_at_most_once_a_second() {
+        let t0 = Instant::now();
+        let mut pad = Pad::new(t0, 2, GameId::HarborStack);
+        let drop = |held| Decoded {
+            input: PadInput {
+                steer: 0,
+                boost: false,
+                drop: held,
+            },
+            probe: None,
+        };
+        pad.input(FIRST, 5, drop(true), t0);
+        pad.input(FIRST, 4, drop(false), t0); // late: ignored, but counted
+        pad.input(FIRST, 6, drop(true), t0); // still held: not another press
+        pad.input(SECOND, 1, drop(false), t0);
+        assert!(pad.summary(t0 + SUMMARY_EVERY / 2).is_empty(), "not yet");
+        assert_eq!(
+            pad.summary(t0 + SUMMARY_EVERY),
+            vec![
+                "controller 1: inputs 3, late 1, presses 1 in 1.0 s".to_string(),
+                "controller 2: inputs 1, late 0, presses 0 in 1.0 s".to_string()
+            ]
+        );
+        // Counts start again; a quiet second says nothing.
+        assert!(pad.summary(t0 + SUMMARY_EVERY * 2).is_empty());
     }
 
     #[test]

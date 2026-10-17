@@ -48,6 +48,7 @@ import {
   milestoneLine,
   newStack,
   nudgeFrom,
+  padDrop,
   settled,
   stackOffKey,
   stackOutlook,
@@ -545,14 +546,16 @@ function onPad(e: GamePad) {
       pause();
     }
   }
-  const fresh = e.connected && e.drop && !padDropWas[i];
+  // A fresh press is latched in `dropPress` until the next frame takes it (a quick tap's press and
+  // release can both land between two frames).
+  const { fresh, held } = padDrop(padDropWas[i], e);
   if (fresh && phase.value === "playing") pressDrop(player - 1);
   // From a phone alone: Drop starts, resumes or plays again (on a fresh press).
   if (fresh && phase.value !== "playing" && !blocked.value) {
     sheet.value = false;
     primary();
   }
-  padDropWas[i] = e.connected && e.drop;
+  padDropWas[i] = held;
 }
 
 const sendFeedback = () => controller.sendFeedback();

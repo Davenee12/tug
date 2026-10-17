@@ -25,6 +25,7 @@ import {
   MAX_IN_FLIGHT,
   chooseLayout,
   controlsFor,
+  PressLatch,
   encodeFor,
   gameFrom,
   nextSendDelay,
@@ -127,13 +128,13 @@ function setSteer(v: number) {
 // --- The big button: on the press itself, not the release ---
 let actionPointer: number | null = null;
 /** Bumped on each press, to start the ring again. */
-const presses = ref(0);
+const taps = ref(0);
 function onActionDown(e: PointerEvent) {
   actionPointer = e.pointerId;
   capture(e.currentTarget as Element, e.pointerId);
   held.value = true;
-  pressPending = true;
-  presses.value++;
+  presses.press();
+  taps.value++;
   buzz(12);
   kick();
 }
@@ -150,7 +151,7 @@ function switchGame(g: PadGame) {
   game.value = g;
   steer.value = 0;
   held.value = false;
-  pressPending = false;
+  presses.clear();
   actionPointer = steerPointer = null;
   dragging.value = false;
   if (tiltOn.value) tiltOff();
@@ -205,12 +206,13 @@ let sentCount = 0;
 let appliedReply = 0;
 let stopped = false;
 let backoffUntil = 0;
-/** A press not yet sent. Only the newest state goes out, so a quick tap (down and up between two
- * sends) would otherwise never reach the PC: the press is held until one send carries it, and the
- * release follows in the next. */
-let pressPending = false;
+/** Presses the PC hasn't confirmed. Only the newest state goes out and two can be in flight, so a
+ * quick tap (down and up between two sends, or a release overtaking its press) would otherwise
+ * never reach the PC: the press stays in every input until a reply to one carrying it comes back,
+ * and only then does the release go (`PressLatch`). */
+const presses = new PressLatch();
 
-const current = () => encodeFor(game.value, steer.value, held.value || pressPending);
+const current = () => encodeFor(game.value, steer.value, held.value || presses.pending);
 const carriesPress = (input: PadInput) => input.boost || input.drop === true;
 
 /** Something changed: send it now if the pacing allows, or at the next 16 ms mark. */
@@ -241,13 +243,15 @@ async function send() {
   dirtySince = null;
   lastSentAt = started;
   lastQueued = input;
-  if (carriesPress(input)) pressPending = false;
+  const mark = carriesPress(input) ? presses.mark() : 0;
   // Ready for the next change straight away (up to two in flight).
   pump();
   try {
     const reply = await props.api.pad(input, p);
     lastRtt = performance.now() - started;
     status.value = "ok";
+    // The PC has this press: the release can follow (a change, so the next pump sends it at once).
+    if (mark > 0) presses.heardUpTo(mark);
     if (id > appliedReply) {
       appliedReply = id;
       paused.value = reply.paused;
@@ -264,9 +268,8 @@ async function send() {
       emit("leave", code);
       return;
     }
-    // Not delivered: send the state again, and a lost tap again.
+    // Not delivered: send the state again (an unconfirmed press is still waiting in the latch).
     lastQueued = null;
-    if (carriesPress(input) && !held.value) pressPending = true;
     if (action === "slow") backoffUntil = performance.now() + BUSY_BACKOFF_MS;
     else {
       if (code === "network") status.value = "network";
@@ -290,7 +293,7 @@ function onVisibility() {
   steerPointer = actionPointer = null;
   dragging.value = false;
   held.value = false;
-  pressPending = false;
+  presses.clear();
   if (controls.value.springBack) steer.value = 0;
 }
 
@@ -429,7 +432,7 @@ const sideways = computed(() => layout.value === "landscape");
         @pointercancel="onActionUp"
         @contextmenu.prevent
       >
-        <span v-if="presses > 0" :key="presses" class="animate-tap pointer-events-none absolute size-48 rounded-full bg-canvas/40" aria-hidden="true" />
+        <span v-if="taps > 0" :key="taps" class="animate-tap pointer-events-none absolute size-48 rounded-full bg-canvas/40" aria-hidden="true" />
         <span class="relative text-[30px] font-medium">{{ controls.action }}</span>
         <span class="relative text-[14px] opacity-90">{{ controls.actionHint }}</span>
       </button>
