@@ -283,7 +283,14 @@ impl Store {
         // History brought in from a backup already has it (a text that reached the phone while tug
         // couldn't list it, listed now): the same text twice is worse than this copy's handle lost.
         if m.source != SOURCE_IPHONE_BACKUP
-            && crate::backup::import::backup_has(&conn, m.address, m.body, m.sent_at, m.received_at)?
+            && crate::backup::import::backup_has(
+                &conn,
+                self.local_zone().resolver(),
+                m.address,
+                m.body,
+                m.sent_at,
+                m.received_at,
+            )?
         {
             return Ok(None);
         }

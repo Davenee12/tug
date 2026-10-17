@@ -405,6 +405,9 @@ pub struct NewNotification<'a> {
 
 pub struct Store {
     conn: Mutex<Connection>,
+    /// How the phone's zoneless text times are read as UTC when comparing Bluetooth texts with
+    /// history from a backup (`backup::clock`): the PC's and phone's real zone in the app.
+    local_zone: Mutex<crate::backup::clock::LocalZone>,
 }
 
 pub type Result<T> = rusqlite::Result<T>;
@@ -414,9 +417,13 @@ impl Store {
         Self::init(Connection::open(path)?)
     }
 
+    /// In memory, for tests: zoneless phone times are read as UTC unless a test says otherwise
+    /// (`set_local_zone`), so no test depends on the PC's time zone.
     #[cfg(test)]
     pub fn in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?)
+        let store = Self::init(Connection::open_in_memory()?)?;
+        store.set_local_zone(crate::backup::clock::LocalZone::Fixed(0));
+        Ok(store)
     }
 
     fn init(mut conn: Connection) -> Result<Self> {
@@ -424,12 +431,25 @@ impl Store {
         register_functions(&conn)?;
         conn.execute_batch(SCHEMA)?;
         migrate(&mut conn)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+            local_zone: Mutex::new(crate::backup::clock::LocalZone::System),
+        })
     }
 
     pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         // A panic while holding the lock leaves SQLite itself consistent, so keep going.
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Where the phone's zoneless times get their offset (see `backup::clock`).
+    pub(crate) fn local_zone(&self) -> crate::backup::clock::LocalZone {
+        *self.local_zone.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_local_zone(&self, zone: crate::backup::clock::LocalZone) {
+        *self.local_zone.lock().unwrap_or_else(|e| e.into_inner()) = zone;
     }
 
     /// Insert or update a notification and return the stored row.

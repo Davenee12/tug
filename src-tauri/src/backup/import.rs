@@ -7,9 +7,14 @@
 //! - Only one-to-one conversations come in: Messages in tug holds the conversations it can reply
 //!   to, and iOS gives Bluetooth no way to send to a group, so group chats stay on the iPhone
 //!   (counted, so the wizard can say so).
-//! - A text tug already has from Bluetooth isn't added twice: same direction, same person (by
-//!   `store::match_key`), same words, and close in time. The Bluetooth copy stays; the backup only
-//!   adds what it lacked (the photos of a text Bluetooth showed as "Attachment: 1 Photo").
+//! - A text tug already has from Bluetooth isn't added twice: same direction, same conversation
+//!   (the person, by `store::match_key`), same words, and close in time: tug got it within minutes
+//!   of the backup's time, or the phone's own time for it is within a clock's slack, in UTC. A
+//!   phone time without a zone is turned into UTC with an offset tug knows (`clock`), never guessed;
+//!   with none known it isn't compared. Each Bluetooth text pairs with one backup text at most, and
+//!   one that happened after the backup was made can't be in it. The Bluetooth copy stays; the
+//!   backup only adds what it lacked (the photos of a text Bluetooth showed as "Attachment: 1
+//!   Photo").
 //! - People are tug's: a number the backup writes as `+447700900123` joins the conversation tug
 //!   already has under `07700 900123` (the same last 10 digits), and contacts' names apply as usual.
 //! - Photos and videos are copied in a second pass, through a `FileSink`, so they can be skipped
@@ -22,6 +27,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 
+use super::clock;
 use super::smsdb::{Message, Service, SmsData};
 use crate::messages::SOURCE_IPHONE_BACKUP;
 use crate::store::{match_key, Result, Store};
@@ -31,11 +37,10 @@ pub const IMPORT_RECORD: &str = "backup_import";
 
 /// A Bluetooth text tug got within this of the backup's time is the same text (tug saw it live).
 const LIVE_TOLERANCE_MS: i64 = 10 * 60 * 1000;
-/// The phone's own time for a Bluetooth text, when it carries a zone: a clock's worth of slack.
+/// The phone's own time for a Bluetooth text, in UTC (it carried a zone, or `clock` turned it into
+/// UTC with a known offset): a clock's worth of slack. Also how far past the backup's date a text
+/// may be and still be in it.
 const ZONED_TOLERANCE_MS: i64 = 2 * 60 * 1000;
-/// The phone's time without a zone is its local time, read here as if UTC: it can be off by the
-/// phone's offset from UTC, up to 14 hours.
-const NAIVE_TOLERANCE_MS: i64 = 14 * 60 * 60 * 1000 + ZONED_TOLERANCE_MS;
 
 /// Rows per transaction: a crash or cancel loses at most one batch, and the store is never held
 /// for long.
@@ -248,7 +253,7 @@ pub fn iso_utc(ms: i64) -> String {
 }
 
 // Howard Hinnant's days-from-civil and its inverse (proleptic Gregorian).
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+pub(crate) fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
@@ -258,7 +263,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
+pub(crate) fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -270,51 +275,95 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
+/// A Bluetooth text's phone time in UTC: as stored when it carries a zone, else turned into UTC
+/// with an offset tug knows (`clock`), else none (a zoneless time is never guessed at).
+fn phone_time(sent_at: Option<&str>, zone: clock::Resolver) -> Option<i64> {
+    let (ms, zoned) = parse_iso_ms(sent_at?)?;
+    if zoned {
+        Some(ms)
+    } else {
+        zone.to_utc(ms)
+    }
+}
+
 /// A Bluetooth text that could be the same as a backup's.
 struct Candidate {
     id: i64,
     received_at: i64,
-    sent_at: Option<(i64, bool)>,
+    /// The phone's time for it, in UTC, when known (`phone_time`).
+    sent_at: Option<i64>,
 }
 
 impl Candidate {
+    /// When it happened, as well as tug knows: the phone's time, else when tug got it.
+    fn time(&self) -> i64 {
+        self.sent_at.unwrap_or(self.received_at)
+    }
+
     /// How close it is to `at` (smaller is better), if close enough to be the same text at all.
     fn distance(&self, at: i64) -> Option<i64> {
         let live = (self.received_at - at).abs();
         if live <= LIVE_TOLERANCE_MS {
             return Some(live);
         }
-        let (sent, zoned) = self.sent_at?;
-        let d = (sent - at).abs();
-        if zoned {
-            (d <= ZONED_TOLERANCE_MS).then_some(d)
-        } else {
-            // Ranked after every live match: a zone guess is the weaker evidence.
-            (d <= NAIVE_TOLERANCE_MS).then_some(LIVE_TOLERANCE_MS + d)
-        }
+        let d = (self.sent_at? - at).abs();
+        (d <= ZONED_TOLERANCE_MS).then_some(d)
+    }
+
+    /// Whether a backup made at `backup_date` could hold it: not if it happened after (beyond a
+    /// clock's slack). An unknown date rules nothing out.
+    fn before(&self, backup_date: Option<i64>) -> bool {
+        backup_date.is_none_or(|d| self.time() <= d.saturating_add(ZONED_TOLERANCE_MS))
     }
 }
 
-/// Whether imported history already holds this incoming Bluetooth text (same person, same words,
-/// close in time, by the same rules the import uses the other way round). Uses the partial index
-/// on incoming bodies, so it costs a lookup, not a scan.
+/// The import record (`IMPORT_RECORD`): `None` when nothing was ever imported, else the newest
+/// backup's date, if known.
+fn import_record(conn: &rusqlite::Connection) -> Result<Option<Option<i64>>> {
+    let json: Option<String> = conn
+        .query_row("SELECT value FROM settings WHERE key = ?1", [IMPORT_RECORD], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    Ok(json.map(|json| {
+        serde_json::from_str::<serde_json::Value>(&json)
+            .ok()
+            .and_then(|v| v.get("backupDate").and_then(serde_json::Value::as_i64))
+    }))
+}
+
+/// Whether imported history already holds this incoming Bluetooth text (same conversation, same
+/// words, close in time, by the same rules the import uses the other way round). Uses the partial
+/// index on incoming bodies, so it costs a lookup, not a scan.
 pub(crate) fn backup_has(
     conn: &rusqlite::Connection,
+    zone: clock::Resolver,
     address: &str,
     body: &str,
     sent_at: Option<&str>,
     received_at: i64,
 ) -> Result<bool> {
     let words = compare_body(body);
+    // Only a photo's Bluetooth words ("Attachment: 1 Photo"), or nothing: too little to tell one
+    // text from another, so it's never taken for the backup's.
+    if words.is_empty() {
+        return Ok(false);
+    }
     let incoming = Candidate {
         id: 0,
         received_at,
-        sent_at: sent_at.and_then(parse_iso_ms),
+        sent_at: phone_time(sent_at, zone),
     };
+    // Nothing imported, or newer than the newest backup brought in: the backup can't have it.
+    match import_record(conn)? {
+        None => return Ok(false),
+        Some(date) if !incoming.before(date) => return Ok(false),
+        Some(_) => {}
+    }
     let key = person_key(address);
     let mut stmt = conn.prepare_cached(
         "SELECT address, received_at FROM messages
-         WHERE direction = 'in' AND body IN (?1, ?2) AND source = ?3 AND hidden_at IS NULL",
+         WHERE direction = 'in' AND body IN (?1, ?2) AND source = ?3 AND hidden_at IS NULL AND unsent = 0",
     )?;
     let rows = stmt.query_map(params![body, words, SOURCE_IPHONE_BACKUP], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
@@ -338,7 +387,9 @@ struct Known {
     imported: HashMap<String, i64>,
 }
 
-fn load_known(store: &Store) -> Result<Known> {
+/// tug's people and Bluetooth texts, with each text's phone time read in UTC (`zone`), leaving out
+/// any that happened after the backup was made.
+fn load_known(store: &Store, zone: clock::Resolver, backup_date: Option<i64>) -> Result<Known> {
     let conn = store.conn();
     let mut addresses = HashMap::new();
     {
@@ -387,12 +438,16 @@ fn load_known(store: &Store) -> Result<Known> {
         })?;
         for row in rows {
             let (id, direction, address, body, sent_at, received_at) = row?;
-            let key = (direction == "out", person_key(&address), compare_body(&body));
-            texts.entry(key).or_default().push(Candidate {
+            let candidate = Candidate {
                 id,
                 received_at,
-                sent_at: sent_at.as_deref().and_then(parse_iso_ms),
-            });
+                sent_at: phone_time(sent_at.as_deref(), zone),
+            };
+            if !candidate.before(backup_date) {
+                continue;
+            }
+            let key = (direction == "out", person_key(&address), compare_body(&body));
+            texts.entry(key).or_default().push(candidate);
         }
     }
     let mut imported = HashMap::new();
@@ -423,8 +478,10 @@ fn resolve(known: &Known, handle: &str) -> String {
         .unwrap_or(normalized)
 }
 
-fn plan<'a>(store: &Store, data: &'a SmsData) -> Result<Plan<'a>> {
-    let known = load_known(store)?;
+/// How each of the backup's messages lands. Group chats are left out; a one-to-one text is matched
+/// only with Bluetooth texts in the same conversation.
+fn plan<'a>(store: &Store, data: &'a SmsData, backup_date: Option<i64>) -> Result<Plan<'a>> {
+    let known = load_known(store, store.local_zone().resolver(), backup_date)?;
     let mut used: HashSet<i64> = HashSet::new();
     let mut items = Vec::with_capacity(data.messages.len());
     for m in &data.messages {
@@ -483,8 +540,13 @@ fn conversation_key(target: &Target) -> Option<String> {
 }
 
 /// What importing would add, against what tug has now.
-pub fn scan(store: &Store, data: &SmsData, sizes: &dyn Fn(&str) -> Option<u64>) -> Result<Scan> {
-    let plan = plan(store, data)?;
+pub fn scan(
+    store: &Store,
+    data: &SmsData,
+    backup_date: Option<i64>,
+    sizes: &dyn Fn(&str) -> Option<u64>,
+) -> Result<Scan> {
+    let plan = plan(store, data, backup_date)?;
     let stored = stored_keys(store)?;
     let mut scan = Scan::default();
     let mut convs = HashSet::new();
@@ -551,12 +613,19 @@ pub fn import(
     sink: &mut dyn FileSink,
     progress: &mut dyn FnMut(Stage, u64, u64) -> bool,
 ) -> std::result::Result<Summary, ImportError> {
-    let plan = plan(store, data)?;
+    let plan = plan(store, data, backup_date)?;
     let mut summary = Summary {
         group_texts: plan.items.iter().filter(|(_, t)| *t == Target::Group).count() as u64,
         ..Summary::default()
     };
-    let record = serde_json::json!({ "backupDate": backup_date, "importedAt": crate::state::now_ms() });
+    // The newest backup brought in so far: history is in tug up to its date (the label says so,
+    // and a Bluetooth text after it can't be a backup's).
+    let previous = import_record(&store.conn())?.flatten();
+    let newest = match (previous, backup_date) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => b.or(a),
+    };
+    let record = serde_json::json!({ "backupDate": newest, "importedAt": crate::state::now_ms() });
     store.set_setting(IMPORT_RECORD, &record.to_string())?;
 
     let work: Vec<&(&Message, Target)> = plan
@@ -782,11 +851,15 @@ pub fn attachment_file(store: &Store, id: i64) -> Result<Option<(String, String)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backup::smsdb::{self, tests::sample};
+    use crate::backup::clock::LocalZone;
+    use crate::backup::smsdb::{self, tests::sample, Chat};
     use crate::messages::{IncomingMessage, SOURCE_IPHONE_MAP};
     use rusqlite::Connection;
 
     const T0: i64 = 1_760_000_000_000;
+    const H: i64 = 3_600_000;
+    /// When the sample backup was made: a day after its texts.
+    const BACKUP: i64 = T0 + 24 * H;
 
     fn data() -> SmsData {
         let conn = Connection::open_in_memory().unwrap();
@@ -823,7 +896,7 @@ mod tests {
     }
 
     fn run(store: &Store, data: &SmsData, opts: Options, sink: &mut FakeSink) -> Summary {
-        import(store, data, opts, Some(T0), sink, &mut |_, _, _| true).unwrap()
+        import(store, data, opts, Some(BACKUP), sink, &mut |_, _, _| true).unwrap()
     }
 
     #[test]
@@ -862,7 +935,7 @@ mod tests {
         assert_eq!(store.search_messages("corner", 10).unwrap().len(), 1);
 
         let state = imported(&store).unwrap();
-        assert_eq!((state.texts, state.photos, state.backup_date), (6, 2, Some(T0)));
+        assert_eq!((state.texts, state.photos, state.backup_date), (6, 2, Some(BACKUP)));
     }
 
     #[test]
@@ -883,7 +956,7 @@ mod tests {
             })
             .unwrap();
         let data = data();
-        let scan = scan(&store, &data, &|_| Some(10)).unwrap();
+        let scan = scan(&store, &data, Some(BACKUP), &|_| Some(10)).unwrap();
         assert_eq!((scan.texts, scan.group_texts, scan.conversations), (6, 3, 1));
         let s = run(&store, &data, all(), &mut FakeSink::default());
         assert_eq!((s.texts, s.group_texts, s.already), (6, 3, 0));
@@ -912,7 +985,7 @@ mod tests {
             cancel_after: Some(0),
             ..Default::default()
         };
-        let r = import(&store, &data, all(), Some(T0), &mut sink, &mut |_, _, _| true);
+        let r = import(&store, &data, all(), Some(BACKUP), &mut sink, &mut |_, _, _| true);
         assert!(matches!(r, Err(ImportError::Cancelled)));
         assert_eq!(imported(&store).unwrap().texts, 6);
         assert_eq!(imported(&store).unwrap().photos, 0);
@@ -928,7 +1001,7 @@ mod tests {
         let s = run(&store, &data, all(), &mut sink);
         assert_eq!((s.texts, s.photos), (0, 0));
         assert!(sink.stored.is_empty());
-        let scan = scan(&store, &data, &|_| Some(10)).unwrap();
+        let scan = scan(&store, &data, Some(BACKUP), &|_| Some(10)).unwrap();
         assert_eq!((scan.texts, scan.photos, scan.videos, scan.already), (0, 0, 0, 6));
     }
 
@@ -940,7 +1013,7 @@ mod tests {
             &store,
             &data,
             all(),
-            Some(T0),
+            Some(BACKUP),
             &mut FakeSink::default(),
             &mut |_, _, _| false,
         );
@@ -954,6 +1027,8 @@ mod tests {
     #[test]
     fn texts_tug_has_from_bluetooth_are_not_added_twice() {
         let store = Store::in_memory().unwrap();
+        // The phone is four hours behind UTC, and tug knows it.
+        store.set_local_zone(LocalZone::Fixed(-240));
         // Jane's text arrived live over Bluetooth, in her national format, a few seconds late;
         // the photo came as Bluetooth's words; tug's own reply went out from tug.
         store
@@ -990,7 +1065,7 @@ mod tests {
             .set_outgoing_status(out.id, crate::messages::Status::Accepted, None)
             .unwrap();
         let data = data();
-        let scan = scan(&store, &data, &|_| Some(10)).unwrap();
+        let scan = scan(&store, &data, Some(BACKUP), &|_| Some(10)).unwrap();
         assert_eq!((scan.texts, scan.already), (3, 3));
         let s = run(&store, &data, all(), &mut FakeSink::default());
         assert_eq!((s.texts, s.already), (3, 3));
@@ -1016,6 +1091,7 @@ mod tests {
     #[test]
     fn bluetooth_listing_a_text_after_the_import_does_not_add_it_twice() {
         let store = Store::in_memory().unwrap();
+        store.set_local_zone(LocalZone::Fixed(-240));
         run(&store, &data(), all(), &mut FakeSink::default());
         let catch_up = |handle, body, sent_at, received_at| IncomingMessage {
             source: SOURCE_IPHONE_MAP,
@@ -1034,13 +1110,14 @@ mod tests {
             store.insert_incoming(&late).unwrap().is_none(),
             "the backup already has it"
         );
-        // Her photo, as Bluetooth words, also matches the imported photo text.
+        // Her photo, as Bluetooth words, has no words to compare: it's never taken for another
+        // text, even at the same moment.
         let photo = catch_up("H8", "Attachment: 2 Photos", Some("2025-10-09T08:56:20Z"), T0 + 400_000);
-        assert!(store.insert_incoming(&photo).unwrap().is_none());
+        assert!(store.insert_incoming(&photo).unwrap().is_some());
         // A new text with the same words a day later is new.
         let again = catch_up("H9", "dinner at 7?", Some("2025-10-10T08:53:20Z"), T0 + 86_400_000);
         assert!(store.insert_incoming(&again).unwrap().is_some());
-        assert_eq!(store.recent_messages(100).unwrap().len(), 7);
+        assert_eq!(store.recent_messages(100).unwrap().len(), 8);
     }
 
     #[test]
@@ -1076,6 +1153,205 @@ mod tests {
         assert_eq!(s.already, 0, "a day apart, with the zone known");
     }
 
+    /// One "ok" from Jane at `at`, in a one-to-one chat.
+    fn one_ok(at: i64) -> SmsData {
+        let mut data = SmsData::default();
+        data.chats.insert(
+            1,
+            Chat {
+                id: 1,
+                members: vec!["+15550100001".into()],
+                is_group: false,
+            },
+        );
+        data.messages.push(Message {
+            guid: "GUID-OK".into(),
+            chat: Some(1),
+            from_me: false,
+            handle: Some("+15550100001".into()),
+            body: "ok".into(),
+            at_ms: at,
+            service: Service::IMessage,
+            edited: false,
+            unsent: false,
+            attachments: Vec::new(),
+        });
+        data
+    }
+
+    /// An incoming Bluetooth "ok" from Jane, with the phone's zoneless local time for `utc` (the
+    /// phone four hours behind UTC), got by tug at `received_at`.
+    fn bluetooth_ok(handle: &'static str, local: &'static str, received_at: i64) -> IncomingMessage<'static> {
+        IncomingMessage {
+            source: SOURCE_IPHONE_MAP,
+            handle,
+            address: "+15550100001",
+            sender_name: None,
+            body: "ok",
+            sent_at: Some(local),
+            received_at,
+            unread_on_phone: false,
+            msg_type: None,
+        }
+    }
+
+    #[test]
+    fn a_repeated_ok_hours_apart_is_two_texts_bluetooth_first() {
+        // Bluetooth has an "ok" from 3 hours after the backup's "ok", with no zone on its time.
+        // Read as if UTC (off by the phone's 4 hours) it looked an hour from the backup's, and the
+        // old 14-hour allowance merged them, so the backup's "ok" never came in.
+        let store = Store::in_memory().unwrap();
+        store.set_local_zone(LocalZone::Fixed(-240));
+        store
+            .insert_incoming(&bluetooth_ok("H1", "2025-10-09T07:53:20", T0 + 3 * H))
+            .unwrap();
+        let data = one_ok(T0);
+        let s = scan(&store, &data, Some(BACKUP), &|_| None).unwrap();
+        assert_eq!((s.texts, s.already), (1, 0), "two different texts");
+        run(&store, &data, all(), &mut FakeSink::default());
+        assert_eq!(store.recent_messages(10).unwrap().len(), 2);
+
+        // The same "ok" caught up by Bluetooth hours later is the backup's own: matched.
+        let store = Store::in_memory().unwrap();
+        store.set_local_zone(LocalZone::Fixed(-240));
+        store
+            .insert_incoming(&bluetooth_ok("H1", "2025-10-09T04:53:20", T0 + 5 * H))
+            .unwrap();
+        let s = scan(&store, &data, Some(BACKUP), &|_| None).unwrap();
+        assert_eq!((s.texts, s.already), (0, 1));
+
+        // With the phone's offset unknown, a zoneless time isn't compared at all.
+        let store = Store::in_memory().unwrap();
+        store.set_local_zone(LocalZone::Unknown);
+        store
+            .insert_incoming(&bluetooth_ok("H1", "2025-10-09T04:53:20", T0 + 5 * H))
+            .unwrap();
+        let s = scan(&store, &data, Some(BACKUP), &|_| None).unwrap();
+        assert_eq!((s.texts, s.already), (1, 0), "not guessed");
+    }
+
+    #[test]
+    fn a_repeated_ok_hours_apart_is_two_texts_backup_first() {
+        // The backup's "ok" is in; Jane sends "ok" again 3 hours later and Bluetooth lists it with
+        // no zone on its time. It used to be dropped as the backup's.
+        let store = Store::in_memory().unwrap();
+        store.set_local_zone(LocalZone::Fixed(-240));
+        run(&store, &one_ok(T0), all(), &mut FakeSink::default());
+        let later = bluetooth_ok("H1", "2025-10-09T07:53:20", T0 + 3 * H);
+        assert!(store.insert_incoming(&later).unwrap().is_some(), "a new text");
+        // The backup's own "ok", caught up late, isn't added twice.
+        let same = bluetooth_ok("H2", "2025-10-09T04:53:20", T0 + 5 * H);
+        assert!(store.insert_incoming(&same).unwrap().is_none());
+        assert_eq!(store.recent_messages(10).unwrap().len(), 2);
+
+        // Offset unknown: never matched by a zoneless time.
+        let store = Store::in_memory().unwrap();
+        store.set_local_zone(LocalZone::Unknown);
+        run(&store, &one_ok(T0), all(), &mut FakeSink::default());
+        let same = bluetooth_ok("H2", "2025-10-09T04:53:20", T0 + 5 * H);
+        assert!(store.insert_incoming(&same).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_bluetooth_text_after_the_backup_was_made_is_never_the_backups() {
+        // Backed up right after Jane's "ok"; 8 minutes later she sends "ok" again. Tug got it
+        // within the 10 minutes that count as "seen live", but it happened after the backup.
+        let store = Store::in_memory().unwrap();
+        let data = one_ok(T0);
+        import(
+            &store,
+            &data,
+            all(),
+            Some(T0),
+            &mut FakeSink::default(),
+            &mut |_, _, _| true,
+        )
+        .unwrap();
+        let after = IncomingMessage {
+            sent_at: Some("2025-10-09T09:01:20Z"),
+            ..bluetooth_ok("H1", "", T0 + 8 * 60_000)
+        };
+        assert!(store.insert_incoming(&after).unwrap().is_some());
+
+        // Bluetooth first, the other way round: the later "ok" isn't taken for the backup's.
+        let store = Store::in_memory().unwrap();
+        store.insert_incoming(&after).unwrap();
+        let s = scan(&store, &data, Some(T0), &|_| None).unwrap();
+        assert_eq!((s.texts, s.already), (1, 0));
+    }
+
+    #[test]
+    fn unsent_and_wordless_texts_never_match() {
+        let store = Store::in_memory().unwrap();
+        let mut data = one_ok(T0);
+        data.messages[0].body = String::new();
+        data.messages[0].attachments = vec![smsdb::Attachment {
+            guid: "ATT".into(),
+            path: None,
+            kind: smsdb::AttachmentKind::Photo,
+            ext: Some("jpg"),
+            bytes: None,
+        }];
+        run(&store, &data, all(), &mut FakeSink::default());
+        // A photo text and Bluetooth's words for it, at the same moment: nothing to compare.
+        let photo = IncomingMessage {
+            body: "Attachment: 1 Photo",
+            sent_at: Some("2025-10-09T08:53:20Z"),
+            ..bluetooth_ok("H1", "", T0 + 2_000)
+        };
+        assert!(store.insert_incoming(&photo).unwrap().is_some());
+        // An unsent text is never what a Bluetooth text matches, whatever its row holds.
+        let store = Store::in_memory().unwrap();
+        run(&store, &one_ok(T0), all(), &mut FakeSink::default());
+        store.conn().execute("UPDATE messages SET unsent = 1", []).unwrap();
+        let ok = IncomingMessage {
+            sent_at: Some("2025-10-09T08:53:20Z"),
+            ..bluetooth_ok("H1", "", T0 + 2_000)
+        };
+        assert!(store.insert_incoming(&ok).unwrap().is_some());
+    }
+
+    #[test]
+    fn the_newest_backups_date_is_kept() {
+        let store = Store::in_memory().unwrap();
+        let data = one_ok(T0);
+        import(
+            &store,
+            &data,
+            all(),
+            Some(BACKUP),
+            &mut FakeSink::default(),
+            &mut |_, _, _| true,
+        )
+        .unwrap();
+        // An older backup brought in afterwards doesn't move the date back.
+        import(
+            &store,
+            &data,
+            all(),
+            Some(T0),
+            &mut FakeSink::default(),
+            &mut |_, _, _| true,
+        )
+        .unwrap();
+        assert_eq!(imported(&store).unwrap().backup_date, Some(BACKUP));
+        import(&store, &data, all(), None, &mut FakeSink::default(), &mut |_, _, _| {
+            true
+        })
+        .unwrap();
+        assert_eq!(imported(&store).unwrap().backup_date, Some(BACKUP));
+        import(
+            &store,
+            &data,
+            all(),
+            Some(BACKUP + H),
+            &mut FakeSink::default(),
+            &mut |_, _, _| true,
+        )
+        .unwrap();
+        assert_eq!(imported(&store).unwrap().backup_date, Some(BACKUP + H));
+    }
+
     #[test]
     fn photos_can_be_skipped_and_added_later() {
         let store = Store::in_memory().unwrap();
@@ -1100,7 +1376,7 @@ mod tests {
             photo.attachments.iter().all(|a| !a.stored),
             "the kind is known, the file isn't here"
         );
-        let scan = scan(&store, &data, &|_| Some(1000)).unwrap();
+        let scan = scan(&store, &data, Some(BACKUP), &|_| Some(1000)).unwrap();
         assert_eq!(
             (scan.texts, scan.photos, scan.videos, scan.media_bytes),
             (0, 1, 1, 2000),
@@ -1151,14 +1427,17 @@ mod tests {
         let store = Store::in_memory().unwrap();
         let data = data();
         let sizes = |p: &str| if p.ends_with(".MOV") { Some(4096) } else { Some(2048) };
-        let s = scan(&store, &data, &sizes).unwrap();
+        let s = scan(&store, &data, Some(BACKUP), &sizes).unwrap();
         assert_eq!(s.texts, 6);
         assert_eq!(s.conversations, 1);
         assert_eq!(s.group_texts, 3);
         assert_eq!((s.photos, s.videos, s.media_bytes), (1, 1, 6144));
         assert_eq!(s.photo_texts, 1);
         // A photo the backup doesn't have isn't counted.
-        let s = scan(&store, &data, &|p: &str| p.ends_with(".MOV").then_some(4096)).unwrap();
+        let s = scan(&store, &data, Some(BACKUP), &|p: &str| {
+            p.ends_with(".MOV").then_some(4096)
+        })
+        .unwrap();
         assert_eq!((s.photos, s.videos), (0, 1));
     }
 

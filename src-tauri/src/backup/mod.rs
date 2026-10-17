@@ -18,6 +18,7 @@
 //! What's logged: counts and timings only. Never a password, a word of a message, a name, a
 //! number, a file name or a path.
 
+pub mod clock;
 pub mod decrypt;
 pub mod discover;
 pub mod files;
@@ -296,7 +297,9 @@ impl BackupService {
                 session.data.skipped_events,
                 started.elapsed().as_secs_f64()
             );
-            match import::scan(&self.inner.store, &session.data, &|p| sizes(&session, p)) {
+            match import::scan(&self.inner.store, &session.data, session.info.last_backup, &|p| {
+                sizes(&session, p)
+            }) {
                 Ok(scan) => Ok((session, scan)),
                 Err(_) => {
                     log::warn!("backup: couldn't compare the backup with tug's history");

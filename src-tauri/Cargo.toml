@@ -122,6 +122,9 @@ windows = { version = "0.62", features = [
   # Tugboat's help: whether this account is an administrator (the firewall prompt may need one).
   "Win32_Security",
   "Win32_System_Threading",
+  # Full message history: reading the phone's zoneless text times in this PC's time zone
+  # (TzSpecificLocalTimeToSystemTime), so Bluetooth texts are compared with a backup's in UTC.
+  "Win32_System_Time",
   "Win32_System_WindowsProgramming",
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",
