@@ -116,6 +116,27 @@ export async function openUnlessAbandoned(
   return false;
 }
 
+/**
+ * Tugboat Run's phone-controller channel. The backend has exactly one (a single slot that the
+ * latest open or close sets), so an open that lands keeps it only if the controller is wanted
+ * *now*: switched on, and the game not closed. Deciding by which open is the newest instead would
+ * let an older open that lands last close the channel a newer one just opened (on, off, on again
+ * with the first open slow), leaving the phones dead while the game shows the controller on.
+ */
+export function controllerChannel(
+  io: { open: () => Promise<unknown>; close: () => Promise<unknown> },
+  state: () => { on: boolean; closed: boolean },
+) {
+  const wanted = () => {
+    const s = state();
+    return s.on && !s.closed;
+  };
+  return {
+    /** Open (or re-size) the channel. True if it's open and still wanted; throws if the open failed. */
+    open: () => openUnlessAbandoned(io.open, io.close, wanted),
+  };
+}
+
 // --- The shared clipboard ("Send clipboard to iPhone"; src-tauri/src/tugboat/clip.rs) ---
 
 type Say = { kind: "info" | "error"; text: string };

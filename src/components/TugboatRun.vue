@@ -39,7 +39,7 @@ import { useDevToolsStore } from "../stores/devtools";
 import { useWeatherStore } from "../stores/weather";
 import { useFocusTrap } from "../lib/focusTrap";
 import { api, on } from "../lib/ipc";
-import { capitalised, openUnlessAbandoned } from "../lib/tugboat";
+import { capitalised, controllerChannel } from "../lib/tugboat";
 import { CALM, FIELD_W, LIVES, advance, laneLayouts, layout, mergeInput, newRun, score, toFieldX, type Layout, type Run } from "../lib/tugboatRun";
 import { CALM_SEAS, conditionsFrom, conditionsLine, currentStreak, dailySeed, handlingFor, localDate, sailedToday, type Conditions } from "../lib/tugboatDaily";
 import { droppedPlayer, playerFor, raceKey, seatFor, winner, type Player, type Seat } from "../lib/tugboatRace";
@@ -565,20 +565,21 @@ function onPad(e: GamePad) {
   padBoostWas[i] = e.connected && e.boost;
 }
 
-/** Bumped by each controller open and off, so an open that lands late knows it's been overtaken. */
+/** Bumped by each controller open and off, so only the latest one reports a failure. */
 let padRequest = 0;
+/** The controller channel. Closing the game (or switching the controller off) while an open is on
+ * its way closes the channel once it's open; otherwise an open is kept, whichever open it was: the
+ * backend has one channel, so an older open landing last must not close the one a newer open made. */
+const channel = controllerChannel(
+  { open: () => api.gamePadOpen(players.value), close: () => api.gamePadClose() },
+  () => ({ on: controllerOn.value, closed: disposed }),
+);
 /** Open (or re-size) the controller channel: one phone, or two in a race. */
 async function openController() {
   controllerError.value = null;
   const mine = ++padRequest;
   try {
-    // Closing the game (or switching the controller off) while this opens: close the channel once
-    // it's open, so the phone isn't left as a controller for a game that's gone.
-    const kept = await openUnlessAbandoned(
-      () => api.gamePadOpen(players.value),
-      () => api.gamePadClose(),
-      () => !disposed && mine === padRequest,
-    );
+    const kept = await channel.open();
     if (kept) {
       lastFeedback[0] = lastFeedback[1] = "";
       sendFeedback();

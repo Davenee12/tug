@@ -10,6 +10,7 @@ import {
   closeWarning,
   codeCaption,
   folderBlockMessage,
+  controllerChannel,
   openUnlessAbandoned,
   percent,
   phoneTextMessage,
@@ -50,6 +51,62 @@ describe("openUnlessAbandoned (the game's phone controller)", () => {
   it("a failing close doesn't throw, and a failing open does", async () => {
     await expect(openUnlessAbandoned(async () => {}, async () => Promise.reject("gone"), () => false)).resolves.toBe(false);
     await expect(openUnlessAbandoned(async () => Promise.reject("no network"), async () => {}, () => true)).rejects.toBe("no network");
+  });
+});
+
+describe("controllerChannel (Tugboat Run's phone controller, one backend slot)", () => {
+  /** The backend: one channel, set by whichever open or close lands last; opens answer when told. */
+  function backend() {
+    const answers: Array<() => void> = [];
+    const b = {
+      open: false,
+      closes: 0,
+      io: {
+        open: () =>
+          new Promise<void>((resolve) =>
+            answers.push(() => {
+              b.open = true;
+              resolve();
+            }),
+          ),
+        close: async () => {
+          b.open = false;
+          b.closes++;
+        },
+      },
+      answer: (i: number) => answers[i](),
+    };
+    return b;
+  }
+
+  it("on, off, on with the first open answering last leaves the channel open", async () => {
+    const b = backend();
+    const ui = { on: false, closed: false };
+    const channel = controllerChannel(b.io, () => ui);
+    ui.on = true;
+    const first = channel.open();
+    ui.on = false; // switched off while it opened
+    await b.io.close();
+    ui.on = true; // and on again
+    const second = channel.open();
+    b.answer(1);
+    expect(await second).toBe(true);
+    b.answer(0); // the first open lands last: the controller is wanted, so it stays open
+    expect(await first).toBe(true);
+    expect(b.open).toBe(true);
+    expect(b.closes, "only the switch-off closed it").toBe(1);
+  });
+
+  it("closes it once the open lands if it was switched off, or the game closed, meanwhile", async () => {
+    for (const change of [{ on: false }, { closed: true }]) {
+      const b = backend();
+      const ui = { on: true, closed: false };
+      const opening = controllerChannel(b.io, () => ui).open();
+      Object.assign(ui, change);
+      b.answer(0);
+      expect(await opening).toBe(false);
+      expect(b.open).toBe(false);
+    }
   });
 });
 
