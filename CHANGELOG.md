@@ -1,5 +1,92 @@
 # Changelog
 
+## v0.5.17 — 2026-10-17
+
+Texts that send right away, a shared clipboard, smart replies and privacy while you share your
+screen, plus a full round of fixes. Merged as one release from #126, #127, #128, #129, #130, #131,
+#132, #133, #134, #135, #136, #137, #138 and #139, plus fixes from the release review.
+
+### New
+- **Smart replies:** a text gets up to three one-tap replies, on its Windows pop-up and above the
+  composer in Messages ("Calling you now", "On my way", "Yes / No / Let me check"…). Picked on
+  your PC, never for codes or automated senders. On by default; turn it off or change your own
+  three in Settings › Notifications. (#127)
+- **Previews stay hidden while you share your screen or present:** during a Teams, Zoom or browser
+  screen share, a PowerPoint slide show, a full-screen app or a duplicated display, pop-ups say
+  only "Messages · New message", and texts and names in tug's window are blurred until you press
+  Show anyway. On by default (Settings › Notifications). (#129)
+- **Shared clipboard:** "Send clipboard to iPhone" (tray, Ctrl+K or the Tugboat panel) puts your
+  PC's text or picture on your phone over Tugboat's encrypted Wi-Fi link, and "Paste to PC" on the
+  phone does the reverse. Nothing says "sent" until your phone has it. (#130)
+- **Voice typing:** hold Ctrl+Alt+Space, talk, let go, and tug types what you said into the app
+  you're in, code-aware ("open paren", "camel case"…). Recognized on your PC by Windows; nothing is
+  sent or saved. Off until you turn it on in Settings › General. (#131)
+- **Taskbar quick actions:** right-click tug on the taskbar for New message, Tugboat, Copy latest
+  code, Play Tugboat Run and Settings. (#128)
+- **Tugboat Run:** a daily course sailed in your real weather (with a streak), and two-player
+  races side by side, on the keyboard or one phone each. Player 2 scans their own code, which can
+  only steer. (#135)
+- **"iPhone forgot this PC":** when you tap Forget This Device on the iPhone, tug now says so and
+  offers **Pair again**, instead of "iPhone away" forever. (#126)
+
+### Better
+- **Texts send immediately:** a send jumps ahead of whatever tug was doing with your phone
+  (syncing, contacts, marking read), and an open connection goes straight to sending. (#133)
+- **Lighter contacts checks:** tug asks the iPhone whether contacts changed (every 10 minutes, or
+  sooner when something suggests it) instead of downloading them every minute, and stops checking
+  on window focus. (#139)
+- **Photos look like photos:** a photo text shows "📷 Photo · Open it on your iPhone" instead of
+  "Attachment: 1 Photo", and texts in other encodings no longer turn into "�". (#138)
+- **Statuses never go stale:** every status update is ordered, so tug can't get stuck on
+  "Connecting…" after it connected, and a slow start retries by itself instead of holding back
+  pop-ups. (#132)
+- **Spotify, toggles and the Feed tell the truth:** switches go back if a change couldn't be saved,
+  Shuffle and Repeat don't flip back, "You're all caught up" only shows when it's true, the seek
+  bar works from the keyboard, and the sidebar fits at 125% and 150% zoom. (#134)
+- **Tugboat on more PCs:** works with Windows Security's Controlled folder access (files go to
+  Downloads\Tugboat) and with Hyper-V network adapters. Start with Windows only uses your own
+  account's settings, and tug no longer delays Windows shutdown. (#136)
+- Copying a code by hand (Ctrl+Shift+C, the code chip, a pop-up's Copy code) is now private too:
+  kept out of clipboard history and cleared after 2 minutes. Ctrl+Shift+V still types the latest
+  code. (#137)
+
+### Fixed
+- **Calls:** typing Space or Enter while a call rings can't answer it, on the call card or in the
+  Feed. (#137)
+- **Texts:** a send report can no longer mark the wrong text sent or failed; when tug can't tell
+  which of two texts failed, both say "May have sent" instead of "Sent". A reply or call-back never
+  goes to a guess between two people with the same name: the pop-up offers "Open in tug". (#137)
+- Clear history never reuses old notification numbers and only says "History cleared" when it
+  worked; the low-battery alert doesn't repeat after a restart; names are learned much faster on
+  a long history. (#137)
+- Start over fully resets texts and contacts, cancelling a PIN prompt no longer breaks the next
+  pairing, and Bluetooth calls that hang can't freeze tug. (#139)
+- **From the release review:**
+  - Two-player Tugboat Run: Player 2 scans its own code, which can only steer and can never reach
+    your files, texts or clipboard, or keep Tugboat open by itself. (#135)
+  - Hiding previews fails safe: if tug can't check your screen in time, the pop-up is hidden
+    rather than shown, pop-ups already on screen are taken back when hiding starts, the window
+    doesn't flash unblurred, and Ctrl+K results are blurred too. (#129)
+  - Voice typing types a line break only in Notepad, Word, Outlook, OneNote, Teams, Slack and
+    Discord (a space elsewhere, never Enter), and types nothing while Ctrl, Alt or Shift is still
+    held. (#131)
+  - "iPhone forgot this PC" no longer fires on a working connection that blips, or on refused
+    requests alone (for example with Share System Notifications off). (#126)
+  - Texts: a send report is only matched to texts already sent when it arrived; Start over drops
+    the old phone's queued mark-reads and texts device; half an emoji shows as one "�"; a text
+    re-listed after the update isn't shown twice. (#133, #137, #138, #139)
+  - Switches only go back for the newest press, the first pop-ups after a restart are never
+    swept away with the last run's, Start with Windows never moves another account's entry, and
+    Copy diagnostics also hides the short and web forms of your user folder. (#134, #136)
+
+### Known limits
+- Texts you send from the iPhone itself don't appear in tug (iOS doesn't share them with
+  accessories); texts you send from tug do.
+- iOS shares only about the 10 newest incoming texts, and no attachments: photos say to open them
+  on your iPhone.
+- Nothing in this release was tried against a real iPhone or a real screen share before release:
+  please report anything that looks wrong.
+
 ## v0.5.16 — 2026-10-10
 
 Play, listen and sign in faster. Merged as #116, #117, #118 and #119, together with v0.5.15's security work (#107).

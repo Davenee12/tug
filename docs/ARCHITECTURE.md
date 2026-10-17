@@ -41,7 +41,7 @@ Inside `tug.exe`:
                     └───────────▲ Tauri events (device-status, notification, message, …)  │ invoke ─┘
                                 │                                                         ▼
   ┌──────────────┐  Shared (Arc: status, now playing, calls, store, MapHandle) ┌──────────────────────┐
-  │ tug-ble      │◄────────────── commands.rs (92 Tauri commands) ────────────►│ tug-map              │
+  │ tug-ble      │◄────────────── commands.rs (105 Tauri commands) ───────────►│ tug-map              │
   │ BLE actor    │  BleHandle (mpsc + oneshot replies)    MapHandle (mpsc)     │ MAP worker           │
   │ 1 s tick     │                                                             │ MAP/MNS/PBAP/HFP     │
   └──┬───────┬───┘                                                             └──┬───────────────────┘
