@@ -62,10 +62,46 @@ pub fn adopt(local_dir: &Path, temp_file: &Path, sha256: &[u8; 32], ext: &str) -
     }
     std::fs::create_dir_all(dest.parent().expect("attachments folder"))?;
     if std::fs::rename(temp_file, &dest).is_err() {
-        std::fs::copy(temp_file, &dest)?;
+        // Another drive (or a move Windows refused): copied, but never straight to its real name.
+        copy_into_place(temp_file, &dest)?;
         std::fs::remove_file(temp_file)?;
     }
     Ok(key)
+}
+
+/// The suffix of a file still being written in tug's attachments folder (never a valid key, so
+/// nothing reads it; swept at the next start if tug didn't get to finish it).
+const PART: &str = ".part";
+
+/// Copy `src` to `dest` under a temporary name beside it, then rename it into place, so a crash,
+/// a full disk or a power cut never leaves a half-written photo (or preview) under its real name.
+fn copy_into_place(src: &Path, dest: &Path) -> io::Result<()> {
+    write_into_place(dest, |part| std::fs::copy(src, part).map(|_| ()))
+}
+
+/// Write `dest` through a temporary `<name>.part` beside it, renamed into place once complete.
+fn write_into_place(dest: &Path, write: impl FnOnce(&Path) -> io::Result<()>) -> io::Result<()> {
+    let mut name = dest.file_name().unwrap_or_default().to_os_string();
+    name.push(PART);
+    let part = dest.with_file_name(name);
+    let done = write(&part).and_then(|()| std::fs::rename(&part, dest));
+    if done.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    done
+}
+
+/// Half-written files a crash left in the attachments and previews folders.
+fn sweep_parts(local_dir: &Path) {
+    let dir = local_dir.join(ATTACHMENTS_DIR);
+    for d in [dir.clone(), dir.join(THUMBS_DIR)] {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            if e.file_name().to_string_lossy().ends_with(PART) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
 }
 
 /// Delete stored files (and their previews) no row points at any more.
@@ -146,7 +182,7 @@ pub fn preview(local_dir: &Path, key: &str) -> Preview {
             if let Some(parent) = thumb.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let _ = std::fs::write(&thumb, &jpeg);
+            let _ = write_into_place(&thumb, |part| std::fs::write(part, &jpeg));
             Preview {
                 data_uri: crate::app_icons::data_uri(&jpeg),
                 ..Preview::default()
@@ -246,8 +282,10 @@ impl Drop for TempDir {
 }
 
 /// At startup: whatever an earlier run left in the scratch folder (it crashed, or the PC lost
-/// power mid-import) goes. Returns whether anything was there.
+/// power mid-import) goes, and so does any half-written photo or preview. Returns whether the
+/// scratch folder was there.
 pub fn sweep_temp(local_dir: &Path) -> bool {
+    sweep_parts(local_dir);
     let dir = local_dir.join(TEMP_DIR);
     if !dir.exists() {
         return false;
@@ -317,6 +355,44 @@ mod tests {
         assert_eq!(remove_all(&local), 1);
         assert!(!local.join(ATTACHMENTS_DIR).exists());
         drop(tmp);
+        std::fs::remove_dir_all(&local).unwrap();
+    }
+
+    #[test]
+    fn a_copied_photo_only_ever_appears_whole() {
+        let local = temp_dir("atomic");
+        let attachments = local.join(ATTACHMENTS_DIR);
+        std::fs::create_dir_all(&attachments).unwrap();
+        let src = local.join("src");
+        std::fs::write(&src, b"a whole photo").unwrap();
+        let dest = attachments.join(format!("{}.jpg", "ab".repeat(16)));
+        copy_into_place(&src, &dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"a whole photo");
+        let names: Vec<String> = std::fs::read_dir(&attachments)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 1, "no temporary file left: {names:?}");
+        // A write that fails partway leaves nothing under the real name, and no temporary file.
+        let other = attachments.join(format!("{}.jpg", "cd".repeat(16)));
+        let failed = write_into_place(&other, |part| {
+            std::fs::write(part, b"half a ph")?;
+            Err(io::Error::from(io::ErrorKind::StorageFull))
+        });
+        assert!(failed.is_err());
+        assert!(!other.exists());
+        assert_eq!(std::fs::read_dir(&attachments).unwrap().count(), 1);
+        // One a crash left behind goes at the next start.
+        let left = attachments.join(format!("{}.jpg{PART}", "ef".repeat(16)));
+        std::fs::write(&left, b"half").unwrap();
+        std::fs::create_dir_all(attachments.join(THUMBS_DIR)).unwrap();
+        let thumb_left = attachments
+            .join(THUMBS_DIR)
+            .join(format!("{}.jpg{PART}", "ef".repeat(16)));
+        std::fs::write(&thumb_left, b"half").unwrap();
+        sweep_temp(&local);
+        assert!(!left.exists() && !thumb_left.exists());
+        assert!(dest.exists(), "finished photos stay");
         std::fs::remove_dir_all(&local).unwrap();
     }
 
