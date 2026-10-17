@@ -745,14 +745,15 @@ impl TugboatService {
         Ok(self.status())
     }
 
-    /// Tugboat Run wants the phone as a controller: open Tugboat if it's off (same session, same
-    /// code, same rules), open the controller channel, and watch it for a phone that goes quiet.
-    pub async fn pad_open(&self) -> Result<TugboatStatus, String> {
+    /// Tugboat Run wants the phone as a controller (or two phones, for two players): open Tugboat if
+    /// it's off (same session, same code, same rules), open the controller channel, and watch it for
+    /// a phone that goes quiet. Asking again changes how many phones.
+    pub async fn pad_open(&self, players: u8) -> Result<TugboatStatus, String> {
         if self.session().is_none() {
             self.start().await?;
         }
         let session = self.session().ok_or("Tugboat isn't open.")?;
-        if session.pad_open() {
+        if session.pad_open(players) {
             let watched = session.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -763,7 +764,7 @@ impl TugboatService {
                 }
             });
         }
-        if let Some(e) = session.pad_event() {
+        for e in session.pad_events() {
             let _ = self.inner.app.emit(PAD_EVENT, e);
         }
         Ok(self.status())
@@ -777,10 +778,11 @@ impl TugboatService {
         }
     }
 
-    /// What the phone's controller shows: paused, and hits so far (it buzzes on a new one).
-    pub fn pad_feedback(&self, reply: pad::PadReply) {
+    /// What a phone's controller shows: paused, hits so far (it buzzes on a new one), and in a
+    /// two-player game which player it is.
+    pub fn pad_feedback(&self, seat: pad::SeatNo, reply: pad::PadReply) {
         if let Some(s) = self.session() {
-            s.pad_feedback(reply);
+            s.pad_feedback(seat, reply);
         }
     }
 

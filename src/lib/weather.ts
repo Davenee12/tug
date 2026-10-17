@@ -29,7 +29,8 @@ export interface Forecast {
   fetchedAt: number;
   /** IANA zone of the place, e.g. America/New_York (absent in caches from before it was kept). */
   timezone?: string;
-  now: { time: string; temp: number; feels: number; code: number; day: boolean; wind: number; humidity: number };
+  /** windDir: where the wind blows from, degrees (absent in caches from before it was kept). */
+  now: { time: string; temp: number; feels: number; code: number; day: boolean; wind: number; windDir?: number; humidity: number };
   hours: Hour[]; // from the current hour, next 24
   days: Day[]; // today first, 7 days
 }
@@ -157,7 +158,7 @@ export async function fetchForecast(p: Place): Promise<Forecast> {
   const q = new URLSearchParams({
     latitude: String(round(p.latitude)),
     longitude: String(round(p.longitude)),
-    current: "temperature_2m,apparent_temperature,weather_code,is_day,wind_speed_10m,relative_humidity_2m",
+    current: "temperature_2m,apparent_temperature,weather_code,is_day,wind_speed_10m,wind_direction_10m,relative_humidity_2m",
     hourly: "temperature_2m,weather_code,is_day,precipitation_probability",
     daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
     timezone: "auto",
@@ -197,6 +198,7 @@ export function parseForecast(j: any, fetchedAt: number): Forecast {
       code: c.weather_code,
       day: c.is_day === 1,
       wind: c.wind_speed_10m,
+      windDir: typeof c.wind_direction_10m === "number" ? c.wind_direction_10m : undefined,
       humidity: c.relative_humidity_2m,
     },
     hours,

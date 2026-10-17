@@ -62,12 +62,12 @@ export function nextSendDelay(sinceLastMs: number, changed: boolean): number {
 }
 
 /**
- * What a failed input means for the controller. "leave": the game closed or the session's over,
- * so go back to the Tugboat page. "slow": the PC asked for fewer. "retry": a dropped packet or a
- * stale sequence number; carry on.
+ * What a failed input means for the controller. "leave": the game closed, the session's over, or
+ * a two-player race already has its two phones, so go back to the Tugboat page. "slow": the PC
+ * asked for fewer. "retry": a dropped packet or a stale sequence number; carry on.
  */
 export function padErrorAction(code: string): "leave" | "slow" | "retry" {
-  if (["no-game", "closed", "unauthorized", "in-use"].includes(code)) return "leave";
+  if (["no-game", "closed", "unauthorized", "in-use", "full"].includes(code)) return "leave";
   if (code === "busy") return "slow";
   return "retry";
 }

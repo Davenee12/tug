@@ -318,7 +318,7 @@ async fn pad_input(State(s): Shared, req: Request) -> Response {
         // Read the (at most 104-byte) body before saying no to it: a reply that leaves a body
         // unread closes the connection, and the phone would pay for a new one on its next input.
         let body = read_body(req, super::pad::MAX_BODY, PAD_BODY_TIMEOUT).await?;
-        s.pad_admit()?;
+        s.pad_admit(&ok)?;
         let reply = s.pad_input(&ok, &body)?;
         Ok(sealed(s.seal_json(&ok, &reply)))
     };
@@ -367,7 +367,7 @@ async fn asset(State(s): Shared, Path(file): Path<String>) -> Response {
 
 async fn state(State(s): Shared, method: Method, uri: Uri, headers: HeaderMap) -> Response {
     match authorize(&s, &method, &uri, &headers) {
-        Ok(req) => sealed(s.seal_json(&req, &s.page_state())),
+        Ok(req) => sealed(s.seal_json(&req, &s.page_state(&req))),
         Err(e) => error(e),
     }
 }

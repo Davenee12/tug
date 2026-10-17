@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use super::auth::{Auth, Authorized, Rejected};
+use super::auth::{Auth, Authorized, GuestPolicy, Rejected};
 use super::clip::{self, Ack, ClipEvent, ClipState, ClipStatus, Outbox, Payload, Prepared};
 use super::crypto::{self, ad, Keys};
 use super::names;
-use super::pad::{self, Pad, PadEvent, PadReply};
+use super::pad::{self, Pad, PadEvent, PadReply, SeatNo, FIRST, SECOND};
 use super::upload::{Plan, PlanError, Received};
 
 /// Largest file the PC offers to the phone: the page assembles it in memory before saving.
@@ -60,6 +60,8 @@ pub enum ApiError {
     Unauthorized,
     /// Another device already has this session.
     InUse,
+    /// A two-player game already has its two phones: a third is turned away.
+    Full,
     NotFound,
     BadRequest,
     /// A chunk didn't decrypt, or had the wrong length.
@@ -88,7 +90,7 @@ impl ApiError {
         match self {
             ApiError::Closed => 410,
             ApiError::Unauthorized => 401,
-            ApiError::InUse | ApiError::Blocked => 403,
+            ApiError::InUse | ApiError::Blocked | ApiError::Full => 403,
             ApiError::NotFound => 404,
             ApiError::BadRequest | ApiError::BadChunk => 400,
             ApiError::TooBig => 413,
@@ -104,6 +106,7 @@ impl ApiError {
             ApiError::Closed => "closed",
             ApiError::Unauthorized => "unauthorized",
             ApiError::InUse => "in-use",
+            ApiError::Full => "full",
             ApiError::NotFound => "not-found",
             ApiError::BadRequest => "bad-request",
             ApiError::BadChunk => "bad-chunk",
@@ -261,6 +264,10 @@ pub struct StateReply {
     pub game: bool,
     /// The PC's clipboard, sent with "Send clipboard to iPhone", until the phone says it has it.
     pub clip: Option<PageClip>,
+    /// This phone is the second controller of a two-player game: it only ever steers (no files, no
+    /// text), and waits for the next race when there isn't one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub guest: bool,
 }
 
 // --- What the Tugboat panel shows (mirrored in src/types/protocol.ts) ---
@@ -397,6 +404,8 @@ struct State {
     /// The PC's clipboard on its way to the phone (see clip.rs).
     clip: Outbox,
     next_clip_id: u32,
+    /// When the second phone of a two-player game was last heard from.
+    guest_seen: Option<Instant>,
 }
 
 pub struct Session {
@@ -450,6 +459,7 @@ impl Session {
                 refused: super::tally::Tally::default(),
                 clip: Outbox::new(),
                 next_clip_id: 1,
+                guest_seen: None,
             }),
             closed: AtomicBool::new(false),
             sink,
@@ -566,6 +576,7 @@ impl Session {
         st.auth.unbind();
         st.phone = None;
         st.last_seen = None;
+        st.guest_seen = None;
         if let Some(p) = st.pad.as_mut() {
             p.rebound();
         }
@@ -595,7 +606,9 @@ impl Session {
 
     // --- Requests from the phone ---
 
-    /// Check a request's `Authorization` header. The first good one binds the session.
+    /// Check a request's `Authorization` header. The first good one binds the session. While a
+    /// two-player game asks for two controllers, one second phone may join too, for steering only:
+    /// its page's check-in and its inputs, nothing else.
     pub fn authorize(
         &self,
         header: Option<&str>,
@@ -606,9 +619,31 @@ impl Session {
         if self.is_closed() {
             return Err(ApiError::Closed);
         }
+        let controller = is_controller_request(method, path);
         let mut st = self.state();
-        let result = st.auth.check(&self.keys, header, method, path);
+        let duo = st.pad.as_ref().is_some_and(|p| p.players() == 2);
+        let policy = GuestPolicy {
+            may_join: duo && controller,
+            // Exactly two phones at a time; one that has gone quiet makes room for the next.
+            may_replace: st.guest_seen.is_none_or(|t| t.elapsed() >= ACTIVE),
+        };
+        let result = st.auth.check_with(&self.keys, header, method, path, policy);
         match result {
+            Ok(ok) if ok.guest => {
+                if !controller {
+                    // A second phone only ever steers: never files, text or the panel.
+                    return Err(ApiError::InUse);
+                }
+                st.guest_seen = Some(Instant::now());
+                st.last_activity = Instant::now();
+                if ok.first {
+                    log::info!("tugboat: second controller joined");
+                    if let Some(p) = st.pad.as_mut() {
+                        p.rebound_seat(SECOND);
+                    }
+                }
+                Ok(ok)
+            }
             Ok(ok) => {
                 let was_active = st.last_seen.is_some_and(|t| t.elapsed() < ACTIVE);
                 st.last_seen = Some(Instant::now());
@@ -630,6 +665,8 @@ impl Session {
                     log::debug!("tugboat: request refused ({why:?}){}", super::tally::more(held));
                 }
                 Err(match why {
+                    // Turned away from a two-player game's controller: it has its two phones.
+                    Rejected::OtherDevice if policy.may_join => ApiError::Full,
                     Rejected::OtherDevice => ApiError::InUse,
                     Rejected::Replayed => ApiError::Stale,
                     Rejected::Malformed | Rejected::BadMac => ApiError::Unauthorized,
@@ -657,9 +694,20 @@ impl Session {
     }
 
     /// What the page polls for: files on offer, the latest text from the PC, and the PC's clipboard
-    /// while it's on its way.
-    pub fn page_state(&self) -> StateReply {
+    /// while it's on its way. A two-player game's second phone only hears whether there's a race to
+    /// steer in: it returns before the clipboard is looked at (`for_page` counts as serving it), and
+    /// never gets the clipboard, files or text.
+    pub fn page_state(&self, req: &Authorized) -> StateReply {
         let mut st = self.state();
+        if req.guest {
+            return StateReply {
+                offers: Vec::new(),
+                text: None,
+                game: st.pad.as_ref().is_some_and(|p| p.open_for(SECOND)),
+                clip: None,
+                guest: true,
+            };
+        }
         let clip = match st.clip.for_page(Instant::now()) {
             Some((id, Payload::Text(t))) => Some((id, Some(t.clone()), None)),
             Some((id, Payload::Image { offer })) => Some((id, None, Some(offer.clone()))),
@@ -678,6 +726,7 @@ impl Session {
             }),
             game: st.pad.is_some(),
             clip,
+            guest: false,
         }
     }
 
@@ -775,52 +824,64 @@ impl Session {
 
     // --- The game controller (see pad.rs) ---
 
-    /// tug's game wants a controller: the phone page offers it at its next check-in. Returns
-    /// whether the channel was newly opened (the caller starts watching it).
-    pub fn pad_open(&self) -> bool {
+    /// tug's game wants a controller (`players` 1), or two (a two-player game, 2): the phone pages
+    /// offer it at their next check-in. Asking again changes how many; going back to one lets the
+    /// second phone go (the game hears it's gone). Returns whether the channel was newly opened
+    /// (the caller starts watching it).
+    pub fn pad_open(&self, players: u8) -> bool {
         let mut st = self.state();
         st.last_activity = Instant::now();
-        if st.pad.is_some() {
+        if let Some(p) = st.pad.as_mut() {
+            let was = p.players();
+            let gone = p.set_players(players, Instant::now());
+            let now = p.players();
+            drop(st);
+            if was != now {
+                log::info!("tugboat: game controller for {now} player(s)");
+            }
+            if let Some(e) = gone {
+                self.sink.pad(e);
+            }
             return false;
         }
-        st.pad = Some(Pad::new(Instant::now()));
+        st.pad = Some(Pad::new(Instant::now(), players));
         drop(st);
-        log::info!("tugboat: game controller on");
+        log::info!("tugboat: game controller on ({} player(s))", players.clamp(1, 2));
         true
     }
 
-    /// The game closed: inputs are refused from now on, and the game hears the phone has gone.
+    /// The game closed: inputs are refused from now on, and the game hears the phones have gone.
     pub fn pad_close(&self) {
         let was = self.state().pad.take();
         if let Some(p) = was {
             log::info!("tugboat: game controller off");
-            // The latency probe, once per session (never per input).
-            if let Some(s) = p.latency().summary() {
-                log::debug!("tugboat: controller touch-to-PC latency: {s}");
-            }
-            if p.connected() {
-                self.sink.pad(PadEvent {
-                    connected: false,
-                    steer: 0.0,
-                    boost: false,
-                });
+            for seat in [FIRST, SECOND] {
+                // The latency probe, once per session (never per input).
+                if let Some(s) = p.latency(seat).summary() {
+                    log::debug!("tugboat: controller {seat} touch-to-PC latency: {s}");
+                }
+                if p.connected(seat) {
+                    self.sink.pad(PadEvent::gone(seat));
+                }
             }
         }
     }
 
-    /// Check the channel is open and the phone isn't flooding it, before its body is read.
-    pub fn pad_admit(&self) -> Result<(), ApiError> {
+    /// Check the channel is open for this phone and it isn't flooding it, before its body is read.
+    pub fn pad_admit(&self, req: &Authorized) -> Result<(), ApiError> {
+        let seat = seat_of(req);
         let mut st = self.state();
-        let pad = st.pad.as_mut().ok_or(ApiError::NoGame)?;
-        if pad.admit(Instant::now()) {
+        let pad = st.pad.as_mut().filter(|p| p.open_for(seat)).ok_or(ApiError::NoGame)?;
+        if pad.admit(seat, Instant::now()) {
             Ok(())
         } else {
             Err(ApiError::Busy)
         }
     }
 
-    /// One controller input from the bound phone: open it, check it, and hand the game the new
-    /// state. It can't do anything else: no files, no clipboard, no panel.
+    /// One controller input from the bound phone (or a two-player game's second phone): open it,
+    /// check it, and hand the game the new state. It can't do anything else: no files, no
+    /// clipboard, no panel.
     pub fn pad_input(&self, req: &Authorized, body: &[u8]) -> Result<PadReply, ApiError> {
         if body.len() > pad::MAX_BODY {
             return Err(ApiError::TooBig);
@@ -833,10 +894,11 @@ impl Session {
             pad::PadError::TooBig => ApiError::TooBig,
             pad::PadError::Malformed | pad::PadError::OutOfRange => ApiError::BadRequest,
         })?;
+        let seat = seat_of(req);
         let mut st = self.state();
-        let pad = st.pad.as_mut().ok_or(ApiError::NoGame)?;
-        let event = pad.input(req.seq, decoded, Instant::now());
-        let reply = pad.reply();
+        let pad = st.pad.as_mut().filter(|p| p.open_for(seat)).ok_or(ApiError::NoGame)?;
+        let event = pad.input(seat, req.seq, decoded, Instant::now());
+        let reply = pad.reply(seat);
         drop(st);
         if let Some(e) = event {
             self.sink.pad(e);
@@ -850,31 +912,39 @@ impl Session {
         let Some(pad) = st.pad.as_mut() else {
             return false;
         };
-        let event = pad.tick(Instant::now());
+        let events = pad.tick(Instant::now());
         drop(st);
-        if let Some(e) = event {
-            log::info!("tugboat: game controller went quiet");
+        for e in events {
+            log::info!("tugboat: game controller {} went quiet", e.seat);
             self.sink.pad(e);
         }
         true
     }
 
-    /// What the next replies tell the phone (paused, and hits so far for a buzz).
-    pub fn pad_feedback(&self, reply: PadReply) {
+    /// What the next replies tell a phone (paused, its hits so far for a buzz, its player).
+    pub fn pad_feedback(&self, seat: SeatNo, reply: PadReply) {
         if let Some(p) = self.state().pad.as_mut() {
-            p.set_reply(reply);
+            p.set_reply(seat, reply);
         }
     }
 
-    /// The latency probe's summary so far (for the manual test harness).
+    /// The latency probe's summary so far for the first phone (for the manual test harness).
     #[cfg(test)]
     pub fn pad_latency(&self) -> Option<String> {
-        self.state().pad.as_ref().and_then(|p| p.latency().summary())
+        self.state().pad.as_ref().and_then(|p| p.latency(FIRST).summary())
     }
 
-    /// The controller as the game should show it now.
-    pub fn pad_event(&self) -> Option<PadEvent> {
-        self.state().pad.as_ref().map(Pad::event)
+    /// The controllers as the game should show them now (seat 2 only in a two-player game).
+    pub fn pad_events(&self) -> Vec<PadEvent> {
+        let st = self.state();
+        let Some(p) = st.pad.as_ref() else {
+            return Vec::new();
+        };
+        [FIRST, SECOND]
+            .into_iter()
+            .filter(|s| p.open_for(*s))
+            .map(|s| p.event(s))
+            .collect()
     }
 
     /// Start (or resume) receiving a file. Idempotent: asking again for the same id reports
@@ -1365,6 +1435,21 @@ fn withdraw(st: &mut State, payload: &Payload) {
     if let Some(offer) = payload.offer() {
         st.offers.retain(|o| o.id != offer);
         st.downloading.remove(offer);
+    }
+}
+
+/// The two requests a game controller makes: the page's check-in and an input. A two-player
+/// game's second phone may make these and nothing else.
+fn is_controller_request(method: &str, path: &str) -> bool {
+    matches!((method, path), ("GET", "/api/state") | ("POST", "/api/pad"))
+}
+
+/// Which seat a controller request is for: the session's own phone is seat 1, the guest seat 2.
+fn seat_of(req: &Authorized) -> SeatNo {
+    if req.guest {
+        SECOND
+    } else {
+        FIRST
     }
 }
 

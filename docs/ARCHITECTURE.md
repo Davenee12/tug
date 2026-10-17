@@ -226,6 +226,16 @@ phone page polls GET /api/state ─► { game: true } ─► Controller.vue (sli
 game closes ─► game_pad_close ─► inputs get 409 ─► the page goes back to Tugboat
 ```
 
+Two players: `game_pad_open(2)` opens a second seat. While it's open, one other phone may join
+with the same code (`auth.rs`: a guest, signed with the same secret, with its own replay window;
+a guest that's been quiet for 8 s gives way to the next phone, and any other phone gets 403
+`full`). The guest may only make the two controller requests (`GET /api/state`, which tells it
+only whether there's a race, and `POST /api/pad`); everything else is 403 `in-use`. Seat 1 is the
+session's own phone, seat 2 the guest; each seat has its own ordering, rate limit, silence watch,
+reply (`player` 1 or 2, so the phone shows its colour) and latency summary, and `game-pad` carries
+the `seat`. `game_pad_open(1)` closes seat 2 again (the game hears it's gone; the guest waits on
+its page for the next race).
+
 The input channel is a small POST endpoint rather than a WebSocket: it reuses Tugboat's
 authentication, sealing, connection limits and timeouts unchanged, needs no new dependency or
 connection upgrade, and on a home network one request per input (kept alive) is well inside the
@@ -262,7 +272,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `crates/tug-bridge` (`auth`, `protocol`, `framing`, `paths`, `time`) | Bridge protocol and handshake; the whole exchange is also tested over a real pipe |
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
-| `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone |
+| `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone, two seats for a two-player game |
 | `tugboat/net.rs`, `tugboat/tally.rs`, `tugboat/session.rs` (`choose_folder`) | Which adapter the phone can reach (including a Hyper-V external switch); logging strangers' refused requests once a minute with a count; Pictures or the Downloads fallback |
 | `autostart.rs`, `session_end.rs` | Start with Windows over a `Registry` trait (tested with a fake: HKCU only, moving an old HKLM entry); what exit skips when Windows is ending the session |
 | `tugboat/clip.rs`, `tugboat/dib.rs` | The shared clipboard: one waiting clipboard at a time, delivered only on the phone's word, dropped after 2 minutes, what can be sent; a clipboard bitmap to PNG |
@@ -284,10 +294,12 @@ answers never land), `layout` (sidebar density and "wide", from sizes that follo
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
 (unknown-sender filter), `singleFlight` (one press, one action), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `startup` (startup reads that fail are retried, never block), `threadWindow` (long conversations render their newest texts first),
-`toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: seeded spawning, collisions,
-scoring, the speed curve, inertia, merging the controls), `useCitySearch` (the weather card's
-city box), `vips`, `weather`, `weblinks`, `whatsNew`. Thin DOM composables such as `useElementSize` (an
-element's size in zoomed CSS pixels) feed these rules.
+`toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
+scoring, the speed curve, inertia, the weather's handling, merging the controls), `tugboatDaily` (the
+daily challenge: the date's seed, weather → water, the start screen's line, the streak), `tugboatRace`
+(two players: who steers what, the result, when a dropped phone pauses the race), `useCitySearch` (the
+weather card's city box), `vips`, `weather`, `weblinks`, `whatsNew`. Thin DOM composables such as
+`useElementSize` (an element's size in zoomed CSS pixels) feed these rules.
 The phone page has its own: `tugboat-page/chunks`, `crypto`, `clip` (the PC's clipboard: when to
 acknowledge it, copying without a secure context) and `pad` (the controller's wire format, pacing
 and errors). Components and
@@ -354,6 +366,8 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?tugboatclip` | Send clipboard to iPhone with no phone yet: the code with its clipboard hint, then a phone scanning it and taking the clipboard |
 | `/?game` | Tugboat Run, ready to start |
 | `/?gamephone` | Tugboat Run with the phone controller: Tugboat's code, a phone scanning it, then the phone starting the run and steering |
+| `/?game2p` (`&p2drop`) | Tugboat Run for two players with two phones (Player 2's phone drops mid-race: the waiting card and Continue solo) |
+| `/?game&weather=rain` | The daily challenge in made-up weather for the preview: `rain`, `storm`, `snow`, `night`, `windy` or `off` |
 | `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
 | `/?pcaudio`, `/?pcaudiofail`, `/?pcaudiodrop`, `/?pcaudioold` | iPhone audio playing on this PC / Play on this PC times out / it drops after 6 s (Reconnect) / Windows too old for it |
 | `/?whatsnew` | The What's new card for the newest release |

@@ -12,7 +12,12 @@ import {
   SPEED_MAX,
   SPEED_START,
   FOLLOW_TAU,
+  CALM,
+  LANE_GAP,
+  RESPONSE,
   advance,
+  distanceAt,
+  laneLayouts,
   follow,
   layout,
   mergeInput,
@@ -25,10 +30,13 @@ import {
   speedAt,
   step,
   steerVelocity,
+  timeAtDistance,
   toFieldX,
   touches,
+  waveAt,
   widestGap,
   type Controls,
+  type Handling,
   type Run,
   type Thing,
 } from "./tugboatRun";
@@ -153,8 +161,9 @@ describe("spawning", () => {
     const rowsIn = (fromT: number, seconds: number) => {
       const run = newRun(3);
       run.t = fromT;
+      run.distance = distanceAt(fromT);
+      run.nextSpawn = run.distance;
       let rows = 0;
-      run.nextSpawn = 0;
       for (let i = 0; i < seconds * 60; i++) {
         const before = run.nextSpawn;
         step(run, still, 1 / 60);
@@ -173,7 +182,7 @@ describe("spawning", () => {
     for (let seed = 1; seed <= 200; seed++) {
       const run = newRun(seed);
       for (const t of [0, 30, 90, 240, 600]) {
-        run.t = t;
+        run.nextSpawn = distanceAt(t);
         for (let i = 0; i < 20; i++) {
           run.things = [];
           const row = spawnRow(run);
@@ -196,6 +205,60 @@ describe("spawning", () => {
       if (spawnRow(run).some((th) => th.kind === "ring")) rings++;
     }
     expect(rings).toBeGreaterThan(0);
+  });
+
+  it("difficulty follows distance: the distance curve and its inverse agree", () => {
+    for (const t of [0, 1, 10, 45, 90, 300, 900]) expect(timeAtDistance(distanceAt(t))).toBeCloseTo(t, 6);
+    expect(timeAtDistance(-5)).toBe(0);
+    expect(distanceAt(60)).toBeGreaterThan(distanceAt(30));
+  });
+
+  it("the same seed is the same course at any frame rate, whatever the boat does", () => {
+    /** Each thing as it first appears: what it is, where across, how big. */
+    const course = (fps: number, steer: number, hop: boolean) => {
+      const run = newRun(20261016);
+      const seen: Array<[string, number, number]> = [];
+      let last = 0;
+      for (let i = 0; i < 40 * fps; i++) {
+        step(run, { steer, boost: hop && i % 30 === 0 }, 1 / fps);
+        for (const th of run.things) if (th.id > last) seen.push([th.kind, th.x, th.w]);
+        last = run.nextId - 1;
+        // Never sink and never be hurt, so no life ring takes a row's place.
+        run.lives = LIVES;
+        run.over = false;
+      }
+      return seen;
+    };
+    const steady = course(60, 0, false);
+    expect(steady.length).toBeGreaterThan(30);
+    // 144 frames a second, steering hard and hopping: the same things in the same places.
+    expect(course(144, 1, true)).toEqual(steady);
+    expect(course(30, -1, false)).toEqual(steady);
+  });
+
+  it("a boat that's been hit may find a life ring, but the rest of the course is the same", () => {
+    const fine = newRun(99);
+    const hurt = newRun(99);
+    hurt.lives = 1;
+    let rings = 0;
+    for (let i = 0; i < 400; i++) {
+      const a = spawnRow(fine).map((th) => [th.kind, th.x, th.w]);
+      const b = spawnRow(hurt).map((th) => [th.kind, th.x, th.w]);
+      if (b.length === 1 && b[0][0] === "ring") rings++;
+      else expect(b).toEqual(a);
+      // The next row comes at the same distance either way.
+      expect(hurt.nextSpawn).toBe(fine.nextSpawn);
+    }
+    expect(rings).toBeGreaterThan(5);
+  });
+
+  it("different seeds are different courses", () => {
+    const rows = (seed: number) => {
+      const run = newRun(seed);
+      return Array.from({ length: 12 }, () => spawnRow(run).map((th) => `${th.kind}@${th.x.toFixed(2)}`)).join("|");
+    };
+    expect(rows(1)).toBe(rows(1));
+    expect(rows(1)).not.toBe(rows(2));
   });
 
   it("forgets things once they've floated off the bottom", () => {
@@ -381,6 +444,67 @@ describe("the phone's slider", () => {
   });
 });
 
+describe("the water's handling (the daily challenge's weather)", () => {
+  const withHandling = (h: Partial<Handling>) => {
+    const run = newRun(1, { ...CALM, ...h });
+    run.nextSpawn = Infinity;
+    return run;
+  };
+
+  it("calm water is the game as it always was", () => {
+    const a = quiet();
+    const b = withHandling({});
+    for (let i = 0; i < 120; i++) {
+      step(a, { steer: 0.5, boost: false }, 1 / 60);
+      step(b, { steer: 0.5, boost: false }, 1 / 60);
+    }
+    expect(b.x).toBe(a.x);
+    expect(b.distance).toBe(a.distance);
+  });
+
+  it("snow slows the water and makes the helm slide", () => {
+    const calm = quiet();
+    const snow = withHandling({ speedScale: 0.82, response: RESPONSE * 0.38 });
+    for (let i = 0; i < 6; i++) {
+      step(calm, { steer: 1, boost: false }, 1 / 60);
+      step(snow, { steer: 1, boost: false }, 1 / 60);
+    }
+    expect(snow.distance).toBeCloseTo(calm.distance * 0.82, 6);
+    // A tenth of a second in, the icy boat has barely started to turn.
+    expect(snow.vx).toBeLessThan(calm.vx * 0.6);
+    // It still turns, just later.
+    for (let i = 0; i < 30; i++) step(snow, { steer: 1, boost: false }, 1 / 60);
+    expect(snow.vx).toBeGreaterThan(0.5 * MAX_VX);
+  });
+
+  it("wind pushes an idle boat downwind, and the slider holds against it", () => {
+    const run = withHandling({ drift: 6 });
+    for (let i = 0; i < 60; i++) step(run, still, 1 / 60);
+    expect(run.x).toBeCloseTo(FIELD_W / 2 + 6, 1);
+    const left = withHandling({ drift: -6 });
+    for (let i = 0; i < 60; i++) step(left, still, 1 / 60);
+    expect(left.x).toBeLessThan(FIELD_W / 2 - 5);
+    // The phone's slider keeps the boat within a unit of where the knob is.
+    const pad = withHandling({ drift: 9 });
+    for (let i = 0; i < 120; i++) step(pad, { steer: 0, boost: false, target: 30 }, 1 / 60);
+    expect(Math.abs(pad.x - 30)).toBeLessThan(1);
+  });
+
+  it("waves rock the boat from side to side without carrying it away", () => {
+    const run = withHandling({ waves: 8 });
+    let lo = run.x;
+    let hi = run.x;
+    for (let i = 0; i < 60 * 13; i++) {
+      step(run, still, 1 / 60);
+      lo = Math.min(lo, run.x);
+      hi = Math.max(hi, run.x);
+    }
+    expect(hi - lo).toBeGreaterThan(3);
+    expect(Math.abs(run.x - FIELD_W / 2)).toBeLessThan(8);
+    expect(Math.abs(waveAt(1.234))).toBeLessThanOrEqual(1);
+  });
+});
+
 describe("controls", () => {
   const none: Controls = { keyLeft: false, keyRight: false, keyBoost: false, pointerX: null, pointerBoost: false, pad: null, padLeads: false };
   const pad = { connected: true, steer: 0.5, boost: false };
@@ -418,5 +542,18 @@ describe("layout", () => {
     expect(narrow.scale).toBe(3);
     expect(narrow.left).toBe(0);
     expect(layout(0, 0).scale).toBeGreaterThan(0);
+  });
+
+  it("two lanes sit side by side at the size one would be, at a usual window shape", () => {
+    const [a, b] = laneLayouts(1200, 640);
+    expect(a.scale).toBe(4);
+    expect(b.scale).toBe(a.scale);
+    expect(b.left - a.left).toBe((FIELD_W + LANE_GAP) * a.scale);
+    // Centred together.
+    expect(a.left).toBeCloseTo(1200 - (b.left + FIELD_W * b.scale), 6);
+    // A narrow window shrinks them to fit across.
+    const [n] = laneLayouts(500, 900);
+    expect(n.scale).toBeCloseTo(500 / (2 * FIELD_W + LANE_GAP), 6);
+    expect(n.left).toBeCloseTo(0, 6);
   });
 });

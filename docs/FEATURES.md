@@ -193,7 +193,7 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 ## Games
 
-- **Tugboat Run**, a little endless runner: steer a tugboat through the harbor, dodge buoys, logs
+- **Tugboat Run**, a little harbor runner: steer a tugboat through the harbor, dodge buoys, logs
   and other boats, collect coins, and catch a life ring to win back a life. Three lives with a short
   grace after each hit; the water speeds up, so a run lasts a minute or three. Restart instantly.
 - **Controls:** ← → or A and D steer (with a little inertia), Space hops over buoys and logs (not
@@ -205,7 +205,26 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   keyboard always works too and takes over the moment the phone drops. Tilt steering isn't
   offered: phone browsers only allow it on a secure (HTTPS) page, and Tugboat's page is plain HTTP
   on your Wi-Fi.
-- Best score is kept on this PC only. Nothing runs while the game is closed or paused.
+- **Daily challenge** (the start screen's Daily tab): one course a day, the same for everyone that
+  day (the course comes from the date), sailed in **your real weather** from the weather card: rain
+  brings waves that rock the boat, wind a gentle sideways drift, snow slower water and icy
+  steering, and at night the harbor goes dark with a lighthouse sweeping its beam. The start screen
+  says what to expect ("Today: rainy, wind 12 mph — expect waves"); with the weather card off or
+  no fresh forecast it's calm water and says "Calm seas today", never made-up weather. A **streak**
+  counts the days in a row you've finished a daily run (a run that ends after midnight counts for
+  the day it started; a missed day starts it again), with your best score for each day.
+- **Free play**: the endless runner as before, a new course every time.
+- **Two players**: race side by side in two lanes on the same course; the higher score wins, and
+  the winner screen shows both scores. Player 1 (coral) steers with ← → and hops with ↑, Player 2
+  (teal) with A, D and W, or each uses a phone: both scan the same code, and each phone shows its
+  player's colour (**Swap phones** puts the first phone on Player 2, so the keyboard can be
+  Player 1). Exactly two phones can join; a third is turned away. If a player's phone drops
+  mid-race the race waits ("Player 2 disconnected — waiting…") until it's back, or **Continue
+  solo**. A second phone can only steer: it never sees Tugboat's files or text.
+- Scores are kept on this PC only: the Free play best, each day's daily best and the streak, and a
+  separate best race score for two players. Nothing runs while the game is closed or paused.
+- With Windows' reduce-motion setting on, the lighthouse beam holds still, rain and snow drift with
+  the water instead of falling across it, there are no wind streaks and no screen shake.
 - Open it from the **Play** button beside tug's name, or Ctrl+K "game" / "tugboat run". Turn
   **Show games** off in Settings › General to hide both.
 
