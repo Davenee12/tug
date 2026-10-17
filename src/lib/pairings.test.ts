@@ -7,8 +7,49 @@ import {
   pairingProblem,
   setupDeviceLists,
   startedOutsideTug,
+  holdPhones,
+  phonesInGrace,
+  CANDIDATE_GRACE_MS,
+  type HeldPhone,
 } from "./pairings";
 import type { DeviceStatus, DiscoveredDevice } from "../types/protocol";
+
+describe("holding a phone that blinks out of discovery", () => {
+  const a = { id: "a" };
+  const b = { id: "b" };
+  const empty = new Map<string, HeldPhone<{ id: string }>>();
+
+  it("keeps a phone for the grace from when it dropped out, not from when it was first seen", () => {
+    // Seen at 0 and still listed at 60 s: the grace starts when it goes, at 61 s.
+    let held = holdPhones(empty, [a], 0);
+    held = holdPhones(held, [a], 60_000);
+    held = holdPhones(held, [], 61_000);
+    expect(phonesInGrace(held, 61_000)).toEqual([a]);
+    expect(phonesInGrace(held, 61_000 + CANDIDATE_GRACE_MS - 1)).toEqual([a]);
+    expect(phonesInGrace(held, 61_000 + CANDIDATE_GRACE_MS)).toEqual([]);
+  });
+
+  it("a listed phone is never counted as in grace, and comes back fresh", () => {
+    let held = holdPhones(empty, [a, b], 0);
+    held = holdPhones(held, [b], 1_000);
+    expect(phonesInGrace(held, 2_000)).toEqual([a]);
+    held = holdPhones(held, [a, b], 3_000);
+    expect(phonesInGrace(held, 3_000)).toEqual([]);
+  });
+
+  it("lets go of a phone whose grace is over", () => {
+    let held = holdPhones(empty, [a], 0);
+    held = holdPhones(held, [], 1_000);
+    held = holdPhones(held, [], 1_000 + CANDIDATE_GRACE_MS);
+    expect(held.size).toBe(0);
+  });
+
+  it("doesn't change the map it was given", () => {
+    const held = holdPhones(empty, [a], 0);
+    holdPhones(held, [], 5_000);
+    expect(held.get("a")?.goneAt).toBeNull();
+  });
+});
 
 const CONNECTED: DeviceStatus = {
   radio: "on",

@@ -15,7 +15,7 @@ import { useTugboatStore } from "../stores/tugboat";
 import { useDevToolsStore } from "../stores/devtools";
 import { useFocusTrap } from "../lib/focusTrap";
 import { api, on } from "../lib/ipc";
-import { capitalised } from "../lib/tugboat";
+import { capitalised, openUnlessAbandoned } from "../lib/tugboat";
 import { LIVES, advance, layout, mergeInput, newRun, score, toFieldX, type Layout, type Run } from "../lib/tugboatRun";
 import { draw, type Palette } from "./tugboatRunDraw";
 
@@ -302,22 +302,33 @@ function onPad(e: { connected: boolean; steer: number; boost: boolean }) {
   padBoostWas = e.connected && e.boost;
 }
 
+/** Bumped by each controller open and off, so an open that lands late knows it's been overtaken. */
+let padRequest = 0;
 async function useController() {
   pause();
   sheet.value = true;
   if (controllerOn.value) return;
   controllerOn.value = true;
   controllerError.value = null;
+  const mine = ++padRequest;
   try {
-    await api.gamePadOpen();
-    sendFeedback();
+    // Closing the game (or switching the controller off) while this opens: close the channel once
+    // it's open, so the phone isn't left as a controller for a game that's gone.
+    const kept = await openUnlessAbandoned(
+      () => api.gamePadOpen(),
+      () => api.gamePadClose(),
+      () => !disposed && mine === padRequest,
+    );
+    if (kept) sendFeedback();
   } catch (e) {
+    if (disposed || mine !== padRequest) return;
     controllerOn.value = false;
     controllerError.value = typeof e === "string" ? e : "Couldn't start Tugboat.";
   }
 }
 
 async function controllerOff() {
+  padRequest++;
   controllerOn.value = false;
   sheet.value = false;
   onPad({ connected: false, steer: 0, boost: false });

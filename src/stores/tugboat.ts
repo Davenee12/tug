@@ -76,14 +76,21 @@ export const useTugboatStore = defineStore("tugboat", () => {
     started = false;
   }
 
+  // Each open or close starts a new generation. A start or stop that answers after a newer one began
+  // is old news: a slow stop mustn't blank a session opened again meanwhile, and a slow start
+  // mustn't bring back a code for a panel that was closed (the status events tell the truth).
+  let generation = 0;
+
   async function start() {
     if (starting.value) return;
+    const mine = ++generation;
     starting.value = true;
     error.value = null;
     try {
-      apply(await api.tugboatStart());
+      const s = await api.tugboatStart();
+      if (mine === generation) apply(s);
     } catch (e) {
-      error.value = typeof e === "string" ? e : "Couldn't start Tugboat.";
+      if (mine === generation) error.value = typeof e === "string" ? e : "Couldn't start Tugboat.";
     } finally {
       starting.value = false;
     }
@@ -97,6 +104,7 @@ export const useTugboatStore = defineStore("tugboat", () => {
 
   /** Close the panel: the server stops and the code stops working. */
   async function close() {
+    const mine = ++generation;
     open.value = false;
     dragging.value = false;
     try {
@@ -104,7 +112,7 @@ export const useTugboatStore = defineStore("tugboat", () => {
     } catch {
       /* already stopped */
     }
-    apply({ ...TUGBOAT_OFF, folder: status.value.folder });
+    if (mine === generation) apply({ ...TUGBOAT_OFF, folder: status.value.folder });
   }
 
   /** "Copy link": done in Rust, kept out of clipboard history and sync. */

@@ -83,3 +83,21 @@ export function skippedMessage(skipped: TugboatSkipped[]): string | null {
 export function percent(received: number, size: number): number {
   return size > 0 ? Math.min(100, Math.round((received / size) * 100)) : 100;
 }
+
+/**
+ * Open something that takes a while (the game's phone-controller channel), and if it's no longer
+ * wanted by the time it opens (the game closed, or the controller was switched off meanwhile),
+ * close it again rather than leave it open with nobody using it. A close sent while the open was
+ * still on its way can be overtaken by it, so this one is sent after. True if it's open and wanted.
+ * A failed open throws, as `open` does.
+ */
+export async function openUnlessAbandoned(
+  open: () => Promise<unknown>,
+  close: () => Promise<unknown>,
+  stillWanted: () => boolean,
+): Promise<boolean> {
+  await open();
+  if (stillWanted()) return true;
+  await close().catch(() => undefined);
+  return false;
+}
