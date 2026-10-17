@@ -94,7 +94,14 @@ pub fn decode(bytes: &[u8]) -> (String, Decoding) {
         any_utf8_multibyte |= valid.bytes().any(|b| b >= 0x80);
         any_valid_text |= !valid.trim().is_empty();
         out.push_str(valid);
-        out.extend(chunk.invalid().iter().map(|&b| cp1252(b)));
+        match chunk.invalid() {
+            // A lone stray byte is most likely a Windows-1252 letter ("caf" + E9).
+            [b] => out.push(cp1252(*b)),
+            // Two or three bytes of one UTF-8 sequence that got cut (half an emoji): it was a
+            // character, but which one is lost. Guessing Windows-1252 would show "ðŸ˜" instead.
+            [] => {}
+            _ => out.push('\u{FFFD}'),
+        }
     }
     if !any_valid_text && bytes.len() <= 2 {
         // One or two stray bytes and nothing else: not a word in any encoding.
@@ -345,6 +352,17 @@ mod tests {
         b.push(0xE9);
         b.extend_from_slice(b" ok");
         assert_eq!(decode(&b), ("👍 café ok".into(), Decoding::Utf8AndCp1252));
+    }
+
+    #[test]
+    fn half_an_emoji_mid_text_is_one_replacement_not_windows_1252() {
+        // "😀" is F0 9F 98 80; its last byte went missing in the middle of the text.
+        let mut b = "ok ".as_bytes().to_vec();
+        b.extend_from_slice(&[0xF0, 0x9F, 0x98]);
+        b.extend_from_slice(" see you 👍".as_bytes());
+        let (text, _) = decode(&b);
+        assert_eq!(text, "ok \u{FFFD} see you 👍");
+        assert!(!text.contains('ð'), "never shown as Windows-1252 letters");
     }
 
     #[test]
