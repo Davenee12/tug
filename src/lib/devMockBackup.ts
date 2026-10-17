@@ -7,6 +7,7 @@
 //   /?backup&none       no backups on this PC: the "how to make one" step
 //   /?backup&imported   history already brought in (Settings shows Remove, Messages the label)
 //   /?backup&heif       photos show as "Open photo" with the HEIF Image Extensions hint
+//   /?backup&hevc       the same, with HEIF there but HEVC Video Extensions missing
 
 import { emit } from "@tauri-apps/api/event";
 import type { BackupImported, BackupInfo, BackupStatus, SmsMessage } from "../types/protocol";
@@ -197,7 +198,9 @@ export function backupMock(
     case "conversation_messages":
       return ctx.messages.map((m) => ({ ...m }));
     case "attachment_preview":
-      return params.has("heif") ? { dataUri: null, needsHeif: true } : { dataUri: fakePhoto((Number(a.id) * 47) % 360), needsHeif: false };
+      if (params.has("heif")) return { dataUri: null, needsHeif: true, needsHevc: false };
+      if (params.has("hevc")) return { dataUri: null, needsHeif: false, needsHevc: true };
+      return { dataUri: fakePhoto((Number(a.id) * 47) % 360), needsHeif: false, needsHevc: false };
     case "open_attachment":
       console.info("[devMock] would open the photo in Photos", a.id);
       return null;

@@ -41,6 +41,9 @@ export const useBackupStore = defineStore("backup", () => {
   /** A HEIC photo couldn't be shown (no HEIF Image Extensions); the hint says why, once. */
   const needsHeif = ref(false);
   const heifHintDismissed = ref(true);
+  /** HEIF Image Extensions opened a HEIC photo but HEVC Video Extensions is missing to show it. */
+  const needsHevc = ref(false);
+  const hevcHintDismissed = ref(true);
 
   function applyStatus(s: BackupStatus) {
     // The backend's rev only goes up: an older copy (a slow status read, a late event) never wins.
@@ -74,6 +77,7 @@ export const useBackupStore = defineStore("backup", () => {
       ]);
       imported.value = i;
       heifHintDismissed.value = settings["ui.heifHintDismissed"] === "true";
+      hevcHintDismissed.value = settings["ui.hevcHintDismissed"] === "true";
       mergeMessages(heads);
     })();
     return loaded;
@@ -225,10 +229,11 @@ export const useBackupStore = defineStore("backup", () => {
   function preview(id: number): Promise<AttachmentPreview> {
     let p = previews.get(id);
     if (!p) {
-      p = api.attachmentPreview(id).catch(() => ({ dataUri: null, needsHeif: false }));
+      p = api.attachmentPreview(id).catch(() => ({ dataUri: null, needsHeif: false, needsHevc: false }));
       previews.set(id, p);
       void p.then((r) => {
         if (r.needsHeif) needsHeif.value = true;
+        if (r.needsHevc) needsHevc.value = true;
       });
     }
     return p;
@@ -242,9 +247,11 @@ export const useBackupStore = defineStore("backup", () => {
     }
   }
 
-  function dismissHeifHint() {
-    heifHintDismissed.value = true;
-    void api.setSetting("ui.heifHintDismissed", "true").catch(() => undefined);
+  /** Each hint is dismissed on its own: dismissing HEIF's doesn't hide HEVC's when it comes next. */
+  function dismissPhotoHint(kind: "heif" | "hevc") {
+    if (kind === "heif") heifHintDismissed.value = true;
+    else hevcHintDismissed.value = true;
+    void api.setSetting(kind === "heif" ? "ui.heifHintDismissed" : "ui.hevcHintDismissed", "true").catch(() => undefined);
   }
 
   return {
@@ -257,6 +264,8 @@ export const useBackupStore = defineStore("backup", () => {
     imported,
     needsHeif,
     heifHintDismissed,
+    needsHevc,
+    hevcHintDismissed,
     ensureLoaded,
     loadHistory,
     openWizard,
@@ -272,6 +281,6 @@ export const useBackupStore = defineStore("backup", () => {
     historyCleared,
     preview,
     openAttachment,
-    dismissHeifHint,
+    dismissPhotoHint,
   };
 });

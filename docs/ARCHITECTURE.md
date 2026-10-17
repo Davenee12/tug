@@ -183,7 +183,7 @@ backup_import(texts, photos) ─► import.rs: plan (a group chat? left out; gui
   ─► "backup-import" { phase: done, summary } ─► the session (keys, data, scratch folder) dropped
 window: stores/backup.ts re-reads messages and conversation heads; MessageThreads loads a
   conversation's whole history when it opens (conversation_messages); photos via attachment_preview
-  (wic.rs: JPEG preview, HEIC needs HEIF Image Extensions) and open_attachment (default app)
+  (wic.rs: JPEG preview; HEIC needs HEIF Image Extensions, then HEVC Video Extensions, and the hint names which) and open_attachment (default app)
 ```
 
 Imported rows are ordinary `messages` with source `iphone-backup` (keyed by the backup's message
@@ -533,7 +533,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
 | `/?sharing` (`&presenting`, `&stop`) | The screen is being shared: blurred texts and names under the `Previews hidden` banner with Show anyway (a slide show / sharing ends after 10 s); add `&call` for the call card |
 | `/?voice` (`&micblocked`, `&nospeech`, `&voicebusy`) | Settings › General › Voice typing on, with the microphone blocked / no speech language / the shortcut taken |
-| `/?backup` (`&none`, `&imported`, `&heif`) | Settings › Messages › Bring in your full history with made-up backups (the encrypted one's password is `test`) / no backups / history already brought in (the label, photos) / photos Windows can't show without HEIF Image Extensions |
+| `/?backup` (`&none`, `&imported`, `&heif`, `&hevc`) | Settings › Messages › Bring in your full history with made-up backups (the encrypted one's password is `test`) / no backups / history already brought in (the label, photos) / photos Windows can't show without HEIF Image Extensions / with HEIF but without HEVC Video Extensions |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then

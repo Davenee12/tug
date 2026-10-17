@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { ChevronRight, History, Image, Info, Phone, Plus, RotateCcw, ShieldQuestionMark, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useBackupStore } from "../stores/backup";
-import { backupLabel, HEIF_HINT, HEIF_STORE_URL, isImported } from "../lib/backupImport";
+import { backupLabel, isImported, photoHint } from "../lib/backupImport";
 import { api } from "../lib/ipc";
 import MessageAttachments from "./MessageAttachments.vue";
 import { replyUnavailable } from "../lib/availability";
@@ -245,9 +245,15 @@ const edited = (i: ConversationItem) => i.kind === "message" && !!i.m.edited;
 // "From your iPhone backup, Oct 12": once, above the oldest history the backup brought in.
 const firstImported = computed(() => selected.value?.items.find((i) => i.kind === "message" && isImported(i.m))?.id ?? null);
 const importedLabel = computed(() => backupLabel(backup.imported));
-// Once: why a HEIC photo shows as "Open photo" instead of the picture.
-const showHeifHint = computed(() => backup.needsHeif && !backup.heifHintDismissed);
-const getHeif = () => void api.openUrl(HEIF_STORE_URL).catch(() => undefined);
+// Once: why a HEIC photo shows as "Open photo" instead of the picture, and which free extension
+// would show it (HEIF Image Extensions, or HEVC Video Extensions when HEIF is already there).
+const shownPhotoHint = computed(() =>
+  photoHint({
+    heif: backup.needsHeif && !backup.heifHintDismissed,
+    hevc: backup.needsHevc && !backup.hevcHintDismissed,
+  }),
+);
+const getExtension = (url: string) => void api.openUrl(url).catch(() => undefined);
 const statusLabel = (i: ConversationItem) => {
   if (i.kind !== "message" || i.m.direction !== "out") return "";
   // "accepted" (the iPhone took it) and "sent" (a MAP SendingSuccess event confirmed it, when
@@ -408,11 +414,15 @@ async function retry(m: SmsMessage) {
         <button class="btn-secondary btn-sm shrink-0" @click="tug.moveToConversations(selected)">Move to conversations</button>
       </div>
       <!-- Once, until dismissed: why an iPhone photo shows as "Open photo". -->
-      <div v-if="showHeifHint" class="flex items-center gap-3 border-b border-hairline bg-surface-soft px-8 py-2.5">
+      <div v-if="shownPhotoHint" class="flex items-center gap-3 border-b border-hairline bg-surface-soft px-8 py-2.5">
         <Image :size="15" class="shrink-0 text-muted" />
-        <p class="min-w-0 flex-1 text-[13px] text-muted">{{ HEIF_HINT }}</p>
-        <button class="btn-secondary btn-sm shrink-0" @click="getHeif">Get it</button>
-        <button class="shrink-0 rounded p-1 text-muted hover:bg-surface-card hover:text-ink" aria-label="Dismiss" @click="backup.dismissHeifHint()">
+        <p class="min-w-0 flex-1 text-[13px] text-muted">{{ shownPhotoHint.text }}</p>
+        <button class="btn-secondary btn-sm shrink-0" @click="getExtension(shownPhotoHint.url)">Get it</button>
+        <button
+          class="shrink-0 rounded p-1 text-muted hover:bg-surface-card hover:text-ink"
+          aria-label="Dismiss"
+          @click="backup.dismissPhotoHint(shownPhotoHint.kind)"
+        >
           <X :size="13" />
         </button>
       </div>

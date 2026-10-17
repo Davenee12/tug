@@ -1,8 +1,11 @@
 //! A small JPEG preview of a stored photo, made with Windows Imaging Component, because the web
-//! view can't show an iPhone's HEIC photos. WIC decodes JPEG, PNG and GIF on every Windows, and
-//! HEIC when the free "HEIF Image Extensions" from the Microsoft Store is installed; without it,
-//! opening a HEIC file fails with `WINCODEC_ERR_COMPONENTNOTFOUND`, which the caller turns into
-//! "install HEIF Image Extensions to see iPhone photos here".
+//! view can't show an iPhone's HEIC photos. WIC decodes JPEG, PNG and GIF on every Windows. HEIC
+//! needs two free Microsoft Store extensions: "HEIF Image Extensions" (the container: without it
+//! WIC finds no decoder for the file) and "HEVC Video Extensions from Device Manufacturer" (the
+//! pictures inside: without it the decoder opens the file but can't decode a frame). Which one is
+//! missing decides what the hint asks for. A failure only counts as a missing extension when the
+//! file really is HEIF (`ftypheic`, `ftypheix` or `ftypmif1`); anything else is just a photo
+//! Windows couldn't read.
 //!
 //! Thin on purpose: decode, turn upright (the photo's orientation tag), scale to fit, encode as
 //! JPEG, all in memory. Runs on a thread of its own with a time limit (a codec can hang), never on
@@ -12,7 +15,7 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use windows::core::{w, HSTRING};
+use windows::core::{w, HRESULT, HSTRING};
 use windows::Win32::Foundation::{GENERIC_READ, WINCODEC_ERR_COMPONENTNOTFOUND, WINCODEC_ERR_UNKNOWNIMAGEFORMAT};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_ContainerFormatJpeg, GUID_WICPixelFormat24bppBGR, IWICBitmapSource,
@@ -31,10 +34,56 @@ use windows::Win32::System::Variant::VT_UI2;
 /// Why there's no preview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThumbError {
-    /// Windows has no decoder for this format (HEIC without HEIF Image Extensions).
-    NoCodec,
+    /// A HEIC photo, and Windows has no decoder for it: HEIF Image Extensions isn't installed.
+    NeedsHeif,
+    /// A HEIC photo the HEIF decoder opened but couldn't decode: HEVC Video Extensions isn't
+    /// installed.
+    NeedsHevc,
     /// Anything else: a damaged file, or Windows didn't answer in time.
     Failed,
+}
+
+/// Media Foundation's "no suitable decoder" (`MF_E_TOPO_CODEC_NOT_FOUND`), what the HEIF decoder
+/// reports when it can't find an HEVC decoder.
+const MF_E_TOPO_CODEC_NOT_FOUND: HRESULT = HRESULT(0xC00D_5212_u32 as i32);
+
+/// How far decoding got when it failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// Finding a decoder for the file.
+    Open,
+    /// Decoding a frame, once a decoder was found.
+    Decode,
+}
+
+/// Whether a file starts like a HEIF image: an ISO box `ftyp` with the brand iPhones write.
+pub fn is_heif_file(head: &[u8]) -> bool {
+    head.len() >= 12 && &head[4..8] == b"ftyp" && matches!(&head[8..12], b"heic" | b"heix" | b"mif1")
+}
+
+fn heif_on_disk(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 12];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok()
+        && is_heif_file(&head)
+}
+
+/// Which extension a failure means is missing, if any.
+fn classify(step: Step, code: HRESULT, heif: bool) -> ThumbError {
+    if !heif {
+        return ThumbError::Failed;
+    }
+    match step {
+        Step::Open if code == WINCODEC_ERR_COMPONENTNOTFOUND || code == WINCODEC_ERR_UNKNOWNIMAGEFORMAT => {
+            ThumbError::NeedsHeif
+        }
+        Step::Decode if code == WINCODEC_ERR_COMPONENTNOTFOUND || code == MF_E_TOPO_CODEC_NOT_FOUND => {
+            ThumbError::NeedsHevc
+        }
+        _ => ThumbError::Failed,
+    }
 }
 
 /// The longest side of a preview, in pixels.
@@ -63,17 +112,11 @@ pub fn jpeg_thumbnail(path: &Path, max_side: u32) -> Result<Vec<u8>, ThumbError>
     rx.recv_timeout(TIME_LIMIT).unwrap_or(Err(ThumbError::Failed))
 }
 
-fn classify(e: windows::core::Error) -> ThumbError {
-    let code = e.code();
-    if code == WINCODEC_ERR_COMPONENTNOTFOUND || code == WINCODEC_ERR_UNKNOWNIMAGEFORMAT {
-        ThumbError::NoCodec
-    } else {
-        ThumbError::Failed
-    }
-}
-
 /// SAFETY: COM must be initialised on the calling thread.
 unsafe fn encode(path: &Path, max_side: u32) -> Result<Vec<u8>, ThumbError> {
+    let heif = heif_on_disk(path);
+    let opening = |e: windows::core::Error| classify(Step::Open, e.code(), heif);
+    let decoding = |e: windows::core::Error| classify(Step::Decode, e.code(), heif);
     let factory: IWICImagingFactory =
         CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).map_err(|_| ThumbError::Failed)?;
     let decoder = factory
@@ -84,8 +127,8 @@ unsafe fn encode(path: &Path, max_side: u32) -> Result<Vec<u8>, ThumbError> {
             GENERIC_READ,
             WICDecodeMetadataCacheOnDemand,
         )
-        .map_err(classify)?;
-    let frame = decoder.GetFrame(0).map_err(classify)?;
+        .map_err(opening)?;
+    let frame = decoder.GetFrame(0).map_err(decoding)?;
     let transform = frame
         .GetMetadataQueryReader()
         .ok()
@@ -101,7 +144,7 @@ unsafe fn encode(path: &Path, max_side: u32) -> Result<Vec<u8>, ThumbError> {
         .unwrap_or(WICBitmapTransformRotate0);
 
     let (mut w, mut h) = (0u32, 0u32);
-    frame.GetSize(&mut w, &mut h).map_err(|_| ThumbError::Failed)?;
+    frame.GetSize(&mut w, &mut h).map_err(decoding)?;
     if w == 0 || h == 0 {
         return Err(ThumbError::Failed);
     }
@@ -113,7 +156,7 @@ unsafe fn encode(path: &Path, max_side: u32) -> Result<Vec<u8>, ThumbError> {
     let scaler = factory.CreateBitmapScaler().map_err(|_| ThumbError::Failed)?;
     scaler
         .Initialize(&frame, sw, sh, WICBitmapInterpolationModeFant)
-        .map_err(classify)?;
+        .map_err(decoding)?;
     let mut source: IWICBitmapSource = scaler.into();
     if transform != WICBitmapTransformRotate0 {
         let rotator = factory.CreateBitmapFlipRotator().map_err(|_| ThumbError::Failed)?;
@@ -130,7 +173,7 @@ unsafe fn encode(path: &Path, max_side: u32) -> Result<Vec<u8>, ThumbError> {
             0.0,
             WICBitmapPaletteTypeCustom,
         )
-        .map_err(|_| ThumbError::Failed)?;
+        .map_err(decoding)?;
     let (mut ow, mut oh) = (0u32, 0u32);
     converter.GetSize(&mut ow, &mut oh).map_err(|_| ThumbError::Failed)?;
 
@@ -151,9 +194,8 @@ unsafe fn encode(path: &Path, max_side: u32) -> Result<Vec<u8>, ThumbError> {
     out_frame.SetSize(ow, oh).map_err(|_| ThumbError::Failed)?;
     let mut format = GUID_WICPixelFormat24bppBGR;
     out_frame.SetPixelFormat(&mut format).map_err(|_| ThumbError::Failed)?;
-    out_frame
-        .WriteSource(&converter, std::ptr::null())
-        .map_err(|_| ThumbError::Failed)?;
+    // The pixels are decoded here, so a missing HEVC decoder can show up here too.
+    out_frame.WriteSource(&converter, std::ptr::null()).map_err(decoding)?;
     out_frame.Commit().map_err(|_| ThumbError::Failed)?;
     encoder.Commit().map_err(|_| ThumbError::Failed)?;
 
@@ -213,6 +255,59 @@ mod tests {
         // Not an image at all.
         std::fs::write(dir.join("not.heic"), b"definitely not a photo").unwrap();
         assert!(jpeg_thumbnail(&dir.join("not.heic"), MAX_SIDE).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_a_real_heif_file_can_be_missing_an_extension() {
+        let heic = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic";
+        assert!(is_heif_file(heic));
+        assert!(is_heif_file(b"\0\0\0\x1cftypmif1\0\0\0\0"));
+        assert!(is_heif_file(b"\0\0\0\x1cftypheix\0\0\0\0"));
+        assert!(!is_heif_file(b"\xFF\xD8\xFF\xE0\0\x10JFIF\0\x01"), "a JPEG");
+        assert!(!is_heif_file(b"\0\0\0\x18ftypqt  \0\0\0\0"), "a video");
+        assert!(!is_heif_file(b"ftyp"));
+
+        // No decoder for a HEIF file: HEIF Image Extensions is missing.
+        assert_eq!(
+            classify(Step::Open, WINCODEC_ERR_COMPONENTNOTFOUND, true),
+            ThumbError::NeedsHeif
+        );
+        assert_eq!(
+            classify(Step::Open, WINCODEC_ERR_UNKNOWNIMAGEFORMAT, true),
+            ThumbError::NeedsHeif
+        );
+        // The decoder opened it but couldn't decode: HEVC Video Extensions is missing.
+        assert_eq!(
+            classify(Step::Decode, WINCODEC_ERR_COMPONENTNOTFOUND, true),
+            ThumbError::NeedsHevc
+        );
+        assert_eq!(
+            classify(Step::Decode, MF_E_TOPO_CODEC_NOT_FOUND, true),
+            ThumbError::NeedsHevc
+        );
+        // A file that isn't HEIF ("unknown format" is just a damaged or odd file), or any other
+        // error, is no missing extension.
+        assert_eq!(
+            classify(Step::Open, WINCODEC_ERR_UNKNOWNIMAGEFORMAT, false),
+            ThumbError::Failed
+        );
+        assert_eq!(
+            classify(Step::Decode, MF_E_TOPO_CODEC_NOT_FOUND, false),
+            ThumbError::Failed
+        );
+        assert_eq!(
+            classify(Step::Open, HRESULT(0x8007_0005_u32 as i32), true),
+            ThumbError::Failed
+        );
+    }
+
+    #[test]
+    fn a_heic_name_on_a_file_that_isnt_heif_is_just_unreadable() {
+        let dir = std::env::temp_dir().join(format!("tug-wic-heif-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("not.heic"), b"definitely not a photo").unwrap();
+        assert_eq!(jpeg_thumbnail(&dir.join("not.heic"), MAX_SIDE), Err(ThumbError::Failed));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

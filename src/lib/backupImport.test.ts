@@ -5,8 +5,11 @@ import {
   backupUnusable,
   formatBytes,
   groupsNote,
+  HEIF_STORE_URL,
+  HEVC_STORE_URL,
   importedLine,
   isImported,
+  photoHint,
   photosChoice,
   problemMessage,
   progressLine,
@@ -116,6 +119,22 @@ describe("backup import words", () => {
     expect(summaryLine({ ...s, already: 9 })).toBe("Everything in this backup was already in tug.");
     expect(summaryNote({ ...s, texts: 1, conversations: 1 })).toBeNull();
     expect(summaryNote({ ...s, texts: 1, conversations: 1, missing: 2 })).toMatch(/^2 photos or videos weren't/);
+  });
+
+  it("asks for the free extension a HEIC photo is missing", () => {
+    expect(photoHint({ heif: false, hevc: false })).toBeNull();
+    expect(photoHint({ heif: true, hevc: false })).toEqual({
+      kind: "heif",
+      text: "Install HEIF Image Extensions from the Microsoft Store to see iPhone photos here.",
+      url: HEIF_STORE_URL,
+    });
+    const hevc = photoHint({ heif: false, hevc: true })!;
+    expect(hevc.kind).toBe("hevc");
+    expect(hevc.text).toContain("HEIF Image Extensions");
+    expect(hevc.text).toContain("HEVC Video Extensions from Device Manufacturer");
+    expect(hevc.url).toBe(HEVC_STORE_URL);
+    // HEIF first: without it Windows can't even tell the photo needs HEVC.
+    expect(photoHint({ heif: true, hevc: true })!.kind).toBe("heif");
   });
 
   it("says group chats stay on the iPhone, before and after", () => {

@@ -110,6 +110,15 @@ pub struct Preview {
     pub data_uri: Option<String>,
     /// A HEIC photo Windows can't open without HEIF Image Extensions.
     pub needs_heif: bool,
+    /// A HEIC photo the HEIF extension opened but can't show without HEVC Video Extensions.
+    pub needs_hevc: bool,
+}
+
+/// Which free Microsoft Store extension a HEIC photo is missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingCodec {
+    Heif,
+    Hevc,
 }
 
 fn is_heic(key: &str) -> bool {
@@ -128,7 +137,7 @@ pub fn preview(local_dir: &Path, key: &str) -> Preview {
         if let Some(uri) = crate::app_icons::data_uri(&bytes) {
             return Preview {
                 data_uri: Some(uri),
-                needs_heif: false,
+                ..Preview::default()
             };
         }
     }
@@ -140,25 +149,37 @@ pub fn preview(local_dir: &Path, key: &str) -> Preview {
             let _ = std::fs::write(&thumb, &jpeg);
             Preview {
                 data_uri: crate::app_icons::data_uri(&jpeg),
-                needs_heif: false,
+                ..Preview::default()
             }
         }
-        Err(no_codec) => Preview {
-            data_uri: None,
-            needs_heif: no_codec && is_heic(key),
-        },
+        Err(missing) => no_preview(key, missing),
     }
 }
 
-/// `Err(true)` when Windows has no decoder for the format.
+/// No picture: and, for a HEIC photo, which extension would show it.
+fn no_preview(key: &str, missing: Option<MissingCodec>) -> Preview {
+    let missing = missing.filter(|_| is_heic(key));
+    Preview {
+        data_uri: None,
+        needs_heif: missing == Some(MissingCodec::Heif),
+        needs_hevc: missing == Some(MissingCodec::Hevc),
+    }
+}
+
+/// `Err(Some(..))` when a HEIC photo is missing one of Windows' free extensions.
 #[cfg(windows)]
-fn make_thumbnail(src: &Path) -> Result<Vec<u8>, bool> {
-    super::wic::jpeg_thumbnail(src, super::wic::MAX_SIDE).map_err(|e| e == super::wic::ThumbError::NoCodec)
+fn make_thumbnail(src: &Path) -> Result<Vec<u8>, Option<MissingCodec>> {
+    use super::wic::ThumbError;
+    super::wic::jpeg_thumbnail(src, super::wic::MAX_SIDE).map_err(|e| match e {
+        ThumbError::NeedsHeif => Some(MissingCodec::Heif),
+        ThumbError::NeedsHevc => Some(MissingCodec::Hevc),
+        ThumbError::Failed => None,
+    })
 }
 
 #[cfg(not(windows))]
-fn make_thumbnail(_src: &Path) -> Result<Vec<u8>, bool> {
-    Err(true)
+fn make_thumbnail(_src: &Path) -> Result<Vec<u8>, Option<MissingCodec>> {
+    Err(None)
 }
 
 /// Open a stored photo or video in its default app (Photos, usually). The path is only ever one
@@ -317,6 +338,30 @@ mod tests {
         assert!(!local.join(TEMP_DIR).exists());
         assert!(!sweep_temp(&local), "nothing the second time");
         std::fs::remove_dir_all(&local).unwrap();
+    }
+
+    #[test]
+    fn the_hint_names_the_missing_extension_for_heic_photos_only() {
+        let heic = format!("{}.heic", "ab".repeat(16));
+        let jpg = format!("{}.jpg", "ab".repeat(16));
+        assert_eq!(
+            no_preview(&heic, Some(MissingCodec::Heif)),
+            Preview {
+                data_uri: None,
+                needs_heif: true,
+                needs_hevc: false
+            }
+        );
+        assert_eq!(
+            no_preview(&heic, Some(MissingCodec::Hevc)),
+            Preview {
+                data_uri: None,
+                needs_heif: false,
+                needs_hevc: true
+            }
+        );
+        assert_eq!(no_preview(&heic, None), Preview::default());
+        assert_eq!(no_preview(&jpg, Some(MissingCodec::Heif)), Preview::default());
     }
 
     #[test]

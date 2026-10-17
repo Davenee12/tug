@@ -11,6 +11,19 @@ export const BACKUP_SOURCE = "iphone-backup";
 /** The free Microsoft Store extension that lets Windows (and so tug) open HEIC photos. */
 export const HEIF_HINT = "Install HEIF Image Extensions from the Microsoft Store to see iPhone photos here.";
 export const HEIF_STORE_URL = "https://apps.microsoft.com/detail/9pmmsr1cgpwg";
+/** The other free one: the pictures inside a HEIC file are HEVC, which needs its own extension. */
+export const HEVC_HINT =
+  "iPhone photos need two free extensions from the Microsoft Store: HEIF Image Extensions, which you have, and HEVC Video Extensions from Device Manufacturer. Install that one to see them here.";
+export const HEVC_STORE_URL = "https://apps.microsoft.com/detail/9n4wgh0z6vhq";
+
+export type PhotoHint = { kind: "heif" | "hevc"; text: string; url: string };
+
+/** The one-time hint above a conversation when iPhone photos can't be shown, or null. */
+export function photoHint(needs: { heif: boolean; hevc: boolean }): PhotoHint | null {
+  if (needs.heif) return { kind: "heif", text: HEIF_HINT, url: HEIF_STORE_URL };
+  if (needs.hevc) return { kind: "hevc", text: HEVC_HINT, url: HEVC_STORE_URL };
+  return null;
+}
 
 /** How to make a backup when there isn't one. Kept short; the Apple Devices app does the rest. */
 export const HOW_TO_BACK_UP = [

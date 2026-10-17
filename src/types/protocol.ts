@@ -248,6 +248,8 @@ export interface AttachmentPreview {
   dataUri: string | null;
   /** A HEIC photo Windows can't open without HEIF Image Extensions. */
   needsHeif: boolean;
+  /** A HEIC photo HEIF Image Extensions opened but can't show without HEVC Video Extensions. */
+  needsHevc: boolean;
 }
 
 /** One iPhone backup on this PC (`backup/discover.rs`). */

@@ -127,9 +127,10 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   what's new. Old history carries a quiet "From your iPhone backup, Oct 12" label; photos show in
   the conversation and open in Photos; edited and unsent texts say so; reactions are left out.
   Group chats stay on your iPhone (the wizard says how many texts): Messages in tug holds only
-  conversations you can reply to, and iOS gives Bluetooth no way to send to a group. **Remove imported history** takes it all out
-  again. iPhone photos (HEIC) need the free HEIF Image Extensions from the Microsoft Store to show
-  in tug; without it they open in Photos and tug says why, once.
+  conversations you can reply to, and iOS gives Bluetooth no way to send to a group. **Remove
+  imported history** takes it all out again. iPhone photos (HEIC) need two free extensions from the
+  Microsoft Store to show in tug, HEIF Image Extensions and HEVC Video Extensions from Device
+  Manufacturer; without them they open in Photos and tug says which one is missing, once.
 - When the iPhone may not have shared every text from while tug was away, the conversation says so.
 - Messages holds only texts tug can send and receive. Other chat apps (WhatsApp, Teams, Slack and
   so on) stay in the Feed, with no reply box or suggested replies (reply on your phone), and never

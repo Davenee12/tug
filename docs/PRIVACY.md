@@ -47,7 +47,7 @@ it goes nowhere unless you paste it somewhere yourself.
 | **Spotify** | Spotify (`accounts.spotify.com`, `api.spotify.com`, Spotify's image servers) | Your Spotify sign-in, and the requests you make (search, play, queue, like) | Only after you connect Spotify in Settings › Connectors |
 | **Open on the web** | The website, in your browser | Whatever your browser sends | Only when you click it |
 | **Automatic updates** | GitHub (`github.com` and GitHub's download servers, `objects.githubusercontent.com`) | An ordinary web request for tug's `latest.json`, then the installer if there's a new version; nothing about you, your phone or your data | In release builds set up for updates: shortly after tug starts and then every 6 hours, while **Download updates automatically** is on (Settings › About; on by default); otherwise only when you press **Check for updates**. Builds without an update key never check |
-| **Get it** (HEIF Image Extensions, when iPhone photos can't be shown) | The Microsoft Store page, in your browser | Whatever your browser sends | Only when you click it |
+| **Get it** (HEIF Image Extensions or HEVC Video Extensions, when iPhone photos can't be shown) | The Microsoft Store page, in your browser | Whatever your browser sends | Only when you click it |
 
 **Spotify** asks for permission to: read your private and collaborative playlists; read and
 control playback; read what's currently playing; and read and change your Liked Songs. The sign-in
