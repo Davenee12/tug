@@ -21,6 +21,17 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.18",
+    title: "Your whole message history, album art and a new game",
+    highlights: [
+      "Bring in your full message history, texts you sent and photos included, from a backup of your iPhone on this PC.",
+      "Album art and colours on the music card.",
+      "Messages now holds only texts you can reply to; other chat apps stay in the Feed.",
+      "Harbor Stack: a new stacking game, with your iPhone as a sideways controller.",
+      "Send files to your iPhone from the command line or AI tools, always with your OK.",
+    ],
+  },
+  {
     version: "0.5.17",
     title: "Faster texts, a shared clipboard and privacy while you share",
     highlights: [

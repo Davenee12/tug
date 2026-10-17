@@ -1,5 +1,91 @@
 # Changelog
 
+## v0.5.18 — 2026-10-17
+
+Your whole message history, album art, automatic updates, files to your iPhone from the command
+line and a new game. Merged as one release from #141, #142, #143, #144, #145 and #146, plus fixes
+from the release review.
+
+### New
+- **Bring in your full history** (Settings › Messages): from a backup of your iPhone on this PC
+  (made with the Apple Devices app or iTunes, encrypted or not), tug brings in your conversations
+  with each person, the texts you sent from the iPhone included, with their photos and videos.
+  It all stays on your PC, texts tug already had aren't added twice, and **Remove imported
+  history** takes it out again. (#146)
+- **Album art and colours on the music card,** looked up in Apple's music catalog by artist and
+  album when Spotify isn't the one playing. On by default; **Show album art** in Settings ›
+  General turns it off. (#142)
+- **Automatic updates:** once they're set up for tug's releases, new versions download quietly and
+  an **Update** button appears; tug restarts only when you click it (or quit). The portable app
+  points you to the download instead. Settings › About shows whether this copy can update. (#143)
+- **tug boat:** send files to your iPhone from the command line (`tug boat report.pdf`) or from AI
+  coding tools (`send_file_to_phone`). Every send stops at tug's card until you click **Send**,
+  waits for your phone to download it, and says honestly how it went. Off until you turn on
+  **Send files to your iPhone** in Settings › Developer tools. (#144)
+- **Harbor Stack:** a new stacking game. Drop containers onto a swaying boat, with a daily stack in
+  your real weather and a two-player stack-off. Your iPhone works as a sideways, gamepad-style
+  controller for both games. (#145)
+
+### Better
+- **Messages holds only texts you can reply to.** WhatsApp, Teams, Slack and other chat apps stay
+  in the Feed, one stack per app, with no reply box tug couldn't send from. (#141)
+- **Play a game** (the Play button, Ctrl+K or the taskbar) opens a picker for Tugboat Run and
+  Harbor Stack. (#145)
+- **From the release review:**
+  - Group chats aren't brought in from a backup, so Messages keeps only conversations tug can
+    reply to; the import says how many group texts stay on your iPhone. (#146)
+  - Album art asks Apple at most 20 times a minute, stops straight away when you switch it off,
+    and refuses images far bigger than a cover. (#142)
+  - iPhone photos: tug says which free Microsoft extension is missing, HEIF Image Extensions or
+    HEVC Video Extensions. (#146)
+  - The phone controller's log stays short during long games. (#145)
+
+### Fixed
+- **From the release review:**
+  - **Bring in your full history:** two different texts with the same words a few hours apart
+    (an "ok", say) are no longer merged, and a new text from your iPhone is never dropped as
+    "already in the backup". A Bluetooth copy tug does recognise is kept hidden behind the
+    backup's, and comes back if you remove imported history. (#146)
+  - Reading a big encrypted backup no longer loads its whole manifest into memory and Cancel
+    answers at once; Clear history no longer freezes the window; photos are copied whole or not at
+    all; a backup that stops being readable halfway (a drive unplugged) stops the import instead
+    of reporting photos as "not in the backup"; a damaged backup can't hold the unlock forever.
+    (#146)
+  - **tug boat** never touches files on another computer (network shares, mapped drives, or links
+    to them), so asking can't make Windows sign in to someone else's server; it never sends a
+    file's hidden data stream; piped input is read only from the command's own copy, which is
+    deleted even if the command is killed; turning sending off withdraws files still on offer,
+    `--no-wait` ones included; and the card shows a file's folder without hidden direction tricks.
+    (#144)
+  - **Album art** only ever comes from Apple's image servers, checked properly and without
+    following redirects, and an old lookup can't trigger a duplicate one. (#142)
+  - **Games:** the taskbar's Play a game during a game no longer throws the game away; two quick
+    taps on the phone's Drop are two drops; a press held up by a Wi-Fi blip never fires late.
+    (#145)
+  - **Updates:** if the installer can't start, tug comes back instead of staying hidden; an update
+    restart doesn't repeat a taskbar task; updates download only from tug's own GitHub releases;
+    and the release signing key is used only in a separate, owner-approved job that never runs
+    npm or cargo. (#143)
+  - Chat-app stacks in the Feed don't all show as new after upgrading. (#141)
+
+### Known limits
+- **Automatic updates need a one-time setup by the owner** (the signing key and GitHub's release
+  environment, see docs/RELEASING.md), and they can't reach v0.5.17 or older, which don't have the
+  updater: install v0.5.18 by hand once. A build without the key says so in Settings › About and
+  never checks.
+- Group chats aren't brought in from a backup.
+- Texts you send from the iPhone itself appear in tug only through **Bring in your full history**,
+  as of the backup's date; iOS doesn't share them over Bluetooth.
+- iPhone photos (HEIC) need Microsoft's free **HEIF Image Extensions** and **HEVC Video Extensions
+  from Device Manufacturer** to show in tug; without them they open in Photos.
+- **Going back to v0.5.17** after this version: v0.5.17 sees a newer database and leaves it as it
+  is. Texts brought in from a backup show there as ordinary texts without their photos, Remove
+  imported history isn't there, and its Clear history leaves the copied photos on disk. Coming
+  back to v0.5.18 or later puts it all right.
+- The installer isn't code-signed yet, so Windows SmartScreen still warns about it.
+- Nothing in this release was tried against a real iPhone or a real iPhone backup before release:
+  please report anything that looks wrong.
+
 ## v0.5.17 — 2026-10-17
 
 Texts that send right away, a shared clipboard, smart replies and privacy while you share your
