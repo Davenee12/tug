@@ -343,6 +343,8 @@ export const useTugStore = defineStore("tug", () => {
     return contactPhotos.value[key] ?? null;
   }
   const advertiseEnabled = ref(true);
+  /** Presses of the visibility switch, so only the newest may put it back. */
+  let advertisePresses = 0;
   /** Start with Windows. Mirrors the real autostart registry entry, not a stored setting. */
   const autostartEnabled = ref(false);
   const zoom = ref(1);
@@ -829,14 +831,20 @@ export const useTugStore = defineStore("tug", () => {
     void hasToastPermission().then((ok) => ok && showInfoToast(CODE_FILL_TOAST_ID, title, body));
   }
 
+  /** Presses of the type-the-code switch and shortcut picker, so only the newest may put them back. */
+  let codeHotkeyPresses = 0;
+
   /** Settings › Notifications: turn the shortcut on or off, or pick another; the backend says if it's taken. */
   async function setCodeHotkey(enabled: boolean, keys: string) {
+    const press = ++codeHotkeyPresses;
     const id = knownHotkey(keys);
     const before = { typeCodeHotkey: settings.value.typeCodeHotkey, typeCodeKeys: settings.value.typeCodeKeys };
     const beforeStatus = codeHotkey.value;
     settings.value = { ...settings.value, typeCodeHotkey: enabled, typeCodeKeys: id };
     // Still the newest choice? A later press owns the switch; an older failure mustn't undo it.
-    const stillMine = () => settings.value.typeCodeHotkey === enabled && settings.value.typeCodeKeys === id;
+    // By press, not by value: on → off → on shows this press's value again after two newer ones.
+    const stillMine = () =>
+      press === codeHotkeyPresses && settings.value.typeCodeHotkey === enabled && settings.value.typeCodeKeys === id;
     const revert = () => {
       if (stillMine()) settings.value = { ...settings.value, ...before };
     };
@@ -849,10 +857,12 @@ export const useTugStore = defineStore("tug", () => {
       (await attempt(() => api.setSetting("ui.typeCodeHotkey", JSON.stringify(enabled)).then(() => true))) === true &&
       (await attempt(() => api.setSetting("ui.typeCodeKeys", id).then(() => true))) === true;
     if (saved || !stillMine()) return;
-    // Not saved, so it wouldn't survive a restart: put the shortcut back as it was, quietly.
+    // Not saved, so it wouldn't survive a restart: put the shortcut back as it was, quietly. (No
+    // newer press happened during the saves: `stillMine` said so just above.)
     revert();
     const back = await api.setCodeHotkey(before.typeCodeHotkey, before.typeCodeKeys).catch(() => null);
-    codeHotkey.value = back ?? beforeStatus;
+    // A press during that call owns the shortcut and its status now.
+    if (press === codeHotkeyPresses) codeHotkey.value = back ?? beforeStatus;
   }
 
   /** Calls always ring through; everything else is rate-limited and the overflow summed up once. */
@@ -1698,14 +1708,22 @@ export const useTugStore = defineStore("tug", () => {
     return attempt(() => api.searchAll(query, 30));
   }
 
+  /** Presses per setting, so only the newest press on a switch may put it back. */
+  const settingPresses = new Map<keyof UiSettings, number>();
+
   /** Show the change at once; if it can't be saved, the switch goes back (the error says why). */
   async function setSetting<K extends keyof UiSettings>(key: K, value: UiSettings[K]): Promise<boolean> {
+    const press = (settingPresses.get(key) ?? 0) + 1;
+    settingPresses.set(key, press);
     const previous = settings.value[key];
     settings.value = { ...settings.value, [key]: value };
     const raw = typeof value === "string" ? value : JSON.stringify(value);
     const ok = (await attempt(() => api.setSetting(`ui.${key}`, raw).then(() => true))) === true;
-    // Only while it's still this change on screen: a newer one owns the switch now.
-    if (!ok && settings.value[key] === value) settings.value = { ...settings.value, [key]: previous };
+    // Only the newest press puts it back: comparing values isn't enough, because on → off → on
+    // shows the first press's value again, and its late failure would undo the third.
+    if (!ok && settingPresses.get(key) === press && settings.value[key] === value) {
+      settings.value = { ...settings.value, [key]: previous };
+    }
     return ok;
   }
 
@@ -2312,11 +2330,15 @@ export const useTugStore = defineStore("tug", () => {
       return ok === true;
     },
     async setAdvertising(enabled: boolean) {
+      const press = ++advertisePresses;
       const previous = advertiseEnabled.value;
       advertiseEnabled.value = enabled;
       const ok = await attempt(() => api.setAdvertising(enabled).then(() => true));
-      // Didn't take: the switch goes back rather than claim tug is (or isn't) visible.
-      if (ok !== true && advertiseEnabled.value === enabled) advertiseEnabled.value = previous;
+      // Didn't take: the switch goes back rather than claim tug is (or isn't) visible. Only for
+      // the newest press: an older one failing late mustn't undo what was pressed since.
+      if (ok !== true && press === advertisePresses && advertiseEnabled.value === enabled) {
+        advertiseEnabled.value = previous;
+      }
     },
     async setAutostart(enabled: boolean) {
       // Show the change at once, then confirm against what the registry actually holds, so a

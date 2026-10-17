@@ -84,6 +84,58 @@ describe("a switch whose save fails goes back", () => {
     expect(tug.settings.doNotDisturb).toBe(before);
   });
 
+  /** The first call answers when the test says; every later one saves at once. */
+  function firstSlow(name: string) {
+    const first = deferred();
+    let calls = 0;
+    impl[name] = () => (calls++ === 0 ? first.promise : Promise.resolve());
+    return first;
+  }
+
+  it("on → off → on: the first save failing last doesn't undo the third press", async () => {
+    const tug = useTugStore();
+    tug.settings = { ...tug.settings, doNotDisturb: false };
+    const first = firstSlow("setSetting");
+    const a = tug.setSetting("doNotDisturb", true);
+    await tug.setSetting("doNotDisturb", false);
+    await tug.setSetting("doNotDisturb", true);
+    first.reject("Couldn't save");
+    expect(await a).toBe(false);
+    expect(tug.settings.doNotDisturb).toBe(true);
+  });
+
+  it("setAdvertising: off → on → off with the first failing last keeps it off", async () => {
+    const tug = useTugStore();
+    expect(tug.advertiseEnabled).toBe(true);
+    const first = firstSlow("setAdvertising");
+    const a = tug.setAdvertising(false);
+    await tug.setAdvertising(true);
+    await tug.setAdvertising(false);
+    first.reject("Bluetooth is off");
+    await a;
+    expect(tug.advertiseEnabled).toBe(false);
+  });
+
+  it("the type-the-code switch: on → off → on with the first save failing last stays on", async () => {
+    const tug = useTugStore();
+    tug.settings = { ...tug.settings, typeCodeHotkey: false };
+    tug.codeHotkey = { state: "off", keys: tug.settings.typeCodeKeys };
+    impl.setCodeHotkey = async (...args: never[]) => ({ state: args[0] ? "on" : "off", keys: args[1] });
+    const first = firstSlow("setSetting");
+    const keys = tug.settings.typeCodeKeys;
+    const a = tug.setCodeHotkey(true, keys);
+    await flush();
+    await tug.setCodeHotkey(false, keys);
+    await tug.setCodeHotkey(true, keys);
+    first.reject("Couldn't save");
+    await a;
+    expect(tug.settings.typeCodeHotkey).toBe(true);
+    expect(tug.codeHotkey.state).toBe("on");
+    // The backend isn't put back to off behind the newest press.
+    const registrations = called.filter(([name]) => name === "setCodeHotkey").map(([, args]) => args[0]);
+    expect(registrations).toEqual([true, false, true]);
+  });
+
   it("setAdvertising reverts when it fails", async () => {
     const tug = useTugStore();
     impl.setAdvertising = () => Promise.reject("Bluetooth is off");
