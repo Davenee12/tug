@@ -128,12 +128,15 @@ const ACCESS_DENIED: i32 = 5;
 /// ERROR_DISK_FULL.
 const DISK_FULL: i32 = 112;
 
+/// An I/O failure as the page hears it. Access denied is `Io` here, never `Blocked`: Windows also
+/// says it when antivirus holds a file tug is renaming, or about tug's own incoming folder, and
+/// "Windows Security blocked tug" would send the person to the wrong setting. Only the folder
+/// check (`save_folder_checked`, through `Probe` and `choose_folder`) can say `Blocked`.
 fn io_err(context: &str, e: std::io::Error) -> ApiError {
     // The error kind only: paths here name the user's files.
     log::warn!("tugboat: {context} failed: {:?}", e.kind());
     match e.raw_os_error() {
         Some(DISK_FULL) => ApiError::NoSpace,
-        Some(ACCESS_DENIED) => ApiError::Blocked,
         _ => ApiError::Io,
     }
 }
@@ -1619,9 +1622,15 @@ mod tests {
     }
 
     #[test]
-    fn access_denied_is_its_own_error() {
-        let denied = std::io::Error::from_raw_os_error(ACCESS_DENIED);
-        assert_eq!(io_err("save a received file", denied), ApiError::Blocked);
+    fn only_the_folder_check_says_windows_security_blocked_it() {
+        // Access denied while saving (antivirus holding the file mid-rename) or in tug's incoming
+        // folder is a plain I/O failure, not "Windows Security blocked tug".
+        let denied = || std::io::Error::from_raw_os_error(ACCESS_DENIED);
+        assert_eq!(io_err("save a received file", denied()), ApiError::Io);
+        assert_eq!(io_err("create the incoming folder", denied()), ApiError::Io);
+        // The folder check is where it means Controlled folder access.
+        assert_eq!(Probe::from(Err(denied())), Probe::Denied);
+        assert_eq!(choose_folder(Probe::from(Err(denied())), None), Err(ApiError::Blocked));
         assert_eq!(ApiError::Blocked.code(), "blocked");
         let full = std::io::Error::from_raw_os_error(DISK_FULL);
         assert_eq!(io_err("write a chunk", full), ApiError::NoSpace);
