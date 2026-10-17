@@ -14,7 +14,8 @@
 //   http://localhost:1420/?latephone  fresh install, no iPhone discoverable yet: it appears a rescan
 //                                     later (the find step re-inquires every ~15 s)
 //   http://localhost:1420/?forgotten  the iPhone forgot this PC while Windows still holds the bond:
-//                                     the "Your iPhone has forgotten this PC" notice, with Remove
+//                                     "iPhone forgot this PC" in the sidebar and "Your iPhone forgot
+//                                     this PC" with Pair again (back to the find step)
 //   http://localhost:1420/?nudge      connected, notifications on, but texts/contacts off: the Feed's
 //                                     dismissible "Get more from tug" nudge
 //   http://localhost:1420/?whatsnew   the "What's new" card on launch, previewing the newest entry in
@@ -175,12 +176,14 @@ const status: DeviceStatus = noPhone
       connection: "disconnected",
       battery: null,
       services: { notifications: false, media: false, battery: false, messages: false },
-      lastError: "Your iPhone isn't accepting this PC's pairing",
+      lastError: "iPhone is out of range or not connected",
       lastErrorAt: now - min,
       pairingStale: true,
       awaitingPhoneAllow: false,
       awaitingUnlock: false,
       reconnecting: false,
+      // As seen on hardware: the link coming and going had already made it "away".
+      away: true,
       messagesError: null,
       contactsError: null,
       contactsShared: false,
@@ -1153,7 +1156,7 @@ mockIPC(
         return null;
       }
       case "forget_device":
-        // Start over / Remove: clear the device and drop back to the find step.
+        // Start over / Remove / Pair again: clear the device and drop back to the find step.
         status.device = null;
         status.connection = "noDevice";
         status.pairingStale = false;

@@ -8,7 +8,13 @@ import type { DeviceStatus } from "../types/protocol";
 type StatusInputs = Pick<
   DeviceStatus,
   "connection" | "awaitingUnlock" | "reconnecting" | "radio" | "away" | "notIphone" | "phoneRestarted"
->;
+> &
+  Partial<Pick<DeviceStatus, "pairingStale">>;
+
+/** The iPhone forgot this PC while Windows still holds the pairing: the one way forward is Pair again. */
+export const FORGOT_TITLE = "Your iPhone forgot this PC";
+export const FORGOT_BODY = "Pair again to reconnect.";
+export const FORGOT_ACTION = "Pair again";
 
 /** The phone restarted after working this run: iOS holds notifications until the first unlock. */
 export const PHONE_RESTARTED = "Your iPhone restarted. Unlock it and tug reconnects by itself.";
@@ -36,6 +42,9 @@ export function connectionLabel(s: StatusInputs): string {
   // Nothing connects with Bluetooth off, so never "Connecting…" then (a relink that was under way
   // when the radio went off would otherwise pulse until it came back).
   if (radioDown(s)) return s.radio === "off" ? "Bluetooth is off" : "No Bluetooth";
+  // The phone forgot this PC: no amount of waiting or reconnecting helps, so say so over "away"
+  // (the link comes and goes while the phone refuses it, which looked like out of range).
+  if (s.pairingStale) return "iPhone forgot this PC";
   const reconnecting = showsReconnecting(s);
   if (s.connection === "connecting") return reconnecting ? "Reconnecting…" : "Connecting…";
   // Not an iPhone at all: unlocking would never help.
@@ -49,7 +58,7 @@ export function connectionLabel(s: StatusInputs): string {
 
 /** Whether tug is actively (re)connecting, so the status dot pulses rather than sitting idle. */
 export function connectionBusy(s: StatusInputs): boolean {
-  if (radioDown(s)) return false;
+  if (radioDown(s) || s.pairingStale) return false;
   if (s.connection === "connecting") return true;
   return s.connection === "disconnected" && showsReconnecting(s) && !s.awaitingUnlock;
 }
@@ -65,6 +74,7 @@ export function connectionSentence(s: StatusInputs & Pick<DeviceStatus, "device"
   if (radioDown(s)) {
     return s.radio === "off" ? "Bluetooth is off in Windows. Turn it on to reach your iPhone." : "This PC has no usable Bluetooth adapter.";
   }
+  if (s.pairingStale) return `${FORGOT_TITLE}. ${FORGOT_BODY}`;
   const reconnecting = "Reconnecting to your iPhone. No need to do anything.";
   if (s.connection === "connecting") return showsReconnecting(s) ? reconnecting : "Connecting to your iPhone…";
   // A stale awaitingUnlock flag must never claim a forgotten phone is "connected" (handled above).

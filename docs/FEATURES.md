@@ -20,7 +20,8 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - Once notifications work, a dismissible "Get more from tug" banner on the Feed points out any
   optional switch that's still off.
 - tug explains pairing problems in plain words: more than one iPhone paired, the iPhone has
-  forgotten this PC, or a leftover pairing from before (with Use or Remove).
+  forgotten this PC (with **Pair again**, which removes the dead pairing and starts pairing fresh),
+  or a leftover pairing from before (with Use or Remove).
 - **Start over** (Forget this iPhone) removes both of Windows' pairings with the phone and clears
   saved recent calls; your history stays.
 - It tells you when Bluetooth is off (with a button to turn it on), when the PC has no Bluetooth,

@@ -252,6 +252,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `store.rs`, `messages.rs` | SQLite + FTS5 history, settings, migrations; conversations, contacts, name learning, send states |
 | `link_policy.rs` | What a failed connect means, the sticky "away" state, waiting for link-up, keep-or-relink after wake, when to ask for a re-pair |
 | `wedge.rs` | An adapter that's connected but not answering: relink with backoff and a cap |
+| `forgotten.rs` | The iPhone forgot this PC while Windows kept the bond: a link that keeps coming up and dropping at once, or connects refused for want of a pairing, on a phone that has worked here before (never while it's locked, and not after a wake, radio change or adapter stall) |
 | `wake.rs` | A real sleep vs a stalled thread, from two clocks and the resume flag |
 | `map/contacts_watch.rs` | When to check the phonebook (every 10 min, plus triggers; every 10 s while the switches are on screen), whether a check must pull the names (PBAP 1.2 version counters), when an empty phonebook means Sync Contacts is off |
 | `pin_confirm.rs` | The PIN prompt waiting on the user, by id, so one pairing's leftovers can't close the next's |
@@ -336,7 +337,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?setup` | First run: the Connect panel, scripted end to end (add `&btoff` to start with Bluetooth off) |
 | `/?leftover` | An old Windows pairing offered with Use / Remove |
 | `/?latephone` | The iPhone appears after a rescan |
-| `/?forgotten` | "Your iPhone has forgotten this PC" |
+| `/?forgotten` | "Your iPhone forgot this PC" with Pair again |
 | `/?justpaired`, `/?contactsoff` (`&flip`), `/?textsoff`, `/?textsmissing`, `/?radiooff` | Setup and switch states |
 | `/?nudge` | Texts and contacts off: the Feed's "Get more from tug" nudge |
 | `/?lasterror`, `/?textsbroken`, `/?livetexts` | Connection health states |
@@ -404,7 +405,8 @@ it where it isn't a secure context, as on a phone).
 - After the iPhone restarts, nothing connects until it's unlocked once.
 - The iPhone only shows Show Notifications / Sync Contacts for the PC after tug has asked for them.
   An empty phonebook (rather than a refusal) usually means Sync Contacts is off.
-- A PC whose iPhone forgot it keeps stale bonds that make the phone connect and drop; remove both
-  Windows entries before re-pairing.
+- A PC whose iPhone forgot it keeps stale bonds that make the phone connect and drop (about every
+  2 s, with no stale-bond error); remove both Windows entries before re-pairing. tug spots this
+  (`forgotten.rs`) and offers Pair again, which does exactly that.
 - After registering for notifications, an open MAP session's inbox listing can go stale if the MNS
   link dies; reopening the session fixes it.

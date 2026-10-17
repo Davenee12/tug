@@ -338,6 +338,8 @@ export const useTugStore = defineStore("tug", () => {
   const showConnect = ref(false);
   /** "Skip for now" on the panel's switches: let it yield with optional switches still off. */
   const connectSkipped = ref(false);
+  /** Pair again (the iPhone forgot this PC) is under way: its buttons wait, so one press is one removal. */
+  const pairingAgain = ref(false);
   watch(
     [statusKnown, status, connectSkipped],
     () => {
@@ -2070,6 +2072,7 @@ export const useTugStore = defineStore("tug", () => {
     setZoom,
     showConnect,
     connectSkipped,
+    pairingAgain,
     // What's new
     appVersion,
     whatsNewOpen,
@@ -2168,6 +2171,23 @@ export const useTugStore = defineStore("tug", () => {
       return ok === true;
     },
     forget: () => attempt(api.forgetDevice),
+    /**
+     * The iPhone forgot this PC: remove the dead Windows pairing (the bonds tug made, the same as
+     * Start over) and go back to the Connect panel to pair fresh. One press, one removal: presses
+     * while it runs are ignored.
+     */
+    async pairAgain() {
+      if (pairingAgain.value) return;
+      pairingAgain.value = true;
+      try {
+        await attempt(api.forgetDevice);
+        // Show the pairing steps: Settings › iPhone has them; anywhere else in Settings would hide
+        // the Connect panel that now stands in for the Feed.
+        if (view.value === "settings" && settingsSection.value !== "iphone") closeSettings();
+      } finally {
+        pairingAgain.value = false;
+      }
+    },
     /** Pair the iPhone's Classic (texts) side from inside tug; true on success. */
     async pairTexts(): Promise<boolean> {
       const ok = await attempt(() => api.pairTexts().then(() => true));

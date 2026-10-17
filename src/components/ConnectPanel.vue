@@ -9,6 +9,7 @@ import { api } from "../lib/ipc";
 import { phoneModel } from "../lib/phoneModel";
 import PhoneArt from "./PhoneArt.vue";
 import PhoneSwitches from "./PhoneSwitches.vue";
+import ForgottenNotice from "./ForgottenNotice.vue";
 import type { DiscoveredDevice } from "../types/protocol";
 
 // One "Connect your iPhone" panel, live from top to bottom, shown in two places: where the Feed
@@ -229,11 +230,15 @@ const model = computed(() => phoneModel(s.value.device?.model));
         </button>
       </div>
 
-      <!-- The phone looks to have forgotten this PC while Windows still holds the bond: remove it
-           here (unpairs both bonds and scans fresh) rather than leaving them unable to reconnect. -->
-      <div v-if="bond" class="flex flex-col gap-2 rounded-xl border border-error/30 bg-canvas px-4 py-3">
+      <!-- The iPhone forgot this PC while Windows still holds the bond: Pair again removes it and
+           brings this panel back to finding the phone. -->
+      <ForgottenNotice v-if="bond === 'forgotten'" />
+
+      <!-- It might have (the phone keeps refusing, which some switches also cause): remove it here
+           (unpairs both bonds and scans fresh) rather than leaving them unable to reconnect. -->
+      <div v-else-if="bond" class="flex flex-col gap-2 rounded-xl border border-error/30 bg-canvas px-4 py-3">
         <p class="text-[13px] text-body-strong">
-          Your iPhone has forgotten this PC — remove it and pair again.
+          Your iPhone may have forgotten this PC — remove it and pair again.
         </p>
         <div class="flex gap-2">
           <button class="btn-primary btn-sm" :disabled="resetting" @click="startOver">

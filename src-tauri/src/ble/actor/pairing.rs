@@ -381,6 +381,9 @@ impl Actor {
         // A new phone: no session yet this run, and its grace period starts now.
         self.had_session = false;
         self.adopted_at = Some(Instant::now());
+        // Just paired: not yet a bond that has worked here (its own "pair again" rule covers it).
+        let change = self.forgotten.replace(false);
+        self.note_forgotten(change, "a phone was paired");
         self.stop_discovery();
         self.shared.update_status(|s| {
             s.device = Some(PairedDevice { id: le_id, name, model });
@@ -405,6 +408,8 @@ impl Actor {
         self.drop_link();
         self.away_since = None;
         self.last_poke = None;
+        let change = self.forgotten.replace(false);
+        self.note_forgotten(change, "the pairing was removed to pair again");
         self.shared.update_status(|s| s.away = false);
         self.reset_inventory();
         let store = &self.shared.store;

@@ -15,6 +15,7 @@ mod device_info;
 mod device_kind;
 mod devtools;
 mod diagnostics;
+mod forgotten;
 mod frontend_log;
 pub mod hfp;
 mod link_policy;
