@@ -281,14 +281,17 @@ impl Store {
         conn.query_row(&format!("{SELECT} WHERE m.id = ?1"), [id], map_row)
     }
 
-    /// Outgoing messages not yet confirmed sent (still `pending` or `accepted`) and sent within
-    /// `CONFIRM_WINDOW_MS` of `now`, for matching a MAP `Sending{Success,Failure}` event to the send
-    /// it reports (see `map::mns::choose_outgoing`). Returns `(id, handle, received_at)`.
+    /// Outgoing messages the phone has been handed but hasn't confirmed (`accepted`, or
+    /// `unconfirmed`) and sent within `CONFIRM_WINDOW_MS` of `now`, for matching a MAP
+    /// `Sending{Success,Failure}` event to the send it reports (see `map::mns::choose_outgoing`).
+    /// Never a `pending` row: that text hasn't been pushed yet, so no report can be about it, and
+    /// settling it would mark it Sent (or failed) without it ever being sent. Returns
+    /// `(id, handle, received_at)`.
     pub fn outgoing_unconfirmed(&self, source: &str, now: i64) -> Result<Vec<(i64, Option<String>, i64)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, handle, received_at FROM messages
-             WHERE source = ?1 AND direction = 'out' AND status IN ('pending', 'accepted', 'unconfirmed')
+             WHERE source = ?1 AND direction = 'out' AND status IN ('accepted', 'unconfirmed')
                AND received_at > ?2",
         )?;
         let rows = stmt.query_map(params![source, now - CONFIRM_WINDOW_MS], |r| {
@@ -1111,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn outgoing_unconfirmed_lists_pending_and_accepted_only() {
+    fn outgoing_unconfirmed_lists_handed_over_sends_only() {
         let s = Store::in_memory().unwrap();
         let pending = s
             .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "a", 1_000)
@@ -1130,11 +1133,18 @@ mod tests {
             .unwrap();
         s.set_outgoing_status(failed.id, Status::Failed, None).unwrap();
 
+        let maybe = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "e", 4_500)
+            .unwrap();
+        s.set_outgoing_status(maybe.id, Status::Unconfirmed, None).unwrap();
+
         let mut got = s.outgoing_unconfirmed(SOURCE_IPHONE_MAP, 5_000).unwrap();
         got.sort_by_key(|(id, ..)| *id);
+        // The pending one hasn't been pushed yet, so no send report can be about it.
+        assert!(got.iter().all(|(id, ..)| *id != pending.id));
         assert_eq!(
             got,
-            vec![(pending.id, None, 1_000), (accepted.id, Some("A1".into()), 2_000)]
+            vec![(accepted.id, Some("A1".into()), 2_000), (maybe.id, None, 4_500)]
         );
     }
 
@@ -1149,8 +1159,9 @@ mod tests {
         let recent = s
             .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "new", now - 5_000)
             .unwrap();
+        s.set_outgoing_status(recent.id, Status::Accepted, Some("A2")).unwrap();
         let got = s.outgoing_unconfirmed(SOURCE_IPHONE_MAP, now).unwrap();
-        assert_eq!(got, vec![(recent.id, None, now - 5_000)]);
+        assert_eq!(got, vec![(recent.id, Some("A2".into()), now - 5_000)]);
     }
 
     #[test]

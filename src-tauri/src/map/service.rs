@@ -13,8 +13,10 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
+use crate::map::mns;
 use crate::messages::{Status, StoredMessage, SOURCE_IPHONE_MAP};
 use crate::state::{events, Shared};
+use crate::store::Store;
 
 pub enum MapCommand {
     Refresh,
@@ -144,6 +146,31 @@ async fn deliver_or_fail(shared: &Shared, map: &MapHandle, id: i64) -> Result<St
     }
 }
 
+/// Settle the outgoing message a MAP `Sending{Success,Failure}` report is about. Candidates are
+/// only sends the phone has already been handed (never a pending one still waiting to be pushed),
+/// and a report whose handle matches none of them settles a send only when exactly one is waiting
+/// (`mns::choose_outgoing`). `None` when the report can't be placed; nothing is changed then.
+pub(crate) fn settle_send_report(
+    store: &Store,
+    handle: Option<&str>,
+    status: Status,
+    now: i64,
+) -> crate::store::Result<Option<StoredMessage>> {
+    let outs: Vec<mns::Outgoing> = store
+        .outgoing_unconfirmed(SOURCE_IPHONE_MAP, now)?
+        .into_iter()
+        .map(|(id, handle, received_at)| mns::Outgoing {
+            id,
+            handle,
+            received_at,
+        })
+        .collect();
+    let Some(id) = mns::choose_outgoing(handle, &outs) else {
+        return Ok(None);
+    };
+    store.set_outgoing_status(id, status, None).map(Some)
+}
+
 pub fn start(shared: Arc<Shared>) -> MapHandle {
     // Nothing can be sending yet (the handle doesn't exist until this returns), so a send still
     // pending was cut off by a crash or quit. Done here, before the worker thread starts, rather
@@ -203,7 +230,7 @@ mod worker {
     use crate::map::contacts_watch::{check_now_at, ContactsWatch, Pull, Transition};
     use crate::map::health::{Attempt, Health, LiveTexts, TextsPairing};
     use crate::map::listing;
-    use crate::map::mns::{self, Outgoing};
+    use crate::map::mns;
     use crate::map::obex::RSP_NOT_FOUND;
     use crate::map::pick::choose_device;
     use crate::map::session::{
@@ -419,6 +446,11 @@ mod worker {
         let mut next = Instant::now() + FIRST_SYNC_DELAY;
         loop {
             tokio::select! {
+                // Live-text events first: a send report is about a push that already happened, so
+                // it's settled before a queued send starts (which would add a second candidate).
+                biased;
+                // The phone pushed a live-texts event (or just connected to the MNS).
+                Some(msg) = events_rx.recv() => w.on_mns(msg).await,
                 cmd = commands.recv() => match cmd {
                     None => break,
                     Some(MapCommand::Refresh) => w.refresh().await,
@@ -449,8 +481,6 @@ mod worker {
                         let _ = reply.send(w.inventory_folders().await);
                     }
                 },
-                // The phone pushed a live-texts event (or just connected to the MNS).
-                Some(msg) = events_rx.recv() => w.on_mns(msg).await,
                 _ = tokio::time::sleep_until(next) => w.refresh().await,
             }
             if Instant::now() >= next {
@@ -765,29 +795,14 @@ mod worker {
             }
         }
 
-        /// Update the outgoing message a Sending{Success,Failure} report is about. The report's
-        /// handle may not equal the one PushMessage returned (and it carries no recipient), so the
-        /// match is handle-first then newest-unconfirmed; see `mns::choose_outgoing`.
+        /// Update the outgoing message a Sending{Success,Failure} report is about; see
+        /// [`super::settle_send_report`].
         async fn confirm_send(&mut self, handle: Option<&str>, status: Status) {
-            let store = self.shared.store.clone();
-            let candidates = match store.outgoing_unconfirmed(SOURCE_IPHONE_MAP, now_ms()) {
-                Ok(c) => c,
-                Err(e) => return log::warn!("reading unconfirmed sends failed: {e}"),
-            };
-            let outs: Vec<Outgoing> = candidates
-                .into_iter()
-                .map(|(id, handle, received_at)| Outgoing {
-                    id,
-                    handle,
-                    received_at,
-                })
-                .collect();
-            let Some(id) = mns::choose_outgoing(handle, &outs) else {
-                log::debug!("live texts: a send report ({status:?}) matched no pending message");
-                return;
-            };
-            match store.set_outgoing_status(id, status, None) {
-                Ok(m) => {
+            match super::settle_send_report(&self.shared.store, handle, status, now_ms()) {
+                Ok(None) => {
+                    log::debug!("live texts: a send report ({status:?}) matched no single sent message");
+                }
+                Ok(Some(m)) => {
                     log::info!(
                         "live texts: a sent message is now {}",
                         if status == Status::Sent {
@@ -1732,5 +1747,80 @@ mod worker {
                 "clock moved back (last-sync in the future): due"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod settle_tests {
+    use super::settle_send_report;
+    use crate::messages::{Status, SOURCE_IPHONE_MAP};
+    use crate::store::Store;
+
+    const NOW: i64 = 10_000_000;
+
+    #[test]
+    fn a_stray_report_never_marks_a_queued_text_sent_without_sending_it() {
+        // A text is saved and queued (pending) while the worker is busy; a send report that
+        // isn't about it arrives first. It used to be taken as the newest send and marked Sent,
+        // and the worker then skipped it because it was no longer pending: never sent at all.
+        let s = Store::in_memory().unwrap();
+        let queued = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "on my way", NOW - 1_000)
+            .unwrap();
+        assert_eq!(settle_send_report(&s, Some("ZZ"), Status::Sent, NOW).unwrap(), None);
+        assert_eq!(settle_send_report(&s, None, Status::Sent, NOW).unwrap(), None);
+        assert_eq!(s.outgoing(queued.id).unwrap().unwrap().status, Status::Pending);
+
+        // With an earlier send waiting for its report, the report settles that one, not the queued.
+        let earlier = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "hello", NOW - 5_000)
+            .unwrap();
+        s.set_outgoing_status(earlier.id, Status::Accepted, Some("A1")).unwrap();
+        let settled = settle_send_report(&s, Some("ZZ"), Status::Sent, NOW).unwrap().unwrap();
+        assert_eq!(settled.id, earlier.id);
+        assert_eq!(settled.status, Status::Sent);
+        assert_eq!(s.outgoing(queued.id).unwrap().unwrap().status, Status::Pending);
+    }
+
+    #[test]
+    fn a_failure_report_never_lands_on_the_wrong_text() {
+        // Two texts are with the phone; a failure report comes back whose handle matches neither.
+        // It used to mark the newer one failed even though it had sent, and Retry then sent that
+        // text a second time.
+        let s = Store::in_memory().unwrap();
+        let first = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "first", NOW - 6_000)
+            .unwrap();
+        s.set_outgoing_status(first.id, Status::Accepted, Some("HA")).unwrap();
+        let second = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550111", "second", NOW - 3_000)
+            .unwrap();
+        s.set_outgoing_status(second.id, Status::Accepted, Some("HB")).unwrap();
+
+        assert_eq!(settle_send_report(&s, Some("ZZ"), Status::Failed, NOW).unwrap(), None);
+        for id in [first.id, second.id] {
+            assert_eq!(s.outgoing(id).unwrap().unwrap().status, Status::Accepted);
+            assert!(s.retry_outgoing(id, NOW).unwrap().is_none(), "nothing to retry");
+        }
+
+        // A report with a matching handle still settles exactly its own text.
+        let failed = settle_send_report(&s, Some("HA"), Status::Failed, NOW)
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed.id, first.id);
+        assert_eq!(failed.status, Status::Failed);
+        assert_eq!(s.outgoing(second.id).unwrap().unwrap().status, Status::Accepted);
+    }
+
+    #[test]
+    fn an_unmatched_report_settles_the_only_text_waiting() {
+        // iOS's report handle can differ from the one PushMessage returned.
+        let s = Store::in_memory().unwrap();
+        let m = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "hi", NOW - 2_000)
+            .unwrap();
+        s.set_outgoing_status(m.id, Status::Unconfirmed, None).unwrap();
+        let settled = settle_send_report(&s, Some("ZZ"), Status::Sent, NOW).unwrap().unwrap();
+        assert_eq!((settled.id, settled.status), (m.id, Status::Sent));
     }
 }
