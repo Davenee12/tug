@@ -180,10 +180,112 @@ pub fn blocked(app: &AppHandle) -> bool {
     }
 }
 
+/// Pop-ups this run asked for while the last run's leftovers were still being withdrawn at
+/// startup. Withdrawing removes the whole notification group, so a pop-up shown before it finished
+/// would be taken back with them; these wait instead, and show the moment it's done (or its time
+/// limit passes). Open unless startup closed it, so nothing else ever waits on it. Pure.
+#[derive(Debug, Default)]
+struct StartupGate {
+    closed: bool,
+    held: Vec<ToastSpec>,
+}
+
+impl StartupGate {
+    const fn new() -> Self {
+        Self {
+            closed: false,
+            held: Vec::new(),
+        }
+    }
+
+    /// Hold pop-ups from now until `open`.
+    fn close(&mut self) {
+        self.closed = true;
+    }
+
+    /// The spec to show now, or `None` when it's held (a newer pop-up for the same notification
+    /// replaces a held one, as it would on screen).
+    fn admit(&mut self, spec: ToastSpec) -> Option<ToastSpec> {
+        if !self.closed {
+            return Some(spec);
+        }
+        self.held.retain(|s| s.id != spec.id);
+        self.held.push(spec);
+        None
+    }
+
+    /// The phone cleared this notification (or the history was cleared) before it showed.
+    fn forget(&mut self, id: Option<i64>) {
+        match id {
+            Some(id) => self.held.retain(|s| s.id != id),
+            None => self.held.clear(),
+        }
+    }
+
+    /// The leftovers are gone: show what waited, oldest first, and stop holding.
+    fn open(&mut self) -> Vec<ToastSpec> {
+        self.closed = false;
+        std::mem::take(&mut self.held)
+    }
+}
+
+static GATE: Mutex<StartupGate> = Mutex::new(StartupGate::new());
+
+fn gate() -> std::sync::MutexGuard<'static, StartupGate> {
+    GATE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// How long this run's pop-ups wait for the last run's to be withdrawn. Normally that takes a few
+/// milliseconds; a Windows call that hangs mustn't hold tug's pop-ups back for long.
+pub const STALE_WITHDRAW_LIMIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// At startup: withdraw the pop-ups the last run left (nothing hears their presses while tug is
+/// closed; a normal Quit takes them back, a Windows shutdown leaves it to now). Call before
+/// anything that can pop up starts. Returns at once: the withdrawal runs on its own thread, and
+/// this run's pop-ups are held until it's done or `STALE_WITHDRAW_LIMIT` passes.
+pub fn withdraw_stale_at_startup(app: &AppHandle) {
+    gate().close();
+    let handle = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("tug-toast-tidy".into())
+        .spawn(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let for_helper = handle.clone();
+            let helper = std::thread::Builder::new()
+                .name("tug-toast-withdraw".into())
+                .spawn(move || {
+                    remove_groups(&for_helper, &[GROUP_NOTIFICATIONS, GROUP_OWN]);
+                    let _ = tx.send(());
+                });
+            if helper.is_ok() && rx.recv_timeout(STALE_WITHDRAW_LIMIT).is_err() {
+                log::warn!(
+                    "withdrawing the last run's pop-ups took over {}s; showing this run's anyway",
+                    STALE_WITHDRAW_LIMIT.as_secs()
+                );
+            }
+            let held = gate().open();
+            for spec in held {
+                show_now(&handle, spec);
+            }
+        });
+    if spawned.is_err() {
+        log::warn!("couldn't start withdrawing the last run's pop-ups");
+        gate().open();
+    }
+}
+
 /// Pop up one phone notification with the actions its spec allows. While the screen is shared
 /// or presented (and the setting is on), it says only which app it's from (`share_privacy`).
-/// Decided here, for every pop-up, so no path from the window can skip it.
+/// Decided here, for every pop-up, so no path from the window can skip it. Held for a moment at
+/// startup while the last run's pop-ups are withdrawn (`withdraw_stale_at_startup`).
 pub fn show(app: &AppHandle, spec: ToastSpec) {
+    let admitted = gate().admit(spec);
+    if let Some(spec) = admitted {
+        show_now(app, spec);
+    }
+}
+
+fn show_now(app: &AppHandle, spec: ToastSpec) {
     let spec = if spec.kind != xml::ToastKind::Info && crate::share_privacy::previews_hidden_now() {
         crate::share_privacy::redact(&spec)
     } else {
@@ -217,6 +319,7 @@ fn plain(app: &AppHandle, title: &str, body: &str) {
 
 /// The phone cleared this notification: take its pop-up back, so no stale buttons linger.
 pub fn withdraw(app: &AppHandle, id: i64) {
+    gate().forget(Some(id));
     #[cfg(windows)]
     if let Err(e) = native::remove(&aumid(app), &id.to_string(), GROUP_NOTIFICATIONS) {
         log::debug!("pop-up {id} not withdrawn: {}", e.message());
@@ -227,8 +330,9 @@ pub fn withdraw(app: &AppHandle, id: i64) {
 
 /// tug is quitting: once it's gone nothing would hear a press (and a typed reply would be
 /// lost), so take its notification pop-ups (and its own, which have buttons too) out of Action
-/// Center.
+/// Center. (Also Clear history.) Pop-ups still held at startup are dropped too.
 pub fn withdraw_all(app: &AppHandle) {
+    gate().forget(None);
     remove_groups(app, &[GROUP_NOTIFICATIONS, GROUP_OWN]);
 }
 
@@ -245,6 +349,7 @@ pub fn withdraw_while_hiding(app: &AppHandle) {
     log::info!("share privacy: took back pop-ups already shown");
 }
 
+/// Take these pop-up groups out of Action Center (not pop-ups still held at startup).
 fn remove_groups(app: &AppHandle, groups: &[&str]) {
     #[cfg(windows)]
     {
@@ -540,6 +645,61 @@ mod reply_tests {
             super::first_reply(9_002, "on my way"),
             "another notification is separate"
         );
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::{StartupGate, ToastSpec};
+
+    fn spec(id: i64, title: &str) -> ToastSpec {
+        ToastSpec {
+            id,
+            title: title.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn open_unless_startup_closed_it() {
+        let mut g = StartupGate::default();
+        assert_eq!(g.admit(spec(1, "a")).map(|s| s.id), Some(1));
+        assert!(g.open().is_empty());
+    }
+
+    #[test]
+    fn this_runs_first_pop_ups_wait_for_the_withdrawal_then_show() {
+        // Seen in review: the last run's pop-ups were withdrawn on a thread that could finish
+        // after this run's first pop-ups, taking them back too. They wait instead.
+        let mut g = StartupGate::default();
+        g.close();
+        assert!(g.admit(spec(1, "first")).is_none());
+        assert!(g.admit(spec(2, "second")).is_none());
+        // A newer pop-up for the same notification replaces the held one.
+        assert!(g.admit(spec(1, "first, updated")).is_none());
+        let shown: Vec<_> = g.open().into_iter().map(|s| (s.id, s.title)).collect();
+        assert_eq!(
+            shown,
+            vec![(2, "second".to_string()), (1, "first, updated".to_string())]
+        );
+        // Once open, pop-ups show at once.
+        assert_eq!(g.admit(spec(3, "later")).map(|s| s.id), Some(3));
+        assert!(g.open().is_empty());
+    }
+
+    #[test]
+    fn a_notification_cleared_while_held_never_shows() {
+        let mut g = StartupGate::default();
+        g.close();
+        g.admit(spec(1, "a"));
+        g.admit(spec(2, "b"));
+        g.forget(Some(1));
+        assert_eq!(g.open().into_iter().map(|s| s.id).collect::<Vec<_>>(), vec![2]);
+        // Clear history (or quitting) drops everything held.
+        g.close();
+        g.admit(spec(3, "c"));
+        g.forget(None);
+        assert!(g.open().is_empty());
     }
 }
 

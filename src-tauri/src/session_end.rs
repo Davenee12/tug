@@ -19,7 +19,7 @@ pub const AUDIO_QUIT_WAIT: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExitPlan {
     /// Take tug's pop-ups out of Action Center now (a synchronous WinRT call). When the session
-    /// ends they go at the next start instead (`toast::withdraw_all` runs then too).
+    /// ends they go at the next start instead (`toast::withdraw_stale_at_startup`).
     pub withdraw_toasts: bool,
     /// How long to wait for Windows to close PC audio. The close is always started.
     pub audio_wait: Duration,

@@ -148,11 +148,10 @@ pub fn run() {
         .setup(move |app| {
             // Pop-ups left by the last run can't be answered (nothing hears a press while tug is
             // closed). A normal Quit withdraws them; when Windows shut down it was left to now.
-            // Off the main thread, and before this run shows any of its own.
-            {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || toast::withdraw_all(&handle));
-            }
+            // Off the main thread and time-limited; this run's own pop-ups wait for it (at most
+            // `toast::STALE_WITHDRAW_LIMIT`) so it can't take them back. Before the BLE actor and
+            // the MAP worker start, so nothing can pop up ahead of the gate.
+            toast::withdraw_stale_at_startup(app.handle());
             // Running elevated: move an old all-users Start with Windows entry back to this user.
             std::thread::spawn(autostart::tidy_at_startup);
             let dir = app.path().app_data_dir()?;

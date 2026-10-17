@@ -94,7 +94,8 @@ map is `EventPayloads` in `src/lib/ipc.ts`.
 plugins (single-instance first, so a second launch just shows the window or carries out its
 `--action`; log with rotation; notification; dialog) → withdraw the last run's pop-ups and, running
 elevated, move an old all-users Start with Windows entry back to this user if tug lives in that
-account's own Local AppData (both off the main thread;
+account's own Local AppData (both off the main thread; this run's own pop-ups wait for the
+withdrawal, at most 3 s, so it can't take them back;
 `autostart.rs` owns the HKCU Run entry, quoted, with `--minimized`) → create the data folder →
 open the SQLite store and migrate → queue this launch's `--action`, if any, and build the taskbar
 jump list (off-thread) → `Shared` → start the BLE actor → start the MAP worker → media
