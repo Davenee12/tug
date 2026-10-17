@@ -114,6 +114,9 @@ impl Keybag {
         if bag.salt.is_empty() || bag.iterations == 0 || bag.class_keys.is_empty() {
             return Err(KeybagError::Malformed);
         }
+        if bag.iterations > MAX_ITERATIONS {
+            return Err(KeybagError::Malformed);
+        }
         if bag.dp_salt.is_some() != bag.dp_iterations.is_some() {
             return Err(KeybagError::Malformed);
         }
@@ -187,6 +190,11 @@ pub fn unwrap_key(kek: &[u8; 32], wrapped: &[u8]) -> Option<Zeroizing<Vec<u8>>> 
     kw.unwrap_key(wrapped, &mut out).ok()?;
     Some(out)
 }
+
+/// The most rounds the SHA-1 step (`ITER`) may ask for. That step can't be cancelled, and iOS uses
+/// 10,000 (the slow, cancellable SHA-256 step carries the millions), so a bag asking for more than
+/// this is refused rather than holding tug for hours.
+const MAX_ITERATIONS: u32 = 10_000_000;
 
 /// The rounds between two progress ticks: often enough for a smooth bar, rare enough to cost
 /// nothing (a few hundred ticks for iOS's ten million rounds).
@@ -356,6 +364,26 @@ pub(crate) mod tests {
         let mut want = [0u8; 32];
         pbkdf2::pbkdf2_hmac::<sha1::Sha1>(b"pw", &bag.salt, bag.iterations, &mut want);
         assert_eq!(*bag.derive_key("pw", |_| true).unwrap(), want);
+    }
+
+    #[test]
+    fn a_keybag_asking_for_endless_sha1_rounds_is_refused() {
+        let (blob, _) = make_keybag("pw", &[(3, [3; 32])]);
+        let with_iter = |n: u32| {
+            let at = blob.windows(8).position(|w| w == b"ITER\0\0\0\x04").unwrap() + 8;
+            let mut b = blob.clone();
+            b[at..at + 4].copy_from_slice(&n.to_be_bytes());
+            b
+        };
+        assert_eq!(
+            Keybag::parse(&with_iter(MAX_ITERATIONS)).unwrap().iterations,
+            MAX_ITERATIONS
+        );
+        assert_eq!(
+            Keybag::parse(&with_iter(MAX_ITERATIONS + 1)),
+            Err(KeybagError::Malformed)
+        );
+        assert_eq!(Keybag::parse(&with_iter(u32::MAX)), Err(KeybagError::Malformed));
     }
 
     #[test]
