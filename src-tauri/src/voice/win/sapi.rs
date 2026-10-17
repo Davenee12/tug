@@ -101,15 +101,12 @@ fn recognizer_tokens() -> windows::core::Result<Vec<(ISpObjectToken, String, Str
     }
 }
 
-/// The installed speech languages: `(description, language attribute)`.
-pub fn languages() -> Vec<(String, String)> {
-    match recognizer_tokens() {
-        Ok(tokens) => tokens.into_iter().map(|(_, d, l)| (d, l)).collect(),
-        Err(e) => {
-            log::warn!("voice typing: couldn't list speech recognizers: {e}");
-            Vec::new()
-        }
-    }
+/// The installed speech languages: `(description, language attribute)`, or what SAPI said when it
+/// couldn't list them.
+pub fn languages() -> Result<Vec<(String, String)>, String> {
+    recognizer_tokens()
+        .map(|tokens| tokens.into_iter().map(|(_, d, l)| (d, l)).collect())
+        .map_err(|e| format!("couldn't list speech recognizers: {e}"))
 }
 
 /// An in-memory stream SAPI reads a recording from (or writes speech into, for the test).
@@ -295,7 +292,7 @@ mod tests {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         }
-        let langs = languages();
+        let langs = languages().expect("recognizers listed");
         println!("recognizers: {langs:?}");
         let mut sapi = Sapi::new("409").expect("English (US) recognizer");
         for phrase in [

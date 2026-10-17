@@ -15,13 +15,30 @@ use super::sapi::wave_format;
 const BUFFERS: usize = 8;
 /// 100 ms of 16 kHz 16-bit mono.
 const BUFFER_BYTES: usize = 3200;
-/// MMSYSERR_ALLOCATED, MMSYSERR_BADDEVICEID, MMSYSERR_NODRIVER, WAVERR_BADFORMAT: no usable device.
-const NO_DEVICE: [u32; 4] = [4, 2, 6, 32];
+/// MMSYSERR_BADDEVICEID, MMSYSERR_NODRIVER: no device. (WAVERR_BADFORMAT is `Failed`: the wave
+/// mapper converts from whatever the device records, 8 kHz hands-free included, so a format it
+/// can't convert means the device changed under it, not that there's none.)
+const NO_DEVICE: [u32; 2] = [2, 6];
+/// MMSYSERR_ALLOCATED: another program has the device to itself (exclusive mode).
+const ALLOCATED: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenError {
     NoDevice,
+    /// Another program is using the microphone exclusively.
+    InUse,
     Failed(u32),
+}
+
+/// What waveInOpen's answer means.
+pub fn open_error(rc: u32) -> OpenError {
+    if rc == ALLOCATED {
+        OpenError::InUse
+    } else if NO_DEVICE.contains(&rc) {
+        OpenError::NoDevice
+    } else {
+        OpenError::Failed(rc)
+    }
 }
 
 /// Whether Windows has any recording device at all.
@@ -58,11 +75,7 @@ impl Recording {
         // SAFETY: valid out-pointer and format; no callback (polled).
         let rc = unsafe { waveInOpen(Some(&mut handle), WAVE_MAPPER, &format, None, None, CALLBACK_NULL) };
         if rc != 0 {
-            return Err(if NO_DEVICE.contains(&rc) {
-                OpenError::NoDevice
-            } else {
-                OpenError::Failed(rc)
-            });
+            return Err(open_error(rc));
         }
         let buffers = (0..BUFFERS)
             .map(|_| Buffer {
@@ -165,5 +178,47 @@ impl Recording {
 impl Drop for Recording {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tells_a_busy_microphone_from_a_missing_one() {
+        assert_eq!(open_error(4), OpenError::InUse);
+        assert_eq!(open_error(2), OpenError::NoDevice);
+        assert_eq!(open_error(6), OpenError::NoDevice);
+        assert_eq!(open_error(32), OpenError::Failed(32), "bad format: there is a device");
+        assert_eq!(open_error(1), OpenError::Failed(1));
+    }
+
+    /// Another dictation app holding the microphone first: tug still opens it (shared mode) or
+    /// says it's busy, never crashes. Needs a microphone, so it's run by hand:
+    /// `cargo test --manifest-path src-tauri/Cargo.toml -p tug --lib voice::win::capture -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn opens_alongside_another_app_holding_the_microphone() {
+        if !has_device() {
+            println!("no microphone on this PC; nothing to test");
+            return;
+        }
+        let other = Recording::start().expect("the other app opens the microphone");
+        for round in 1..=5 {
+            match Recording::start() {
+                Ok(mut rec) => {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    rec.poll();
+                    let pcm = rec.finish();
+                    println!("round {round}: opened alongside, {} samples", pcm.len());
+                }
+                Err(e) => {
+                    println!("round {round}: {e:?}");
+                    assert!(matches!(e, OpenError::InUse | OpenError::Failed(_)));
+                }
+            }
+        }
+        drop(other);
     }
 }

@@ -9,6 +9,10 @@
 //! RegisterHotKey only reports the press, so the worker watches the shortcut's key with
 //! GetAsyncKeyState to know when it's let go: no keyboard hook, nothing else is seen.
 //!
+//! Starting can fail without taking tug down: a thread that doesn't start, an indicator window
+//! Windows won't create, a shortcut it refuses, or speech recognition that doesn't answer each
+//! comes back as a `StartError`, and `voice::apply` switches voice typing back off and says why.
+//!
 //! The decisions live in `voice/mod.rs` and `voice/text.rs`; this only asks Windows and reports.
 
 mod capture;
@@ -20,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::Foundation::{ERROR_HOTKEY_ALREADY_REGISTERED, LPARAM, WPARAM};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS};
@@ -30,7 +34,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::engine::{Engine, EngineError};
-use super::{judge_recording, judge_typing, peak, pill_problem, text, VoiceLanguage, VoiceOutcome, MAX_HOLD, TAIL};
+use super::{
+    judge_recording, judge_typing, peak, pill_problem, text, StartError, VoiceLanguage, VoiceOutcome, MAX_HOLD, TAIL,
+};
+use crate::callback::guarded;
 use crate::code_fill::Keys;
 use overlay::Look;
 
@@ -41,10 +48,16 @@ const WM_REGISTER: u32 = WM_APP + 1;
 const TICK: Duration = Duration::from_millis(10);
 /// How long a problem stays on the indicator.
 const PROBLEM_MS: u32 = 2600;
+/// How long to wait for the key thread to start, or to answer a registration.
+const KEY_WAIT: Duration = Duration::from_secs(2);
+/// How long to wait for speech recognition to list its languages.
+const LANGUAGES_WAIT: Duration = Duration::from_secs(10);
 
+/// A registration for the key thread. The answer: `Ok(true)` registered, `Ok(false)` another app
+/// has the shortcut (or there was nothing to register), `Err` anything else Windows said.
 struct Request {
     keys: Option<Keys>,
-    reply: mpsc::Sender<bool>,
+    reply: mpsc::Sender<Result<bool, String>>,
 }
 
 struct KeyThread {
@@ -61,12 +74,16 @@ struct Press {
 
 enum Job {
     Hold(Press),
-    Languages(mpsc::Sender<Vec<VoiceLanguage>>),
+    Languages(mpsc::Sender<Result<Vec<VoiceLanguage>, String>>),
     Language(Option<String>),
 }
 
 static KEY_THREAD: OnceLock<KeyThread> = OnceLock::new();
+/// Held while the key thread is being started, so two requests at once start one thread.
+static KEY_STARTING: Mutex<()> = Mutex::new(());
 static WORKER: OnceLock<Mutex<mpsc::Sender<Job>>> = OnceLock::new();
+/// Held while the worker is being started.
+static WORKER_STARTING: Mutex<()> = Mutex::new(());
 /// The registered shortcut, read by the key thread on a press.
 static REGISTERED: Mutex<Option<Keys>> = Mutex::new(None);
 /// One hold at a time: a press while one is being recognized or typed is ignored.
@@ -77,86 +94,132 @@ pub fn busy() -> bool {
     BUSY.load(Ordering::SeqCst)
 }
 
-fn worker() -> Option<&'static Mutex<mpsc::Sender<Job>>> {
+fn worker() -> Result<&'static Mutex<mpsc::Sender<Job>>, StartError> {
     if let Some(w) = WORKER.get() {
-        return Some(w);
+        return Ok(w);
     }
+    let _starting = WORKER_STARTING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(w) = WORKER.get() {
+        return Ok(w);
+    }
+    log::info!("voice typing: starting the speech thread");
     let (tx, rx) = mpsc::channel::<Job>();
-    let spawned = std::thread::Builder::new()
+    std::thread::Builder::new()
         .name("tug-voice".into())
-        .spawn(move || run_worker(rx));
-    if let Err(e) = spawned {
-        log::warn!("voice typing unavailable: {e}");
-        return None;
-    }
+        .spawn(move || run_worker(rx))
+        .map_err(|e| StartError::Speech(format!("the speech thread didn't start: {e}")))?;
     let _ = WORKER.set(Mutex::new(tx));
-    WORKER.get()
+    WORKER
+        .get()
+        .ok_or_else(|| StartError::Speech("the speech thread wasn't kept".into()))
 }
 
-fn send_job(job: Job) -> bool {
-    worker().is_some_and(|w| w.lock().unwrap_or_else(|e| e.into_inner()).send(job).is_ok())
+fn send_job(job: Job) -> Result<(), StartError> {
+    worker()?
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send(job)
+        .map_err(|_| StartError::Speech("the speech thread has stopped".into()))
 }
 
-fn key_thread() -> Option<&'static KeyThread> {
+fn key_thread() -> Result<&'static KeyThread, StartError> {
     if let Some(t) = KEY_THREAD.get() {
-        return Some(t);
+        return Ok(t);
     }
-    let (ready_tx, ready_rx) = mpsc::channel::<u32>();
+    let _starting = KEY_STARTING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(t) = KEY_THREAD.get() {
+        return Ok(t);
+    }
+    log::info!("voice typing: starting the shortcut thread");
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<u32, String>>();
     let (req_tx, req_rx) = mpsc::channel::<Request>();
-    let spawned = std::thread::Builder::new()
+    std::thread::Builder::new()
         .name("tug-voice-key".into())
-        .spawn(move || run_keys(ready_tx, req_rx));
-    if let Err(e) = spawned {
-        log::warn!("voice typing shortcut unavailable: {e}");
-        return None;
-    }
-    match ready_rx.recv_timeout(Duration::from_secs(2)) {
-        Ok(id) => {
+        .spawn(move || run_keys(ready_tx, req_rx))
+        .map_err(|e| StartError::Shortcut(format!("the shortcut thread didn't start: {e}")))?;
+    match ready_rx.recv_timeout(KEY_WAIT) {
+        Ok(Ok(id)) => {
             let _ = KEY_THREAD.set(KeyThread {
                 id,
                 requests: Mutex::new(req_tx),
             });
+            log::info!("voice typing: shortcut thread ready");
         }
-        Err(_) => log::warn!("voice typing shortcut thread didn't start"),
+        // The thread has ended; the next attempt starts a new one.
+        Ok(Err(why)) => return Err(StartError::Indicator(why)),
+        Err(_) => {
+            return Err(StartError::Shortcut(format!(
+                "the shortcut thread didn't start within {} s",
+                KEY_WAIT.as_secs()
+            )))
+        }
     }
-    KEY_THREAD.get()
+    KEY_THREAD
+        .get()
+        .ok_or_else(|| StartError::Shortcut("the shortcut thread wasn't kept".into()))
 }
 
-/// Register `keys` (replacing any earlier shortcut), or unregister with `None`. True when the
-/// shortcut is now registered.
-pub fn register(keys: Option<Keys>) -> bool {
+/// Register `keys` (replacing any earlier shortcut), or unregister with `None`. `Ok(true)` when
+/// the shortcut is now registered, `Ok(false)` when another app has it (or after unregistering).
+pub fn register(keys: Option<Keys>) -> Result<bool, StartError> {
+    let result = request_registration(keys);
+    let registered = matches!(result, Ok(true));
+    *REGISTERED.lock().unwrap_or_else(|e| e.into_inner()) = keys.filter(|_| registered);
+    result
+}
+
+fn request_registration(keys: Option<Keys>) -> Result<bool, StartError> {
     if keys.is_none() && KEY_THREAD.get().is_none() {
         // Never started: nothing to unregister.
-        return false;
+        return Ok(false);
     }
-    let Some(thread) = key_thread() else {
-        return false;
-    };
+    let thread = key_thread()?;
+    if keys.is_some() {
+        log::info!("voice typing: registering the shortcut");
+    }
     let (reply, answer) = mpsc::channel();
-    let sent = thread
+    thread
         .requests
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .send(Request { keys, reply });
-    if sent.is_err() {
-        return false;
-    }
+        .send(Request { keys, reply })
+        .map_err(|_| StartError::Shortcut("the shortcut thread has stopped".into()))?;
     // SAFETY: posting a message with no pointers to a thread tug owns.
-    if unsafe { PostThreadMessageW(thread.id, WM_REGISTER, WPARAM(0), LPARAM(0)) }.is_err() {
-        return false;
+    unsafe { PostThreadMessageW(thread.id, WM_REGISTER, WPARAM(0), LPARAM(0)) }
+        .map_err(|e| StartError::Shortcut(format!("couldn't reach the shortcut thread: {e}")))?;
+    match answer.recv_timeout(KEY_WAIT) {
+        Ok(Ok(registered)) => {
+            if keys.is_some() {
+                log::info!(
+                    "voice typing: shortcut {}",
+                    if registered {
+                        "registered"
+                    } else {
+                        "taken by another app"
+                    }
+                );
+            }
+            Ok(registered)
+        }
+        Ok(Err(why)) => Err(StartError::Shortcut(why)),
+        Err(_) => Err(StartError::Shortcut(format!(
+            "the shortcut thread didn't answer within {} s",
+            KEY_WAIT.as_secs()
+        ))),
     }
-    let ok = answer.recv_timeout(Duration::from_secs(2)).unwrap_or(false);
-    *REGISTERED.lock().unwrap_or_else(|e| e.into_inner()) = keys.filter(|_| ok);
-    ok
 }
 
-/// The installed speech languages (listed on the COM thread).
-pub fn languages() -> Vec<VoiceLanguage> {
+/// The installed speech languages (listed on the COM thread), or why they couldn't be.
+pub fn languages() -> Result<Vec<VoiceLanguage>, StartError> {
     let (reply, answer) = mpsc::channel();
-    if !send_job(Job::Languages(reply)) {
-        return Vec::new();
+    send_job(Job::Languages(reply))?;
+    match answer.recv_timeout(LANGUAGES_WAIT) {
+        Ok(listed) => listed.map_err(StartError::Speech),
+        Err(_) => Err(StartError::Speech(format!(
+            "speech recognition didn't list its languages within {} s",
+            LANGUAGES_WAIT.as_secs()
+        ))),
     }
-    answer.recv_timeout(Duration::from_secs(10)).unwrap_or_default()
 }
 
 /// The language to listen in from now on (`None` when voice typing is off: the recognizer is let go).
@@ -164,7 +227,9 @@ pub fn set_language(language: Option<String>) {
     if language.is_none() && WORKER.get().is_none() {
         return;
     }
-    send_job(Job::Language(language));
+    if let Err(e) = send_job(Job::Language(language)) {
+        log::warn!("voice typing: {}", e.detail());
+    }
 }
 
 pub fn mic_blocked() -> bool {
@@ -175,37 +240,38 @@ pub fn ui_language() -> u16 {
     system::ui_language()
 }
 
-fn run_keys(ready: mpsc::Sender<u32>, requests: mpsc::Receiver<Request>) {
+fn run_keys(ready: mpsc::Sender<Result<u32, String>>, requests: mpsc::Receiver<Request>) {
     let mut msg = MSG::default();
     // SAFETY: plain Win32 calls on this thread with a valid MSG buffer. The peek creates the
     // thread's message queue, so a registration posted right after `ready` isn't lost.
     unsafe {
         let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
     }
-    overlay::create();
+    // The indicator is created here, on the thread that pumps its messages below, and lives as
+    // long as this thread does.
+    log::info!("voice typing: creating the listening indicator");
+    if let Err(why) = overlay::create() {
+        log::warn!("voice typing: the listening indicator couldn't be created: {why}");
+        let _ = ready.send(Err(why));
+        return;
+    }
+    log::info!("voice typing: listening indicator ready");
     // SAFETY: as above.
-    let _ = ready.send(unsafe { GetCurrentThreadId() });
+    let _ = ready.send(Ok(unsafe { GetCurrentThreadId() }));
     loop {
         // SAFETY: as above; GetMessageW returns 0 on WM_QUIT and -1 on error.
         let got = unsafe { GetMessageW(&mut msg, None, 0, 0) };
         if got.0 <= 0 {
+            log::warn!("voice typing: the shortcut thread's message loop ended ({})", got.0);
             break;
         }
         // Thread messages (no window): ours. Window messages: the indicator's.
         if msg.hwnd.is_invalid() {
             match msg.message {
-                WM_HOTKEY if msg.wParam.0 == HOTKEY_ID as usize => on_press(),
+                WM_HOTKEY if msg.wParam.0 == HOTKEY_ID as usize => guarded("voice typing shortcut", on_press, || ()),
                 WM_REGISTER => {
                     while let Ok(req) = requests.try_recv() {
-                        // SAFETY: the hotkey is registered to this thread (no window), id HOTKEY_ID.
-                        unsafe {
-                            let _ = UnregisterHotKey(None, HOTKEY_ID);
-                        }
-                        let ok = req.keys.is_some_and(|k| {
-                            // SAFETY: as above.
-                            unsafe { RegisterHotKey(None, HOTKEY_ID, HOT_KEY_MODIFIERS(k.modifiers()), k.vk()) }.is_ok()
-                        });
-                        let _ = req.reply.send(ok);
+                        let _ = req.reply.send(apply_registration(req.keys));
                     }
                 }
                 _ => {}
@@ -217,6 +283,23 @@ fn run_keys(ready: mpsc::Sender<u32>, requests: mpsc::Receiver<Request>) {
                 DispatchMessageW(&msg);
             }
         }
+    }
+}
+
+/// On the key thread: replace the registration with `keys` (or none).
+fn apply_registration(keys: Option<Keys>) -> Result<bool, String> {
+    // SAFETY: the hotkey is registered to this thread (no window), id HOTKEY_ID.
+    unsafe {
+        let _ = UnregisterHotKey(None, HOTKEY_ID);
+    }
+    let Some(k) = keys else {
+        return Ok(false);
+    };
+    // SAFETY: as above.
+    match unsafe { RegisterHotKey(None, HOTKEY_ID, HOT_KEY_MODIFIERS(k.modifiers()), k.vk()) } {
+        Ok(()) => Ok(true),
+        Err(e) if e.code() == ERROR_HOTKEY_ALREADY_REGISTERED.to_hresult() => Ok(false),
+        Err(e) => Err(format!("RegisterHotKey failed: {e}")),
     }
 }
 
@@ -235,42 +318,42 @@ fn on_press() {
         keys,
         target: system::foreground(),
     };
-    if !send_job(Job::Hold(press)) {
+    if let Err(e) = send_job(Job::Hold(press)) {
+        log::warn!("voice typing: {}", e.detail());
         BUSY.store(false, Ordering::SeqCst);
     }
 }
 
 fn run_worker(jobs: mpsc::Receiver<Job>) {
     // SAFETY: initialising COM for this thread, which lives as long as tug.
-    if let Err(e) = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok() {
-        log::warn!("voice typing: COM didn't start: {e}");
+    let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
+        .ok()
+        .map_err(|e| format!("COM didn't start: {e}"));
+    if let Err(why) = &com {
+        log::warn!("voice typing: {why}");
     }
     let mut engine: Option<sapi::Sapi> = None;
     let mut language: Option<String> = None;
     while let Ok(job) = jobs.recv() {
         match job {
             Job::Hold(press) => {
-                let outcome = hold(&press, &mut engine, language.as_deref());
+                let outcome = guarded(
+                    "voice typing hold",
+                    || hold(&press, &mut engine, language.as_deref()),
+                    || VoiceOutcome::Failed,
+                );
                 finish(outcome);
                 BUSY.store(false, Ordering::SeqCst);
                 super::emit_typed(outcome);
             }
             Job::Languages(reply) => {
-                let list = sapi::languages()
-                    .into_iter()
-                    .filter_map(|(desc, attr)| {
-                        super::language_id(&attr).map(|id| VoiceLanguage {
-                            id,
-                            name: super::language_name(&desc),
-                        })
-                    })
-                    .fold(Vec::<VoiceLanguage>::new(), |mut acc, l| {
-                        if !acc.iter().any(|x| x.id == l.id) {
-                            acc.push(l);
-                        }
-                        acc
-                    });
-                let _ = reply.send(list);
+                let listed = match &com {
+                    Err(why) => Err(why.clone()),
+                    Ok(()) => guarded("voice typing languages", list_languages, || {
+                        Err("listing the languages failed".into())
+                    }),
+                };
+                let _ = reply.send(listed);
             }
             Job::Language(l) => {
                 if engine.as_ref().map(|e| e.language()) != l.as_deref() {
@@ -280,6 +363,24 @@ fn run_worker(jobs: mpsc::Receiver<Job>) {
             }
         }
     }
+}
+
+/// The installed speech languages, one entry per language id.
+fn list_languages() -> Result<Vec<VoiceLanguage>, String> {
+    Ok(sapi::languages()?
+        .into_iter()
+        .filter_map(|(desc, attr)| {
+            super::language_id(&attr).map(|id| VoiceLanguage {
+                id,
+                name: super::language_name(&desc),
+            })
+        })
+        .fold(Vec::<VoiceLanguage>::new(), |mut acc, l| {
+            if !acc.iter().any(|x| x.id == l.id) {
+                acc.push(l);
+            }
+            acc
+        }))
 }
 
 /// The whole shortcut is still down. Letting go of any of its keys ends the hold, so a Space still
@@ -323,9 +424,16 @@ fn hold(press: &Press, engine: &mut Option<sapi::Sapi>, language: Option<&str>) 
     }
     let mut rec = match capture::Recording::start() {
         Ok(r) => r,
+        Err(capture::OpenError::NoDevice) => {
+            log::info!("voice typing: no usable microphone");
+            return VoiceOutcome::NoMic;
+        }
+        // There is a microphone; it just couldn't be had right now (another app holding it
+        // exclusively, or Windows switching devices as a hands-free call starts or ends). The hold
+        // ends here and voice typing stays on: the next hold tries again.
         Err(e) => {
             log::warn!("voice typing: couldn't open the microphone ({e:?})");
-            return VoiceOutcome::NoMic;
+            return VoiceOutcome::MicBusy;
         }
     };
     overlay::show("Listening…", Look::Listening, 0);
@@ -400,5 +508,226 @@ fn hold(press: &Press, engine: &mut Option<sapi::Sapi>, language: Option<&str>) 
     } else {
         log::warn!("voice typing: Windows didn't take the keystrokes");
         VoiceOutcome::Failed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::voice::{apply, VoiceState, HOTKEYS};
+
+    /// Wait up to 2 s for the indicator to be shown (or hidden).
+    fn indicator_becomes(visible: bool) -> bool {
+        let until = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < until {
+            if overlay::visible() == visible {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// Switching voice typing on is what crashed v0.5.18: Windows painted the new, still hidden
+    /// indicator before it had any text, and the empty text reached DrawTextW. This runs the
+    /// switch's own path (`voice::apply`, as `set_voice_typing` calls it) on this PC's real
+    /// desktop, shows and hides the indicator (with text, and empty while it's on screen), and
+    /// switches it off again, 20 times. Without the fix the process dies on the first round with
+    /// 0xc000041d. It needs a desktop session and a Windows speech language, so it's run by hand:
+    /// `cargo test --manifest-path src-tauri/Cargo.toml -p tug --lib voice::win::tests -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn switching_on_and_off_twenty_times_never_crashes() {
+        // A shortcut nothing else on this PC holds, if there is one (taken ones still start the
+        // thread and the indicator, which is what's being tested).
+        let keys = HOTKEYS
+            .iter()
+            .copied()
+            .find(|k| {
+                let s = apply(true, k, None);
+                println!("{k}: {:?}", s.state);
+                assert_eq!(
+                    s.start_error, None,
+                    "{k}: a taken shortcut is inUse, not a failed start"
+                );
+                apply(false, k, None);
+                s.state == VoiceState::On
+            })
+            .unwrap_or(HOTKEYS[0]);
+        println!("using {keys}");
+        for round in 1..=20 {
+            let on = apply(true, keys, None);
+            assert_eq!(on.start_error, None, "round {round}: {on:?}");
+            assert!(on.enabled, "round {round}: still on");
+            assert!(
+                matches!(on.state, VoiceState::On | VoiceState::InUse),
+                "round {round}: {:?}",
+                on.state
+            );
+            overlay::show("Listening…", Look::Listening, 0);
+            assert!(indicator_becomes(true), "round {round}: indicator shown");
+            overlay::show("Typing…", Look::Working, 0);
+            // Nothing to say, on screen: painted with no text.
+            overlay::show("", Look::Problem, 0);
+            std::thread::sleep(Duration::from_millis(30));
+            assert!(overlay::visible(), "round {round}: still up");
+            overlay::hide();
+            assert!(indicator_becomes(false), "round {round}: indicator hidden");
+            // A problem that hides by itself.
+            overlay::show("Didn't catch that", Look::Problem, 50);
+            assert!(indicator_becomes(true), "round {round}: problem shown");
+            assert!(indicator_becomes(false), "round {round}: problem hid itself");
+
+            let off = apply(false, keys, None);
+            assert_eq!(off.state, VoiceState::Off, "round {round}");
+            assert!(!off.enabled);
+            assert!(REGISTERED.lock().unwrap().is_none(), "round {round}: shortcut let go");
+        }
+        println!("20 rounds: on, indicator shown and hidden, off");
+    }
+
+    /// Stands in for another dictation app on the same PC, on a thread of its own: it holds a
+    /// hold-to-talk shortcut (RegisterHotKey), watches every key (a WH_KEYBOARD_LL hook), shows its
+    /// own topmost layered overlay and keeps the microphone open, all until it's told to quit.
+    struct OtherApp {
+        thread: u32,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl OtherApp {
+        fn start(keys: Keys) -> OtherApp {
+            use windows::core::w;
+            use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
+            use windows::Win32::UI::WindowsAndMessaging::{
+                CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW,
+                SetLayeredWindowAttributes, SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, LWA_ALPHA,
+                SW_SHOWNOACTIVATE, WH_KEYBOARD_LL, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+                WS_EX_TOPMOST, WS_POPUP,
+            };
+
+            extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+                // SAFETY: passing the event on unchanged, as a well-behaved hook does.
+                unsafe { CallNextHookEx(None, code, wparam, lparam) }
+            }
+            extern "system" fn other_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+                // SAFETY: default handling for the stand-in's own window.
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let handle = std::thread::spawn(move || {
+                let mut msg = MSG::default();
+                // SAFETY: Win32 calls on this thread with valid arguments; everything is undone
+                // before the thread ends.
+                unsafe {
+                    let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+                    let hotkey = RegisterHotKey(None, 7, HOT_KEY_MODIFIERS(keys.modifiers()), keys.vk());
+                    let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook), None, 0);
+                    let class = WNDCLASSW {
+                        lpfnWndProc: Some(other_proc),
+                        lpszClassName: w!("tugTestOtherOverlay"),
+                        ..Default::default()
+                    };
+                    RegisterClassW(&class);
+                    let overlay = CreateWindowExW(
+                        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+                        w!("tugTestOtherOverlay"),
+                        w!("other overlay"),
+                        WS_POPUP,
+                        40,
+                        40,
+                        120,
+                        30,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    if let Ok(o) = overlay {
+                        let _ = SetLayeredWindowAttributes(o, COLORREF(0), 200, LWA_ALPHA);
+                        let _ = ShowWindow(o, SW_SHOWNOACTIVATE);
+                    }
+                    let mic = capture::Recording::start();
+                    println!(
+                        "other app: shortcut {:?}, keyboard hook {:?}, overlay {:?}, microphone {:?}",
+                        hotkey.is_ok(),
+                        hook.is_ok(),
+                        overlay.is_ok(),
+                        mic.as_ref().map(|_| ()).map_err(|e| *e)
+                    );
+                    let _ = ready_tx.send(GetCurrentThreadId());
+                    while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                    drop(mic);
+                    if let Ok(o) = overlay {
+                        let _ = DestroyWindow(o);
+                    }
+                    if let Ok(h) = hook {
+                        let _ = UnhookWindowsHookEx(h);
+                    }
+                    let _ = UnregisterHotKey(None, 7);
+                }
+            });
+            let thread = ready_rx.recv_timeout(Duration::from_secs(5)).expect("stand-in started");
+            OtherApp {
+                thread,
+                handle: Some(handle),
+            }
+        }
+    }
+
+    impl Drop for OtherApp {
+        fn drop(&mut self) {
+            use windows::Win32::UI::WindowsAndMessaging::WM_QUIT;
+            // SAFETY: a message with no pointers to the stand-in's thread.
+            unsafe {
+                let _ = PostThreadMessageW(self.thread, WM_QUIT, WPARAM(0), LPARAM(0));
+            }
+            if let Some(h) = self.handle.take() {
+                let _ = h.join();
+            }
+        }
+    }
+
+    /// Voice typing next to another dictation app that already holds the shortcut, a keyboard
+    /// hook, a topmost overlay and the microphone: switching on never crashes. The taken shortcut
+    /// is reported as in use (Settings offers the others), another shortcut works, tug's
+    /// indicator shows and hides above the other overlay, and the microphone opens alongside or
+    /// says it's busy. Run by hand like the test above.
+    #[test]
+    #[ignore]
+    fn coexists_with_another_dictation_app() {
+        let taken = HOTKEYS[3];
+        let free = HOTKEYS[1];
+        let other = OtherApp::start(crate::voice::parse_hotkey(taken).expect("offered"));
+        for round in 1..=5 {
+            let s = apply(true, taken, None);
+            assert_eq!(s.start_error, None, "round {round}: {s:?}");
+            assert_eq!(s.state, VoiceState::InUse, "round {round}: the other app has {taken}");
+            assert!(s.enabled);
+
+            let s = apply(true, free, None);
+            assert_eq!(s.start_error, None, "round {round}: {s:?}");
+            assert!(matches!(s.state, VoiceState::On | VoiceState::InUse), "{:?}", s.state);
+            overlay::show("Listening…", Look::Listening, 0);
+            assert!(indicator_becomes(true), "round {round}: indicator shown");
+            // What a hold does first, with the other app holding the microphone.
+            match capture::Recording::start() {
+                Ok(rec) => println!(
+                    "round {round}: microphone opened alongside ({} samples)",
+                    rec.finish().len()
+                ),
+                Err(e) => println!("round {round}: microphone busy ({e:?}), the pill would say so"),
+            }
+            // The key polling a hold does, with the other app's hook in place.
+            let _ = still_held(&crate::voice::parse_hotkey(free).expect("offered"));
+            overlay::hide();
+            assert!(indicator_becomes(false), "round {round}: indicator hidden");
+            assert_eq!(apply(false, free, None).state, VoiceState::Off);
+        }
+        drop(other);
+        println!("5 rounds next to another dictation app: no crash");
     }
 }

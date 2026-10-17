@@ -1078,6 +1078,7 @@ const shareState: ShareState = params.has("sharing")
 const codeHotkey: CodeHotkeyStatus = { state: params.has("hotkeybusy") ? "inUse" : "on", keys: "ctrl+shift+v" };
 // Voice typing (voice/ in Rust): off by default; `/?voice` starts it on (`&micblocked`,
 // `&nospeech` for a PC without a speech language, `&voicebusy` for a taken shortcut).
+// `?voicefail`: turning it on fails and the switch goes back off with the reason.
 const voiceOn = params.has("voice");
 const voiceLanguages = params.has("nospeech")
   ? []
@@ -1093,6 +1094,7 @@ const voice: VoiceStatus = {
   language: voiceLanguages[0]?.id ?? null,
   languages: [],
   micBlocked: params.has("micblocked"),
+  startError: null,
 };
 
 // Automatic updates (updater/ in Rust). Without a flag the build isn't set up for updates, like a
@@ -1503,8 +1505,13 @@ mockIPC(
         const keys = String(a.keys);
         const lang = voiceLanguages.find((l) => l.id === a.language)?.id ?? voiceLanguages[0]?.id ?? null;
         const taken = params.has("voicebusy") && keys === "ctrl+alt+space";
+        if (a.enabled && params.has("voicefail")) {
+          const startError = "Voice typing couldn't start: Windows couldn't show the listening indicator.";
+          Object.assign(voice, { enabled: false, keys, language: lang, languages: voiceLanguages, state: "off", startError });
+          return { ...voice };
+        }
         const state = !a.enabled ? "off" : lang === null ? "unavailable" : taken ? "inUse" : "on";
-        Object.assign(voice, { enabled: Boolean(a.enabled), keys, language: lang, languages: voiceLanguages, state });
+        Object.assign(voice, { enabled: Boolean(a.enabled), keys, language: lang, languages: voiceLanguages, state, startError: null });
         return { ...voice };
       }
       // Windows pop-ups don't exist in a browser; log what tug would have shown.

@@ -24,11 +24,19 @@ use crate::wake::{Beat, Clocks, WakeWatch};
 static RESUMED: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "system" fn on_power_event(_context: *const c_void, kind: u32, _setting: *const c_void) -> u32 {
-    // Only the automatic resume: Windows sends it on every resume. PBT_APMRESUMESUSPEND follows only
-    // once the user is active again, possibly minutes later, and would relink a link that's fine.
-    if kind == PBT_APMRESUMEAUTOMATIC {
-        RESUMED.store(true, Ordering::SeqCst);
-    }
+    // Nothing may unwind into Windows from here (`crate::callback`).
+    crate::callback::guarded(
+        "resume notification",
+        || {
+            // Only the automatic resume: Windows sends it on every resume. PBT_APMRESUMESUSPEND
+            // follows only once the user is active again, possibly minutes later, and would relink
+            // a link that's fine.
+            if kind == PBT_APMRESUMEAUTOMATIC {
+                RESUMED.store(true, Ordering::SeqCst);
+            }
+        },
+        || (),
+    );
     ERROR_SUCCESS.0
 }
 

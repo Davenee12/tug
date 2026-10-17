@@ -325,7 +325,8 @@ fn class_name(hwnd: HWND) -> String {
     let mut buf = [0u16; 128];
     // SAFETY: the buffer outlives the call and its length is passed with it.
     let n = unsafe { GetClassNameW(hwnd, &mut buf) };
-    String::from_utf16_lossy(&buf[..n.max(0) as usize])
+    // Clamped: this runs inside EnumWindows' callback, where a panic must not happen.
+    String::from_utf16_lossy(&buf[..(n.max(0) as usize).min(buf.len())])
 }
 
 /// The foreground window covers its whole monitor and isn't the desktop or taskbar.
@@ -439,6 +440,18 @@ fn windows_of_interest() -> Option<Vec<TopWindow>> {
 }
 
 unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    // Nothing may unwind into Windows from here (`crate::callback`): a panic skips the window and
+    // the walk carries on.
+    crate::callback::guarded(
+        "share privacy window scan",
+        // SAFETY: as `visit_one` requires, straight from EnumWindows.
+        || unsafe { visit_one(hwnd, lparam) },
+        || BOOL(1),
+    )
+}
+
+/// SAFETY: `lparam` must be the `Scan` passed by `windows_of_interest`, during its EnumWindows.
+unsafe fn visit_one(hwnd: HWND, lparam: LPARAM) -> BOOL {
     // SAFETY: lparam is the `Scan` passed by `windows_of_interest`, alive for the whole enumeration.
     let scan = unsafe { &mut *(lparam.0 as *mut Scan) };
     // SAFETY: plain FFI calls on a window handle Windows just gave us.
@@ -457,7 +470,7 @@ unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
             // Another program's title is read without sending it a message, so this can't hang.
             let mut buf = [0u16; 256];
             let n = GetWindowTextW(hwnd, &mut buf);
-            String::from_utf16_lossy(&buf[..n.max(0) as usize])
+            String::from_utf16_lossy(&buf[..(n.max(0) as usize).min(buf.len())])
         });
         scan.found.push(TopWindow { class, exe, title });
     }
