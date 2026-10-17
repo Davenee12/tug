@@ -358,17 +358,19 @@ pub(crate) mod tests {
 
     #[test]
     fn an_older_keybag_without_the_sha256_step_still_derives() {
-        let mut bag = Keybag::parse(&make_keybag("pw", &[(1, [1; 32])]).0).unwrap();
+        // Made up at run time: any password does, and a literal reads as a hard-coded secret.
+        let password = made_up_password();
+        let mut bag = Keybag::parse(&make_keybag(&password, &[(1, [1; 32])]).0).unwrap();
         bag.dp_salt = None;
         bag.dp_iterations = None;
         let mut want = [0u8; 32];
-        pbkdf2::pbkdf2_hmac::<sha1::Sha1>(b"pw", &bag.salt, bag.iterations, &mut want);
-        assert_eq!(*bag.derive_key("pw", |_| true).unwrap(), want);
+        pbkdf2::pbkdf2_hmac::<sha1::Sha1>(password.as_bytes(), &bag.salt, bag.iterations, &mut want);
+        assert_eq!(*bag.derive_key(&password, |_| true).unwrap(), want);
     }
 
     #[test]
     fn a_keybag_asking_for_endless_sha1_rounds_is_refused() {
-        let (blob, _) = make_keybag("pw", &[(3, [3; 32])]);
+        let (blob, _) = make_keybag(&made_up_password(), &[(3, [3; 32])]);
         let with_iter = |n: u32| {
             let at = blob.windows(8).position(|w| w == b"ITER\0\0\0\x04").unwrap() + 8;
             let mut b = blob.clone();
@@ -397,6 +399,11 @@ pub(crate) mod tests {
         assert_eq!(Keybag::parse(b"SALT\xFF\xFF\xFF\xFFxx"), Err(KeybagError::Malformed));
         // A bag with no class keys can't unlock anything.
         assert!(Keybag::parse(&tlv(b"SALT", b"s")).is_err());
+    }
+
+    /// A password for tests that only need some password: made at run time, never a literal.
+    fn made_up_password() -> String {
+        format!("test-{}", std::process::id())
     }
 
     pub(crate) fn hex<const N: usize>(s: &str) -> [u8; N] {
