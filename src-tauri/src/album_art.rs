@@ -6,8 +6,8 @@
 //! Only the artist and album name are sent, and only when the cover isn't already on disk. Albums
 //! Apple doesn't know are remembered for a day so they aren't asked again on every play. Lookups go
 //! through a `Gate`: a lookup waits a moment in case the song changes again (rapid skips), and at
-//! most one goes out every two seconds. Logs record hits, misses and timings, never the artist or
-//! album.
+//! most one goes out every three seconds (20 a minute at most). Logs record hits, misses and
+//! timings, never the artist or album.
 //!
 //! The matching and the gate are pure (plain values in, plain values out) and tested here; the
 //! network goes through `Net` so the cache, miss memory and the setting can be tested without it.
@@ -25,8 +25,9 @@ const SEARCH_LIMIT: u32 = 10;
 /// A lookup waits this long before going out, so skipping through songs looks up only the one
 /// that stays.
 pub const DEBOUNCE: Duration = Duration::from_millis(600);
-/// At most one lookup this often.
-pub const MIN_GAP: Duration = Duration::from_secs(2);
+/// At most one lookup this often: 20 searches a minute at most, well within what Apple's public
+/// search API allows, however fast songs change.
+pub const MIN_GAP: Duration = Duration::from_secs(3);
 /// Artist and album names longer than this aren't looked up (nothing real is this long).
 const MAX_NAME: usize = 300;
 /// The folder under tug's app data.
@@ -736,6 +737,35 @@ mod tests {
         let wait = g.admit(c, t2, t2 + Duration::from_millis(700));
         assert_eq!(wait, Admit::Wait(Duration::from_millis(1000)));
         assert_eq!(g.admit(c, t2, t1 + Duration::from_millis(2600)), Admit::Go);
+    }
+
+    #[test]
+    fn lookups_stay_within_twenty_a_minute() {
+        // Songs changing as fast as they can for a minute: every one that waits out the debounce
+        // takes a turn, and still no more than 20 searches go out.
+        let mut g = Gate::new(DEBOUNCE, MIN_GAP);
+        let t0 = Instant::now();
+        let minute = t0 + Duration::from_secs(60);
+        let mut now = t0;
+        let mut went = 0;
+        while now < minute {
+            let t = g.ticket();
+            let asked = now;
+            loop {
+                match g.admit(t, asked, now) {
+                    Admit::Go => {
+                        if now < minute {
+                            went += 1;
+                        }
+                        break;
+                    }
+                    Admit::Wait(d) => now += d,
+                    Admit::Superseded => unreachable!(),
+                }
+            }
+        }
+        assert!(went <= 20, "{went} searches in a minute");
+        assert!(went >= 19, "and the gate doesn't starve them: {went}");
     }
 
     #[test]
