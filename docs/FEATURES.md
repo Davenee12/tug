@@ -358,14 +358,20 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
 - **Developer tools:** see above.
 - **Data & privacy:** what stays on your PC and what goes online, the App icons switch, and Clear
   history.
-- **About:** version, What's new, credits, Copy diagnostics.
+- **About:** version, updates (Check for updates, Download updates automatically, release notes),
+  What's new, credits, Copy diagnostics.
+- **Automatic updates:** once a release build is set up for them, tug downloads a new version
+  quietly and an **Update** button appears beside its name: click it, confirm, and tug restarts on the
+  same screen. It never restarts by itself, waits while a call rings, Tugboat is moving files or voice
+  typing is busy, and quitting from the tray installs a downloaded update (the menu says Quit and
+  update tug). The portable exe can't update itself; its button opens the download page.
 - A **What's new** card appears once after each update (and any time from About).
 
 ## Privacy & data
 
 The full policy, including how to delete everything, is in [PRIVACY.md](PRIVACY.md).
 
-- **No tug servers, no account, no analytics, no telemetry, no update checker.**
+- **No tug servers, no account, no analytics, no telemetry.**
 - Your history (notifications, texts, contacts, settings) lives in a database on your PC:
   `%APPDATA%\dev.davejames.tug\tug.db`. Cached app icons, album art, Spotify art and contact photos sit in
   the same folder; logs are in `%LOCALAPPDATA%\dev.davejames.tug\logs`.
@@ -377,6 +383,9 @@ The full policy, including how to delete everything, is in [PRIVACY.md](PRIVACY.
   - Album art, if Show album art is on: Apple's music catalog, sending only the artist and album
     name, for albums tug has no cover for yet.
   - Spotify, only if you connect it.
+  - Updates, in builds set up for them: GitHub, to see whether there's a new version and download
+    it (every 6 hours; with Download updates automatically off, only when you press Check for
+    updates).
   - Opening a notification's web page opens your browser.
 - Tugboat stays on your local network; the developer bridge is local to your Windows account.
 - **Copy diagnostics** removes phone numbers, email addresses, names, Bluetooth addresses and your

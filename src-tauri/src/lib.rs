@@ -39,6 +39,7 @@ mod text;
 pub mod toast;
 mod tray;
 mod tugboat;
+mod updater;
 mod voice;
 mod wake;
 mod webview_watch;
@@ -159,6 +160,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         // Tugboat's "Choose files" picker (opened from Rust; the page never sees it).
         .plugin(tauri_plugin_dialog::init())
+        // Automatic updates (updater/): the check, download and signature check run in Rust. It
+        // does nothing until tauri.conf.json carries a real public key (docs/RELEASING.md).
+        .plugin(updater::plugin())
         .setup(move |app| {
             // Pop-ups left by the last run can't be answered (nothing hears a press while tug is
             // closed). A normal Quit withdraws them; when Windows shut down it was left to now.
@@ -171,6 +175,9 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let store = Arc::new(open_store(&dir, setup_log_dir.as_deref()));
+            // Coming back from an update restart: show the window (even from a `--minimized`
+            // start) so the person sees tug back on the screen they left.
+            let resuming = updater::resume_pending(&store);
             // Taskbar quick actions: a task clicked while tug wasn't running started this launch;
             // the UI carries it out once it has loaded. Then (re)build the jump list itself.
             if let Some(action) = quick_actions::parse_args(launch_args()) {
@@ -211,6 +218,11 @@ pub fn run() {
                 devtools,
                 pc_audio,
             });
+            // Automatic updates: a first check shortly after startup, then every 6 hours, only
+            // when set up (a public key in tauri.conf.json) and switched on.
+            let updates = updater::Updater::new(app.handle().clone());
+            app.manage(updates.clone());
+            updates.start();
             // Keep the purely-cached image folders (album art/covers, app icons) from growing without
             // limit: drop the least-recently-used beyond the cap. Off the main thread so a big folder
             // scan never delays the window. Contact photos aren't capped here — they can't be
@@ -244,7 +256,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 startup::fit_window(&window);
             }
-            if !(launched_minimized() && tray::installed()) {
+            if resuming || !(launched_minimized() && tray::installed()) {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
@@ -401,6 +413,13 @@ pub fn run() {
             commands::devtools_revoke,
             commands::devtools_confirm,
             commands::devtools_set_on_path,
+            updater::update_status,
+            updater::update_check,
+            updater::update_download,
+            updater::update_set_auto,
+            updater::update_apply,
+            updater::update_open_release_page,
+            updater::update_take_resume,
         ])
         .build(context);
     // A setup or WebView failure: say what failed and where the log is, instead of exiting
@@ -424,29 +443,43 @@ pub fn run() {
             }
         }
         if let tauri::RunEvent::Exit = event {
-            // Windows signing out or shutting down runs this from WM_ENDSESSION and waits for it:
-            // then only what can't wait is done, and the rest is left to the next start.
-            let started = std::time::Instant::now();
             let ending = session_end::ending();
-            let plan = session_end::ExitPlan::for_exit(ending);
-            // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
-            if plan.withdraw_toasts {
-                toast::withdraw_all(app);
+            tidy_before_exit(app, ending);
+            // Quit with an update downloaded: install it now, without starting tug again (the
+            // tray's item said "Quit and update tug"). Never while Windows is ending the session.
+            if let Some(updates) = app.try_state::<updater::Updater>() {
+                updates.apply_on_quit(ending);
             }
-            // Tugboat never outlives tug: stop listening (and remove unfinished uploads).
-            if let Some(state) = app.try_state::<AppState>() {
-                state.tugboat.shutdown_now(plan.clean_tugboat);
-                // Hand the phone's audio back to the phone rather than leave it routed to a PC
-                // that stopped listening.
-                state.pc_audio.shutdown_now(plan.audio_wait);
-            }
-            log::info!(
-                "exit: tidied up in {} ms{}",
-                started.elapsed().as_millis(),
-                if ending { " (Windows is ending the session)" } else { "" }
-            );
         }
     });
+}
+
+/// What tug does on its way out, once, however it leaves: Quit, Windows ending the session, or an
+/// update's installer about to start (`updater`, from the plugin's `on_before_exit`).
+/// Windows signing out or shutting down runs this from WM_ENDSESSION and waits for it: then only
+/// what can't wait is done, and the rest is left to the next start.
+pub(crate) fn tidy_before_exit(app: &tauri::AppHandle, ending: bool) {
+    if !updater::first_tidy() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let plan = session_end::ExitPlan::for_exit(ending);
+    // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
+    if plan.withdraw_toasts {
+        toast::withdraw_all(app);
+    }
+    // Tugboat never outlives tug: stop listening (and remove unfinished uploads).
+    if let Some(state) = app.try_state::<AppState>() {
+        state.tugboat.shutdown_now(plan.clean_tugboat);
+        // Hand the phone's audio back to the phone rather than leave it routed to a PC
+        // that stopped listening.
+        state.pc_audio.shutdown_now(plan.audio_wait);
+    }
+    log::info!(
+        "exit: tidied up in {} ms{}",
+        started.elapsed().as_millis(),
+        if ending { " (Windows is ending the session)" } else { "" }
+    );
 }
 
 #[cfg(test)]

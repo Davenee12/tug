@@ -5,6 +5,7 @@
 //! tray menu.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -27,6 +28,16 @@ static UNREAD: AtomicU32 = AtomicU32::new(0);
 /// The tray icon currently shows the unread badge (so it's only swapped when that changes).
 static BADGED: AtomicBool = AtomicBool::new(false);
 
+/// Renames the menu's Quit item (see `set_update_ready`); set once the tray exists.
+type QuitLabel = Box<dyn Fn(&str) + Send>;
+static QUIT_LABEL: Mutex<Option<QuitLabel>> = Mutex::new(None);
+/// The Quit item currently says it will update.
+static QUIT_UPDATES: AtomicBool = AtomicBool::new(false);
+const QUIT: &str = "Quit tug";
+/// With an update downloaded, quitting installs it (without starting tug again): the item says so,
+/// so quitting never surprises anyone with an installer.
+const QUIT_AND_UPDATE: &str = "Quit and update tug";
+
 pub fn installed() -> bool {
     INSTALLED.load(Ordering::Relaxed)
 }
@@ -38,7 +49,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open tug", true, None::<&str>)?;
     let clip = MenuItem::with_id(app, "send-clipboard", "Send clipboard to iPhone", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit tug", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", QUIT, true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &clip, &settings, &quit])?;
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("tug")
@@ -73,8 +84,39 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         builder = builder.icon(icon.clone());
     }
     builder.build(app)?;
+    let item = quit.clone();
+    *QUIT_LABEL.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(move |text: &str| {
+        if let Err(e) = item.set_text(text) {
+            log::debug!("tray: couldn't rename Quit: {e}");
+        }
+    }));
+    // An update may have finished downloading before the tray existed.
+    if QUIT_UPDATES.load(Ordering::Relaxed) {
+        rename_quit(true);
+    }
     INSTALLED.store(true, Ordering::Relaxed);
     Ok(())
+}
+
+/// An update is downloaded and will be installed on Quit (or not any more).
+pub fn set_update_ready(ready: bool) {
+    if QUIT_UPDATES.swap(ready, Ordering::Relaxed) != ready {
+        rename_quit(ready);
+    }
+}
+
+fn rename_quit(updates: bool) {
+    if let Some(rename) = QUIT_LABEL.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        rename(quit_label(updates));
+    }
+}
+
+fn quit_label(updates: bool) -> &'static str {
+    if updates {
+        QUIT_AND_UPDATE
+    } else {
+        QUIT
+    }
 }
 
 /// The window was closed and tug went to the tray: say so the first time, so it doesn't
@@ -222,6 +264,12 @@ fn dot_rgba() -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quit_says_when_it_will_update() {
+        assert_eq!(quit_label(false), "Quit tug");
+        assert_eq!(quit_label(true), "Quit and update tug");
+    }
 
     #[test]
     fn tooltip_counts_unread() {

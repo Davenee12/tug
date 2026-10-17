@@ -138,6 +138,31 @@ fooled into *asking*; it can't send without the person.
 only), production npm dependencies by `npm audit`, the code by CodeQL, and Dependabot keeps
 both lockfiles current. CI actions from third parties are pinned to commit SHAs.
 
+**Release builds.** Releases are built by GitHub Actions (`.github/workflows/release.yml`) from a
+version tag on a commit on `main`, after the same checks as every pull request, and land as a
+*draft* that the owner publishes by hand. The workflow's token is read-only except in the one job
+that creates the draft. Secrets (the updater signing key, SignPath's token) are only read on a real
+release run, never on pull requests or dry runs, and never echoed. The build fails if a local path
+survived in the exes, and the checksums and `latest.json` are made after any code signing, so they
+describe the files people download. See [RELEASING.md](RELEASING.md).
+
+**Automatic updates.** Release builds set up for them check GitHub only
+(`https://github.com/Davenee12/tug/releases/latest/download/latest.json`, then the installer it
+names), from Rust; the webview's CSP is unchanged and it has no updater permission. Every download
+is verified by `tauri-plugin-updater` against the minisign public key compiled into tug
+(`tauri.conf.json`) before it can run, and the signature must name the same version the manifest
+announces (`requireSignedVersion`), so a tampered `latest.json` can't pair a new version number with
+an older signed installer. Only strictly newer versions are accepted: downgrades are refused, in
+the plugin's comparator and again before installing. A failed check, download or signature leaves
+tug running as it was (logged, retried later). tug never restarts on its own: the person clicks
+**Update** and **Restart now**, which waits while a call rings, Tugboat moves files or voice typing
+is busy, or quits from the tray (whose item then says **Quit and update tug**). Without a real
+public key in the build, nothing checks at all. The signing key's private half lives only in the
+owner's offline backup and the repository's Actions secrets; anyone holding it could sign an update
+every installed tug would accept, which is why it is never committed and never used outside a
+release run. Losing it means installed copies can't update automatically any more (they'd need a
+manual reinstall of a build with a new key).
+
 ## What tug doesn't protect against
 
 - **Malware already running as you.** A program at normal integrity in your Windows session can
@@ -165,4 +190,7 @@ you the next time it runs as administrator.)
 ## Unsigned builds
 
 The installer isn't code-signed yet, so Windows SmartScreen warns about it and there's no
-publisher signature to check. Download tug only from the project's GitHub Releases page.
+publisher signature to check. Download tug only from the project's GitHub Releases page, and
+compare its SHA-256 with the checksums in the release notes. The release workflow is ready for
+SignPath's free open-source signing and turns it on once SignPath approves the project. Automatic
+updates don't depend on code signing: they're verified with tug's own update key.

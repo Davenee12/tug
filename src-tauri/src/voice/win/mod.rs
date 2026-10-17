@@ -72,6 +72,11 @@ static REGISTERED: Mutex<Option<Keys>> = Mutex::new(None);
 /// One hold at a time: a press while one is being recognized or typed is ignored.
 static BUSY: AtomicBool = AtomicBool::new(false);
 
+/// A hold is being listened to, recognized or typed.
+pub fn busy() -> bool {
+    BUSY.load(Ordering::SeqCst)
+}
+
 fn worker() -> Option<&'static Mutex<mpsc::Sender<Job>>> {
     if let Some(w) = WORKER.get() {
         return Some(w);

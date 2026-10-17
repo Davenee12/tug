@@ -67,11 +67,17 @@
 //   http://localhost:1420/?sharing    the screen is being shared: the Feed and Messages blur texts and names under
 //                                     the "Previews hidden" banner (Show anyway). &presenting for a slide show,
 //                                     &stop to have sharing end after 10 s (the banner clears), &call for a call
+//   http://localhost:1420/?update     a new version has downloaded: the Update button beside tug's name and its
+//                                     "Restart tug to update?" confirm (&updatebusy: held, as during a call)
+//   http://localhost:1420/?updatecheck   updates set up, nothing found yet: Settings › About › Check for updates
+//                                     finds a version and downloads it
+//   http://localhost:1420/?updateportable   the portable exe with a new version out: "Update available — Download"
+//   (no flag)                         updates aren't set up for this build: Settings › About says so
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { RELEASE_NOTES } from "./whatsNew";
-import type { CallRecord, CodeHotkeyStatus, VoiceStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
+import type { CallRecord, CodeHotkeyStatus, VoiceStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack, UpdateStatus } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -1029,10 +1035,67 @@ const voice: VoiceStatus = {
   micBlocked: params.has("micblocked"),
 };
 
+// Automatic updates (updater/ in Rust). Without a flag the build isn't set up for updates, like a
+// real build before the owner adds the key. ?update: a new version has downloaded (the Update
+// button beside tug's name). &updatebusy: Restart now is held as if a call were ringing.
+// ?updatecheck: set up, nothing found yet; Check for updates finds one and downloads it.
+// ?updateportable: the portable exe, a new version out (the button opens the release page).
+const updateNext = appVersion.replace(/(\d+)$/, (n) => String(Number(n) + 1));
+const update: UpdateStatus = {
+  rev: 1,
+  phase: params.has("update") ? "ready" : params.has("updatecheck") ? "upToDate" : params.has("updateportable") ? "available" : "notConfigured",
+  current: appVersion,
+  version: params.has("update") || params.has("updateportable") ? updateNext : null,
+  headline: params.has("update") ? "Automatic updates with an Update button, and a calmer tray." : null,
+  progress: null,
+  failure: null,
+  portable: params.has("updateportable"),
+  auto: true,
+  checkedAt: null,
+};
+function sendUpdate(patch: Partial<UpdateStatus> = {}) {
+  Object.assign(update, patch, { rev: (update.rev ?? 0) + 1 });
+  void emit("update-status", { ...update });
+  return { ...update };
+}
+function mockUpdateCheck() {
+  const answer = sendUpdate({ phase: "checking", failure: null });
+  setTimeout(() => {
+    if (!params.has("updatecheck")) return void sendUpdate({ phase: "upToDate", checkedAt: Date.now() });
+    sendUpdate({ phase: "downloading", version: updateNext, headline: "Automatic updates with an Update button.", progress: 0 });
+    let p = 0;
+    const tick = setInterval(() => {
+      p += 20;
+      if (p < 100) return void sendUpdate({ progress: p });
+      clearInterval(tick);
+      sendUpdate({ phase: "ready", progress: null, checkedAt: Date.now() });
+    }, 400);
+  }, 1200);
+  return answer;
+}
+
 mockIPC(
   (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (cmd) {
+      case "update_status":
+        return { ...update };
+      case "update_check":
+        return update.phase === "notConfigured" ? { ...update } : mockUpdateCheck();
+      case "update_download":
+        return sendUpdate({ phase: "ready" });
+      case "update_set_auto":
+        return sendUpdate({ auto: a.on === true });
+      case "update_apply":
+        if (params.has("updatebusy")) return { blocked: "call", status: { ...update } };
+        sendUpdate({ phase: "applying" });
+        console.info("[dev mock] the installer would run now; tug restarts on", a.resume);
+        return { blocked: null, status: { ...update } };
+      case "update_open_release_page":
+        console.info("[dev mock] open the release page");
+        return null;
+      case "update_take_resume":
+        return null;
       case "pc_audio_status":
         return { ...pcAudio };
       case "pc_audio_set":
