@@ -6,7 +6,7 @@ import { useTugboatStore } from "../stores/tugboat";
 import { useGameStore } from "../stores/game";
 import { useVoiceStore } from "../stores/voice";
 import { useFocusTrap } from "../lib/focusTrap";
-import { afterPaletteSend, parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
+import { afterPaletteSend, notificationPick, parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
 import {
   appLabel,
   canClear,
@@ -16,7 +16,6 @@ import {
   formatAddress,
   groupConversations,
   highlight,
-  isConversation,
   notificationTime,
   snippet,
   threadKey,
@@ -269,16 +268,19 @@ function pick(o: Option | undefined) {
   } else if (o.kind === "message") {
     openConversation(o.m.address, messageName(o.m));
     tug.focusItem = `m${o.m.id}`;
-  } else if (isConversation(o.n)) {
-    tug.openThread(threadKey(o.n));
-    tug.focusItem = `n${o.n.id}`;
-  } else if (o.n.removedAt == null) {
-    tug.view = "feed";
-    tug.focusItem = `n${o.n.id}`;
   } else {
-    // Cleared app notifications aren't in the feed any more: show them in full here.
-    expanded.value = expanded.value === o.n.id ? null : o.n.id;
-    return;
+    // A text's notification opens its conversation; any other app's (WhatsApp, Teams…) its Feed row.
+    const target = notificationPick(o.n);
+    if (target.open === "messages") {
+      tug.openThread(target.thread);
+    } else if (target.open === "feed") {
+      tug.view = "feed";
+    } else {
+      // Cleared app notifications aren't in the feed any more: show them in full here.
+      expanded.value = expanded.value === o.n.id ? null : o.n.id;
+      return;
+    }
+    tug.focusItem = `n${o.n.id}`;
   }
   close();
 }

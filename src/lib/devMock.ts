@@ -138,6 +138,12 @@ const history: PhoneNotification[] = noPhone
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Also bring the charger 🙏", 14),
       n("com.apple.mobilecal", "Calendar", "Design review", "In 15 minutes · Room 4", 18, { category: "schedule" }),
       n("com.hammerandchisel.discord", "Discord", "#release", "ci passed on main, tagging v0.4 now", 41),
+      // Other chat apps stay in the Feed (tug can't reply to them), even from a name that also
+      // texts you: Teams' Jane Doe never joins her Messages conversation. A WhatsApp code still
+      // gets its Copy code chip.
+      n("com.microsoft.skype.teams", "Teams", "Jane Doe", "Can you share the deck before standup?", 5),
+      n("com.tinyspeck.chatlyio", "Slack", "#design", "Priya: new mocks are up in the channel", 11),
+      n("net.whatsapp.WhatsApp", "WhatsApp", "Acme", "Your WhatsApp code: 384-221. Don't share this code with others.", 13),
       n("com.apple.mobilemail", "Mail", "Netlify", "Deploy succeeded for example-site", 66, { category: "email", removedAt: now - 30 * min, live: false }),
       n("net.whatsapp.WhatsApp", "WhatsApp", "Sam Okafor", "Running 5 late", 180, { live: false }),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Booked for Thursday", 60 * 26, { live: false }),

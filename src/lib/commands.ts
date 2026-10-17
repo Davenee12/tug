@@ -2,7 +2,7 @@
 // "text zoe running late", "pause", "copy code", "clear all", "new message". Pure, so it's tested.
 
 import type { MediaCommand, PhoneNotification, SpotifyPlaylist } from "../types/protocol";
-import { cleanName, formatAddress, missedCallFor } from "./format";
+import { cleanName, formatAddress, isConversation, missedCallFor, threadKey } from "./format";
 import { matchPlaylists, normalize, playlistDetail } from "./spotify";
 
 export interface Person {
@@ -310,4 +310,16 @@ export function afterPaletteSend(
   result: "sent" | "unconfirmed" | "failed" | "error",
 ): "open-conversation" | "restore-query" {
   return result === "error" ? "restore-query" : "open-conversation";
+}
+
+/**
+ * Where a notification picked from Ctrl+K's results opens. A Messages notification opens its
+ * conversation; every other app's, WhatsApp and Teams included, opens its row in the Feed, never a
+ * Messages thread tug couldn't reply in. One already cleared from the Feed shows in full in place.
+ */
+export function notificationPick(
+  n: Pick<PhoneNotification, "appId" | "title" | "removedAt">,
+): { open: "messages"; thread: string } | { open: "feed" } | { open: "here" } {
+  if (isConversation(n)) return { open: "messages", thread: threadKey(n) };
+  return n.removedAt == null ? { open: "feed" } : { open: "here" };
 }

@@ -7,7 +7,9 @@ import { textContent } from "../lib/messageType";
 import { mayHaveWebsite, webLinkFor, type WebLink } from "../lib/weblinks";
 import { useCallButtonGate } from "../lib/useCallButtonGate";
 import type { PhoneNotification } from "../types/protocol";
+import { findCode } from "../lib/codes";
 import AppAvatar from "./AppAvatar.vue";
+import CodeChip from "./CodeChip.vue";
 import MediaChip from "./MediaChip.vue";
 
 // `compact`: inside an expanded app stack, where the avatar and app name are already shown.
@@ -29,6 +31,8 @@ const webLink = computed<WebLink | null>(() => {
 // A text's photo ("Attachment: 1 Photo") reads as a chip under any caption (lib/attachments).
 const content = computed(() => (props.n.appId === MESSAGES_APP && props.n.message ? textContent(props.n.message) : null));
 const hasChip = computed(() => !!content.value && (!!content.value.media || content.value.unreadable));
+// A one-time code in any app's notification (a WhatsApp or bank code in a stack): one click to copy.
+const code = computed(() => findCode(props.n.message || props.n.subtitle));
 const messageText = computed(() => (hasChip.value ? (content.value?.text ?? "") : props.n.message));
 const expanded = ref(false);
 const busy = ref<"positive" | "negative" | null>(null);
@@ -73,6 +77,7 @@ async function act(positive: boolean) {
 
 
       <div :class="['flex items-center gap-2', compact ? 'mt-1.5' : 'mt-2.5']">
+        <CodeChip v-if="code" :code="code.code" :from="[n]" />
         <template v-if="n.live">
           <button
             v-if="n.flags.positiveAction"

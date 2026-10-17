@@ -265,8 +265,8 @@ const canReply = computed(
   () => (!!replyTo.value || canPickNumber.value) && tug.status.services.messages && !!selected.value?.addresses.length,
 );
 const replyHint = computed(() => {
+  // Every conversation here is a Messages one (other chat apps stay in the Feed: lib/format).
   if (!selected.value) return "";
-  if (selected.value.appId !== "com.apple.MobileSMS") return `Reply to ${selected.value.appLabel} messages on your phone.`;
   const unavailable = replyUnavailable(tug.status, tug.switchContext);
   if (unavailable) return unavailable;
   if (!selected.value.addresses.length) return "tug will learn this number when their next text arrives.";
