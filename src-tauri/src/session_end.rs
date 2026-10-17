@@ -84,8 +84,8 @@ fn subclass(window: &tauri::WebviewWindow) {
         return;
     };
     let hwnd = HWND(hwnd.0);
-    // SAFETY: the subclass proc is a plain function with no state; it stays installed for the
-    // window's lifetime (tug has one main window, destroyed only at exit).
+    // SAFETY: the subclass proc is a plain function with no state; it removes itself when the
+    // window is destroyed (WM_NCDESTROY), as SetWindowSubclass's documentation asks.
     let ok = unsafe { SetWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID, 0) };
     if !ok.as_bool() {
         log::debug!("session end: couldn't watch the window");
@@ -107,13 +107,22 @@ unsafe extern "system" fn subclass_proc(
     _id: usize,
     _data: usize,
 ) -> windows::Win32::Foundation::LRESULT {
-    use windows::Win32::UI::Shell::DefSubclassProc;
+    use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::WM_ENDSESSION;
     if is_session_end(msg, wparam.0) {
         ENDING.store(true, Ordering::SeqCst);
     } else if msg == WM_ENDSESSION {
         // wParam FALSE: another app cancelled the shutdown; tug carries on as normal.
         ENDING.store(false, Ordering::SeqCst);
+    }
+    if removes_subclass(msg) {
+        // The window is going away (exit, or the window rebuilt after a WebView2 failure): take
+        // the subclass off before it's destroyed, so nothing calls this proc for a dead window.
+        // SAFETY: same window, proc and id as SetWindowSubclass above; called on the window's own
+        // thread from inside its message handling, as the documentation requires.
+        unsafe {
+            let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID);
+        }
     }
     // SAFETY: forwarding the message unchanged to the next handler (tao's).
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
@@ -125,6 +134,13 @@ fn is_session_end(msg: u32, wparam: usize) -> bool {
     const WM_QUERYENDSESSION: u32 = 0x0011;
     const WM_ENDSESSION: u32 = 0x0016;
     msg == WM_QUERYENDSESSION || (msg == WM_ENDSESSION && wparam != 0)
+}
+
+/// WM_NCDESTROY, the last message a window gets: where a subclass must remove itself.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn removes_subclass(msg: u32) -> bool {
+    const WM_NCDESTROY: u32 = 0x0082;
+    msg == WM_NCDESTROY
 }
 
 #[cfg(test)]
@@ -153,5 +169,16 @@ mod tests {
         assert!(is_session_end(0x0016, 1)); // WM_ENDSESSION, ending
         assert!(!is_session_end(0x0016, 0)); // WM_ENDSESSION, cancelled
         assert!(!is_session_end(0x0010, 0)); // WM_CLOSE
+    }
+
+    #[test]
+    fn the_subclass_comes_off_when_the_window_is_destroyed() {
+        assert!(removes_subclass(0x0082)); // WM_NCDESTROY
+        assert!(!removes_subclass(0x0002)); // WM_DESTROY comes first; children still exist
+        assert!(!removes_subclass(0x0010)); // WM_CLOSE
+        assert!(!removes_subclass(0x0011)); // WM_QUERYENDSESSION
+                                            // The number is Windows' own.
+        #[cfg(windows)]
+        assert!(removes_subclass(windows::Win32::UI::WindowsAndMessaging::WM_NCDESTROY));
     }
 }
