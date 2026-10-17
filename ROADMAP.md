@@ -132,6 +132,15 @@ Shipping it also needs paid code signing.
   doesn't instantly clear SmartScreen; reputation still builds over time.
 - **Branded installer** (NSIS welcome/finish pages).
 
+## Sustaining tug (monetization plan, owner-approved direction 2026-10-07)
+tug's core stays free and MIT-licensed, and private: no ads, no selling data.
+1. **Now:** GitHub Sponsors + a "Support tug" link (Settings › About, README). Funds code signing first.
+2. **When signed and stable:** a paid Microsoft Store listing (one-time, signed, auto-updates); the GitHub build stays free.
+3. **Later, "tug Plus" subscription** for things that cost money to run or save real time: an end-to-end
+   encrypted relay to reach the phone away from home, companion-app features, browser-extension code
+   autofill and calm mode, developer extras, encrypted backup/sync. Free users keep everything that
+   works today. Paid parts live in services or separately licensed add-ons.
+
 ## Future — macOS
 Tauri, the UI, the store and the pure protocol modules (`ancs.rs`, `ams.rs`, `map/` parsers) are
 portable; the Bluetooth I/O (`ble/`, `map/session.rs`) and a few Windows bits (tray overlay,
