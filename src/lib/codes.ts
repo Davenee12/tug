@@ -27,7 +27,13 @@ const CUE_WORDS = [
 const W = "[\\p{L}\\p{N}_]";
 const CUE = new RegExp(`(?<!${W})(?:${CUE_WORDS.join("|")})(?!${W})`, "iu");
 /** Scripts without spaces between words: matched anywhere (ja, zh, ko). */
-const CUE_ANYWHERE = /コード|验证码|驗證碼|校验码|认证码|인증\s?번호|인증\s?코드/u;
+const CUE_ANYWHERE = /コード|確認コード|認証番号|验证码|驗證碼|校验码|认证码|인증\s?번호|인증\s?코드/u;
+/**
+ * Arabic and Hebrew join short words to the front of the next ("الرمز" the code, "בקוד" with the
+ * code) and Arabic adds "your" at the end ("رمزك"): the cue word with those, still as a whole word,
+ * so "רמזי" (a name) or "קודם" ("before") aren't cues. Mirrors `CUE_AFFIXED` in `codes.rs`.
+ */
+const CUE_AFFIXED = /(?<!\p{L})(?:(?:وال|بال|فال|لل|ال|و|ب|ل|ف)?(?:رمز|رموز)(?:ك|كم|ه)?|[הבלמו]?קוד(?:ים)?)(?!\p{L})/u;
 
 /**
  * Candidate codes: 4–8 digits, optionally split once by a dash or space (482-913), or a
@@ -51,7 +57,7 @@ export interface FoundCode {
  * likely an order number, a price or a time, and a wrong "Copy code" is worse than none.
  */
 export function findCode(text: string | null | undefined): FoundCode | null {
-  if (!text || !(CUE.test(text) || CUE_ANYWHERE.test(text))) return null;
+  if (!text || !(CUE.test(text) || CUE_ANYWHERE.test(text) || CUE_AFFIXED.test(text))) return null;
   const phones = [...text.matchAll(PHONE)].map((m) => [m.index!, m.index! + m[0].length] as const);
   const inPhone = (i: number) => phones.some(([a, b]) => i >= a && i < b);
   const found: FoundCode[] = [];

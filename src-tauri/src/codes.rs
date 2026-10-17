@@ -68,8 +68,17 @@ static CUE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Scripts without spaces between words: matched anywhere (ja, zh, ko).
-static CUE_ANYWHERE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"コード|验证码|驗證碼|校验码|认证码|인증\s?번호|인증\s?코드").expect("compiles"));
+static CUE_ANYWHERE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"コード|確認コード|認証番号|验证码|驗證碼|校验码|认证码|인증\s?번호|인증\s?코드").expect("compiles")
+});
+
+/// Arabic and Hebrew join short words to the front of the next ("الرمز" the code, "בקוד" with the
+/// code) and Arabic adds "your" at the end ("رمزك"): the cue word with those, still as a whole word,
+/// so "רמזי" (a name) or "קודם" ("before") aren't cues. Mirrors `CUE_AFFIXED` in `src/lib/codes.ts`.
+static CUE_AFFIXED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?<!\p{L})(?:(?:وال|بال|فال|لل|ال|و|ب|ل|ف)?(?:رمز|رموز)(?:ك|كم|ه)?|[הבלמו]?קוד(?:ים)?)(?!\p{L})")
+        .expect("CUE_AFFIXED compiles")
+});
 
 /// 4–8 digits, optionally split once by a dash or space (482-913), or a provider prefix like
 /// G-482913. Not part of a longer number, a price, a time or a phone number.
@@ -99,7 +108,9 @@ pub struct FoundCode {
 /// The one code in `text`, or `None` (no cue word, no candidate, or several different numbers).
 /// Always needs a cue word: a bare number is as likely an order number, a price or a time.
 pub fn find_code(text: &str) -> Option<FoundCode> {
-    let cued = CUE.is_match(text).unwrap_or(false) || CUE_ANYWHERE.is_match(text).unwrap_or(false);
+    let cued = CUE.is_match(text).unwrap_or(false)
+        || CUE_ANYWHERE.is_match(text).unwrap_or(false)
+        || CUE_AFFIXED.is_match(text).unwrap_or(false);
     if text.is_empty() || !cued {
         return None;
     }
