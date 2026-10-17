@@ -60,8 +60,13 @@ export const useGameStore = defineStore("game", () => {
     }
   }
 
-  /** Open a game, or the picker to choose one (the Play button, the taskbar's Play a game). */
+  /**
+   * Open a game, or the picker to choose one (the Play button, the taskbar's Play a game). The
+   * picker never replaces a game that's open: a taskbar "Play a game" mid-game would otherwise
+   * throw the game away.
+   */
   async function show(which: GameId | "picker" = "picker") {
+    if (which === "picker" && screen.value !== null) return;
     screen.value = which;
     await load();
   }

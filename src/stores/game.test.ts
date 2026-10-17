@@ -33,6 +33,22 @@ describe("the games' screens", () => {
     game.close();
     expect(game.open).toBe(false);
   });
+
+  it("Play a game while a game is open keeps the game", async () => {
+    const game = useGameStore();
+    await game.show("tugboat-run");
+    // The taskbar's Play a game (or the Play button) mid-race.
+    await game.show("picker");
+    expect(game.screen).toBe("tugboat-run");
+    await game.show();
+    expect(game.screen).toBe("tugboat-run");
+    // Choosing a game by name still switches, and the picker opens once nothing is.
+    await game.show("harbor-stack");
+    expect(game.screen).toBe("harbor-stack");
+    game.close();
+    await game.show();
+    expect(game.screen).toBe("picker");
+  });
 });
 
 describe("scores", () => {
