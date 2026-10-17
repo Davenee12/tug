@@ -8,6 +8,7 @@ import { GMAIL_APP_ID, mayHaveWebsite, webLinkFor, type WebLink } from "../lib/w
 import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import NotificationItem from "./NotificationItem.vue";
+import { singleFlight } from "../lib/singleFlight";
 
 const props = defineProps<{ entry: FeedEntry }>();
 const tug = useTugStore();
@@ -66,6 +67,10 @@ watch(
   { immediate: true },
 );
 
+// One press, one action: Answer/Decline and ✕ wait for the phone before they can be pressed again.
+const { run: respond, busy: answering } = singleFlight((answer: boolean) => tug.respondToCall(latest.value, answer));
+const { run: clearAll, busy: clearing } = singleFlight(() => tug.clearItems(items.value));
+
 function open() {
   if (props.entry.kind === "thread") {
     tug.openThread(props.entry.key);
@@ -95,6 +100,7 @@ function open() {
       class="flex w-full cursor-default items-center gap-3 rounded-xl px-3 py-2.5 text-left active:bg-surface-soft"
       @click="open"
       @keydown.enter.self="open"
+      @keydown.space.self.prevent="open"
     >
       <AppAvatar :app-id="appId" :label="entry.kind === 'thread' ? title : appLabel" :person="entry.kind === 'thread'" size="sm" />
       <span class="min-w-0 flex-1">
@@ -122,17 +128,20 @@ function open() {
         :title="`Open in ${webLink.label} on the web`"
         @click.stop="tug.openUrl(webLink.url)"
         @keydown.enter.stop="tug.openUrl(webLink.url)"
+        @keydown.space.stop.prevent="tug.openUrl(webLink.url)"
       >
         <ExternalLink :size="14" />
       </span>
       <span
         v-if="clearable && !ringing"
         role="button"
-        tabindex="0"
-        class="shrink-0 rounded-md p-1 text-muted-soft active:bg-surface-card"
+        :tabindex="clearing ? -1 : 0"
+        :aria-disabled="clearing ? 'true' : undefined"
+        :class="['shrink-0 rounded-md p-1 text-muted-soft active:bg-surface-card', clearing ? 'opacity-50' : '']"
         :title="`Clear ${entry.kind === 'thread' ? title : appLabel} on your iPhone`"
-        @click.stop="tug.clearItems(items)"
-        @keydown.enter.stop="tug.clearItems(items)"
+        @click.stop="clearAll"
+        @keydown.enter.stop="clearAll"
+        @keydown.space.stop.prevent="clearAll"
       >
         <X :size="14" />
       </span>
@@ -144,10 +153,10 @@ function open() {
     </div>
 
     <div v-if="ringing && !expanded" class="flex gap-2 px-3 pb-3 pl-14">
-      <button v-if="latest.flags.positiveAction" class="btn-primary btn-sm" @click="tug.respondToCall(latest, true)">
+      <button v-if="latest.flags.positiveAction" class="btn-primary btn-sm" :disabled="answering" @click="respond(true)">
         {{ latest.positiveLabel || "Answer" }}
       </button>
-      <button v-if="latest.flags.negativeAction" class="btn-secondary btn-sm" @click="tug.respondToCall(latest, false)">
+      <button v-if="latest.flags.negativeAction" class="btn-secondary btn-sm" :disabled="answering" @click="respond(false)">
         {{ latest.negativeLabel || "Decline" }}
       </button>
     </div>

@@ -1,10 +1,19 @@
 // App-wide zoom with Ctrl +/−/0 and Ctrl+wheel, like browsers and Electron apps.
 // CSS zoom on the root works in WebView2 and in the browser preview alike.
 
+import { ref } from "vue";
+
 const STEPS = [0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+
+/**
+ * The zoom in effect. Layout that measures itself (lib/useElementSize) watches this, because a
+ * ResizeObserver doesn't report a change of CSS zoom even though the room in CSS pixels changed.
+ */
+export const currentZoom = ref(1);
 
 export function applyZoom(factor: number) {
   document.documentElement.style.zoom = String(factor);
+  currentZoom.value = factor;
 }
 
 export function stepZoom(current: number, dir: 1 | -1): number {

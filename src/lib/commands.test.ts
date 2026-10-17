@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseActions, type ActionContext, type Person } from "./commands";
+import { afterPaletteSend, parseActions, type ActionContext, type Person } from "./commands";
 import type { PhoneNotification } from "../types/protocol";
 
 const people: Person[] = [
@@ -262,5 +262,16 @@ describe("spotify search actions", () => {
   it("opens the Spotify panel, only when connected", () => {
     expect(parseActions("spotify", people, on)[0]).toMatchObject({ kind: "open", target: "spotify" });
     expect(parseActions("spotify", people, {})).toEqual([]);
+  });
+});
+
+describe("afterPaletteSend", () => {
+  it("opens the conversation when the text was recorded, even as Not sent", () => {
+    expect(afterPaletteSend("sent")).toBe("open-conversation");
+    expect(afterPaletteSend("failed")).toBe("open-conversation");
+    expect(afterPaletteSend("unconfirmed")).toBe("open-conversation");
+  });
+  it("brings the typed text back when nothing was recorded", () => {
+    expect(afterPaletteSend("error")).toBe("restore-query");
   });
 });

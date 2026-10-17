@@ -272,3 +272,15 @@ function build(person: Person, text: string): Action {
     ? { kind: "send", person, text, label: `Send “${text}” to ${cleanName(person.name)}`, detail }
     : { kind: "open-chat", person, label: `Message ${cleanName(person.name)}`, detail };
 }
+
+/**
+ * What happens after Ctrl+K sent a text. "sent", "unconfirmed" (in the conversation as May have
+ * sent) and "failed" (in the conversation as Not sent, with Retry) open the conversation; "error"
+ * means nothing was recorded, so the palette comes back with what was typed rather than lose it
+ * (the composer keeps its text the same way).
+ */
+export function afterPaletteSend(
+  result: "sent" | "unconfirmed" | "failed" | "error",
+): "open-conversation" | "restore-query" {
+  return result === "error" ? "restore-query" : "open-conversation";
+}

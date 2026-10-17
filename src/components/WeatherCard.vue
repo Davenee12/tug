@@ -16,7 +16,8 @@ import {
   Sun,
 } from "lucide-vue-next";
 import { useWeatherStore } from "../stores/weather";
-import { dayLabel, describe, hourLabel, localTime, outlook, searchPlaces, temp, wind, withCurrentHour, type Place, type Sky } from "../lib/weather";
+import { dayLabel, describe, hourLabel, localTime, outlook, temp, wind, withCurrentHour, type Place, type Sky } from "../lib/weather";
+import { useCitySearch } from "../lib/useCitySearch";
 import { relativeTime } from "../lib/format";
 import { errorMessage } from "../lib/ipc";
 import { friendlyLocateError } from "../lib/locating";
@@ -171,38 +172,21 @@ function sideways(e: WheelEvent) {
 }
 
 // ---- Set-up: your location or a city ----
-const query = ref("");
-const results = ref<Place[]>([]);
-const setupError = ref<string | null>(null);
+// The city box (lib/useCitySearch): newest results only, plain words when it can't search.
+const { query, results, error: cityError, reset: resetCities } = useCitySearch();
+/** "Use my location" didn't work, in tug's words. */
+const locateError = ref<string | null>(null);
+const setupError = computed(() => locateError.value ?? cityError.value);
 const locating = ref(false);
-let seq = 0;
-let debounce: number | undefined;
-watch(query, (q) => {
-  window.clearTimeout(debounce);
-  if (q.trim().length < 2) {
-    results.value = [];
-    return;
-  }
-  debounce = window.setTimeout(async () => {
-    const mine = ++seq;
-    try {
-      const r = await searchPlaces(q);
-      if (mine === seq) results.value = r;
-    } catch (e) {
-      if (mine === seq) setupError.value = String(e instanceof Error ? e.message : e);
-    }
-  }, 250);
-});
 async function pick(p: Place) {
-  query.value = "";
-  results.value = [];
-  setupError.value = null;
+  resetCities();
+  locateError.value = null;
   await w.setPlace(p);
 }
 // "Use my location": tug's own words while it looks, "There you are" when it's found.
 const finding = useLocating();
 async function locate() {
-  setupError.value = null;
+  locateError.value = null;
   locating.value = true;
   finding.start();
   try {
@@ -210,7 +194,7 @@ async function locate() {
     await finding.succeed();
     await w.setPlace(p);
   } catch (e) {
-    setupError.value = friendlyLocateError(errorMessage(e));
+    locateError.value = friendlyLocateError(errorMessage(e));
   } finally {
     finding.stop();
     locating.value = false;

@@ -24,6 +24,8 @@ import { nextDownSince, RECONNECT_GRACE_MS, showConnectionPanel } from "./lib/co
 import { showsReconnecting } from "./lib/connectionStatus";
 import { skippedMessage } from "./lib/tugboat";
 import { START_FAILED } from "./lib/startup";
+import { isWide } from "./lib/layout";
+import { useElementSize } from "./lib/useElementSize";
 
 const tug = useTugStore();
 const tugboat = useTugboatStore();
@@ -33,11 +35,11 @@ const game = useGameStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
 // show the Connection panel beside the feed; everything else (and narrow windows) uses
-// Settings › iPhone. A quick relink doesn't count: see lib/connectionPanel.
-const WIDE = "(min-width: 1240px)";
-const wide = ref(window.matchMedia(WIDE).matches);
-const mq = window.matchMedia(WIDE);
-const onMq = (e: MediaQueryListEvent) => (wide.value = e.matches);
+// Settings › iPhone. A quick relink doesn't count: see lib/connectionPanel. "Wide" is measured from
+// the window's layout, which follows tug's zoom; a media query wouldn't (lib/layout).
+const shell = ref<HTMLElement | null>(null);
+const { width: shellWidth } = useElementSize(shell, { width: window.innerWidth, height: window.innerHeight });
+const wide = computed(() => isWide(shellWidth.value));
 const downSince = ref<number | null>(null);
 const now = ref(Date.now());
 let graceTimer: number | undefined;
@@ -111,7 +113,6 @@ function onShortcut(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  mq.addEventListener("change", onMq);
   window.addEventListener("keydown", onShortcut);
   // Tugboat: files dragged onto the window open Tugboat with them offered to the phone.
   void tugboat.init({
@@ -139,7 +140,6 @@ onMounted(async () => {
   }
 });
 onUnmounted(() => {
-  mq.removeEventListener("change", onMq);
   window.removeEventListener("keydown", onShortcut);
   window.clearTimeout(graceTimer);
   tug.dispose();
@@ -150,7 +150,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex h-full">
+  <div ref="shell" class="flex h-full">
     <DeviceRail class="w-[288px] shrink-0" />
 
     <main class="min-w-0 flex-1">

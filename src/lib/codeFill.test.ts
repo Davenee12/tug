@@ -13,12 +13,25 @@ import {
   knownHotkey,
   rememberCopied,
   shouldAutoCopy,
+  typeCodeShortcut,
 } from "./codeFill";
 import shared from "./codeHotkeys.json";
 import type { ToastSpec } from "../types/protocol";
 
 const NOW = Date.parse("2026-10-10T12:00:00");
 const min = 60_000;
+
+describe("typeCodeShortcut (Settings › Keyboard)", () => {
+  it("lists the keys that are registered now, whichever were picked", () => {
+    expect(typeCodeShortcut({ state: "on", keys: "ctrl+shift+v" })?.keys).toEqual(["Ctrl", "Shift", "V"]);
+    const other = CODE_HOTKEYS.find((h) => h !== "ctrl+shift+v") ?? "ctrl+alt+v";
+    expect(typeCodeShortcut({ state: "on", keys: other })?.keys).toEqual(hotkeyKeys(other));
+  });
+  it("isn't listed while it's off or another app holds the keys", () => {
+    expect(typeCodeShortcut({ state: "off", keys: "ctrl+shift+v" })).toBeNull();
+    expect(typeCodeShortcut({ state: "inUse", keys: "ctrl+shift+v" })).toBeNull();
+  });
+});
 
 function candidate(over: Partial<Parameters<typeof shouldAutoCopy>[0]> = {}) {
   return { code: "482193", receivedAt: NOW - 2_000, now: NOW, replayed: false, copied: new Map<string, number>(), ...over };

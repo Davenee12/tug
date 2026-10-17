@@ -239,15 +239,19 @@ Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` besid
 (is the window really visible), `battery`, `coalesce` (one render per frame for bursts of
 updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),
-`devtools`, `errorReport`, `escape`, `format` (conversation grouping and display), `health`,
-`locating`, `media` (which controls show, skip routing), `messageSync`, `messageType`, `ordering`
-(newest state wins over late events and reads), `pairings`,
+`devtools`, `errorReport`, `escape`, `feedPaging` (keep paging while the Feed's end is in view),
+`format` (conversation grouping and display), `health`, `latest` (newest request wins: late
+answers never land), `layout` (sidebar density and "wide", from sizes that follow the zoom),
+`locating`, `media` (which controls show, skip routing, seek keys), `messageSync`, `messageType`,
+`ordering` (newest state wins over late events and reads), `pairings`,
 `pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
-(unknown-sender filter), `spotify`, `stableList`, `startup` (startup reads that fail are retried, never block) (regrouped lists keep unchanged rows, so only
-they re-render), `threadWindow` (long conversations render their newest texts first),
+(unknown-sender filter), `singleFlight` (one press, one action), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
+they re-render), `startup` (startup reads that fail are retried, never block), `threadWindow` (long conversations render their newest texts first),
 `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: seeded spawning, collisions,
-scoring, the speed curve, inertia, merging the controls), `vips`, `weather`, `weblinks`, `whatsNew`.
+scoring, the speed curve, inertia, merging the controls), `useCitySearch` (the weather card's
+city box), `vips`, `weather`, `weblinks`, `whatsNew`. Thin DOM composables such as `useElementSize` (an
+element's size in zoomed CSS pixels) feed these rules.
 The phone page has its own: `tugboat-page/chunks`, `crypto` and `pad` (the controller's wire format,
 pacing and errors). Components and
 stores should call these rather than grow logic of their own.

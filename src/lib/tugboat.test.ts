@@ -1,5 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { TUGBOAT_OFF, HELP_AFTER_MS, capitalised, closeWarning, percent, showConnectHelp, skippedMessage, transferring } from "./tugboat";
+import { TUGBOAT_OFF, HELP_AFTER_MS, capitalised, closeWarning, openUnlessAbandoned, percent, showConnectHelp, skippedMessage, transferring } from "./tugboat";
+
+describe("openUnlessAbandoned (the game's phone controller)", () => {
+  it("keeps it open when it's still wanted", async () => {
+    const log: string[] = [];
+    const ok = await openUnlessAbandoned(
+      async () => void log.push("open"),
+      async () => void log.push("close"),
+      () => true,
+    );
+    expect(ok).toBe(true);
+    expect(log).toEqual(["open"]);
+  });
+
+  it("closes it once the open lands if the game closed while it was opening", async () => {
+    const log: string[] = [];
+    let wanted = true;
+    let finishOpen!: () => void;
+    const pending = openUnlessAbandoned(
+      () => new Promise<void>((r) => (finishOpen = () => (log.push("open"), r()))),
+      async () => void log.push("close"),
+      () => wanted,
+    );
+    wanted = false; // the game was closed mid-open
+    finishOpen();
+    expect(await pending).toBe(false);
+    expect(log).toEqual(["open", "close"]);
+  });
+
+  it("a failing close doesn't throw, and a failing open does", async () => {
+    await expect(openUnlessAbandoned(async () => {}, async () => Promise.reject("gone"), () => false)).resolves.toBe(false);
+    await expect(openUnlessAbandoned(async () => Promise.reject("no network"), async () => {}, () => true)).rejects.toBe("no network");
+  });
+});
 import type { TugboatOffer, TugboatStatus } from "../types/protocol";
 
 describe("Tugboat panel decisions", () => {
