@@ -38,7 +38,7 @@ import { MESSAGES_APP } from "../lib/format";
 import { batteryAlert } from "../lib/battery";
 import { copyText } from "../lib/clipboard";
 import { isAddressLike, normalizeAddress } from "../lib/address";
-import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync } from "../lib/messageSync";
+import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync, warmDue } from "../lib/messageSync";
 import { canSeeWindow } from "../lib/attention";
 import { grantedOnceCache } from "../lib/permission";
 import { arrivedDuringGap, GAP_COLLECT_MS, gapSummaryText, planGapPopups } from "../lib/reconnectPopups";
@@ -998,6 +998,18 @@ export const useTugStore = defineStore("tug", () => {
   }
 
   /**
+   * The user is typing a text: have message access open by the time they press Send, so the send
+   * doesn't wait on a reconnect. At most every WARM_GAP_MS; the backend ignores it when it's open.
+   */
+  let lastWarm: number | null = null;
+  function warmTexts() {
+    const now = Date.now();
+    if (!status.value.device || !warmDue(lastWarm, now)) return;
+    lastWarm = now;
+    void api.warmTexts().catch(() => undefined);
+  }
+
+  /**
    * Mark everything read at once: every conversation counts as seen in tug, and its texts
    * are marked read and its notifications cleared on the phone — exactly as opening each would.
    */
@@ -1911,6 +1923,7 @@ export const useTugStore = defineStore("tug", () => {
     startConversation,
     clearItems,
     readConversation,
+    warmTexts,
     markAllRead,
     copyCode,
     latestCode,

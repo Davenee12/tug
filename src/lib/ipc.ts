@@ -113,6 +113,7 @@ export const api = {
   contactPhoto: (key: string) => invoke<string | null>("contact_photo", { key }),
   placeLookup: (latitude: number, longitude: number) => invoke<string>("place_lookup", { latitude, longitude }),
   markRead: (messageIds: number[]) => invoke<void>("mark_read", { messageIds }),
+  warmTexts: () => invoke<void>("warm_texts"),
   searchAll: (query: string, limit: number) => invoke<SearchResults>("search_all", { query, limit }),
   getCalls: () => invoke<CallRecord[]>("get_calls"),
   refreshCalls: () => invoke<void>("refresh_calls"),

@@ -218,10 +218,9 @@ async fn phonebook_size(link: &mut ObexLink, book: &str) -> (PhonebookAnswer, bo
 /// The MAP folder names under `telecom/msg` (GetFolderListing). Names are cleaned and redacted.
 pub async fn folders(session: &mut MapSession) -> Result<Vec<String>, MapError> {
     tokio::time::timeout(FOLDERS_TIMEOUT, async {
+        // Through the session, so it keeps track of which folder it's in.
+        session.goto_msg().await?;
         let link = &mut session.link;
-        link.set_path(None).await?;
-        link.set_path(Some("telecom")).await?;
-        link.set_path(Some("msg")).await?;
         let headers = vec![link.conn(), Header::type_("x-obex/folder-listing")];
         let xml = link.get("GetFolderListing", headers).await?;
         Ok(inv::tally::folder_names(&String::from_utf8_lossy(&xml)))

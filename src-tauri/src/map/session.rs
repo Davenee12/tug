@@ -166,23 +166,35 @@ impl ObexLink {
         target: &[u8; 16],
         forbidden: MapError,
     ) -> Result<Self> {
+        Self::connect_with(device_id, service_uuid, target, forbidden, false).await
+    }
+
+    /// `cached_first`: try Windows' cached service record (no SDP query over the air) before
+    /// asking the phone afresh. Used for message access, where a reconnect can stand between the
+    /// user and a text going out; a stale record just fails to connect and falls back.
+    pub(super) async fn connect_with(
+        device_id: &str,
+        service_uuid: u128,
+        target: &[u8; 16],
+        forbidden: MapError,
+        cached_first: bool,
+    ) -> Result<Self> {
         tokio::time::timeout(
             CONNECT_TIMEOUT,
-            Self::connect_inner(device_id, service_uuid, target, forbidden),
+            Self::connect_inner(device_id, service_uuid, target, forbidden, cached_first),
         )
         .await
         .map_err(|_| MapError::Timeout)?
     }
 
-    async fn connect_inner(
-        device_id: &str,
+    /// An RFCOMM socket to `service_uuid` on `device`, its channel found with `mode`.
+    async fn open_socket(
+        device: &BluetoothDevice,
         service_uuid: u128,
-        target: &[u8; 16],
-        forbidden: MapError,
-    ) -> Result<Self> {
-        let device = BluetoothDevice::FromIdAsync(&HSTRING::from(device_id))?.await?;
+        mode: BluetoothCacheMode,
+    ) -> Result<StreamSocket> {
         let services = device
-            .GetRfcommServicesForIdWithCacheModeAsync(&service_id(service_uuid)?, BluetoothCacheMode::Uncached)?
+            .GetRfcommServicesForIdWithCacheModeAsync(&service_id(service_uuid)?, mode)?
             .await?
             .Services()?;
         if services.Size()? == 0 {
@@ -190,13 +202,43 @@ impl ObexLink {
         }
         let service = services.GetAt(0)?;
         let socket = StreamSocket::new()?;
-        socket
+        let connected = socket
             .ConnectWithProtectionLevelAsync(
                 &service.ConnectionHostName()?,
                 &service.ConnectionServiceName()?,
                 SocketProtectionLevel::BluetoothEncryptionAllowNullAuthentication,
             )?
-            .await?;
+            .await;
+        if let Err(e) = connected {
+            let _ = socket.Close();
+            return Err(e.into());
+        }
+        Ok(socket)
+    }
+
+    async fn connect_inner(
+        device_id: &str,
+        service_uuid: u128,
+        target: &[u8; 16],
+        forbidden: MapError,
+        cached_first: bool,
+    ) -> Result<Self> {
+        let device = BluetoothDevice::FromIdAsync(&HSTRING::from(device_id))?.await?;
+        let cached = if cached_first {
+            match Self::open_socket(&device, service_uuid, BluetoothCacheMode::Cached).await {
+                Ok(socket) => Some(socket),
+                Err(e) => {
+                    log::debug!("the cached service record didn't connect ({e}); asking the phone afresh");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let socket = match cached {
+            Some(socket) => socket,
+            None => Self::open_socket(&device, service_uuid, BluetoothCacheMode::Uncached).await?,
+        };
         let reader = DataReader::CreateDataReader(&socket.InputStream()?)?;
         reader.SetInputStreamOptions(InputStreamOptions::Partial)?;
         let writer = DataWriter::CreateDataWriter(&socket.OutputStream()?)?;
@@ -319,24 +361,43 @@ impl Drop for ObexLink {
 /// A MAP client session with the iPhone's Message Access Server.
 pub struct MapSession {
     pub(super) link: ObexLink,
+    /// The session's current folder is `/telecom/msg` (nothing tug does on a session leaves it),
+    /// so a send or listing needn't walk there again: three round trips saved per send.
+    at_msg: bool,
+}
+
+/// The SETPATH steps from wherever the session is to `/telecom/msg`: none once it's there (where
+/// every listing and send leaves it), otherwise from root (SETPATH is relative). `None` is root.
+/// Pure, so "a send on an open session is just the push" is unit-tested.
+fn path_to_msg(at_msg: bool) -> &'static [Option<&'static str>] {
+    if at_msg {
+        &[]
+    } else {
+        &[None, Some("telecom"), Some("msg")]
+    }
 }
 
 impl MapSession {
     pub async fn connect(device_id: &str) -> Result<Self> {
-        let link = ObexLink::connect(device_id, MAS_UUID, &MAS_TARGET, MapError::Consent).await?;
+        let link = ObexLink::connect_with(device_id, MAS_UUID, &MAS_TARGET, MapError::Consent, true).await?;
         log::info!(
             "MAP session open (connection id {}, max packet {})",
             link.connection_id,
             link.max_packet
         );
-        Ok(Self { link })
+        Ok(Self { link, at_msg: false })
     }
 
-    /// SETPATH is relative, so always start from root: `/telecom/msg`.
-    async fn goto_msg(&mut self) -> Result<()> {
-        self.link.set_path(None).await?;
-        self.link.set_path(Some("telecom")).await?;
-        self.link.set_path(Some("msg")).await
+    /// Go to `/telecom/msg` (already there after the first listing: no round trips).
+    pub(super) async fn goto_msg(&mut self) -> Result<()> {
+        let steps = path_to_msg(self.at_msg);
+        // Wherever a failed step leaves it, the next walk starts again from root.
+        self.at_msg = false;
+        for step in steps {
+            self.link.set_path(*step).await?;
+        }
+        self.at_msg = true;
+        Ok(())
     }
 
     /// Newest messages in `folder` (e.g. "inbox"), at most `max`.
@@ -590,6 +651,14 @@ mod tests {
         let len = expected.len() as u16;
         expected[1..3].copy_from_slice(&len.to_be_bytes());
         assert_eq!(p, expected);
+    }
+
+    #[test]
+    fn a_send_on_an_open_session_walks_no_folders() {
+        // The first listing on a session walks root → telecom → msg; after that a send is the
+        // PushMessage alone, with nothing before it.
+        assert_eq!(path_to_msg(false), &[None, Some("telecom"), Some("msg")]);
+        assert!(path_to_msg(true).is_empty());
     }
 
     #[test]

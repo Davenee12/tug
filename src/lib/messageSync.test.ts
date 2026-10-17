@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { byArrival, EVENT_GRACE_MS, missingMessages, RESYNC_AFTER_MS, settledMessages, shouldResync } from "./messageSync";
+import {
+  byArrival,
+  EVENT_GRACE_MS,
+  missingMessages,
+  RESYNC_AFTER_MS,
+  settledMessages,
+  shouldResync,
+  WARM_GAP_MS,
+  warmDue,
+} from "./messageSync";
 import type { SmsMessage } from "../types/protocol";
 
 const T0 = Date.parse("2026-10-05T21:49:00");
@@ -71,5 +80,18 @@ describe("shouldResync", () => {
   it("takes a custom threshold", () => {
     expect(shouldResync(T0, T0 + 500, 1_000)).toBe(false);
     expect(shouldResync(T0, T0 + 1_000, 1_000)).toBe(true);
+  });
+});
+
+describe("warmDue", () => {
+  it("asks once when typing starts, then at most every WARM_GAP_MS", () => {
+    expect(warmDue(null, T0)).toBe(true);
+    expect(warmDue(T0, T0 + 1_000)).toBe(false);
+    expect(warmDue(T0, T0 + WARM_GAP_MS - 1)).toBe(false);
+    expect(warmDue(T0, T0 + WARM_GAP_MS)).toBe(true);
+  });
+
+  it("never sticks if the clock went backwards", () => {
+    expect(warmDue(T0, T0 - 5_000)).toBe(true);
   });
 });
