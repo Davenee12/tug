@@ -55,9 +55,22 @@ use store::Store;
 /// the tray", so starting with Windows doesn't throw the window in the user's face at login.
 pub const MINIMIZED_ARG: &str = "--minimized";
 
+/// This launch's command line (the program path first), never panicking: `std::env::args()`
+/// panics on an argument that isn't valid Unicode (a lone UTF-16 surrogate from a shortcut or
+/// another program), and the release build aborts on a panic, so tug would vanish at launch. Such
+/// an argument is read lossily (U+FFFD for what can't be decoded); none of tug's own flags can
+/// contain one, so it simply matches nothing.
+pub fn launch_args() -> impl Iterator<Item = String> {
+    lossy_args(std::env::args_os())
+}
+
+fn lossy_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> impl Iterator<Item = String> {
+    args.into_iter().map(|a| a.to_string_lossy().into_owned())
+}
+
 /// Whether this launch asked to start minimized (autostart adds `MINIMIZED_ARG`).
 fn launched_minimized() -> bool {
-    std::env::args().any(|a| a == MINIMIZED_ARG)
+    launch_args().any(|a| a == MINIMIZED_ARG)
 }
 
 /// Run by the uninstaller (windows/hooks.nsh) before tug's files are removed: takes this tug's
@@ -159,7 +172,7 @@ pub fn run() {
             let store = Arc::new(open_store(&dir, setup_log_dir.as_deref()));
             // Taskbar quick actions: a task clicked while tug wasn't running started this launch;
             // the UI carries it out once it has loaded. Then (re)build the jump list itself.
-            if let Some(action) = quick_actions::parse_args(std::env::args()) {
+            if let Some(action) = quick_actions::parse_args(launch_args()) {
                 quick_actions::queue(action);
             }
             let show_games = store.setting(quick_actions::SHOW_GAMES_SETTING).ok().flatten();
@@ -445,5 +458,52 @@ mod uninstall_step_tests {
         assert!(!is_uninstall_step(args(&["--REMOVE-FROM-PATH"])));
         // Every ordinary launch starts the app.
         assert_eq!(run_uninstall_step(args(&[MINIMIZED_ARG])), None);
+    }
+}
+
+#[cfg(test)]
+mod launch_args_tests {
+    use std::ffi::OsString;
+
+    use super::*;
+
+    /// An argument that isn't valid Unicode: a lone UTF-16 surrogate on Windows, a stray byte
+    /// elsewhere. `std::env::args()` panics on one.
+    fn not_unicode() -> OsString {
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[0x0041, 0xD800, 0x0042])
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(vec![b'A', 0xFF, b'B'])
+        }
+    }
+
+    #[test]
+    fn a_non_unicode_argument_is_read_lossily_not_a_panic() {
+        assert!(
+            not_unicode().to_str().is_none(),
+            "the test argument really isn't Unicode"
+        );
+        let args: Vec<String> = lossy_args([
+            OsString::from(r"C:\tug\tug.exe"),
+            not_unicode(),
+            OsString::from("--action"),
+            OsString::from("settings"),
+        ])
+        .collect();
+        assert_eq!(args[1], "A\u{FFFD}B");
+        // tug's own flags still read normally around it.
+        assert_eq!(
+            quick_actions::parse_args(&args),
+            Some(quick_actions::QuickAction::Settings)
+        );
+        assert!(!args.iter().any(|a| a == MINIMIZED_ARG));
+        assert_eq!(run_uninstall_step(args.into_iter().skip(1)), None);
+        // This process's own command line reads without panicking.
+        assert!(launch_args().count() >= 1);
     }
 }

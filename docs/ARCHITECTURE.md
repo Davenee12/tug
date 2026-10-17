@@ -225,7 +225,7 @@ right-click tug on the taskbar / in Start ─► Tasks: New message · Tugboat �
   Start menu shortcut; a cargo build uses "<identifier>.dev" so it never repoints the installed list)
 tug running?  the new tug.exe hands its args to the running one (single-instance) and exits
               ─► quick_actions::receive: queue it, tray::show, emit "quick-action" (no payload)
-not running?  this launch is tug: setup queues parse_args(std::env::args())
+not running?  this launch is tug: setup queues parse_args(launch_args()) (args_os, read lossily: a non-Unicode argument can't abort tug)
 UI (App.vue), only after tug.init() has loaded history and settings, and on every nudge:
   invoke take_quick_actions ─► the queue, drained (each click runs once; duplicates of a waiting
   action collapse) ─► lib/quickActions ─► the same paths as Ctrl+K / Ctrl+N / Ctrl+Shift+C / Ctrl+,
