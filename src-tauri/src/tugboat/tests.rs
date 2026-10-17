@@ -14,8 +14,8 @@ use serde_json::{json, Value};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::auth;
-use super::clip::{ClipEvent, ClipKind, ClipState, Prepared};
 use super::auth::Authorized;
+use super::clip::{ClipEvent, ClipKind, ClipState, Prepared};
 use super::crypto::{self, ad, Keys};
 use super::pad::{PadEvent, PadReply, BURST, FIRST, SECOND};
 use super::server;

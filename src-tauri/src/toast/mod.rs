@@ -405,7 +405,14 @@ async fn reply(
         Ok(stored) if stored.status == crate::messages::Status::Failed => {
             log::info!("{what} from a pop-up not sent (row {id}, message {})", stored.id);
             let body = format!("Use Retry in the conversation when your iPhone is nearby.\n\u{201c}{text}\u{201d}");
-            note(app, id, &format!("Couldn't send to {who}"), "Couldn't send", &body, false);
+            note(
+                app,
+                id,
+                &format!("Couldn't send to {who}"),
+                "Couldn't send",
+                &body,
+                false,
+            );
             Some(stored)
         }
         Ok(stored) if stored.status == crate::messages::Status::Unconfirmed => {
@@ -428,7 +435,14 @@ async fn reply(
         Err(e) => {
             log::info!("{what} from a pop-up not sent (row {id}): {e}");
             let body = format!("{e}\n\u{201c}{text}\u{201d}");
-            note(app, id, &format!("Couldn't send to {who}"), "Couldn't send", &body, false);
+            note(
+                app,
+                id,
+                &format!("Couldn't send to {who}"),
+                "Couldn't send",
+                &body,
+                false,
+            );
             None
         }
     }

@@ -298,7 +298,10 @@ fn a_hidden_text_says_only_the_app() {
     assert!(r.mark_read && r.clear, "buttons that reveal nothing stay");
     assert_eq!(r.id, 42, "buttons still act on the same notification");
     let xml = crate::toast::xml::notification_toast(&r, true);
-    assert!(r.replies.is_empty(), "suggested replies come from the text: never on a hidden pop-up");
+    assert!(
+        r.replies.is_empty(),
+        "suggested replies come from the text: never on a hidden pop-up"
+    );
     for private in ["Mom", "test results", "5555550123", "Reply", "Calling you now"] {
         assert!(!xml.contains(private), "{private} leaked into {xml}");
     }
