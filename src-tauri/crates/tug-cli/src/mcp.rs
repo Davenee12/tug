@@ -338,12 +338,13 @@ impl ServerHandler for TugMcp {
             Ok(c) => c,
             Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)]).into()),
         };
-        // Files resolve against this server's folder (where the AI tool started it), exactly as
-        // given: links followed, only regular files. tug checks them again before its card.
+        // Files are made full against this server's folder (where the AI tool started it), by
+        // their spelling only: nothing is opened here. tug checks them itself, once their switch
+        // is on, before its card (and never touches a network path).
         if let Call::OfferFiles { paths, .. } = &mut call {
             let resolved = std::env::current_dir()
                 .map_err(|_| "Give full paths: tug couldn't tell which folder this is.".to_string())
-                .and_then(|cwd| crate::send::resolve_all(paths, &cwd));
+                .and_then(|cwd| crate::send::absolute_all(paths, &cwd));
             match resolved {
                 Ok(full) => *paths = full,
                 Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)]).into()),

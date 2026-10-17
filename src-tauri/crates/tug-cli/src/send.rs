@@ -15,12 +15,22 @@ pub fn resolve(input: &str, cwd: &Path) -> Result<String, Refusal> {
     outgoing::check(&cwd.join(input)).map(|c| c.path.to_string_lossy().into_owned())
 }
 
-/// Every path for an AI tool's call, exactly as given (never looked up by name: an AI tool
-/// mustn't be able to go looking through the PC). The first problem, as a sentence.
-pub fn resolve_all(inputs: &[String], cwd: &Path) -> Result<Vec<String>, String> {
+/// Every path for an AI tool's call made full against `cwd` by its spelling alone: nothing is
+/// opened, followed or looked up here (never looked up by name either: an AI tool mustn't be able
+/// to go looking through the PC). tug checks each one itself, and only once the switch for sending
+/// files is on, so a call that's switched off touches no path at all. A network path is refused
+/// here already. The first problem, as a sentence.
+pub fn absolute_all(inputs: &[String], cwd: &Path) -> Result<Vec<String>, String> {
     inputs
         .iter()
-        .map(|i| resolve(i, cwd).map_err(|r| r.sentence(i)))
+        .map(|i| {
+            if outgoing::is_network_path(i) {
+                return Err(Refusal::Network.sentence(i));
+            }
+            std::path::absolute(cwd.join(i))
+                .map(|p| p.to_string_lossy().into_owned())
+                .map_err(|_| format!("tug couldn't make sense of {}.", tug_bridge::protocol::printable(i)))
+        })
         .collect()
 }
 
@@ -126,9 +136,31 @@ mod tests {
         assert_eq!(resolve("sub", &dir), Err(Refusal::Folder));
         assert_eq!(resolve("nope.txt", &dir), Err(Refusal::Missing));
         assert_eq!(resolve("NUL", &dir), Err(Refusal::NotRegular));
-        let err = resolve_all(&["sub\\report.pdf".into(), "sub".into()], &dir).unwrap_err();
-        assert!(err.contains("sub is a folder"), "{err}");
+        assert_eq!(
+            resolve(r"\\no-such-server.invalid\s\a.txt", &dir),
+            Err(Refusal::Network)
+        );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_ai_tools_paths_are_made_full_without_touching_them() {
+        let cwd = Path::new(r"C:\work\project");
+        // Nothing here exists: only the spelling changes, nothing is opened or checked.
+        assert_eq!(
+            absolute_all(&[r"docs\report.pdf".into(), r"..\notes.txt".into()], cwd).unwrap(),
+            vec![
+                r"C:\work\project\docs\report.pdf".to_string(),
+                r"C:\work\notes.txt".to_string()
+            ]
+        );
+        assert_eq!(
+            absolute_all(&[r"D:\elsewhere\a.txt".into()], cwd).unwrap(),
+            vec![r"D:\elsewhere\a.txt".to_string()]
+        );
+        let err = absolute_all(&[r"\\server\share\a.txt".into()], cwd).unwrap_err();
+        assert!(err.contains("another computer"), "{err}");
+        assert!(absolute_all(&["//server/share/a.txt".into()], cwd).is_err());
     }
 
     #[test]

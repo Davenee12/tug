@@ -602,6 +602,10 @@ impl Call {
                 }
                 let full = |p: &str| !p.is_empty() && !p.contains('\0') && is_absolute_windows_path(p);
                 for p in paths.iter().chain(stdin.as_ref().map(|s| &s.path)) {
+                    // Before anything else looks at it: opening a network path signs in to it.
+                    if crate::outgoing::is_network_path(p) {
+                        return Err(BridgeError::invalid(crate::outgoing::Refusal::Network.sentence(p)));
+                    }
                     if !full(p) {
                         return Err(BridgeError::invalid("Files must be given as full paths."));
                     }
@@ -1021,8 +1025,14 @@ mod tests {
     #[test]
     fn offered_files_must_be_full_paths() {
         let o = |p: &[&str]| offer(p).validate(NOW);
-        assert!(o(&["C:\\Users\\me\\shot.png", "\\\\nas\\share\\a.txt"]).is_ok());
+        assert!(o(&["C:\\Users\\me\\shot.png", "D:\\a.txt"]).is_ok());
         assert!(o(&[]).is_err());
+        // Another computer's files never reach the app: opening one would sign in to it.
+        for net in [r"\\nas\share\a.txt", r"\\?\UNC\nas\share\a.txt", "//nas/share/a.txt"] {
+            let e = o(&["C:\\ok.txt", net]).unwrap_err();
+            assert_eq!(e.code, ErrorCode::Invalid, "{net}");
+            assert!(e.message.contains("another computer"), "{e}");
+        }
         assert!(o(&["shot.png"]).is_err());
         assert!(o(&["..\\shot.png"]).is_err());
         let many: Vec<String> = (0..21).map(|i| format!("C:\\f{i}")).collect();

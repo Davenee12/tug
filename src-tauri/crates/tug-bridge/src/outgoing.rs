@@ -3,6 +3,9 @@
 //! asked), and the app checks again before it shows its card, with the same rules:
 //!
 //! - regular files only: no folders, devices (`CON`, `\\.\…`) or pipes;
+//! - nothing on another computer: a `\\server\share` path, a mapped network drive, or a link that
+//!   leads to one is refused before anything is opened, because opening it would make Windows
+//!   sign in to that server with the user's account (an NTLM hash anyone there could collect);
 //! - a symbolic link counts as the file it points to, and that file's name is what's shown;
 //! - the file must open for reading.
 //!
@@ -18,6 +21,8 @@ pub enum Refusal {
     /// A device, a pipe, or anything else that isn't a plain file on a disk.
     NotRegular,
     Unreadable,
+    /// On another computer (a network share or mapped drive, directly or through a link).
+    Network,
 }
 
 impl Refusal {
@@ -29,6 +34,9 @@ impl Refusal {
             Refusal::Folder => format!("{shown} is a folder. Name the files inside it instead."),
             Refusal::NotRegular => format!("{shown} isn't a regular file, so it can't be sent."),
             Refusal::Unreadable => format!("tug couldn't read {shown}."),
+            Refusal::Network => {
+                format!("{shown} is on another computer, so tug won't send it. Copy it to this PC first.")
+            }
         }
     }
 }
@@ -72,6 +80,84 @@ pub fn is_device_path(p: &str) -> bool {
     DEVICES.iter().any(|d| d.to_uppercase() == stem)
 }
 
+/// A path on another computer: `\\server\share\…` (either slash), or its verbatim or NT forms
+/// (`\\?\UNC\…`, `\??\UNC\…`, `\\.\UNC\…`). Pure: decided by its spelling alone.
+pub fn is_network_path(p: &str) -> bool {
+    let p = p.replace('/', "\\").to_ascii_lowercase();
+    if [r"\\?\unc\", r"\??\unc\", r"\\.\unc\"].iter().any(|v| p.starts_with(v)) {
+        return true;
+    }
+    p.starts_with(r"\\") && !p.starts_with(r"\\?\") && !p.starts_with(r"\\.\")
+}
+
+/// A path on a drive letter Windows says is a network drive (a mapped share). Asking costs no
+/// network traffic.
+#[cfg(windows)]
+pub fn on_network_drive(p: &str) -> bool {
+    use windows::core::HSTRING;
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    const DRIVE_REMOTE: u32 = 4;
+    let p = plain(p);
+    let b = p.as_bytes();
+    if b.len() < 2 || !b[0].is_ascii_alphabetic() || b[1] != b':' {
+        return false;
+    }
+    let root = HSTRING::from(format!("{}:\\", b[0] as char));
+    // SAFETY: plain FFI call with a valid, NUL-terminated string.
+    unsafe { GetDriveTypeW(&root) == DRIVE_REMOTE }
+}
+
+#[cfg(not(windows))]
+pub fn on_network_drive(_p: &str) -> bool {
+    false
+}
+
+fn remote(p: &str) -> bool {
+    is_network_path(p) || on_network_drive(p)
+}
+
+/// Whether following the links along `path` would lead to another computer. Each link is read
+/// where it is (a local read), never followed, and its target checked before the walk goes on, so
+/// a link that points at `\\server\share` is caught before Windows would open it. Too many links is
+/// treated as leading somewhere it shouldn't.
+fn leads_to_network(path: &Path) -> bool {
+    use std::path::Component;
+    let mut todo: Vec<PathBuf> = path.components().rev().map(|c| PathBuf::from(c.as_os_str())).collect();
+    let mut base = PathBuf::new();
+    let mut links = 0;
+    while let Some(part) = todo.pop() {
+        let next = base.join(&part);
+        let normal = matches!(part.components().next(), Some(Component::Normal(_)));
+        if !normal {
+            base = next;
+            continue;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&next) else {
+            // Not there (or not readable): nothing more to follow; the full check says why.
+            return false;
+        };
+        if !meta.file_type().is_symlink() {
+            base = next;
+            continue;
+        }
+        links += 1;
+        if links > 32 {
+            return true;
+        }
+        let Ok(target) = std::fs::read_link(&next) else {
+            return false;
+        };
+        if remote(&target.to_string_lossy()) {
+            return true;
+        }
+        // Go on from where the link points: a relative target is against the link's own folder.
+        let resolved = base.join(&target);
+        base = PathBuf::new();
+        todo.extend(resolved.components().rev().map(|c| PathBuf::from(c.as_os_str())));
+    }
+    false
+}
+
 /// A file that may be offered: where it really is (links followed) and its size.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checked {
@@ -94,17 +180,29 @@ impl Checked {
     }
 }
 
-/// Check `path` (already absolute) can be offered: follow links, refuse folders, devices and
-/// pipes, and make sure it opens for reading.
+/// Check `path` (already absolute) can be offered: refuse anything on another computer before
+/// any I/O, follow links, refuse folders, devices and pipes, and make sure it opens for reading.
 pub fn check(path: &Path) -> Result<Checked, Refusal> {
-    if is_device_path(&path.to_string_lossy()) {
+    let given = path.to_string_lossy();
+    // By its spelling first: opening `\\server\…` (even to look) signs in to that server.
+    if remote(&given) {
+        return Err(Refusal::Network);
+    }
+    if is_device_path(&given) {
         return Err(Refusal::NotRegular);
+    }
+    if leads_to_network(path) {
+        return Err(Refusal::Network);
     }
     let real = match std::fs::canonicalize(path) {
         Ok(p) => PathBuf::from(plain(&p.to_string_lossy())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Refusal::Missing),
         Err(_) => return Err(Refusal::Unreadable),
     };
+    // Wherever it really is: never on another computer either.
+    if remote(&real.to_string_lossy()) {
+        return Err(Refusal::Network);
+    }
     if is_device_path(&real.to_string_lossy()) {
         return Err(Refusal::NotRegular);
     }
@@ -178,12 +276,77 @@ mod tests {
     }
 
     #[test]
+    fn network_paths_are_known_by_their_spelling() {
+        for net in [
+            r"\\server\share\a.txt",
+            "//server/share/a.txt",
+            r"\/server\share\a.txt",
+            r"\\?\UNC\server\share\a.txt",
+            r"\\?\unc\server\share\a.txt",
+            r"\??\UNC\server\share\a.txt",
+            r"\\.\UNC\server\share\a.txt",
+            r"\\192.0.2.7\c$\a.txt",
+        ] {
+            assert!(is_network_path(net), "{net}");
+        }
+        for local in [
+            r"C:\Users\me\a.txt",
+            r"\\?\C:\Users\me\a.txt",
+            r"\\.\pipe\x",
+            r"\temp\a.txt",
+            "a.txt",
+        ] {
+            assert!(!is_network_path(local), "{local}");
+        }
+        // The system drive is local.
+        assert!(!on_network_drive(r"C:\Windows\win.ini"));
+    }
+
+    #[test]
+    fn a_network_path_is_refused_before_anything_is_opened() {
+        // A server that doesn't exist: had check touched it, the answer would be Missing or
+        // Unreadable after a network timeout, not Network at once.
+        let started = std::time::Instant::now();
+        for p in [
+            r"\\tug-test-no-such-server.invalid\share\a.txt",
+            r"\\?\UNC\tug-test-no-such-server.invalid\share\a.txt",
+        ] {
+            assert_eq!(check(Path::new(p)), Err(Refusal::Network), "{p}");
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(Refusal::Network.sentence("x").contains("another computer"));
+    }
+
+    #[test]
+    fn a_link_to_another_computer_is_refused_without_following_it() {
+        let dir = std::env::temp_dir().join(format!("tug-outgoing-net-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = r"\\tug-test-no-such-server.invalid\share\a.txt";
+        let link = dir.join("innocent.txt");
+        let folder_link = dir.join("docs");
+        // Making links needs Developer Mode or elevation on Windows; skipped when it isn't allowed.
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(target, &link).is_ok()
+            && std::os::windows::fs::symlink_dir(r"\\tug-test-no-such-server.invalid\share", &folder_link).is_ok();
+        #[cfg(not(windows))]
+        let made = false;
+        if made {
+            let started = std::time::Instant::now();
+            assert_eq!(check(&link), Err(Refusal::Network));
+            assert_eq!(check(&folder_link.join("a.txt")), Err(Refusal::Network));
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn refusals_read_as_sentences() {
         for r in [
             Refusal::Missing,
             Refusal::Folder,
             Refusal::NotRegular,
             Refusal::Unreadable,
+            Refusal::Network,
         ] {
             let s = r.sentence("notes\u{1b}[2J.txt");
             assert!(s.ends_with('.'), "{s}");

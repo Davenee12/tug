@@ -96,6 +96,11 @@ its size and the folder it's in, with focus on **Don't send** and **Send** enabl
 is in front; nothing is offered before Send. tug re-checks every path itself whatever the caller
 says: regular readable files only (no folders, devices or pipes, which the bridge also refuses by
 name), links followed to their target, Tugboat's size limits, names through `tugboat/names.rs`.
+Nothing on another computer: a `\\server\share` path (in any spelling), a mapped network drive,
+or a link that leads to one is refused by its spelling before anything opens it, by the bridge
+and by tug, because opening it would make Windows sign in to that server with the person's
+account. The MCP server only makes an AI tool's paths full by their spelling; tug touches them
+only after the switch for sending files says yes.
 The files then travel only over Tugboat's existing channel (same port, secret, MACs, binding and
 sealing), held for the phone for the wait (2 minutes unless asked otherwise) and withdrawn if it
 hasn't downloaded them by then, so "timed out" is true. Turning the switch off, turning Developer
