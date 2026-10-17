@@ -134,4 +134,37 @@ describe("Tugboat panel open/close races", () => {
     expect(t.open).toBe(false);
     expect(t.status.url).toBeNull();
   });
+
+  it("reopening while a start is on its way joins that start instead of staying Off", async () => {
+    const t = useTugboatStore();
+    const { api } = await import("../lib/ipc");
+    const startCalls = vi.mocked(api.tugboatStart).mock.calls.length;
+    const started = deferred<TugboatStatus>();
+    startWith = () => started.promise;
+    const showing = t.show();
+    const closing = t.close();
+    stop.resolve();
+    await closing;
+    // Opened again before the first start answered.
+    const reopening = t.show();
+    expect(t.starting).toBe(true);
+    started.resolve(running);
+    await Promise.all([showing, reopening]);
+    expect(t.open).toBe(true);
+    expect(t.status.url).toBe(running.url);
+    expect(t.starting).toBe(false);
+    expect(vi.mocked(api.tugboatStart).mock.calls.length - startCalls, "one start, joined").toBe(1);
+  });
+
+  it("a start that fails still lets the next open try again", async () => {
+    const t = useTugboatStore();
+    startWith = () => Promise.reject("Couldn't start Tugboat on this network.");
+    await t.show();
+    expect(t.error).toBe("Couldn't start Tugboat on this network.");
+    expect(t.starting).toBe(false);
+    startWith = async () => running;
+    await t.start();
+    expect(t.error).toBeNull();
+    expect(t.status.url).toBe(running.url);
+  });
 });

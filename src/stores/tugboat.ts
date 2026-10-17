@@ -101,19 +101,33 @@ export const useTugboatStore = defineStore("tugboat", () => {
   // is old news: a slow stop mustn't blank a session opened again meanwhile, and a slow start
   // mustn't bring back a code for a panel that was closed (the status events tell the truth).
   let generation = 0;
+  /** The start on its way to the backend, if any: another open joins it rather than asking twice. */
+  let startCall: Promise<TugboatStatus> | null = null;
 
   async function start() {
-    if (starting.value) return;
     const mine = ++generation;
     starting.value = true;
     error.value = null;
+    // Opened again while a start is still on its way (the panel was closed and reopened before it
+    // answered): join that start instead of returning, so its answer reaches this open rather than
+    // leaving the panel on Off. The generation still decides whether the answer is used, so a start
+    // that answers after a close (with no reopen since) never brings the code back.
+    let call = startCall;
+    if (call === null) {
+      const fresh = api.tugboatStart();
+      const done = () => {
+        if (startCall === fresh) startCall = null;
+      };
+      fresh.then(done, done);
+      startCall = call = fresh;
+    }
     try {
-      const s = await api.tugboatStart();
+      const s = await call;
       if (mine === generation) apply(s);
     } catch (e) {
       if (mine === generation) error.value = typeof e === "string" ? e : "Couldn't start Tugboat.";
     } finally {
-      starting.value = false;
+      starting.value = startCall !== null;
     }
   }
 
