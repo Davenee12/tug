@@ -96,15 +96,29 @@ pub fn search_all(state: State<'_, AppState>, query: String, limit: u32) -> Resu
     })
 }
 
+/// Clear history's slow part: the database (one transaction over every notification and text,
+/// years of them after an import) and the photos and videos brought in from an iPhone backup,
+/// which go with their texts. Returns the notification-id floor (`Store::clear_history`).
+fn clear_stored_history(store: &crate::store::Store, local_dir: &std::path::Path) -> rusqlite::Result<i64> {
+    let floor = store.clear_history()?;
+    crate::backup::files::remove_all(local_dir);
+    Ok(floor)
+}
+
+/// Settings › Data & privacy › Clear history. Async, with the database and file work on a blocking
+/// thread: a big history (or thousands of imported photos) must never freeze the window.
 #[tauri::command]
-pub fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
+pub async fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
     // An import still writing would put texts and photos back after the clear.
     if state.backup.busy() {
         return Err(BACKUP_BUSY.into());
     }
-    let cleared_up_to = state.shared.store.clear_history().map_err(|e| e.to_string())?;
-    // Photos and videos brought in from an iPhone backup go with their texts.
-    crate::backup::files::remove_all(state.backup.local_dir());
+    let store = state.shared.store.clone();
+    let dir = state.backup.local_dir().to_path_buf();
+    let cleared_up_to = tauri::async_runtime::spawn_blocking(move || clear_stored_history(&store, &dir))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     // Pop-ups and the Bluetooth actor name notifications by row id, and those rows are gone: take
     // the pop-ups back (their buttons would act on nothing tug still shows) and have the actor drop
     // its map from the phone's notification ids to the cleared rows.
@@ -1340,7 +1354,44 @@ pub async fn devtools_set_on_path(state: State<'_, AppState>, on: bool) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use super::is_http_url;
+    use super::{clear_stored_history, is_http_url};
+
+    #[test]
+    fn clearing_history_takes_imported_texts_and_their_photos() {
+        use crate::backup::files;
+        let store = crate::store::Store::in_memory().unwrap();
+        let local = crate::backup::discover::tests::temp_dir("clear-history");
+        {
+            let conn = store.conn();
+            conn.execute_batch(
+                "INSERT INTO messages (source, handle, direction, address, body, received_at, status)
+                 VALUES ('iphone-backup', 'GUID-1', 'in', '+15550100001', 'from the backup', 1000, 'received'),
+                        ('iphone-map', 'H1', 'in', '+15550100001', 'over Bluetooth', 2000, 'received');
+                 INSERT INTO message_attachments (message_id, source, source_key, kind, ext, file)
+                 VALUES (1, 'iphone-backup', 'ATT-1', 'photo', 'jpg', 'x');",
+            )
+            .unwrap();
+        }
+        let tmp = files::TempDir::create(&local).unwrap();
+        std::fs::write(tmp.file("a"), b"photo").unwrap();
+        let key = files::adopt(&local, &tmp.file("a"), &[0xAB; 32], "jpg").unwrap();
+        assert!(files::attachment_path(&local, &key).unwrap().exists());
+
+        clear_stored_history(&store, &local).unwrap();
+        assert!(store.recent_messages(10).unwrap().is_empty());
+        let left: i64 = store
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM messages WHERE source = 'iphone-backup'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "imported history goes completely");
+        assert!(!local.join(files::ATTACHMENTS_DIR).exists(), "and its photos with it");
+        drop(tmp);
+        std::fs::remove_dir_all(&local).unwrap();
+    }
 
     #[test]
     fn accepts_http_and_https_with_a_host() {
