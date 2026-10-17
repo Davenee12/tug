@@ -6,7 +6,7 @@
 //
 // Pure: no Tauri, no DOM, no clock of its own (callers pass `now`).
 
-import type { CodeFilled, ToastSpec } from "../types/protocol";
+import type { CodeFilled, CodeHotkeyStatus, ToastSpec } from "../types/protocol";
 import hotkeyList from "./codeHotkeys.json";
 
 /** A code older than this is never copied or typed (mirrors `MAX_AGE_MS` in code_fill/mod.rs). */
@@ -33,6 +33,16 @@ export function hotkeyKeys(id: string): string[] {
 /** "ctrl+shift+v" → "Ctrl+Shift+V", for sentences. */
 export function hotkeyLabel(id: string): string {
   return hotkeyKeys(id).join("+");
+}
+
+/**
+ * The type-the-code shortcut's line in Settings › Keyboard: the keys actually registered right
+ * now, from the backend's status. None while it's off or another app holds the keys, so the list
+ * never offers a shortcut that wouldn't do anything.
+ */
+export function typeCodeShortcut(status: CodeHotkeyStatus): { what: string; keys: string[] } | null {
+  if (status.state !== "on") return null;
+  return { what: "Type the latest code (in any app)", keys: hotkeyKeys(status.keys) };
 }
 
 /** The other shortcuts to offer when this one is taken by another app. */

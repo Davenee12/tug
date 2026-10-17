@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // The Now Playing card's progress bar and times: the only part of the card that changes every
 // second, so it ticks on its own (see lib/useNow) and the rest of the card stays still.
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref } from "vue";
 import type { NowPlaying } from "../types/protocol";
 import { duration } from "../lib/format";
-import { elapsedSeconds, positionMoves } from "../lib/media";
+import { elapsedSeconds, positionMoves, seekKeyFraction } from "../lib/media";
 import { seekFraction } from "../lib/spotify";
 import { useNow } from "../lib/useNow";
 
@@ -35,10 +35,28 @@ function seekMove(e: PointerEvent) {
 }
 function seekUp() {
   if (dragFraction.value == null) return;
+  window.clearTimeout(keyTimer);
   const f = dragFraction.value;
   dragFraction.value = null;
   emit("seek", f);
 }
+
+// The keyboard, like the volume bar: arrows step 5 s, Page Up/Down 30 s, Home to the start. The
+// fill moves with each press; a burst of presses becomes one seek once they stop, so holding an
+// arrow doesn't send Spotify a request per auto-repeat.
+const KEY_COMMIT_MS = 400;
+let keyTimer: number | undefined;
+function seekKey(e: KeyboardEvent) {
+  if (!props.seekable) return;
+  const at = dragFraction.value ?? progress.value / 100;
+  const to = seekKeyFraction(e.key, at, props.np.duration);
+  if (to == null) return;
+  e.preventDefault();
+  dragFraction.value = to;
+  window.clearTimeout(keyTimer);
+  keyTimer = window.setTimeout(seekUp, KEY_COMMIT_MS);
+}
+onUnmounted(() => window.clearTimeout(keyTimer));
 
 const progress = computed(() =>
   dragFraction.value != null
@@ -47,6 +65,10 @@ const progress = computed(() =>
       ? (elapsed.value / props.np.duration) * 100
       : 0,
 );
+/** The time the bar stands for: where a drag or key press is heading, else where the song is. */
+const shownSeconds = computed(() =>
+  dragFraction.value != null && props.np.duration ? dragFraction.value * props.np.duration : elapsed.value,
+);
 </script>
 
 <template>
@@ -54,12 +76,18 @@ const progress = computed(() =>
        progress. Its box is unchanged either way so the compact card keeps its height. -->
   <div
     ref="bar"
-    :class="['mt-3 h-1 overflow-hidden rounded-full bg-surface-dark-soft', seekable ? 'cursor-pointer' : '']"
+    :class="[
+      'mt-3 h-1 overflow-hidden rounded-full bg-surface-dark-soft outline-none focus-visible:ring-2 focus-visible:ring-on-dark/30',
+      seekable ? 'cursor-pointer' : '',
+    ]"
     :role="seekable ? 'slider' : undefined"
+    :tabindex="seekable ? 0 : undefined"
     :aria-label="seekable ? 'Seek' : undefined"
     :aria-valuenow="seekable ? Math.round(progress) : undefined"
+    :aria-valuetext="seekable ? `${duration(shownSeconds)} of ${duration(np.duration)}` : undefined"
     aria-valuemin="0"
     aria-valuemax="100"
+    @keydown="seekKey"
     @pointerdown="seekDown"
     @pointermove="seekMove"
     @pointerup="seekUp"
@@ -75,7 +103,7 @@ const progress = computed(() =>
     />
   </div>
   <div class="mt-1.5 flex items-center justify-between font-mono text-[11px] text-on-dark-soft">
-    <span>{{ duration(elapsed) }}</span>
+    <span>{{ duration(shownSeconds) }}</span>
     <slot />
     <span>{{ duration(np.duration) }}</span>
   </div>

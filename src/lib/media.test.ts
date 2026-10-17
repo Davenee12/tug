@@ -18,8 +18,33 @@ import {
   skipTargetMs,
   elapsedSeconds,
   positionMoves,
+  seekKeyFraction,
   type HoldTimers,
 } from "./media";
+
+describe("seekKeyFraction", () => {
+  it("steps 5 s with the arrows and 30 s with Page Up/Down", () => {
+    expect(seekKeyFraction("ArrowRight", 0.5, 100)).toBeCloseTo(0.55);
+    expect(seekKeyFraction("ArrowUp", 0.5, 100)).toBeCloseTo(0.55);
+    expect(seekKeyFraction("ArrowLeft", 0.5, 100)).toBeCloseTo(0.45);
+    expect(seekKeyFraction("ArrowDown", 0.5, 100)).toBeCloseTo(0.45);
+    expect(seekKeyFraction("PageUp", 0.5, 100)).toBeCloseTo(0.8);
+    expect(seekKeyFraction("PageDown", 0.5, 100)).toBeCloseTo(0.2);
+  });
+  it("stays within the song", () => {
+    expect(seekKeyFraction("ArrowLeft", 0.01, 100)).toBe(0);
+    expect(seekKeyFraction("PageUp", 0.9, 100)).toBe(1);
+  });
+  it("Home goes to the start; End and other keys do nothing", () => {
+    expect(seekKeyFraction("Home", 0.7, 100)).toBe(0);
+    expect(seekKeyFraction("End", 0.7, 100)).toBeNull();
+    expect(seekKeyFraction("a", 0.7, 100)).toBeNull();
+  });
+  it("does nothing when the length isn't known", () => {
+    expect(seekKeyFraction("ArrowRight", 0.5, null)).toBeNull();
+    expect(seekKeyFraction("ArrowRight", 0.5, 0)).toBeNull();
+  });
+});
 
 describe("elapsedSeconds", () => {
   const playing = { elapsed: 60, elapsedAt: 1_000_000, state: "playing" as const, rate: 1, duration: 200 };

@@ -12,7 +12,7 @@ import { escClosesSettings } from "../lib/escape";
 import { formatAddress } from "../lib/format";
 import { normalizeAddress } from "../lib/address";
 import { SPOTIFY_BETA_LABEL, SPOTIFY_BETA_NOTE, SPOTIFY_RECONNECT } from "../lib/spotify";
-import { CODE_HOTKEYS, hotkeyAlternatives, hotkeyLabel } from "../lib/codeFill";
+import { CODE_HOTKEYS, hotkeyAlternatives, hotkeyLabel, typeCodeShortcut } from "../lib/codeFill";
 import AppAvatar from "./AppAvatar.vue";
 import ConnectPanel from "./ConnectPanel.vue";
 import DeveloperSettings from "./DeveloperSettings.vue";
@@ -192,13 +192,18 @@ function addVip(c: { address: string }) {
   vipQuery.value = "";
 }
 
-const SHORTCUTS: Array<{ what: string; keys: string[] }> = [
+const APP_SHORTCUTS: Array<{ what: string; keys: string[] }> = [
   { what: "Search, or type an action", keys: ["Ctrl", "K"] },
   { what: "New message", keys: ["Ctrl", "N"] },
   { what: "Copy the latest code", keys: ["Ctrl", "Shift", "C"] },
   { what: "Settings", keys: ["Ctrl", ","] },
   { what: "Zoom in · out · reset", keys: ["Ctrl", "+  −  0"] },
 ];
+// Plus the type-the-code shortcut, as registered right now (it's configurable, and can be off).
+const SHORTCUTS = computed(() => {
+  const typeCode = typeCodeShortcut(tug.codeHotkey);
+  return typeCode ? [...APP_SHORTCUTS, typeCode] : APP_SHORTCUTS;
+});
 
 const UNITS = ["f", "c"] as const;
 

@@ -204,6 +204,9 @@ export function parseForecast(j: any, fetchedAt: number): Forecast {
   };
 }
 
+/** What the city box says when the search can't be reached (offline, or the service is down). */
+export const CITY_SEARCH_ERROR = "Can't look up cities right now. Check your internet connection and try again.";
+
 export async function searchPlaces(query: string): Promise<Place[]> {
   const q = new URLSearchParams({ name: query.trim(), count: "5", language: "en", format: "json" });
   const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?${q}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
