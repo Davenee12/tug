@@ -27,11 +27,14 @@ pub struct Picked {
 }
 
 impl Picked {
+    /// What the card shows. The folder loses control and bidirectional-override characters
+    /// (U+202A–202E, U+2066–2069): a folder named with a right-to-left override could make
+    /// `...\gpj.exe` read as `...\exe.jpg`, so the card shows it as it really is.
     pub fn card(&self) -> ConfirmFile {
         ConfirmFile {
             name: self.name.clone(),
             size: self.size,
-            folder: self.folder.clone(),
+            folder: self.folder.as_deref().map(tug_bridge::protocol::printable),
         }
     }
 }
@@ -232,6 +235,23 @@ mod tests {
         assert!(e.message.contains("tug command"), "{e}");
         std::fs::remove_dir_all(&d).unwrap();
         std::fs::remove_dir_all(&elsewhere).unwrap();
+    }
+
+    #[test]
+    fn the_cards_folder_has_no_bidi_tricks() {
+        let p = Picked {
+            path: PathBuf::from(r"C:\x\a.txt"),
+            name: "a.txt".into(),
+            size: 1,
+            folder: Some(
+                "C:\\Users\\me\\\u{202E}txt.exe\u{202C}\\\u{2066}docs\u{2069}\u{202A}\u{202B}\u{202D}\u{2067}\u{2068}"
+                    .into(),
+            ),
+            stdin: false,
+        };
+        assert_eq!(p.card().folder.as_deref(), Some(r"C:\Users\me\txt.exe\docs"));
+        let piped = Picked { folder: None, ..p };
+        assert_eq!(piped.card().folder, None);
     }
 
     #[test]
