@@ -68,7 +68,9 @@ the session's keys and then the guest's. Guest keys can sign exactly two request
 `POST /api/pad` (steering seat 2, under the controller rules above); anything else is refused. A
 guest key can never bind the session, even if it's the first to connect, so it can't become the
 owner; it joins only while a two-player game asks for a second phone, one phone at a time (a third
-is turned away), and the Player 2 code is shown only for as long as the game asks. The person's
+is turned away), and the Player 2 code is shown only for as long as the game asks. A guest page
+left open can't keep Tugboat running either: its check-ins don't count as activity for the
+10-minute idle stop, only its steering does. The person's
 own phone still binds with Tugboat's usual code exactly as before. Like the rest of Tugboat, it's only as safe as the first
 page load: an active attacker on the network could steer seat 2.
 

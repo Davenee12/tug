@@ -577,9 +577,19 @@ impl Session {
         self.closed.load(Ordering::SeqCst)
     }
 
-    /// Time since the last request (or action in the panel).
+    /// Time since the last request (or action in the panel). A race's second phone counts only
+    /// when it steers, never for its check-ins.
     pub fn idle_for(&self) -> Duration {
         self.state().last_activity.elapsed()
+    }
+
+    /// Pretend nothing happened for `by` (tests of the idle timer).
+    #[cfg(test)]
+    pub fn age_activity(&self, by: Duration) {
+        let mut st = self.state();
+        if let Some(t) = st.last_activity.checked_sub(by) {
+            st.last_activity = t;
+        }
     }
 
     /// The advertised address changed: the next phone to scan the new code becomes the phone (it
@@ -646,8 +656,10 @@ impl Session {
             .check_with(&self.keys, &self.guest_keys, header, method, path, policy);
         match result {
             Ok(ok) if ok.guest => {
+                // Not Tugboat's activity: a guest page left open checks in every couple of seconds
+                // forever, and would keep Tugboat open with nobody using it. Only its steering
+                // counts (`pad_input`).
                 st.guest_seen = Some(Instant::now());
-                st.last_activity = Instant::now();
                 if ok.first {
                     log::info!("tugboat: second controller joined");
                     if let Some(p) = st.pad.as_mut() {
@@ -932,6 +944,8 @@ impl Session {
         let pad = st.pad.as_mut().filter(|p| p.open_for(seat)).ok_or(ApiError::NoGame)?;
         let event = pad.input(seat, req.seq, decoded, Instant::now());
         let reply = pad.reply(seat);
+        // A guest's steering is someone playing (its check-ins aren't: see `authorize`).
+        st.last_activity = Instant::now();
         drop(st);
         if let Some(e) = event {
             self.sink.pad(e);
@@ -1763,6 +1777,47 @@ mod tests {
         for dir in [&pictures, &incoming] {
             let _ = fs::remove_dir_all(dir);
         }
+    }
+
+    #[test]
+    fn a_guests_check_ins_dont_keep_tugboat_open_but_its_steering_does() {
+        use super::super::auth::header;
+        let secret = [5u8; 16];
+        let incoming = temp("incoming");
+        let s = Session::new(&secret, temp("pictures"), incoming.clone(), Arc::new(Quiet));
+        let guest = Keys::derive(&crypto::guest_secret(&secret));
+        let owner = Keys::derive(&secret);
+        let client = "guestAAAAAAAAAAAAAAAAA";
+        let mut seq = 1_790_000_000_000u64 * 1024;
+        let mut sign = |keys: &Keys, who: &str, method: &str, path: &str| {
+            seq += 1;
+            (header(keys, who, seq, method, path), seq)
+        };
+        s.pad_open(2);
+        // Small enough that the clock (time since boot) can always go back this far.
+        let quiet = Duration::from_secs(30);
+        s.age_activity(quiet);
+        // An abandoned guest page keeps checking in: Tugboat still counts as idle.
+        for _ in 0..3 {
+            let (h, _) = sign(&guest, client, "GET", "/api/state");
+            let ok = s.authorize(Some(&h), "GET", "/api/state", None).unwrap();
+            assert!(ok.guest);
+            assert!(s.page_state(&ok).guest);
+        }
+        assert!(s.idle_for() >= quiet, "a guest's check-ins aren't activity");
+        // Its steering is.
+        let (h, n) = sign(&guest, client, "POST", "/api/pad");
+        let ok = s.authorize(Some(&h), "POST", "/api/pad", None).unwrap();
+        assert!(s.idle_for() >= quiet, "authorizing alone isn't activity");
+        let body = guest.seal(&ad::request(client, n), br#"{"steer":10,"boost":false}"#);
+        s.pad_input(&ok, &body).unwrap();
+        assert!(s.idle_for() < Duration::from_secs(5));
+        // The owner's check-ins still count, as before.
+        s.age_activity(quiet);
+        let (h, _) = sign(&owner, "ownerBBBBBBBBBBBBBBBBB", "GET", "/api/state");
+        s.authorize(Some(&h), "GET", "/api/state", None).unwrap();
+        assert!(s.idle_for() < Duration::from_secs(5));
+        let _ = fs::remove_dir_all(&incoming);
     }
 
     #[test]
