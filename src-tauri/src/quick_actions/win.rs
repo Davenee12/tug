@@ -6,7 +6,7 @@ use std::path::Path;
 
 use windows::core::{Interface, Result, HSTRING};
 use windows::Win32::Storage::EnhancedStorage::PKEY_Title;
-use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PROPVARIANT};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
@@ -74,22 +74,73 @@ unsafe fn link(exe: &Path, task: &Task) -> Result<IShellLinkW> {
     link.SetIconLocation(&exe, 0)?;
     link.SetDescription(&HSTRING::from(task.description))?;
     let props: IPropertyStore = link.cast()?;
-    props.SetValue(&PKEY_Title, &text_value(task.title)?)?;
+    // SetValue copies the value; ours is freed when `title` goes out of scope, set or not.
+    let title = text_value(task.title)?;
+    props.SetValue(&PKEY_Title, &title.0)?;
     props.Commit()?;
     Ok(link)
 }
 
+/// A PROPVARIANT that frees what it holds when dropped. windows 0.62's raw PROPVARIANT has no
+/// Drop, so without this the title string SHStrDupW allocated leaked once per task, every time
+/// the jump list was built.
+struct OwnedPropVariant(PROPVARIANT);
+
+impl OwnedPropVariant {
+    /// Free the contents (PropVariantClear) and leave it empty (VT_EMPTY). Safe to repeat.
+    fn clear(&mut self) {
+        // SAFETY: the value was built by `text_value` (or is already empty), which is exactly
+        // what PropVariantClear expects.
+        unsafe {
+            let _ = PropVariantClear(&mut self.0);
+        }
+    }
+}
+
+impl Drop for OwnedPropVariant {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 /// A VT_LPWSTR PROPVARIANT (what the shell expects for a title). The string is allocated with
-/// CoTaskMemAlloc (SHStrDupW), which PROPVARIANT's drop (PropVariantClear) frees.
-fn text_value(text: &str) -> Result<PROPVARIANT> {
+/// CoTaskMemAlloc (SHStrDupW), which `OwnedPropVariant` frees (PropVariantClear) when dropped.
+fn text_value(text: &str) -> Result<OwnedPropVariant> {
     // SAFETY: SHStrDupW copies a valid string; the union is written as the VT_LPWSTR variant it
     // is then tagged as.
     unsafe {
         let copy = SHStrDupW(&HSTRING::from(text))?;
-        let mut value = PROPVARIANT::default();
-        let inner = &mut *value.Anonymous.Anonymous;
+        let mut value = OwnedPropVariant(PROPVARIANT::default());
+        let inner = &mut *value.0.Anonymous.Anonymous;
         inner.vt = VT_LPWSTR;
         inner.Anonymous.pwszVal = copy;
         Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::System::Variant::VT_EMPTY;
+
+    #[test]
+    fn a_title_value_is_freed_when_cleared() {
+        let mut v = text_value("New message").unwrap();
+        // SAFETY: reading the tag and pointer of a value this test just built.
+        unsafe {
+            let inner = &v.0.Anonymous.Anonymous;
+            assert_eq!(inner.vt, VT_LPWSTR);
+            assert_eq!(inner.Anonymous.pwszVal.to_string().unwrap(), "New message");
+        }
+        // What Drop does: PropVariantClear frees the string and empties the value.
+        v.clear();
+        // SAFETY: as above.
+        unsafe {
+            let inner = &v.0.Anonymous.Anonymous;
+            assert_eq!(inner.vt, VT_EMPTY);
+            assert!(inner.Anonymous.pwszVal.is_null());
+        }
+        // Clearing again (Drop after an explicit clear) is harmless.
+        v.clear();
     }
 }
