@@ -5,6 +5,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
+import { isCurrent } from "../lib/ordering";
 import { newPcAudioProblem, pcAudioProblemText, pcAudioView } from "../lib/pcAudio";
 import type { PcAudioStatus } from "../types/protocol";
 import { useTugStore } from "./tug";
@@ -17,7 +18,13 @@ export const usePcAudioStore = defineStore("pcAudio", () => {
   let teardown: UnlistenFn[] = [];
   let started = false;
 
+  /**
+   * Take a status from an event or a command's answer, unless it's older than the one shown: the
+   * answer to "Play on this PC" can arrive after the event of an attempt that already failed, and
+   * must not put the button back on Connecting (lib/ordering).
+   */
   function apply(next: PcAudioStatus) {
+    if (!isCurrent(next, status.value)) return;
     const problem = newPcAudioProblem(status.value, next);
     status.value = next;
     if (problem) {

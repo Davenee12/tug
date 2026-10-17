@@ -87,6 +87,8 @@ import {
 } from "../lib/phoneSwitches";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 import { coalesce, nextFrame } from "../lib/coalesce";
+import { isCurrent, NewestRev, SnapshotGuard } from "../lib/ordering";
+import { retryDelay, settleAll, START_FAILED, STILL_LOADING, type StartupRead } from "../lib/startup";
 import { useTugboatStore } from "./tugboat";
 import { useDevToolsStore } from "./devtools";
 
@@ -173,9 +175,17 @@ export const useTugStore = defineStore("tug", () => {
   const statusKnown = ref(false);
   const nowPlaying = ref<NowPlaying>(EMPTY_NOW_PLAYING);
   /** Now Playing updates, applied once per frame (lib/coalesce), so a song change renders once. */
-  const nowPlayingUpdates = coalesce<NowPlaying>((np) => (nowPlaying.value = np), nextFrame);
+  const nowPlayingUpdates = coalesce<NowPlaying>((np) => applyNowPlaying(np), nextFrame);
+  /** The newest Now Playing event so far, so an older one can't take a newer one's place in the frame wait. */
+  const nowPlayingRev = new NewestRev();
+  /** Only ever replace Now Playing with a copy at least as new (see lib/ordering). */
+  function applyNowPlaying(np: NowPlaying) {
+    if (isCurrent(np, nowPlaying.value)) nowPlaying.value = np;
+  }
   /** Newest first. */
   const notifications = ref<PhoneNotification[]>([]);
+  /** Keeps a notification list read from undoing an event that landed while it was in flight. */
+  const rowGuard = new SnapshotGuard();
   /** Messages from message access (MAP), oldest first. */
   const messages = ref<SmsMessage[]>([]);
   const contacts = ref<Contact[]>([]);
@@ -946,6 +956,8 @@ export const useTugStore = defineStore("tug", () => {
     }
     const gone = new Set(removedNotifications.map((n) => n.id));
     const hiddenMessages = new Set(removedMessages.map((m) => m.id));
+    // A list read already under way mustn't bring them back.
+    for (const id of gone) rowGuard.touched(id);
     notifications.value = notifications.value.filter((n) => !gone.has(n.id));
     messages.value = messages.value.filter((m) => !hiddenMessages.has(m.id));
     if (selectedThread.value === c.key) selectedThread.value = null;
@@ -955,7 +967,10 @@ export const useTugStore = defineStore("tug", () => {
         flash.value = null;
         void attempt(async () => {
           await api.setConversationHidden(senders, c.addresses, at);
-          for (const n of removedNotifications) upsert(notifications.value, n);
+          for (const n of removedNotifications) {
+            rowGuard.touched(n.id);
+            upsert(notifications.value, n);
+          }
           for (const m of removedMessages) upsertMessage(m);
           messages.value.sort(byArrival);
           selectedThread.value = c.key;
@@ -1266,99 +1281,164 @@ export const useTugStore = defineStore("tug", () => {
         },
       ),
     );
-    teardown.push(
-      ...(await Promise.all([
-        on("device-status", (s) => {
-          const wasConnected = status.value.connection === "connected";
-          // The start of an outage: what's posted after it and replayed on reconnect is a gap arrival.
-          if (wasConnected && s.connection !== "connected") linkLostAt = Date.now();
-          if (s.battery !== status.value.battery) void checkBattery(s.battery);
-          status.value = s;
-          // Notification UIDs die with the connection, so nothing stays actionable.
-          if (wasConnected && s.connection !== "connected") {
-            for (const n of notifications.value) n.live = false;
-          }
-          statusKnown.value = true;
-        }),
-        // A song change arrives as several updates a few ms apart: one render per frame, not each.
-        on("now-playing", (np) => nowPlayingUpdates.push(np)),
-        on("notification", (n) => {
-          const added = upsert(notifications.value, n);
-          // Seen only if someone is looking (MessageThreads marks the one on screen on coming back).
-          if (canSee.value && view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
-          if (added && arrivedDuringGap(n, linkLostAt, Date.now())) queueGapPopup(n);
-          else if (added) void maybeToast(n);
-        }),
-        on("notification-removed", (id) => {
-          const n = notifications.value.find((x) => x.id === id);
-          if (n) Object.assign(n, { removedAt: Date.now(), live: false });
-        }),
-        on("app-name", ({ appId, appName }) => {
-          for (const n of notifications.value) if (n.appId === appId) n.appName = appName;
-        }),
-        on("discovered-devices", (list) => (discovered.value = list)),
-        on("message", (m) => {
-          const added = upsertMessage(m);
-          // Only live arrivals pop up; the startup backlog (loaded below) must stay quiet.
-          if (added && messagesReady) void maybeToastMessage(m);
-        }),
-        on("contacts", (list) => {
-          contacts.value = list;
-          // A resync may have added, changed or removed photos: drop the cache so avatars re-ask.
-          contactPhotos.value = {};
-          photoRequests.clear();
-          // Names are joined into messages server-side; re-read them for what's loaded.
-          void refreshLoadedMessageNames();
-          // Notifications under a contact's old name come back under the new one.
-          void refreshLoadedNotifications();
-        }),
-        on("calls", (list) => (calls.value = list)),
-        on("pairing-request", (req) => (pairingRequest.value = req)),
-        on("pairing-request-closed", () => (pairingRequest.value = null)),
-        on("open-latest-conversation", openLatestConversation),
-        on("open-settings", () => openSettings()),
-        on("toast-pressed", onToastPressed),
-        on("code-filled", onCodeFilled),
-      ])),
-    );
-    const [s, np, first, msgs, people, recent] = await Promise.all([
-      api.getStatus(),
-      api.getNowPlaying(),
-      api.listNotifications(PAGE),
-      api.listMessages(2000),
-      api.getContacts(),
-      api.getCalls(),
+    const listeners = await Promise.allSettled([
+      on("device-status", (s) => applyStatus(s, true)),
+      // A song change arrives as several updates a few ms apart: one render per frame, not each.
+      on("now-playing", (np) => {
+        if (nowPlayingRev.accept(np)) nowPlayingUpdates.push(np);
+      }),
+      on("notification", (n) => {
+        rowGuard.touched(n.id);
+        const added = upsert(notifications.value, n);
+        // Seen only if someone is looking (MessageThreads marks the one on screen on coming back).
+        if (canSee.value && view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
+        if (added && arrivedDuringGap(n, linkLostAt, Date.now())) queueGapPopup(n);
+        else if (added) void maybeToast(n);
+      }),
+      on("notification-removed", (id) => {
+        const at = Date.now();
+        rowGuard.removed(id, at);
+        const n = notifications.value.find((x) => x.id === id);
+        if (n) Object.assign(n, { removedAt: at, live: false });
+      }),
+      on("app-name", ({ appId, appName }) => {
+        for (const n of notifications.value) if (n.appId === appId) n.appName = appName;
+      }),
+      on("discovered-devices", (list) => (discovered.value = list)),
+      on("message", (m) => {
+        const added = upsertMessage(m);
+        // Only live arrivals pop up; the startup backlog (loaded below) must stay quiet.
+        if (added && messagesReady) void maybeToastMessage(m);
+      }),
+      on("contacts", (list) => {
+        contacts.value = list;
+        // A resync may have added, changed or removed photos: drop the cache so avatars re-ask.
+        contactPhotos.value = {};
+        photoRequests.clear();
+        // Names are joined into messages server-side; re-read them for what's loaded.
+        void refreshLoadedMessageNames();
+        // Notifications under a contact's old name come back under the new one.
+        void refreshLoadedNotifications();
+      }),
+      on("calls", (list) => (calls.value = list)),
+      on("pairing-request", (req) => (pairingRequest.value = req)),
+      on("pairing-request-closed", () => (pairingRequest.value = null)),
+      on("open-latest-conversation", openLatestConversation),
+      on("open-settings", () => openSettings()),
+      on("toast-pressed", onToastPressed),
+      on("code-filled", onCodeFilled),
     ]);
-    if (calls.value.length === 0) calls.value = recent;
-    // Merge rather than replace: events may have arrived while these loaded.
-    for (const n of first) upsert(notifications.value, n);
-    messages.value = [...missingMessages(messages.value, msgs), ...messages.value].sort(byArrival);
-    if (contacts.value.length === 0) contacts.value = people;
-    status.value = s;
-    statusKnown.value = true;
-    // Any update that came in while these loaded lands first, as it would have without the frame wait.
-    nowPlayingUpdates.flush();
-    nowPlaying.value = np;
-    hasMore.value = first.length === PAGE;
-    // The backlog is in; from here a newly delivered code text is a live arrival that may pop up.
-    messagesReady = true;
-    // Let code rows age out of the Feed's recency window even when nothing else changes. Not while
-    // tug is hidden (nobody sees the Feed); coming back catches up at once (onVisibilityChange).
-    clockTimer = window.setInterval(() => {
-      if (!document.hidden) clock.value = Date.now();
-    }, 60_000);
-    await attempt(loadSettings);
-    // The backend registered the type-the-code shortcut at startup; Settings shows how that went.
-    const hotkey = await attempt(api.codeHotkeyStatus);
-    if (hotkey) codeHotkey.value = hotkey;
-    // Settings and contacts are in: pop-ups held since the listeners went in can be judged now.
-    markReady();
+    for (const r of listeners) if (r.status === "fulfilled") teardown.push(r.value);
+    // Without its listeners the window would never hear about anything again: say so plainly.
+    if (listeners.some((r) => r.status === "rejected")) notify("error", START_FAILED);
+    try {
+      // Each read applies itself, so one failing doesn't throw away the others; what failed is
+      // read again shortly (lib/startup), and nothing below waits on it.
+      const failed = await settleAll(startupReads);
+      if (failed.length) retryStartup(failed, 0);
+      // The backlog is in (or being retried); from here a newly delivered code text is a live
+      // arrival that may pop up.
+      messagesReady = true;
+      // Let code rows age out of the Feed's recency window even when nothing else changes. Not
+      // while tug is hidden (nobody sees the Feed); coming back catches up at once.
+      window.clearInterval(clockTimer);
+      clockTimer = window.setInterval(() => {
+        if (!document.hidden) clock.value = Date.now();
+      }, 60_000);
+      await attempt(loadSettings);
+      // The backend registered the type-the-code shortcut at startup; Settings shows how that went.
+      const hotkey = await attempt(api.codeHotkeyStatus);
+      if (hotkey) codeHotkey.value = hotkey;
+    } finally {
+      // Settings and contacts are in (or couldn't be read): pop-ups held since the listeners went
+      // in are judged now. Always, or every pop-up would wait forever.
+      markReady();
+    }
     // Settings are in (so lastSeenVersion is known): decide whether to greet with "What's new".
     void checkWhatsNew();
     // A phone that's already low when tug starts gets its alert now, not one step later:
-    // device-status only checks when the level changes, and the first status set it silently.
+    // device-status only checks when the level changes, and the startup read sets it silently.
     void checkBattery(status.value.battery);
     void loadSpotify();
+  }
+
+  /**
+   * Take a device status, from an event (`live`) or a read, unless it's older than the one shown
+   * (events and reads can arrive out of order; see lib/ordering).
+   */
+  function applyStatus(s: DeviceStatus, live: boolean) {
+    if (!isCurrent(s, status.value)) return;
+    const wasConnected = status.value.connection === "connected";
+    const lost = wasConnected && s.connection !== "connected";
+    // The start of an outage: what's posted after it and replayed on reconnect is a gap arrival.
+    if (lost) linkLostAt = Date.now();
+    if (live && s.battery !== status.value.battery) void checkBattery(s.battery);
+    status.value = s;
+    // Notification UIDs die with the connection, so nothing stays actionable.
+    if (lost) {
+      rowGuard.allDead();
+      for (const n of notifications.value) n.live = false;
+    }
+    statusKnown.value = true;
+  }
+
+  /** Read a list of notifications and merge it in, without undoing events that land meanwhile. */
+  async function mergeNotificationRead(read: () => Promise<PhoneNotification[]>): Promise<PhoneNotification[]> {
+    const token = rowGuard.begin();
+    try {
+      const rows = await read();
+      const has = (id: number) => notifications.value.some((x) => x.id === id);
+      for (const n of rowGuard.merge(rows, token, has)) upsert(notifications.value, n);
+      return rows;
+    } finally {
+      rowGuard.end(token);
+    }
+  }
+
+  /**
+   * What the window reads at startup. Listeners go in first, so each read is merged with what
+   * events already brought (never replacing something newer), and each can be retried alone.
+   */
+  const startupReads: StartupRead[] = [
+    async () => applyStatus(await api.getStatus(), false),
+    async () => {
+      const np = await api.getNowPlaying();
+      // Any update that came in while this loaded lands first, as it would have without the frame wait.
+      nowPlayingUpdates.flush();
+      applyNowPlaying(np);
+    },
+    async () => {
+      const first = await mergeNotificationRead(() => api.listNotifications(PAGE));
+      hasMore.value = first.length === PAGE;
+    },
+    async () => {
+      const msgs = await api.listMessages(2000);
+      messages.value = [...missingMessages(messages.value, msgs), ...messages.value].sort(byArrival);
+    },
+    async () => {
+      const people = await api.getContacts();
+      if (contacts.value.length === 0) contacts.value = people;
+    },
+    async () => {
+      const recent = await api.getCalls();
+      if (calls.value.length === 0) calls.value = recent;
+    },
+  ];
+
+  /** Startup reads that failed are read again on their own, until they work or tug unmounts. */
+  let startupRetry: number | undefined;
+  let startupGeneration = 0;
+  function retryStartup(failed: StartupRead[], tries: number) {
+    const generation = startupGeneration;
+    window.clearTimeout(startupRetry);
+    startupRetry = window.setTimeout(() => {
+      void settleAll(failed).then((still) => {
+        if (generation !== startupGeneration || !still.length) return;
+        // Once, when a retry fails too: something is really in the way, so don't pretend.
+        if (tries === 0) notify("error", STILL_LOADING);
+        retryStartup(still, tries + 1);
+      });
+    }, retryDelay(tries));
   }
 
   function dispose() {
@@ -1367,6 +1447,9 @@ export const useTugStore = defineStore("tug", () => {
     // Everything with a lifetime gets cleared here, so init() can be called again cleanly (a
     // remount or dev hot-reload) without a leaked timer firing or an interval double-polling.
     window.clearTimeout(toastSummary);
+    window.clearTimeout(startupRetry);
+    startupRetry = undefined;
+    startupGeneration++;
     window.clearTimeout(gapTimer);
     gapTimer = undefined;
     gapQueue = [];
@@ -1393,9 +1476,8 @@ export const useTugStore = defineStore("tug", () => {
   async function loadMore() {
     if (!hasMore.value) return;
     const last = notifications.value.at(-1);
-    const page = await attempt(() => api.listNotifications(PAGE, last?.id));
+    const page = await attempt(() => mergeNotificationRead(() => api.listNotifications(PAGE, last?.id)));
     if (!page) return;
-    for (const n of page) upsert(notifications.value, n);
     hasMore.value = page.length === PAGE;
   }
 
@@ -1412,10 +1494,13 @@ export const useTugStore = defineStore("tug", () => {
     for (const m of messages.value) if (names.has(m.id)) m.contactName = names.get(m.id) ?? null;
   }
 
+  /**
+   * Re-read what's loaded. A removal or update that lands while this is in flight wins over the
+   * read's older copy (lib/ordering), so a cleared notification can't come back.
+   */
   async function refreshLoadedNotifications() {
     const count = Math.min(Math.max(notifications.value.length, PAGE), 500);
-    const fresh = await api.listNotifications(count).catch(() => null);
-    if (fresh) for (const n of fresh) upsert(notifications.value, n);
+    await mergeNotificationRead(() => api.listNotifications(count)).catch(() => null);
   }
 
   /** Universal search: people, texts and notifications. */

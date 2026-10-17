@@ -6,6 +6,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, on } from "../lib/ipc";
+import { isCurrent } from "../lib/ordering";
 import { TUGBOAT_OFF } from "../lib/tugboat";
 import type { TugboatSkipped, TugboatStatus } from "../types/protocol";
 
@@ -24,7 +25,12 @@ export const useTugboatStore = defineStore("tugboat", () => {
   let teardown: UnlistenFn[] = [];
   let started = false;
 
-  function apply(s: TugboatStatus) {
+  function apply(next: TugboatStatus) {
+    // An older copy from the backend (a read or answer overtaken by an event) never replaces a
+    // newer one (lib/ordering). The store's own Off placeholder (close) has no rev: it always
+    // applies and keeps the last rev, so a copy the backend composed before it can't undo it.
+    if (next.rev !== undefined && !isCurrent(next, status.value)) return;
+    const s = next.rev === undefined ? { ...next, rev: status.value.rev } : next;
     const hadCode = status.value.url !== null;
     status.value = s;
     // Stopped because tug's window hid to the tray: don't greet the user with a dead panel.

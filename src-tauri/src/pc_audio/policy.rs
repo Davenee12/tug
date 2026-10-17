@@ -38,6 +38,9 @@ pub enum PcAudioProblem {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PcAudioStatus {
+    /// Counts the changes (see `stamp`). The answer to "Play on this PC" and the event from the
+    /// attempt can reach the UI in either order; the UI keeps the one with the highest `rev`.
+    pub rev: u64,
     /// This version of Windows can do it at all (Windows 10 version 2004 and later).
     pub supported: bool,
     pub state: PcAudioState,
@@ -241,9 +244,74 @@ pub fn pick(candidates: &[Candidate], phone: &PhoneIds) -> Option<usize> {
     (by_name.len() == 1).then(|| by_name[0])
 }
 
+/// What the UI should hold now, given what it was last sent (`sent`) and the status just composed
+/// (`next`, whose `rev` is ignored). A change gets the next `rev` and is recorded as sent; returns
+/// the status to answer with and whether it's new (so it should be emitted).
+pub fn stamp(sent: &mut Option<PcAudioStatus>, next: PcAudioStatus) -> (PcAudioStatus, bool) {
+    let last_rev = sent.map_or(0, |s| s.rev);
+    let next = PcAudioStatus { rev: last_rev, ..next };
+    if *sent == Some(next) {
+        return (next, false);
+    }
+    let stamped = PcAudioStatus {
+        rev: last_rev + 1,
+        ..next
+    };
+    *sent = Some(stamped);
+    (stamped, true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stamp_counts_changes_only() {
+        let mut sent = None;
+        let off = PcAudioStatus {
+            supported: true,
+            ..Default::default()
+        };
+        assert_eq!(stamp(&mut sent, off), (PcAudioStatus { rev: 1, ..off }, true));
+        // The same status again (whatever rev it was composed with): no new revision, not re-sent.
+        assert_eq!(
+            stamp(&mut sent, PcAudioStatus { rev: 42, ..off }),
+            (PcAudioStatus { rev: 1, ..off }, false)
+        );
+        let connecting = PcAudioStatus {
+            state: PcAudioState::Connecting,
+            ..off
+        };
+        assert_eq!(stamp(&mut sent, connecting).0.rev, 2);
+    }
+
+    /// The audit's interleaving: "Play on this PC" answers with Connecting, but the attempt fails
+    /// fast and its event (Off, not found) is sent first. The answer carries the older rev, so the
+    /// UI keeps the failure instead of sticking on Connecting.
+    #[test]
+    fn a_fast_failure_outranks_the_slower_answer() {
+        let mut sent = None;
+        let base = PcAudioStatus {
+            supported: true,
+            ..Default::default()
+        };
+        let (answer, _) = stamp(
+            &mut sent,
+            PcAudioStatus {
+                state: PcAudioState::Connecting,
+                ..base
+            },
+        );
+        let (event, emitted) = stamp(
+            &mut sent,
+            PcAudioStatus {
+                problem: Some(PcAudioProblem::NotFound),
+                ..base
+            },
+        );
+        assert!(emitted);
+        assert!(event.rev > answer.rev);
+    }
 
     fn opened(m: &mut Machine, problem: Option<PcAudioProblem>) -> Action {
         let attempt = m.attempt;
