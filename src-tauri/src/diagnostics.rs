@@ -1,7 +1,8 @@
 //! "Copy diagnostics": a plain-text report the owner can send for support. It gathers the
 //! app and Windows versions, the live `DeviceStatus`, the non-sensitive settings flags and the
-//! tail of the rotated log files, with phone numbers, emails, the phone's own name and Bluetooth
-//! addresses masked out (tug never logs contact names or message text). The pieces
+//! tail of the rotated log files, with phone numbers, emails, the phone's own name, Bluetooth
+//! addresses and the Windows profile folder and account name masked out (tug never logs contact
+//! names, device names or message text). The pieces
 //! that read files or the OS live in the command; the redaction and the report layout are pure
 //! here so they can be unit-tested without hardware.
 
@@ -61,6 +62,77 @@ pub fn os_version() -> String {
 /// `2026-10-05` stay so the log keeps its timestamps.
 pub fn redact(text: &str) -> String {
     redact_emails(&redact_number_runs(&redact_bluetooth_addresses(text)))
+}
+
+/// Who's signed in to Windows, kept out of the report: the profile folder (`C:\Users\Sam Lee`,
+/// which shows up in every logged path) and the account name.
+#[derive(Debug, Clone, Default)]
+pub struct WindowsUser {
+    pub profile: Option<String>,
+    pub name: Option<String>,
+}
+
+impl WindowsUser {
+    pub fn current() -> WindowsUser {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+        WindowsUser {
+            profile: var("USERPROFILE"),
+            name: var("USERNAME"),
+        }
+    }
+}
+
+/// Replace the profile folder with `%USERPROFILE%` (any case, either slash, and the doubled
+/// backslashes of a debug-printed path), then the account name, as a whole word, with `[user]`.
+pub fn redact_user(text: &str, user: &WindowsUser) -> String {
+    let mut out = text.to_string();
+    if let Some(profile) = user
+        .profile
+        .as_deref()
+        .map(|p| p.trim().trim_end_matches(['\\', '/']))
+        .filter(|p| p.len() >= 3)
+    {
+        let variants = [
+            profile.to_string(),
+            profile.replace('\\', "/"),
+            profile.replace('\\', "\\\\"),
+        ];
+        for v in variants {
+            out = replace_ignoring_case(&out, &v, "%USERPROFILE%", false);
+        }
+    }
+    if let Some(name) = user.name.as_deref().map(str::trim).filter(|n| n.chars().count() >= 2) {
+        out = replace_ignoring_case(&out, name, "[user]", true);
+    }
+    out
+}
+
+/// Replace every case-insensitive occurrence of `needle`; with `whole_word`, only where it isn't
+/// part of a longer word.
+fn replace_ignoring_case(text: &str, needle: &str, with: &str, whole_word: bool) -> String {
+    let needle: Vec<char> = needle.chars().collect();
+    if needle.is_empty() {
+        return text.to_string();
+    }
+    let same = |a: char, b: char| a == b || a.to_lowercase().eq(b.to_lowercase());
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let matches = i + needle.len() <= chars.len()
+            && needle.iter().enumerate().all(|(k, &n)| same(chars[i + k].1, n))
+            && (!whole_word
+                || (!word(i.checked_sub(1).map(|j| chars[j].1)) && !word(chars.get(i + needle.len()).map(|c| c.1))));
+        if matches {
+            out.push_str(with);
+            i += needle.len();
+        } else {
+            out.push(chars[i].1);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Mask the phone's own name(s) (e.g. "Jordan's iPhone" names a person) wherever they appear.
@@ -291,6 +363,8 @@ pub struct Report<'a> {
     pub log_lines: &'a [String],
     /// The phone's name(s), masked wherever they appear in the log tail.
     pub phone_names: &'a [String],
+    /// The Windows profile folder and account name, masked everywhere.
+    pub user: &'a WindowsUser,
 }
 
 impl Report<'_> {
@@ -306,7 +380,7 @@ impl Report<'_> {
         out.push('\n');
 
         out.push_str("device status\n-------------\n");
-        out.push_str(&redact(self.status_json));
+        out.push_str(&redact(&redact_user(self.status_json, self.user)));
         out.push_str("\n\n");
 
         out.push_str("settings\n--------\n");
@@ -325,7 +399,7 @@ impl Report<'_> {
             out.push_str("(no log files found)\n");
         } else {
             for line in self.log_lines {
-                out.push_str(&redact(&redact_names(line, self.phone_names)));
+                out.push_str(&redact(&redact_user(&redact_names(line, self.phone_names), self.user)));
                 out.push('\n');
             }
         }
@@ -416,6 +490,7 @@ mod tests {
             settings: &settings,
             log_lines: &logs,
             phone_names: &[],
+            user: &WindowsUser::default(),
         };
         let out = report.render();
         assert!(out.contains("app version:     0.5.7"));
@@ -454,12 +529,59 @@ mod tests {
             settings: &[],
             log_lines: &logs,
             phone_names: &names,
+            user: &WindowsUser::default(),
         }
         .render();
         assert!(!out.contains("My iPhone"), "{out}");
         assert!(out.contains("connected to [phone]"));
         assert!(out.contains("BluetoothLE#BluetoothLE[address]-[address]"));
         assert!(out.contains("[2026-10-05][14:52:21]"), "times stay readable: {out}");
+    }
+
+    #[test]
+    fn the_windows_user_is_never_named() {
+        let user = WindowsUser {
+            profile: Some(r"C:\Users\Sam Lee".into()),
+            name: Some("Sam Lee".into()),
+        };
+        assert_eq!(
+            redact_user(
+                r"couldn't open c:\users\SAM LEE\AppData\Roaming\x\tug.db: locked",
+                &user
+            ),
+            r"couldn't open %USERPROFILE%\AppData\Roaming\x\tug.db: locked"
+        );
+        assert_eq!(
+            redact_user(r#"path "C:\\Users\\Sam Lee\\Pictures" and C:/Users/Sam Lee/x"#, &user),
+            r#"path "%USERPROFILE%\\Pictures" and %USERPROFILE%/x"#
+        );
+        // The account name elsewhere (another drive, OneDrive's folder name), as a whole word.
+        assert_eq!(
+            redact_user(r"D:\Sam Lee\files; OneDrive - Sam Lee", &user),
+            r"D:\[user]\files; OneDrive - [user]"
+        );
+        let short = WindowsUser {
+            profile: Some(r"C:\Users\al".into()),
+            name: Some("al".into()),
+        };
+        assert_eq!(redact_user("all good, al", &short), "all good, [user]");
+        // Nothing known about the user: untouched.
+        assert_eq!(redact_user(r"C:\Users\x", &WindowsUser::default()), r"C:\Users\x");
+
+        let logs = vec![r"[INFO] set the database aside as C:\Users\Sam Lee\AppData\tug.db.bad".to_string()];
+        let out = Report {
+            app_version: "0.5.16",
+            windows_version: "Windows 11",
+            bluetooth: "radio on",
+            status_json: "{}",
+            settings: &[],
+            log_lines: &logs,
+            phone_names: &[],
+            user: &user,
+        }
+        .render();
+        assert!(!out.contains("Sam"), "{out}");
+        assert!(out.contains(r"%USERPROFILE%\AppData\tug.db.bad"), "{out}");
     }
 
     #[test]

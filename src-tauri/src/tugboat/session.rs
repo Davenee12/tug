@@ -74,6 +74,9 @@ pub enum ApiError {
     NoGame,
     /// Controller inputs faster than any real phone sends them.
     Busy,
+    /// Windows wouldn't let tug write where files are saved (Controlled folder access in Windows
+    /// Security protects Pictures from apps it doesn't know), and the fallback was refused too.
+    Blocked,
     Io,
 }
 
@@ -82,7 +85,7 @@ impl ApiError {
         match self {
             ApiError::Closed => 410,
             ApiError::Unauthorized => 401,
-            ApiError::InUse => 403,
+            ApiError::InUse | ApiError::Blocked => 403,
             ApiError::NotFound => 404,
             ApiError::BadRequest | ApiError::BadChunk => 400,
             ApiError::TooBig => 413,
@@ -108,20 +111,80 @@ impl ApiError {
             ApiError::Changed => "changed",
             ApiError::NoGame => "no-game",
             ApiError::Busy => "busy",
+            ApiError::Blocked => "blocked",
             ApiError::Io => "io",
         }
     }
 }
 
+/// ERROR_ACCESS_DENIED: what Controlled folder access (and a folder tug may not write to) gives.
+const ACCESS_DENIED: i32 = 5;
+/// ERROR_DISK_FULL.
+const DISK_FULL: i32 = 112;
+
 fn io_err(context: &str, e: std::io::Error) -> ApiError {
     // The error kind only: paths here name the user's files.
     log::warn!("tugboat: {context} failed: {:?}", e.kind());
-    if e.raw_os_error() == Some(112) {
-        // ERROR_DISK_FULL
-        return ApiError::NoSpace;
+    match e.raw_os_error() {
+        Some(DISK_FULL) => ApiError::NoSpace,
+        Some(ACCESS_DENIED) => ApiError::Blocked,
+        _ => ApiError::Io,
     }
-    ApiError::Io
 }
+
+/// Where received files are going, once the first upload checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FolderBlock {
+    /// Windows refused the usual folder, so files go to the fallback (`Downloads\Tugboat`).
+    Fallback,
+    /// Windows refused both: nothing can be saved until tug is allowed.
+    Blocked,
+}
+
+/// The outcome of trying to write in a folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Probe {
+    Ok,
+    /// Access denied (Controlled folder access, or permissions).
+    Denied,
+    /// Some other failure (a missing drive, say): reported as it is, no fallback.
+    Failed(ApiError),
+}
+
+impl Probe {
+    fn from(result: std::io::Result<()>) -> Probe {
+        match result {
+            Ok(()) => Probe::Ok,
+            Err(e) if e.raw_os_error() == Some(ACCESS_DENIED) => Probe::Denied,
+            Err(e) => Probe::Failed(io_err("check the Tugboat folder", e)),
+        }
+    }
+}
+
+/// Which folder to save in, from how writing to the usual one (and, if that was refused, the
+/// fallback) went. Pure, so the choice is tested without Windows Security.
+pub fn choose_folder(preferred: Probe, fallback: Option<Probe>) -> Result<Option<FolderBlock>, ApiError> {
+    match (preferred, fallback) {
+        (Probe::Ok, _) => Ok(None),
+        (Probe::Failed(e), _) => Err(e),
+        (Probe::Denied, Some(Probe::Ok)) => Ok(Some(FolderBlock::Fallback)),
+        (Probe::Denied, _) => Err(ApiError::Blocked),
+    }
+}
+
+/// Make sure tug can create a file in `dir`: create the folder, then a uniquely named probe file
+/// (named like the cross-drive temp files, so `sweep_temp` removes one ever left behind), and
+/// delete it.
+pub fn probe_folder(dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let probe = dir.join(format!("{TEMP_PREFIX}probe-{}{TEMP_SUFFIX}", crypto::new_id()));
+    OpenOptions::new().write(true).create_new(true).open(&probe)?;
+    let _ = fs::remove_file(&probe);
+    Ok(())
+}
+
+type Prober = dyn Fn(&Path) -> std::io::Result<()> + Send + Sync;
 
 // --- Messages the page sends and receives (inside sealed bodies) ---
 
@@ -286,12 +349,22 @@ struct State {
     next_text_id: u32,
     /// The game controller channel, while tug's game asks for one.
     pad: Option<Pad>,
+    /// Where files are saved, once the first upload checked tug may write there.
+    save_to: Option<PathBuf>,
+    /// Windows refused the usual folder (files go to the fallback), or both.
+    block: Option<FolderBlock>,
+    /// Refused requests, so a flood is logged as a count (`tally.rs`).
+    refused: super::tally::Tally,
 }
 
 pub struct Session {
     pub keys: Keys,
-    /// `Pictures\Tugboat`.
+    /// `Pictures\Tugboat`: where received files go, unless Windows won't let tug write there.
     pub folder: PathBuf,
+    /// `Downloads\Tugboat`: used when Windows refuses `folder` (Controlled folder access).
+    fallback: Option<PathBuf>,
+    /// Checks tug can write in a folder (`probe_folder`; replaced in tests).
+    prober: Box<Prober>,
     /// Where unfinished uploads are written (tug's local app data, not the Pictures folder, so a
     /// OneDrive-synced Pictures never uploads half-received files). Emptied on start and stop.
     pub incoming: PathBuf,
@@ -314,6 +387,8 @@ impl Session {
         Session {
             keys: Keys::derive(secret),
             folder,
+            fallback: None,
+            prober: Box::new(probe_folder),
             incoming,
             state: Mutex::new(State {
                 auth: Auth::new(),
@@ -328,11 +403,86 @@ impl Session {
                 pc_text: None,
                 next_text_id: 1,
                 pad: None,
+                save_to: None,
+                block: None,
+                refused: super::tally::Tally::default(),
             }),
             closed: AtomicBool::new(false),
             sink,
             finishing: Mutex::new(()),
         }
+    }
+
+    /// Where to save when Windows refuses the usual folder.
+    pub fn with_fallback(mut self, fallback: Option<PathBuf>) -> Session {
+        self.fallback = fallback;
+        self
+    }
+
+    /// Replace the write check (tests stand in for Windows Security with it).
+    #[cfg(test)]
+    pub fn with_prober(mut self, prober: impl Fn(&Path) -> std::io::Result<()> + Send + Sync + 'static) -> Session {
+        self.prober = Box::new(prober);
+        self
+    }
+
+    /// The folder received files are saved in (the usual one until a check said otherwise).
+    pub fn save_folder(&self) -> PathBuf {
+        self.state().save_to.clone().unwrap_or_else(|| self.folder.clone())
+    }
+
+    /// Whether Windows refused the usual folder (and the fallback).
+    pub fn folder_block(&self) -> Option<FolderBlock> {
+        self.state().block
+    }
+
+    /// The folder to save this upload in: decided by the first upload (can tug write in the usual
+    /// folder? if Windows refuses, in the fallback?) and kept for the session. Refused both ways,
+    /// it's checked again next time, so allowing tug in Windows Security works without reopening
+    /// Tugboat.
+    fn save_folder_checked(&self) -> Result<PathBuf, ApiError> {
+        if let Some(dir) = self.state().save_to.clone() {
+            return Ok(dir);
+        }
+        let preferred = Probe::from((self.prober)(&self.folder));
+        let fallback = match (preferred, &self.fallback) {
+            (Probe::Denied, Some(dir)) => Some(Probe::from((self.prober)(dir))),
+            _ => None,
+        };
+        let chosen = choose_folder(preferred, fallback);
+        let mut st = self.state();
+        let before = st.block;
+        let result = match chosen {
+            Ok(None) => {
+                st.block = None;
+                st.save_to = Some(self.folder.clone());
+                Ok(self.folder.clone())
+            }
+            Ok(Some(block)) => {
+                let dir = self.fallback.clone().expect("a fallback was checked");
+                st.block = Some(block);
+                st.save_to = Some(dir.clone());
+                Ok(dir)
+            }
+            Err(ApiError::Blocked) => {
+                st.block = Some(FolderBlock::Blocked);
+                Err(ApiError::Blocked)
+            }
+            Err(e) => Err(e),
+        };
+        let after = st.block;
+        drop(st);
+        if after != before {
+            match after {
+                Some(FolderBlock::Fallback) => {
+                    log::warn!("tugboat: Windows blocked saving to Pictures; saving to Downloads instead")
+                }
+                Some(FolderBlock::Blocked) => log::warn!("tugboat: Windows blocked saving received files"),
+                None => {}
+            }
+            self.sink.changed(true);
+        }
+        result
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -349,6 +499,10 @@ impl Session {
     /// End the session: every later request gets "closed", even on a connection still open.
     pub fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+        let held = self.state().refused.flush();
+        if held > 0 {
+            log::debug!("tugboat: {held} more requests refused before closing");
+        }
     }
 
     pub fn is_closed(&self) -> bool {
@@ -426,8 +580,11 @@ impl Session {
                 Ok(ok)
             }
             Err(why) => {
-                // Logged without anything from the request itself.
-                log::debug!("tugboat: request refused ({why:?})");
+                // Logged without anything from the request itself, and at most once a minute
+                // with a count: any device on the network can send refused requests endlessly.
+                if let Some(held) = st.refused.note(Instant::now()) {
+                    log::debug!("tugboat: request refused ({why:?}){}", super::tally::more(held));
+                }
                 Err(match why {
                     Rejected::OtherDevice => ApiError::InUse,
                     Rejected::Replayed => ApiError::Stale,
@@ -613,11 +770,13 @@ impl Session {
             PlanError::BadChunkSize => ApiError::BadRequest,
         })?;
         fs::create_dir_all(&self.incoming).map_err(|e| io_err("create the incoming folder", e))?;
-        fs::create_dir_all(&self.folder).map_err(|e| io_err("create the Tugboat folder", e))?;
+        // Before a byte is sent: can tug save there at all? (Controlled folder access refuses
+        // Pictures to apps it doesn't know, and would otherwise fail only once the file is in.)
+        let folder = self.save_folder_checked()?;
         // Enough room for this file, with a margin. Files already arriving reserved theirs when
         // they started (set_len below), so the free figure already allows for them.
         // Both where it's written and where it ends up (they differ if Pictures is on another drive).
-        for dir in [&self.incoming, &self.folder] {
+        for dir in [&self.incoming, &folder] {
             if let Some(free) = free_space(dir) {
                 if free < req.size + DISK_MARGIN {
                     return Err(ApiError::NoSpace);
@@ -753,7 +912,8 @@ impl Session {
     /// rename that over the reserved name, so the real name never holds a half-copied file (and a
     /// crash mid-copy leaves only a temp file, swept on the next start).
     fn copy_across_drives(&self, id: &str, part: &Path, final_path: &Path) -> std::io::Result<()> {
-        let tmp = self.folder.join(format!("{TEMP_PREFIX}{id}{TEMP_SUFFIX}"));
+        let dir = final_path.parent().unwrap_or(&self.folder);
+        let tmp = dir.join(format!("{TEMP_PREFIX}{id}{TEMP_SUFFIX}"));
         let copied = fs::copy(part, &tmp).and_then(|_| {
             set_hidden(&tmp, true);
             fs::rename(&tmp, final_path)
@@ -776,9 +936,10 @@ impl Session {
     /// Claim a free name in the Tugboat folder by creating it empty (`create_new` fails if another
     /// file got there first, so nothing is ever overwritten).
     fn reserve_name(&self, name: &str) -> Result<(String, PathBuf), ApiError> {
+        let folder = self.save_folder();
         for _ in 0..20 {
-            let candidate = names::unique(name, |n| self.folder.join(n).exists());
-            let path = self.folder.join(&candidate);
+            let candidate = names::unique(name, |n| folder.join(n).exists());
+            let path = folder.join(&candidate);
             match OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(_) => return Ok((candidate, path)),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -1033,9 +1194,11 @@ fn offer_plan(size: u64) -> Plan {
     }
 }
 
-/// Temp files from a cross-drive save are `~$<id>.tugboat.tmp` in the Tugboat folder.
-const TEMP_PREFIX: &str = "~$";
-const TEMP_SUFFIX: &str = ".tugboat.tmp";
+/// Temp files from a cross-drive save are `~$<id>.tugboat.tmp` in the Tugboat folder (and the
+/// write check's probe files `~$probe-<id>.tugboat.tmp`). `names::sanitize` never gives a file
+/// from the phone a name of this shape, so the sweep can't delete one.
+pub const TEMP_PREFIX: &str = "~$";
+pub const TEMP_SUFFIX: &str = ".tugboat.tmp";
 
 /// Remove temp files a crash left mid-copy in the Tugboat folder (cross-drive saves).
 pub fn sweep_temp(folder: &Path) {
@@ -1186,6 +1349,114 @@ mod tests {
         assert_eq!(ApiError::Closed.status(), 410);
         assert_eq!(ApiError::InUse.status(), 403);
         assert_eq!(ApiError::NoSpace.code(), "no-space");
+    }
+
+    #[test]
+    fn access_denied_is_its_own_error() {
+        let denied = std::io::Error::from_raw_os_error(ACCESS_DENIED);
+        assert_eq!(io_err("save a received file", denied), ApiError::Blocked);
+        assert_eq!(ApiError::Blocked.code(), "blocked");
+        let full = std::io::Error::from_raw_os_error(DISK_FULL);
+        assert_eq!(io_err("write a chunk", full), ApiError::NoSpace);
+        let other = std::io::Error::from_raw_os_error(32); // sharing violation
+        assert_eq!(io_err("write a chunk", other), ApiError::Io);
+    }
+
+    #[test]
+    fn chooses_the_fallback_only_when_windows_refuses() {
+        assert_eq!(choose_folder(Probe::Ok, None), Ok(None));
+        assert_eq!(
+            choose_folder(Probe::Denied, Some(Probe::Ok)),
+            Ok(Some(FolderBlock::Fallback))
+        );
+        assert_eq!(
+            choose_folder(Probe::Denied, Some(Probe::Denied)),
+            Err(ApiError::Blocked)
+        );
+        assert_eq!(choose_folder(Probe::Denied, None), Err(ApiError::Blocked));
+        // Another failure isn't papered over by quietly saving somewhere else.
+        assert_eq!(
+            choose_folder(Probe::Failed(ApiError::NoSpace), None),
+            Err(ApiError::NoSpace)
+        );
+    }
+
+    struct Quiet;
+    impl Sink for Quiet {
+        fn changed(&self, _urgent: bool) {}
+        fn text(&self, _text: &str) {}
+        fn pad(&self, _event: PadEvent) {}
+    }
+
+    fn temp(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("tugboat-{tag}-{}", crypto::new_id()))
+    }
+
+    fn upload(size: u64) -> UploadRequest {
+        UploadRequest {
+            name: "IMG_0001.HEIC".into(),
+            size,
+            chunk_size: 64 * 1024,
+        }
+    }
+
+    /// Windows Security stand-in: refuses `blocked` folders with ERROR_ACCESS_DENIED, else the
+    /// real check.
+    fn refusing(blocked: Vec<PathBuf>) -> impl Fn(&Path) -> std::io::Result<()> + Send + Sync {
+        move |dir: &Path| {
+            if blocked.iter().any(|b| b == dir) {
+                Err(std::io::Error::from_raw_os_error(ACCESS_DENIED))
+            } else {
+                probe_folder(dir)
+            }
+        }
+    }
+
+    #[test]
+    fn a_blocked_pictures_folder_falls_back_to_downloads() {
+        let (pictures, downloads, incoming) = (temp("pictures"), temp("downloads"), temp("incoming"));
+        let s = Session::new(&[7u8; 32], pictures.clone(), incoming.clone(), Arc::new(Quiet))
+            .with_fallback(Some(downloads.clone()))
+            .with_prober(refusing(vec![pictures.clone()]));
+        assert_eq!(s.folder_block(), None);
+        s.begin_upload("fileAAAAAAAAAAAAAAAAAA", &upload(10)).unwrap();
+        assert_eq!(s.folder_block(), Some(FolderBlock::Fallback));
+        assert_eq!(s.save_folder(), downloads);
+        // The probe left nothing behind.
+        assert_eq!(fs::read_dir(&downloads).unwrap().count(), 0);
+        for dir in [&downloads, &incoming] {
+            let _ = fs::remove_dir_all(dir);
+        }
+        assert!(!pictures.exists());
+    }
+
+    #[test]
+    fn blocked_both_ways_says_so_before_anything_is_sent_and_checks_again() {
+        let (pictures, downloads, incoming) = (temp("pictures"), temp("downloads"), temp("incoming"));
+        let allowed = Arc::new(AtomicBool::new(false));
+        let gate = allowed.clone();
+        let refuse = refusing(vec![pictures.clone(), downloads.clone()]);
+        let s = Session::new(&[7u8; 32], pictures.clone(), incoming.clone(), Arc::new(Quiet))
+            .with_fallback(Some(downloads.clone()))
+            .with_prober(move |dir: &Path| {
+                if gate.load(Ordering::SeqCst) {
+                    probe_folder(dir)
+                } else {
+                    refuse(dir)
+                }
+            });
+        let id = "fileBBBBBBBBBBBBBBBBBB";
+        assert_eq!(s.begin_upload(id, &upload(10)), Err(ApiError::Blocked));
+        assert_eq!(s.folder_block(), Some(FolderBlock::Blocked));
+        assert_eq!(s.uploads_in_progress(), 0, "nothing was set up for the file");
+        // The person allows tug in Windows Security and tries again: no need to reopen Tugboat.
+        allowed.store(true, Ordering::SeqCst);
+        s.begin_upload(id, &upload(10)).unwrap();
+        assert_eq!(s.folder_block(), None);
+        assert_eq!(s.save_folder(), pictures);
+        for dir in [&pictures, &incoming] {
+            let _ = fs::remove_dir_all(dir);
+        }
     }
 
     #[test]

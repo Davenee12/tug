@@ -649,6 +649,8 @@ const dropState: TugboatStatus = {
   phone: null,
   phoneActive: false,
   folder: dropFolder,
+  // `&cfa`: Windows Security's Controlled folder access refused Pictures (files go to Downloads).
+  folderBlock: params.has("cfa") ? "fallback" : null,
   incoming: [],
   outgoing: [],
   texts: [],

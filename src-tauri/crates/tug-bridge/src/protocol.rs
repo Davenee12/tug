@@ -613,7 +613,30 @@ pub struct PhoneStatus {
 pub struct StatusResult {
     pub version: String,
     pub permissions: BTreeMap<Permission, bool>,
-    pub phone: PhoneStatus,
+    /// The phone's state, only while the Phone status switch is on (`null` otherwise): `status`
+    /// needs only the master switch, so it mustn't hand out what `phone_status` guards.
+    #[serde(default)]
+    pub phone: Option<PhoneStatus>,
+}
+
+impl StatusResult {
+    /// The answer to `status`. `phone` is only asked for when the Phone status switch is on.
+    pub fn new(
+        version: String,
+        permissions: BTreeMap<Permission, bool>,
+        phone: impl FnOnce() -> PhoneStatus,
+    ) -> StatusResult {
+        let phone = permissions
+            .get(&Permission::PhoneStatus)
+            .copied()
+            .unwrap_or(false)
+            .then(phone);
+        StatusResult {
+            version,
+            permissions,
+            phone,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -661,6 +684,39 @@ mod tests {
 
     fn parse(json: &str) -> Call {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn status_leaves_the_phone_out_while_phone_status_is_off() {
+        let phone = || PhoneStatus {
+            connected: true,
+            connection: "connected".into(),
+            model: Some("iPhone 15 Pro".into()),
+            battery_percent: Some(81),
+            notifications: true,
+            texts: true,
+            now_playing: Some(NowPlayingInfo {
+                title: Some("Song".into()),
+                artist: Some("Band".into()),
+                album: None,
+                state: "playing".into(),
+                app: None,
+            }),
+        };
+        let mut perms = effective_permissions(&BTreeMap::new());
+        perms.insert(Permission::PhoneStatus, false);
+        let off = StatusResult::new("0.5.16".into(), perms.clone(), || panic!("not asked for while off"));
+        assert_eq!(off.phone, None);
+        let wire = serde_json::to_string(&off).unwrap();
+        assert!(wire.contains("\"phone\":null"), "{wire}");
+        assert!(!wire.contains("Song") && !wire.contains("81"), "{wire}");
+
+        perms.insert(Permission::PhoneStatus, true);
+        let on = StatusResult::new("0.5.16".into(), perms, phone);
+        assert_eq!(on.phone, Some(phone()));
+        // And it reads back on the other side.
+        let back: StatusResult = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back, on);
     }
 
     #[test]

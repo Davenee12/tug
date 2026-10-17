@@ -5,12 +5,20 @@
 ;   - the "Start with Windows" entry (HKCU Run "tug", plus its Task Manager startup flag; Tauri's
 ;     uninstaller removes the Run value too, this keeps it with its flag),
 ;   - tug's own folder on the user's PATH (Settings > Developer tools > Add tug to PATH): only the
-;     exact "<install folder>\bin" entry, every other entry left as written,
+;     exact "<install folder>\bin" entry, every other entry left as written. tug.exe does this
+;     itself before its files go ("tug.exe --remove-from-path", any PATH length); the NSIS
+;     fallback below only handles a PATH NSIS can hold, and finds nothing left to do normally,
 ;   - the Spotify sign-in token in Credential Manager (tug/spotify-refresh-token).
 ; User data (history, settings) is only removed when the user ticks Tauri's own "Delete the
 ; application data" box; that stays Tauri's job.
 
 !macro NSIS_HOOK_PREUNINSTALL
+  ${If} $UpdateMode <> 1
+    ; tug.exe is still here: it takes its own bin folder off the user's PATH and exits at once
+    ; (no window; it does nothing if the folder isn't on PATH).
+    nsExec::Exec '"$INSTDIR\tug.exe" --remove-from-path'
+    Pop $0
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

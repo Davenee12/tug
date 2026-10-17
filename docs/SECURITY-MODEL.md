@@ -18,7 +18,13 @@ Run asked for the phone as a controller), on the PC's private LAN address. The Q
 network; the page takes it out of the address bar at once and keeps it only in memory (never in
 web storage, so reloading the page means scanning again); every request is MAC'd with keys derived from it, the first phone to connect binds the
 session, replays are refused, and file contents are sealed with XChaCha20-Poly1305. Received files
-get safe names, land only in `Pictures\Tugboat`, and carry the Mark-of-the-Web. Plain HTTP means an
+get safe names (never the shape of tug's own temp files, which are swept at the next start), land
+only in `Pictures\Tugboat` (or `Downloads\Tugboat` when Windows Security's Controlled folder access
+refuses Pictures to tug, which the panel says), and carry the Mark-of-the-Web. Devices that don't
+hold the secret can't wear Tugboat down either: a connection that hasn't proved it holds the secret
+is closed after its first answer, when every connection slot is taken the oldest such connection
+makes way (so they can't lock the phone out), and refused requests and failed connections are
+logged at most once a minute, with a count. Plain HTTP means an
 *active* attacker on the network could tamper with the first page load; that's documented and out
 of scope (see SECURITY.md).
 
@@ -41,7 +47,8 @@ tampered with the first page load could steer the boat.
 reach tug over a named pipe that only the current user can open; low-integrity processes and
 remote machines are refused. Each connection proves it holds the bridge token (an HMAC
 challenge over fresh nonces) before any call. Developer tools are off by default, each tool has
-its own switch, calls are rate limited, and sending a text always needs the person to click
+its own switch (`status` needs only the master switch, so it leaves the phone out unless Phone
+status is on), calls are rate limited, and sending a text always needs the person to click
 **Send** on tug's own card.
 
 **Malicious content in notifications and texts.** Message and notification text comes from other
@@ -95,8 +102,14 @@ History (`tug.db`), settings, logs and caches live unencrypted under your Window
 (`%APPDATA%` and `%LOCALAPPDATA%`, see [ARCHITECTURE.md](ARCHITECTURE.md#storage)), protected by
 Windows' per-user file permissions, not by tug. Use BitLocker or device encryption to protect
 them from someone with the disk. The Spotify refresh token is the exception: it's kept in Windows
-Credential Manager. Logs and **Copy diagnostics** never record message contents, names, numbers
-or tokens.
+Credential Manager. Logs never record message contents, contact or device names, numbers or
+tokens (devices are logged by a short tag). **Copy diagnostics** also masks phone numbers, emails,
+Bluetooth addresses, the phone's name, and your Windows account name and profile folder.
+
+**Start with Windows** is only ever your own entry (`HKCU\...\Run`), never one for every account on
+the PC, so you can always turn it off without an administrator and the uninstaller removes it.
+(Older versions could write an all-users entry if tug ran as administrator; tug moves that back to
+you the next time it runs as administrator.)
 
 ## Unsigned builds
 

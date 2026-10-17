@@ -21,7 +21,7 @@ import { useTugboatStore } from "../stores/tugboat";
 import { useFocusTrap } from "../lib/focusTrap";
 import { api } from "../lib/ipc";
 import { copyText } from "../lib/clipboard";
-import { capitalised, closeWarning, formatSize, percent, showConnectHelp, skippedMessage } from "../lib/tugboat";
+import { capitalised, closeWarning, folderBlockMessage, formatSize, percent, showConnectHelp, skippedMessage } from "../lib/tugboat";
 
 const tug = useTugStore();
 const tugboat = useTugboatStore();
@@ -112,6 +112,8 @@ async function sendText() {
 }
 
 const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.length > 0);
+// Windows Security (Controlled folder access) refused Pictures: say so, and where files go now.
+const blockNote = computed(() => folderBlockMessage(s.value));
 </script>
 
 <template>
@@ -233,6 +235,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
         <div class="min-h-0 px-6 py-5 md:overflow-y-auto">
           <section aria-labelledby="tugboat-from">
             <h3 id="tugboat-from" class="caption-upper text-muted-soft">From your {{ phoneName }}</h3>
+            <p v-if="blockNote" class="mt-2 rounded-lg bg-surface-soft px-3.5 py-3 text-[13px] text-ink" role="status">{{ blockNote }}</p>
             <p v-if="!hasIncoming" class="mt-2 text-[14px] text-muted">Photos, files and text you send from the phone show up here.</p>
 
             <ul v-if="s.texts.length" class="mt-3 space-y-2">
@@ -322,7 +325,7 @@ const hasIncoming = computed(() => s.value.incoming.length > 0 || s.value.texts.
       </div>
 
       <footer class="flex items-center gap-3 border-t border-hairline-soft px-6 py-3 text-[12px] text-muted">
-        <span class="min-w-0 truncate">Received files go to Pictures › Tugboat</span>
+        <span class="min-w-0 truncate">Received files go to {{ s.folderBlock === "fallback" ? "Downloads" : "Pictures" }} › Tugboat</span>
         <button class="btn-secondary btn-sm shrink-0" @click="tugboat.openFolder()">
           <FolderOpen :size="14" />
           Open folder

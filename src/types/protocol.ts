@@ -524,8 +524,13 @@ export interface TugboatStatus {
   phone: string | null;
   /** The phone's page is open and checking in. */
   phoneActive: boolean;
-  /** Where received files go (Pictures\Tugboat). */
+  /** Where received files go (Pictures\Tugboat, or Downloads\Tugboat when Windows refused Pictures). */
   folder: string | null;
+  /**
+   * Windows Security (Controlled folder access) refused Pictures: files go to Downloads instead
+   * ("fallback"), or can't be saved until tug is allowed ("blocked").
+   */
+  folderBlock: "fallback" | "blocked" | null;
   incoming: TugboatIncoming[];
   outgoing: TugboatOffer[];
   texts: TugboatText[];

@@ -83,14 +83,22 @@ map is `EventPayloads` in `src/lib/ipc.ts`.
 ## Startup
 
 `src-tauri/src/lib.rs`: plugins (single-instance first, so a second launch just shows the window;
-autostart with `--minimized`; log with rotation; notification; dialog) → create the data folder →
+log with rotation; notification; dialog) → withdraw the last run's pop-ups and, running elevated,
+move an old all-users Start with Windows entry back to this user (both off the main thread;
+`autostart.rs` owns the HKCU Run entry, quoted, with `--minimized`) → create the data folder →
 open the SQLite store and migrate → `Shared` → start the BLE actor → start the MAP worker → media
 keys → Spotify → Tugboat service (cleans partial uploads) → developer bridge → register state → a
 one-off cache trim → tray → WebView2 watch (reloads the page if its process dies or hangs; rebuilds the
 window if WebView2's browser process exits, except during a Windows shutdown) → show the window unless
 started minimized.
 Closing the window hides it to the tray (unless the user turned that off); on exit tug withdraws its
-toasts and stops Tugboat.
+toasts, stops Tugboat and hands PC audio back to the phone. When Windows is signing out or shutting
+down (`session_end.rs`: the main window is subclassed for WM_QUERYENDSESSION/WM_ENDSESSION, backed
+by `SM_SHUTTINGDOWN`), exit runs inside WM_ENDSESSION and Windows waits for it, so it skips the
+toast withdrawal and Tugboat's temp cleanup (both done at the next start) and doesn't wait for PC
+audio to close; a log line times the exit either way. The uninstaller runs
+`tug.exe --remove-from-path` before removing files, which takes tug's `bin` folder off the user's
+PATH whatever its length (`run_uninstall_step` in `lib.rs`) and exits without starting the app.
 
 ## Data flows
 
@@ -158,7 +166,9 @@ send_text: recipient::resolve ─► confirm.rs opens a card ─► emit "devtoo
 QR: http://<LAN IPv4>:<port>/#<secret>   (the secret after # is never sent)
 phone page ─POST /api/up─► PUT chunks (XChaCha20-Poly1305, keys from HKDF of the secret)
   every request MAC'd (first phone binds, replays refused) ─► tugboat/session.rs
-  ─► finish: sanitized name, " (2)" on collisions ─► Pictures\Tugboat + Mark-of-the-Web
+  first upload: can tug write to Pictures\Tugboat? Controlled folder access refusing it (access
+  denied) ─► Downloads\Tugboat, and the panel says why; refused there too ─► "blocked" to the phone
+  ─► finish: sanitized name, " (2)" on collisions ─► that folder + Mark-of-the-Web
   ─► emit "tugboat-status"
 ```
 
@@ -214,6 +224,8 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
 | `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone |
+| `tugboat/net.rs`, `tugboat/tally.rs`, `tugboat/session.rs` (`choose_folder`) | Which adapter the phone can reach (including a Hyper-V external switch); logging strangers' refused requests once a minute with a count; Pictures or the Downloads fallback |
+| `autostart.rs`, `session_end.rs` | Start with Windows over a `Registry` trait (tested with a fake: HKCU only, moving an old HKLM entry); what exit skips when Windows is ending the session |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
@@ -261,7 +273,7 @@ in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messag
 | App icons, Spotify art, contact photos | `%APPDATA%\<app id>\` (`icons/` 50 MB cap, `spotify_art/` 100 MB cap, `contacts/`) |
 | Logs (2 MB × 5, rotated) | `%LOCALAPPDATA%\<app id>\logs` |
 | Bridge token, half-received Tugboat files | `%LOCALAPPDATA%\<app id>\` |
-| Files received with Tugboat | `Pictures\Tugboat` |
+| Files received with Tugboat | `Pictures\Tugboat` (`Downloads\Tugboat` while Controlled folder access refuses Pictures) |
 | Spotify refresh token | Windows Credential Manager |
 
 `<app id>` is the `identifier` in `src-tauri/tauri.conf.json`. The schema is a baseline plus an
@@ -292,7 +304,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?applemusic`, `/?norepeat`, `/?repeatignored` | Apple Music controls and repeat edge cases |
 | `/?speaker`, `/?spotifyoff` | Spotify on a Connect speaker / Spotify not connected |
 | `/?novolume` | A player that doesn't report its volume: no volume bar |
-| `/?tugboat` (`&android`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring / waiting for a phone / no usable network |
+| `/?tugboat` (`&android`, `&cfa`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring (Controlled folder access refusing Pictures) / waiting for a phone / no usable network |
 | `/?game` | Tugboat Run, ready to start |
 | `/?gamephone` | Tugboat Run with the phone controller: Tugboat's code, a phone scanning it, then the phone starting the run and steering |
 | `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
