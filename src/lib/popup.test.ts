@@ -11,6 +11,7 @@ const baseSettings: UiSettings = {
   muteCalls: false,
   closeToTray: true,
   appIcons: true,
+  albumArt: true,
   lowBattery: true,
   popupSound: true,
   dialing: false,

@@ -123,6 +123,8 @@ export const api = {
   setSwitchesVisible: (on: boolean) => invoke<void>("set_switches_visible", { on }),
   appIcon: (appId: string) => invoke<string | null>("app_icon", { appId }),
   appWebsite: (appId: string) => invoke<string | null>("app_website", { appId }),
+  /** The album's cover (data URI) from the cache or Apple's catalog; null when there's none or Show album art is off. */
+  albumArt: (artist: string, album: string) => invoke<string | null>("album_art", { artist, album }),
   contactPhoto: (key: string) => invoke<string | null>("contact_photo", { key }),
   placeLookup: (latitude: number, longitude: number) => invoke<string>("place_lookup", { latitude, longitude }),
   markRead: (messageIds: number[]) => invoke<void>("mark_read", { messageIds }),

@@ -280,7 +280,9 @@ if (status.device && !forgotten) {
 
 // ?applemusic swaps Spotify for Apple Music, which lists skip ±15 s and Like/Dislike over AMS
 // (and no working repeat), so those controls can be reviewed in the browser.
-const appleMusic = params.has("applemusic");
+// ?albumart plays Apple Music too, so the card's art comes from the catalog lookup (mocked below).
+const albumArtTour = params.has("albumart");
+const appleMusic = params.has("applemusic") || albumArtTour;
 // ?speaker: Spotify on the phone is playing on a Spotify Connect speaker. The phone then reports the
 // title as "Song • Artist" and the artist as "Listening on <speaker>" (seen on a real iPhone).
 const onSpeaker = params.has("speaker") && !appleMusic;
@@ -316,6 +318,35 @@ const nowPlaying: NowPlaying = noPhone || forgotten
         ...(noRepeat ? [] : (["advanceRepeatMode"] as const)),
       ],
     };
+
+// ?albumart: Next and Previous step through made-up albums whose covers (from the mocked catalog
+// lookup below) are light, dark, vivid and grey, then one the catalog doesn't know (the placeholder).
+const tourTracks = [
+  { title: "Morning Paper", artist: "The Lanterns", album: "Paper Lanterns" },
+  { title: "Undertow", artist: "Harbour Lights", album: "Night Swim" },
+  { title: "Wildfire", artist: "Coral Avenue", album: "Ember (Deluxe Edition)" },
+  { title: "Static", artist: "Grey Room", album: "Concrete" },
+  { title: "Lost Song", artist: "Nobody Known", album: "Unreleased Demos" },
+];
+let tourAt = 0;
+if (albumArtTour && nowPlaying.title) Object.assign(nowPlaying, tourTracks[0]);
+function stepTour(by: number) {
+  tourAt = (tourAt + by + tourTracks.length) % tourTracks.length;
+  Object.assign(nowPlaying, tourTracks[tourAt], { elapsed: 0, elapsedAt: Date.now() });
+}
+/** A made-up 600 px cover: a diagonal gradient with a disc, as an SVG data URI. */
+function mockCover(from: string, to: string, disc: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/></linearGradient></defs><rect width="600" height="600" fill="url(#g)"/><circle cx="380" cy="360" r="150" fill="${disc}"/><circle cx="380" cy="360" r="28" fill="${from}"/></svg>`;
+  return `data:image/svg+xml;base64,${btoa(svg)}`;
+}
+const mockCovers: Record<string, string | null> = {
+  "paper lanterns": mockCover("#f6efd9", "#efe2bb", "#e0a83a"),
+  "night swim": mockCover("#0d1b2e", "#13284a", "#2fb5a8"),
+  "ember (deluxe edition)": mockCover("#c0261b", "#ef6a1f", "#ffd23f"),
+  concrete: mockCover("#8a8a8a", "#5e5e5e", "#d0d0d0"),
+  mezzanine: mockCover("#1c1426", "#3b2350", "#b04a7a"),
+  "unreleased demos": null,
+};
 
 // A connected keyboard listed first: the Connect panel must still offer only iPhones. In ?setup the
 // iPhone arrives nameless (shown as "iPhone" right away, named in place a moment later), alongside an
@@ -1198,7 +1229,10 @@ mockIPC(
           nowPlaying.repeat = nowPlaying.repeat === "off" ? "all" : nowPlaying.repeat === "all" ? "one" : "off";
           void emit("now-playing", { ...nowPlaying });
         }
-        if (a.command === "previousTrack") {
+        if (albumArtTour && (a.command === "nextTrack" || a.command === "previousTrack")) {
+          stepTour(a.command === "nextTrack" ? 1 : -1);
+          void emit("now-playing", { ...nowPlaying });
+        } else if (a.command === "previousTrack") {
           Object.assign(nowPlaying, { elapsed: 0, elapsedAt: Date.now() });
           void emit("now-playing", { ...nowPlaying });
         }
@@ -1222,6 +1256,20 @@ mockIPC(
         return null;
       case "app_website":
         return "https://www.example.com/";
+      case "album_art": {
+        // Stand-in covers (the real ones come from Apple's catalog, looked up in Rust): the made-up
+        // albums of ?albumart, Mezzanine for ?applemusic, and a tinted tile for anything else. Off
+        // in Settings: nothing, as the backend would answer.
+        if (settings["ui.albumArt"] === "false") return null;
+        const key = String(a.album ?? "").toLowerCase();
+        const hue = [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+        const cover =
+          key in mockCovers
+            ? mockCovers[key]
+            : mockCover(`hsl(${hue} 45% 30%)`, `hsl(${(hue + 40) % 360} 50% 18%)`, `hsl(${(hue + 180) % 360} 70% 60%)`);
+        // A lookup takes a moment.
+        return new Promise((resolve) => setTimeout(() => resolve(cover), 250));
+      }
       case "contact_photo": {
         // Stand-in contact photos so the avatar path is visible without a phone: a couple of mock
         // people have one, the rest fall back to initials (as iOS contacts without a photo would).

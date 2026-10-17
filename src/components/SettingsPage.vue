@@ -111,6 +111,7 @@ const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tu
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
 const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) => void tug.setAutostart(v) });
 const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
+const albumArt = computed({ get: () => tug.settings.albumArt, set: (v) => void tug.setSetting("albumArt", v) });
 const showGames = computed({ get: () => tug.settings.showGames, set: (v) => void tug.setSetting("showGames", v) });
 const filterUnknown = computed({ get: () => tug.settings.filterUnknown, set: (v) => void tug.setSetting("filterUnknown", v) });
 const hidePreviews = computed({
@@ -351,6 +352,13 @@ async function clearHistory() {
             </SettingsRow>
             <SettingsRow class="bg-surface-card" label="Show games" description="A Play button in the sidebar for Tugboat Run, a little boat game, and “game” in Ctrl+K.">
               <SettingsSwitch v-model="showGames" label="Show games" />
+            </SettingsRow>
+            <SettingsRow
+              class="bg-surface-card"
+              label="Show album art"
+              description="Looks up artwork from Apple's public music catalog. Only the artist and album name go to Apple: nothing else, and no account. Off: Spotify's art if it's connected, otherwise none."
+            >
+              <SettingsSwitch v-model="albumArt" label="Show album art" />
             </SettingsRow>
           </div>
 
@@ -787,7 +795,7 @@ async function clearHistory() {
             />
             <SettingsRow
               label="What goes online"
-              description="Weather, only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name. App icons: each app's ID (like com.google.Gmail, never what it sent you) goes to Apple's App Store once."
+              description="Weather, only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name. App icons: each app's ID (like com.google.Gmail, never what it sent you) goes to Apple's App Store once. Album art: the artist and album name of what's playing go to Apple's music catalog when tug doesn't have that album's cover yet."
             />
             <SettingsRow
               label="Spotify"

@@ -161,6 +161,11 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 - **Now Playing** shows the song, artist, album and progress from your iPhone, with Previous,
   Play/Pause, Next and Restart song.
+- **Album art** on Now Playing: Spotify's cover when Spotify is connected and playing, otherwise
+  looked up in Apple's public music catalog by artist and album (Show album art, Settings ›
+  General, on by default; switch it off and only Spotify's art shows). The card takes a soft tint
+  from the cover and the bars its accent colour, always keeping the text easy to read; the colours
+  ease in with each new song (or switch at once with Windows' reduce-motion setting).
 - **Volume bar** showing your iPhone's volume: click or drag it to a level, scroll over it or use
   the arrow keys, and the buttons either side repeat when you press and hold. It shows whenever
   the player reports its volume (including a Spotify Connect speaker, when the phone passes it on);
@@ -341,7 +346,7 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
 ## Settings
 
 - **General:** Windows pop-ups, Pop-up sound, Do not disturb, Low phone battery, Keep running when
-  closed, Start with Windows (starts in the tray), Zoom, Show games, Voice typing (shortcut and
+  closed, Start with Windows (starts in the tray), Zoom, Show games, Show album art, Voice typing (shortcut and
   language), and the keyboard shortcuts.
 - **iPhone:** connection health, Copy diagnostics, Open logs folder, help for the texts pairing,
   Visible to iPhone, Call from tug, and your iPhone's Connect panel.
@@ -362,13 +367,15 @@ The full policy, including how to delete everything, is in [PRIVACY.md](PRIVACY.
 
 - **No tug servers, no account, no analytics, no telemetry, no update checker.**
 - Your history (notifications, texts, contacts, settings) lives in a database on your PC:
-  `%APPDATA%\dev.davejames.tug\tug.db`. Cached app icons, Spotify art and contact photos sit in
+  `%APPDATA%\dev.davejames.tug\tug.db`. Cached app icons, album art, Spotify art and contact photos sit in
   the same folder; logs are in `%LOCALAPPDATA%\dev.davejames.tug\logs`.
 - The Spotify sign-in is kept in Windows Credential Manager, not in a file.
 - **What goes online, and only then:**
   - Weather, if you set it up: Open-Meteo, with your place rounded to about 1 km (or the city you
     type); "Use my location" names the place through BigDataCloud.
   - App icons, if App icons is on: Apple's App Store lookup, sending only the app's identifier.
+  - Album art, if Show album art is on: Apple's music catalog, sending only the artist and album
+    name, for albums tug has no cover for yet.
   - Spotify, only if you connect it.
   - Opening a notification's web page opens your browser.
 - Tugboat stays on your local network; the developer bridge is local to your Windows account.

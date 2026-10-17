@@ -297,6 +297,28 @@ pub async fn app_website(app: tauri::AppHandle, state: State<'_, AppState>, app_
         .map_err(|e| e.to_string())?
 }
 
+/// The playing album's cover (data URI) for the Now Playing card when Spotify can't supply one:
+/// from the cache, or looked up in Apple's public catalog by artist and album only (see
+/// `album_art`). Nothing is looked up while Show album art is off.
+#[tauri::command]
+pub async fn album_art(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    artist: String,
+    album: String,
+) -> Result<Option<String>> {
+    use tauri::Manager;
+    let setting = state.shared.store.setting(crate::album_art::SETTING).ok().flatten();
+    let enabled = crate::album_art::enabled_from_setting(setting.as_deref());
+    if !enabled {
+        return Ok(None);
+    }
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || crate::album_art::art(&dir, &artist, &album, enabled))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// A contact's photo (data URI) for their avatar, when the iPhone shared one over PBAP. `key` is a
 /// phone number or a name as the avatar shows it; the number is matched exactly, the name only when
 /// one contact of that name has a photo. `None` falls the UI back to initials. Photos are local
@@ -597,6 +619,7 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.doNotDisturb",
     "ui.closeToTray",
     "ui.appIcons",
+    "ui.albumArt",
     "ui.dialing",
     "ui.autoCopyCodes",
     "ui.typeCodeHotkey",

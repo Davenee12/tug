@@ -95,10 +95,11 @@ const shownSeconds = computed(() =>
   >
     <!-- Keyed by track so a new song starts at its position. A full-width fill slid left (not a
          width), stepped once a second with no transition: a transition here kept the renderer
-         drawing every frame for as long as music played (a 1 s step is under a pixel on a song). -->
+         drawing every frame for as long as music played (a 1 s step is under a pixel on a song).
+         Its colour is the album art's accent (album-accent), the usual colour without one. -->
     <div
       :key="np.title ?? ''"
-      class="h-full w-full rounded-full bg-on-dark"
+      class="album-accent h-full w-full rounded-full"
       :style="{ transform: `translateX(${progress - 100}%)` }"
     />
   </div>

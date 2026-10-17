@@ -218,6 +218,7 @@ export const useTugStore = defineStore("tug", () => {
     muteCalls: false,
     closeToTray: true,
     appIcons: true,
+    albumArt: true,
     lowBattery: true,
     popupSound: true,
     dialing: false,
@@ -1354,6 +1355,7 @@ export const useTugStore = defineStore("tug", () => {
       lowBattery: raw["ui.lowBattery"] !== "false",
       popupSound: raw["ui.popupSound"] !== "false",
       appIcons: raw["ui.appIcons"] !== "false",
+      albumArt: raw["ui.albumArt"] !== "false",
       dialing: raw["ui.dialing"] === "true",
       filterUnknown: raw["ui.filterUnknown"] !== "false",
       knownSenders: raw["ui.knownSenders"] ? (JSON.parse(raw["ui.knownSenders"]) as string[]) : [],
@@ -2123,6 +2125,8 @@ export const useTugStore = defineStore("tug", () => {
     switchContext,
     checkSwitches,
     nowPlaying,
+    /** tug's page is on screen (not hidden in the tray or minimised). */
+    pageVisible,
     // Spotify connector
     spotify,
     spotifyPlayer,

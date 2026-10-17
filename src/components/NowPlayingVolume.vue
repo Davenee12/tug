@@ -98,7 +98,7 @@ function onKey(e: KeyboardEvent) {
   >
     <div class="h-1 overflow-hidden rounded-full bg-surface-dark-soft">
       <div
-        class="h-full w-full rounded-full bg-on-dark transition-transform duration-150 ease-out motion-reduce:transition-none"
+        class="album-accent h-full w-full rounded-full transition-transform duration-150 ease-out motion-reduce:transition-none"
         :style="{ transform: fill }"
       />
     </div>
