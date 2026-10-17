@@ -315,7 +315,7 @@ const PAD_BODY_TIMEOUT: Duration = Duration::from_secs(2);
 async fn pad_input(State(s): Shared, req: Request) -> Response {
     let run = async {
         let ok = authorize(&s, req.method(), req.uri(), req.headers())?;
-        // Read the (at most 104-byte) body before saying no to it: a reply that leaves a body
+        // Read the (at most 120-byte, `pad::MAX_BODY`) body before saying no to it: a reply that leaves a body
         // unread closes the connection, and the phone would pay for a new one on its next input.
         let body = read_body(req, super::pad::MAX_BODY, PAD_BODY_TIMEOUT).await?;
         s.pad_admit(&ok)?;

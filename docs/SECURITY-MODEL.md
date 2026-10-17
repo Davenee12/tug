@@ -50,10 +50,10 @@ inputs are refused unless the game has the channel open (and again the moment it
 rate limited (90 a second sustained, a burst of 30; a phone sends at most ~60); the body is read
 only up to 120 bytes; and the plaintext must be exactly `{"steer": -100..=100, "boost": bool}`, plus
 an optional `"drop": bool` (Harbor Stack's Drop) and an optional latency probe (`"age"` and
-`"rtt"`, whole milliseconds 0–10000, only ever summarised once per session in a debug log line;
-the only other controller logging is a count of inputs and presses per phone at debug level, at
-most once a second when it pressed and otherwise every 30 s (counts only, never the steering),
-with any other field, type or range refused. Which game is open is the PC's to say (chosen when
+`"rtt"`, whole milliseconds 0–10000, only ever summarised once per session in a debug log line),
+with any other field, type or range refused. The only other controller logging is a count of
+inputs and presses per phone at debug level, at most once a second when it pressed and otherwise
+every 30 s (counts only, never the steering). Which game is open is the PC's to say (chosen when
 the game opens the channel, and named in `/api/state` and every reply so the page shows that game's
 buttons); an action that isn't the open game's is dropped before the game sees it, so Tugboat Run
 never sees a drop and Harbor Stack never a boost. An input that lands after a newer one is ignored
