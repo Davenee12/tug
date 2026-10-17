@@ -609,7 +609,7 @@ impl Call {
                     if !full(p) {
                         return Err(BridgeError::invalid("Files must be given as full paths."));
                     }
-                    if crate::outgoing::is_device_path(p) {
+                    if crate::outgoing::is_device_path(p) || crate::outgoing::names_a_stream(p) {
                         return Err(BridgeError::invalid(format!(
                             "{} isn't a regular file, so it can't be sent.",
                             printable(p)
@@ -1039,7 +1039,13 @@ mod tests {
         let many: Vec<&str> = many.iter().map(String::as_str).collect();
         assert!(o(&many).is_err());
         // Devices and pipes never reach the app, whatever they're called.
-        for device in [r"\\.\pipe\tug-bridge-x", r"C:\Users\me\NUL", r"\\.\PhysicalDrive0"] {
+        for device in [
+            r"\\.\pipe\tug-bridge-x",
+            r"C:\Users\me\NUL",
+            r"\\.\PhysicalDrive0",
+            // An alternate data stream: hidden from Explorer, so not the file on the card.
+            r"C:\Users\me\report.pdf:secret",
+        ] {
             let e = o(&[device]).unwrap_err();
             assert_eq!(e.code, ErrorCode::Invalid, "{device}");
             assert!(e.message.contains("isn't a regular file"), "{e}");

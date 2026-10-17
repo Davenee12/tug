@@ -158,6 +158,20 @@ fn leads_to_network(path: &Path) -> bool {
     false
 }
 
+/// A path naming one of a file's alternate data streams (`report.pdf:secret`, `a.txt::$DATA`):
+/// any `:` after the drive's own (`C:`). Such a stream is hidden from Explorer and `dir`, so it
+/// isn't the file the person sees on the card; never sent.
+pub fn names_a_stream(p: &str) -> bool {
+    let p = plain(p);
+    let b = p.as_bytes();
+    let rest = if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        &p[2..]
+    } else {
+        &p[..]
+    };
+    rest.contains(':')
+}
+
 /// A file that may be offered: where it really is (links followed) and its size.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checked {
@@ -188,7 +202,7 @@ pub fn check(path: &Path) -> Result<Checked, Refusal> {
     if remote(&given) {
         return Err(Refusal::Network);
     }
-    if is_device_path(&given) {
+    if is_device_path(&given) || names_a_stream(&given) {
         return Err(Refusal::NotRegular);
     }
     if leads_to_network(path) {
@@ -273,6 +287,28 @@ mod tests {
         ] {
             assert!(!is_device_path(ok), "{ok}");
         }
+    }
+
+    #[test]
+    fn alternate_data_streams_are_never_files_to_send() {
+        for stream in [
+            r"C:\Users\me\report.pdf:hidden",
+            r"C:\Users\me\report.pdf::$DATA",
+            r"\\?\C:\Users\me\a.txt:x",
+            r"C:a.txt:x",
+        ] {
+            assert!(names_a_stream(stream), "{stream}");
+        }
+        for ok in [r"C:\Users\me\report.pdf", r"\\?\C:\a.txt", r"D:\x\y.txt"] {
+            assert!(!names_a_stream(ok), "{ok}");
+        }
+        let dir = std::env::temp_dir().join(format!("tug-outgoing-ads-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("report.pdf");
+        std::fs::write(&file, b"%PDF").unwrap();
+        let stream = PathBuf::from(format!("{}:hidden", file.display()));
+        assert_eq!(check(&stream), Err(Refusal::NotRegular));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
