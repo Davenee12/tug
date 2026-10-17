@@ -21,7 +21,8 @@ pub mod auth;
 pub mod clip;
 pub mod crypto;
 mod dib;
-mod names;
+pub mod held;
+pub mod names;
 pub mod net;
 pub mod pad;
 mod page;
@@ -174,6 +175,8 @@ pub struct TugboatStatus {
     /// The last clipboard sent to the phone: its kind and whether the phone has it, never its
     /// contents.
     pub clip: Option<clip::ClipStatus>,
+    /// Files `tug boat` (or an AI tool) is holding for the phone: names and when the hold ends.
+    pub held: Option<held::HeldStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -447,6 +450,7 @@ impl TugboatService {
                 receiving: false,
                 ended,
                 clip: None,
+                held: None,
             };
         };
         let snap = session.snapshot();
@@ -486,6 +490,7 @@ impl TugboatService {
             receiving: snap.receiving,
             ended: None,
             clip: snap.clip,
+            held: snap.held,
         }
     }
 
@@ -624,6 +629,8 @@ impl TugboatService {
             }
             // A clipboard no phone took within two minutes is dropped, never kept waiting.
             session.clip_tick();
+            // Files held for the phone whose time is up are withdrawn, even if nobody's waiting.
+            session.held_tick();
             let active = session.phone_active();
             let sending = session.sending();
             let receiving = session.receiving();
@@ -751,6 +758,26 @@ impl TugboatService {
         if let Some(s) = self.session() {
             s.remove_offer(id);
         }
+    }
+
+    /// `tug boat` / `send_file_to_phone`, after the person clicked Send: open Tugboat if it's off
+    /// (so its code can be scanned) and hold the files for the phone for `window`. Returns the
+    /// session and the hold, to ask after it (`Session::held`).
+    pub async fn hold(&self, files: Vec<session::Outgoing>, window: Duration) -> Result<(Arc<Session>, u32), String> {
+        if self.session().is_none() {
+            self.start().await?;
+        }
+        let session = self.session().ok_or("Tugboat isn't open.")?;
+        let id = session
+            .hold(files, window)
+            .ok_or("Tugboat already has as many files on offer as it can show. Remove some in tug and try again.")?;
+        Ok((session, id))
+    }
+
+    /// Show the Tugboat panel (its code, with nothing waiting on the phone's page yet). Uses the
+    /// same event as files dropped onto the window, with nothing skipped.
+    pub fn show_panel(&self) {
+        let _ = self.inner.app.emit(DROPPED_EVENT, Vec::<Skipped>::new());
     }
 
     pub fn send_text(&self, text: &str) -> Result<(), String> {

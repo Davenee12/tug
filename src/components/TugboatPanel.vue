@@ -223,7 +223,7 @@ const clipWaiting = computed(() => s.value.clip?.state === "waiting");
                 <path :d="s.qr.path" class="fill-ink" />
               </svg>
             </div>
-            <p class="mt-4 text-center text-[15px] font-medium text-ink">{{ codeCaption(s.clip) }}</p>
+            <p class="mt-4 text-center text-[15px] font-medium text-ink">{{ codeCaption(s.clip, s.held) }}</p>
 
             <div v-if="help" class="mt-4 rounded-lg bg-surface-soft px-3.5 py-3 text-[13px] text-body" role="status">
               <p class="font-medium text-ink">Can't connect?</p>

@@ -5,21 +5,20 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::Emitter;
 use tug_bridge::protocol::{
-    BridgeError, ClientInfo, CodeResult, ErrorCode, HitKind, MediaAction, MessageHit, NowPlayingInfo, OfferResult,
-    PhoneStatus, Request, SkippedFile, StatusResult,
+    BridgeError, ClientInfo, CodeResult, ErrorCode, HitKind, MediaAction, MessageHit, NowPlayingInfo, PhoneStatus,
+    Request, StatusResult, StdinFile,
 };
+use tug_bridge::server::ProgressSink;
 use tug_bridge::time::iso_utc;
 
 use super::recipient::{resolve, Recipient};
-use super::{dev_apps, files, phone_model, DevTools};
+use super::{dev_apps, files, outgoing, phone_model, DevTools};
 use crate::ams::{PlaybackState, RemoteCommand};
 use crate::ble::Command;
 use crate::messages::{Direction, StoredMessage};
 use crate::state::{now_ms, ConnectionState};
 use crate::store::{Store, StoredNotification};
-use crate::tugboat::session::SkipReason;
 
 /// Codes older than this aren't handed out (the Feed's Ctrl+Shift+C uses the same window).
 const CODE_MAX_AGE_MS: i64 = crate::code_fill::MAX_AGE_MS;
@@ -86,6 +85,7 @@ pub(super) async fn run(
     dt: &DevTools,
     client: &ClientInfo,
     request: Request,
+    progress: &ProgressSink,
 ) -> Result<serde_json::Value, BridgeError> {
     match request {
         Request::LatestCode { copy } => latest_code(dt, copy).await,
@@ -112,7 +112,13 @@ pub(super) async fn run(
         Request::PhoneStatus => json(phone_status(dt)),
         Request::Media(action) => media(dt, action).await,
         Request::SendText { to, message } => send_text(dt, client, &to, message).await,
-        Request::OfferFiles { paths } => offer_files(dt, paths).await,
+        Request::OfferFiles {
+            paths,
+            stdin,
+            hold_secs,
+            no_wait,
+            progress: _,
+        } => offer_files(dt, client, paths, stdin, hold_secs, no_wait, progress).await,
         // The phone's state only with the Phone status switch on, as for `phone_status`.
         Request::Status => json(StatusResult::new(
             dt.app.package_info().version.to_string(),
@@ -376,48 +382,22 @@ async fn send_text(
     json(dt.confirm_and_send(client, name, address, message).await?)
 }
 
-fn skip_reason(r: SkipReason) -> &'static str {
-    match r {
-        SkipReason::TooBig => "too big",
-        SkipReason::Folder => "a folder (send the files inside it)",
-        SkipReason::Unreadable => "couldn't be read",
-        SkipReason::TooMany => "too many files offered at once",
-    }
-}
-
-async fn offer_files(dt: &DevTools, paths: Vec<String>) -> Result<serde_json::Value, BridgeError> {
-    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-    let mut skipped: Vec<SkippedFile> = Vec::new();
-    let mut existing = Vec::new();
-    for p in paths {
-        if p.exists() {
-            existing.push(p);
-        } else {
-            skipped.push(SkippedFile {
-                name: p
-                    .file_name()
-                    .map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned()),
-                reason: "not found".into(),
-            });
-        }
-    }
-    if existing.is_empty() {
-        return json(OfferResult { offered: 0, skipped });
-    }
-    // Tugboat stops when tug's window hides, so bring tug forward first; the panel opens on the
-    // same event as files dropped onto the window.
-    crate::tray::show(&dt.app);
-    let n = existing.len();
-    let tug_skipped = dt
-        .tugboat
-        .offer(existing)
+/// `tug boat` / `send_file_to_phone`: check every file again here (whatever the caller said),
+/// then the card, then Tugboat (`DevTools::confirm_and_offer`).
+async fn offer_files(
+    dt: &DevTools,
+    client: &ClientInfo,
+    paths: Vec<String>,
+    stdin: Option<StdinFile>,
+    hold_secs: u32,
+    no_wait: bool,
+    progress: &ProgressSink,
+) -> Result<serde_json::Value, BridgeError> {
+    let picked = tokio::task::spawn_blocking(move || outgoing::pick_all(&paths, stdin.as_ref()))
         .await
-        .map_err(|e| BridgeError::new(ErrorCode::Unavailable, e))?;
-    let _ = dt.app.emit(crate::tugboat::DROPPED_EVENT, tug_skipped.clone());
-    let offered = n - tug_skipped.len();
-    skipped.extend(tug_skipped.into_iter().map(|s| SkippedFile {
-        name: s.name,
-        reason: skip_reason(s.reason).into(),
-    }));
-    json(OfferResult { offered, skipped })
+        .map_err(internal)??;
+    json(
+        dt.confirm_and_offer(client, picked, hold_secs, no_wait, progress)
+            .await?,
+    )
 }

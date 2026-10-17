@@ -2,7 +2,8 @@
 
 use tug_bridge::client::ClientError;
 use tug_bridge::protocol::{
-    printable, CodeResult, ErrorCode, OfferResult, Permission, PhoneStatus, SendOutcome, SendResult, StatusResult,
+    printable, CodeResult, ErrorCode, OfferOutcome, OfferResult, Permission, PhoneStatus, Progress, SendOutcome,
+    SendResult, StatusResult,
 };
 
 /// Exit codes: scripts can tell "didn't work" from "couldn't reach tug".
@@ -149,20 +150,81 @@ pub fn send_outcome(r: &SendResult) -> (String, bool) {
     }
 }
 
-pub fn offer_lines(r: &OfferResult) -> Vec<String> {
-    let mut out = Vec::new();
-    match r.offered {
-        0 => out.push("Nothing was sent.".into()),
-        1 => out.push("1 file is waiting for your phone in Tugboat.".into()),
-        n => out.push(format!("{n} files are waiting for your phone in Tugboat.")),
+/// "report.pdf", or "3 files": what `tug boat` is sending, in a sentence.
+pub fn files_named(names: &[String]) -> String {
+    match names {
+        [one] => printable(one),
+        many => format!("{} files", many.len()),
     }
-    if r.offered > 0 {
-        out.push("If your phone isn't connected yet, scan the code in tug with its camera.".into());
+}
+
+/// "2 minutes", "90 seconds".
+pub fn seconds_in_words(secs: u32) -> String {
+    match secs {
+        60 => "1 minute".into(),
+        s if s % 60 == 0 => format!("{} minutes", s / 60),
+        1 => "1 second".into(),
+        s => format!("{s} seconds"),
     }
-    for s in &r.skipped {
-        out.push(format!("Skipped {}: {}.", printable(&s.name), printable(&s.reason)));
+}
+
+/// `tug boat`'s progress, one line on stderr each time it changes.
+pub fn boat_progress(p: &Progress) -> String {
+    match p {
+        Progress::Confirming => "Check tug: Send or Don't send (nothing is sent by itself; 2 minutes)…".into(),
+        Progress::Waiting {
+            names,
+            phone_open,
+            fetched,
+            total,
+        } => {
+            let what = files_named(names);
+            if *fetched > 0 {
+                format!("Your iPhone has downloaded {fetched} of {total}…")
+            } else if *phone_open {
+                let next_to = if names.len() == 1 { what } else { "each file".into() };
+                format!("On your iPhone, tap Get next to {next_to} in Tugboat…")
+            } else {
+                format!("Scan the code in tug to receive {what} on your iPhone…")
+            }
+        }
     }
-    out
+}
+
+/// `tug boat`'s answer: the sentence for stdout, and whether it counts as success (exit 0): the
+/// phone downloaded everything, or with `--no-wait`, it's on offer.
+pub fn boat_outcome(r: &OfferResult) -> (String, bool) {
+    let what = files_named(&r.names);
+    let held = seconds_in_words(r.hold_secs);
+    match r.outcome {
+        OfferOutcome::Delivered => (
+            format!("Delivered: your iPhone downloaded {what}. Tap Save there to keep it."),
+            true,
+        ),
+        OfferOutcome::Offered => (
+            format!(
+                "{what} {} waiting for your iPhone in Tugboat for the next {held}.",
+                if r.names.len() == 1 { "is" } else { "are" }
+            ),
+            true,
+        ),
+        OfferOutcome::TimedOut => (
+            format!("Waiting for your iPhone timed out after {held}, so tug stopped offering {what}."),
+            false,
+        ),
+        OfferOutcome::Declined => ("Not sent: you chose Don't send in tug.".into(), false),
+        OfferOutcome::NotConfirmed => ("Not sent: nobody confirmed it in tug within 2 minutes.".into(), false),
+        OfferOutcome::Cancelled => (
+            format!(
+                "Not sent: {}",
+                r.detail
+                    .as_deref()
+                    .map(printable)
+                    .unwrap_or_else(|| "it was cancelled in tug.".into())
+            ),
+            false,
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -170,7 +232,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use tug_bridge::protocol::{BridgeError, NowPlayingInfo, SkippedFile};
+    use tug_bridge::protocol::{BridgeError, NowPlayingInfo};
 
     fn phone(connection: &str) -> PhoneStatus {
         PhoneStatus {
@@ -280,7 +342,7 @@ mod tests {
         assert!(lines.iter().any(|l| l == "Now playing: Song — Band (paused)."));
         assert!(lines
             .iter()
-            .any(|l| l.contains("Off: Verification codes, Music controls, Send texts.")));
+            .any(|l| l.contains("Off: Verification codes, Music controls, Send texts, Send files to your iPhone.")));
 
         // Phone status switched off: tug sends no phone, and the line says why.
         let lines = status_lines(&StatusResult {
@@ -320,16 +382,74 @@ mod tests {
         assert!(ClientError::SendTimeout.to_string().contains("don't send it again"));
     }
 
+    fn result(outcome: OfferOutcome, names: &[&str]) -> OfferResult {
+        OfferResult {
+            outcome,
+            names: names.iter().map(|s| s.to_string()).collect(),
+            total_bytes: 2_100_000,
+            hold_secs: 120,
+            detail: None,
+        }
+    }
+
     #[test]
-    fn offers() {
-        let lines = offer_lines(&OfferResult {
-            offered: 2,
-            skipped: vec![SkippedFile {
-                name: "big.mov".into(),
-                reason: "too big".into(),
-            }],
-        });
-        assert_eq!(lines[0], "2 files are waiting for your phone in Tugboat.");
-        assert_eq!(lines.last().unwrap(), "Skipped big.mov: too big.");
+    fn boat_outcomes_and_exit_codes() {
+        let (line, ok) = boat_outcome(&result(OfferOutcome::Delivered, &["report.pdf"]));
+        assert!(ok);
+        assert!(
+            line.starts_with("Delivered: your iPhone downloaded report.pdf."),
+            "{line}"
+        );
+        let (line, ok) = boat_outcome(&result(OfferOutcome::Offered, &["a.png", "b.png"]));
+        assert!(ok, "--no-wait counts once it's on offer");
+        assert_eq!(
+            line,
+            "2 files are waiting for your iPhone in Tugboat for the next 2 minutes."
+        );
+        for refused in [
+            OfferOutcome::TimedOut,
+            OfferOutcome::Declined,
+            OfferOutcome::NotConfirmed,
+            OfferOutcome::Cancelled,
+        ] {
+            let (line, ok) = boat_outcome(&result(refused, &["report.pdf"]));
+            assert!(!ok, "{refused:?}");
+            assert!(line.ends_with('.'), "{line}");
+        }
+        assert!(boat_outcome(&result(OfferOutcome::TimedOut, &["report.pdf"]))
+            .0
+            .starts_with("Waiting for your iPhone timed out after 2 minutes"));
+        let mut gone = result(OfferOutcome::Cancelled, &["x"]);
+        gone.detail = Some("Tugboat was closed in tug.".into());
+        assert_eq!(boat_outcome(&gone).0, "Not sent: Tugboat was closed in tug.");
+    }
+
+    #[test]
+    fn boat_progress_lines() {
+        let waiting = |names: &[&str], phone_open, fetched| Progress::Waiting {
+            names: names.iter().map(|s| s.to_string()).collect(),
+            phone_open,
+            fetched,
+            total: names.len(),
+        };
+        assert!(boat_progress(&Progress::Confirming).starts_with("Check tug: Send or Don't send"));
+        assert_eq!(
+            boat_progress(&waiting(&["report.pdf"], false, 0)),
+            "Scan the code in tug to receive report.pdf on your iPhone…"
+        );
+        assert_eq!(
+            boat_progress(&waiting(&["a.png", "b.png"], true, 0)),
+            "On your iPhone, tap Get next to each file in Tugboat…"
+        );
+        assert_eq!(
+            boat_progress(&waiting(&["a.png", "b.png"], true, 1)),
+            "Your iPhone has downloaded 1 of 2…"
+        );
+        // A file name can't put escape sequences in the terminal.
+        let line = boat_progress(&waiting(&["evil\u{1b}[2J.txt"], false, 0));
+        assert!(!line.contains('\u{1b}'), "{line:?}");
+        assert_eq!(seconds_in_words(90), "90 seconds");
+        assert_eq!(seconds_in_words(60), "1 minute");
+        assert_eq!(seconds_in_words(600), "10 minutes");
     }
 }

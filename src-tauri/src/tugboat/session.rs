@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::auth::{Auth, Authorized, GuestPolicy, Rejected};
 use super::clip::{self, Ack, ClipEvent, ClipState, ClipStatus, Outbox, Payload, Prepared};
 use super::crypto::{self, ad, Keys};
+use super::held::{self, HeldStatus, Holds, Verdict};
 use super::names;
 use super::pad::{self, Pad, PadEvent, PadReply, SeatNo, FIRST, SECOND};
 use super::upload::{Plan, PlanError, Received};
@@ -329,6 +330,16 @@ pub struct Snapshot {
     pub receiving: bool,
     /// The last clipboard sent to the phone (its kind and state, never its contents).
     pub clip: Option<ClipStatus>,
+    /// Files `tug boat` (or an AI tool) is holding for the phone, by name.
+    pub held: Option<HeldStatus>,
+}
+
+/// A file for `Session::hold`, already checked (`devtools/outgoing.rs`).
+pub enum Outgoing {
+    /// A file on the PC, read chunk by chunk when the phone fetches it.
+    File { path: PathBuf, name: String, size: u64 },
+    /// What `tug boat -` read from stdin, held in memory (never written to disk by tug).
+    Memory { name: String, bytes: Arc<Vec<u8>> },
 }
 
 /// A file offered to the phone that couldn't be added, and why (for the panel's message).
@@ -416,6 +427,8 @@ struct State {
     next_clip_id: u32,
     /// When the second phone of a two-player game was last heard from.
     guest_seen: Option<Instant>,
+    /// Files held for the phone by `tug boat` and AI tools (see held.rs).
+    holds: Holds,
 }
 
 pub struct Session {
@@ -474,6 +487,7 @@ impl Session {
                 clip: Outbox::new(),
                 next_clip_id: 1,
                 guest_seen: None,
+                holds: Holds::default(),
             }),
             closed: AtomicBool::new(false),
             sink,
@@ -1385,6 +1399,100 @@ impl Session {
         self.sink.changed(true);
     }
 
+    // --- Files held for the phone (`tug boat`, `send_file_to_phone`; see held.rs) ---
+
+    /// Offer files the person said Send to on tug's card, and hold them for the phone for
+    /// `window`. Names go through `names::sanitize` (the card already showed them that way). `None`
+    /// if that would be more files than Tugboat offers at once (nothing is added then).
+    pub fn hold(&self, files: Vec<Outgoing>, window: Duration) -> Option<u32> {
+        let mut st = self.state();
+        if st.offers.iter().filter(|o| !o.clip).count() + files.len() > MAX_OFFERS {
+            return None;
+        }
+        let count = files.len();
+        let mut bytes = 0u64;
+        let mut ids = Vec::with_capacity(count);
+        let mut shown = Vec::with_capacity(count);
+        for f in files {
+            let (name, source, size) = match f {
+                Outgoing::File { path, name, size } => (names::sanitize(&name), Source::File(path), size),
+                Outgoing::Memory { name, bytes } => {
+                    let size = bytes.len() as u64;
+                    (names::sanitize(&name), Source::Memory(bytes), size)
+                }
+            };
+            bytes += size;
+            let id = crypto::new_id();
+            st.offers.push(Offer {
+                id: id.clone(),
+                mime: mime_for(&name),
+                name: name.clone(),
+                source,
+                size,
+                downloads: 0,
+                clip: false,
+            });
+            ids.push(id);
+            shown.push(name);
+        }
+        st.last_activity = Instant::now();
+        let hold = st.holds.add(ids, shown, window, Instant::now(), now_ms());
+        drop(st);
+        // Counts and sizes only, never names or paths.
+        log::info!("tugboat: holding {count} files for the phone ({bytes} bytes)");
+        self.sink.changed(true);
+        Some(hold)
+    }
+
+    /// What's become of hold `id`: still waiting, or how it ended. Ending withdraws what the phone
+    /// didn't fetch, so "timed out" stays true; delivered files stay on offer for the page's Save.
+    pub fn held(&self, id: u32) -> Verdict {
+        let mut st = self.state();
+        let (verdict, ended_now) = match settle(&mut st, id) {
+            Some(v) => (v, !matches!(v, Verdict::Waiting { .. })),
+            None => (st.holds.outcome(id).unwrap_or(Verdict::Withdrawn), false),
+        };
+        drop(st);
+        if ended_now {
+            log::info!("tugboat: files held for the phone: {}", verdict.word());
+            self.sink.changed(true);
+        }
+        verdict
+    }
+
+    /// Settle holds whose time is up even if nobody's asking any more (the command was stopped):
+    /// called every couple of seconds while Tugboat is open.
+    pub fn held_tick(&self) {
+        let mut st = self.state();
+        let ended: Vec<Verdict> = st
+            .holds
+            .ids()
+            .into_iter()
+            .filter_map(|id| settle(&mut st, id))
+            .filter(|v| !matches!(v, Verdict::Waiting { .. }))
+            .collect();
+        drop(st);
+        for v in &ended {
+            log::info!("tugboat: files held for the phone: {}", v.word());
+        }
+        if !ended.is_empty() {
+            self.sink.changed(true);
+        }
+    }
+
+    /// Stop holding `id` (sending files was switched off, or the caller gave up): what the phone
+    /// hasn't fetched is withdrawn.
+    pub fn cancel_hold(&self, id: u32) {
+        let mut st = self.state();
+        let Some(hold) = st.holds.finish(id, Verdict::Withdrawn) else {
+            return;
+        };
+        withdraw_unfetched(&mut st, &hold.offers);
+        drop(st);
+        log::info!("tugboat: files held for the phone: cancelled");
+        self.sink.changed(true);
+    }
+
     /// Text for the phone to copy (replaces the previous one; empty clears it).
     pub fn set_pc_text(&self, text: &str) -> Result<(), String> {
         if text.len() > MAX_TEXT {
@@ -1456,6 +1564,7 @@ impl Session {
             sending: st.downloading.values().any(|t| t.elapsed() < MOVING),
             receiving: st.last_upload.is_some_and(|t| t.elapsed() < MOVING),
             clip: st.clip.status(),
+            held: st.holds.status(),
         }
     }
 
@@ -1478,6 +1587,40 @@ fn page_offer(o: &Offer) -> PageOffer {
         chunk_size: OFFER_CHUNK,
         chunks: offer_plan(o.size).chunks(),
         mime: o.mime.to_string(),
+    }
+}
+
+/// Assess hold `id` and, if it's over, finish it (withdrawing what wasn't fetched unless it was
+/// delivered). `None` if it isn't waiting.
+fn settle(st: &mut State, id: u32) -> Option<Verdict> {
+    let hold = st.holds.get(id)?;
+    let (offers, age, window) = (hold.offers.clone(), hold.since.elapsed(), hold.window);
+    let downloads: Vec<Option<u32>> = offers
+        .iter()
+        .map(|o| st.offers.iter().find(|x| &x.id == o).map(|x| x.downloads))
+        .collect();
+    let moving = offers
+        .iter()
+        .any(|o| st.downloading.get(o).is_some_and(|t| t.elapsed() < MOVING));
+    let verdict = held::assess(&downloads, age, window, moving);
+    if matches!(verdict, Verdict::Waiting { .. }) {
+        return Some(verdict);
+    }
+    st.holds.finish(id, verdict);
+    if verdict != Verdict::Delivered {
+        withdraw_unfetched(st, &offers);
+    }
+    Some(verdict)
+}
+
+/// Take these offers off, except any the phone already fetched whole (it may still want to Save).
+fn withdraw_unfetched(st: &mut State, offers: &[String]) {
+    for id in offers {
+        let fetched = st.offers.iter().any(|o| &o.id == id && o.downloads > 0);
+        if !fetched {
+            st.offers.retain(|o| &o.id != id);
+            st.downloading.remove(id);
+        }
     }
 }
 

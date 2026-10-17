@@ -13,7 +13,8 @@ use tokio::time::timeout;
 use crate::auth;
 use crate::framing::{read_msg, write_msg, FrameError};
 use crate::protocol::{
-    BridgeError, Call, ClientInfo, ClientMsg, ErrorCode, ServerMsg, MAX_SERVER_LINE, PROTOCOL_VERSION,
+    offer_span, BridgeError, Call, ClientInfo, ClientMsg, ErrorCode, Progress, ServerMsg, DEFAULT_WAIT_SECS,
+    MAX_SERVER_LINE, PROTOCOL_VERSION,
 };
 use crate::token_file::{self, TokenError};
 
@@ -83,11 +84,14 @@ fn frame_err(e: FrameError) -> ClientError {
 }
 
 /// One exchange over an open stream. `token` is asked for only once tug has said it's on.
+/// `on_progress` hears each progress line tug sends before its answer (only for a call that asked
+/// for them, and only after tug has proved it's tug).
 pub async fn call_over<S: AsyncRead + AsyncWrite + Unpin>(
     stream: S,
     info: &ClientInfo,
     token: impl FnOnce() -> Result<String, ClientError>,
     call: &Call,
+    on_progress: &mut (dyn FnMut(Progress) + Send),
 ) -> Result<serde_json::Value, ClientError> {
     let (r, mut w) = tokio::io::split(stream);
     let mut r = BufReader::new(r);
@@ -125,7 +129,7 @@ pub async fn call_over<S: AsyncRead + AsyncWrite + Unpin>(
                 _ => ClientError::Impostor,
             })
         }
-        ServerMsg::Result { .. } => return Err(ClientError::Impostor),
+        ServerMsg::Result { .. } | ServerMsg::Progress { .. } => return Err(ClientError::Impostor),
     };
     let token = token()?;
     if !auth::verify_server(&token, &client_nonce, &server_nonce, &server_proof) {
@@ -142,13 +146,16 @@ pub async fn call_over<S: AsyncRead + AsyncWrite + Unpin>(
     )
     .await
     .map_err(frame_err)?;
-    match read_msg::<ServerMsg, _>(&mut r, MAX_SERVER_LINE)
-        .await
-        .map_err(frame_err)?
-    {
-        ServerMsg::Result { ok } => Ok(ok),
-        ServerMsg::Error(e) => Err(ClientError::Bridge(e)),
-        ServerMsg::Challenge { .. } => Err(ClientError::Other("unexpected answer".into())),
+    loop {
+        match read_msg::<ServerMsg, _>(&mut r, MAX_SERVER_LINE)
+            .await
+            .map_err(frame_err)?
+        {
+            ServerMsg::Progress { progress } => on_progress(progress),
+            ServerMsg::Result { ok } => return Ok(ok),
+            ServerMsg::Error(e) => return Err(ClientError::Bridge(e)),
+            ServerMsg::Challenge { .. } => return Err(ClientError::Other("unexpected answer".into())),
+        }
     }
 }
 
@@ -251,9 +258,22 @@ impl Client {
         call: &Call,
         limit: Duration,
     ) -> Result<serde_json::Value, ClientError> {
+        self.call_with_progress(info, call, limit, &mut |_| {}).await
+    }
+
+    /// `call_as_client`, hearing tug's progress lines as they come (`Call::OfferFiles` with
+    /// `progress: true`).
+    #[cfg(windows)]
+    pub async fn call_with_progress(
+        &self,
+        info: &ClientInfo,
+        call: &Call,
+        limit: Duration,
+        on_progress: &mut (dyn FnMut(Progress) + Send),
+    ) -> Result<serde_json::Value, ClientError> {
         let result = timeout(limit, async {
             let stream = self.open().await?;
-            call_over(stream, info, || self.token(), call).await
+            call_over(stream, info, || self.token(), call, on_progress).await
         })
         .await
         .map_err(|_| match call {
@@ -287,13 +307,24 @@ impl Client {
     }
 }
 
-/// The usual time limit for a call.
+/// The usual time limit for a call. Files wait for the card, then the phone: longer than tug's
+/// own limit for them (`offer_span`), so tug always gets to answer.
 pub fn time_limit(call: &Call) -> Duration {
     match call {
         Call::SendText { .. } => SEND_TEXT_TIMEOUT,
+        Call::OfferFiles { wait_secs, .. } => {
+            let hold = match wait_secs {
+                Some(s) if *s > 0 => *s,
+                _ => DEFAULT_WAIT_SECS,
+            };
+            offer_span(hold) + OFFER_MARGIN
+        }
         _ => CALL_TIMEOUT,
     }
 }
+
+/// What the client allows past tug's longest wait for files, for tug's answer to arrive.
+pub const OFFER_MARGIN: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 mod tests {
@@ -302,7 +333,7 @@ mod tests {
 
     use super::*;
     use crate::protocol::{ClientKind, Request};
-    use crate::server::{handle_connection, BoxFuture, Handler};
+    use crate::server::{handle_connection, BoxFuture, Handler, ProgressSink};
 
     struct Fake {
         enabled: AtomicBool,
@@ -342,11 +373,25 @@ mod tests {
             &self,
             client: ClientInfo,
             request: Request,
+            progress: ProgressSink,
         ) -> BoxFuture<'_, Result<serde_json::Value, BridgeError>> {
             self.handled.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move {
                 match request {
                     Request::PhoneStatus => Ok(serde_json::json!({"who": client.name})),
+                    Request::OfferFiles { paths, .. } => {
+                        // Says how it's getting on, whether or not the caller asked.
+                        progress.send(Progress::Confirming);
+                        tokio::task::yield_now().await;
+                        progress.send(Progress::Waiting {
+                            names: vec!["report.pdf".into()],
+                            phone_open: false,
+                            fetched: 0,
+                            total: paths.len(),
+                        });
+                        tokio::task::yield_now().await;
+                        Ok(serde_json::json!({"outcome": "delivered"}))
+                    }
                     Request::Media(_) => {
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         Ok(serde_json::Value::Null)
@@ -369,7 +414,7 @@ mod tests {
         let s = server.clone();
         let task = tokio::spawn(async move { handle_connection(b, &*s).await });
         let tok = client_token.map(str::to_string);
-        let out = call_over(a, &info(), || tok.ok_or(ClientError::NotSetUp), &call).await;
+        let out = call_over(a, &info(), || tok.ok_or(ClientError::NotSetUp), &call, &mut |_| {}).await;
         task.await.unwrap();
         out
     }
@@ -422,6 +467,67 @@ mod tests {
         let call = Call::MediaControl { action: "next".into() };
         let err = run(server, Some(&token), call).await.unwrap_err();
         assert_eq!(err.code(), Some(ErrorCode::Internal));
+    }
+
+    fn offer_call(progress: bool) -> Call {
+        Call::OfferFiles {
+            paths: vec![r"C:\Users\me\report.pdf".into()],
+            stdin: None,
+            wait_secs: None,
+            progress,
+        }
+    }
+
+    async fn offer_over_memory(progress: bool) -> (Result<serde_json::Value, ClientError>, Vec<Progress>) {
+        let token = auth::new_token();
+        let server = Fake::new(&token);
+        let (a, b) = tokio::io::duplex(64 * 1024);
+        let s = server.clone();
+        let task = tokio::spawn(async move { handle_connection(b, &*s).await });
+        let mut heard = Vec::new();
+        let out = call_over(a, &info(), || Ok(token.clone()), &offer_call(progress), &mut |p| {
+            heard.push(p)
+        })
+        .await;
+        task.await.unwrap();
+        (out, heard)
+    }
+
+    /// `tug boat`: tug says how it's getting on (the card, then waiting for the phone) before
+    /// its answer, and the answer still arrives.
+    #[tokio::test]
+    async fn progress_comes_before_the_answer_when_asked_for() {
+        let (out, heard) = offer_over_memory(true).await;
+        assert_eq!(out.unwrap(), serde_json::json!({"outcome": "delivered"}));
+        assert_eq!(heard.first(), Some(&Progress::Confirming));
+        assert!(
+            heard
+                .iter()
+                .any(|p| matches!(p, Progress::Waiting { names, total: 1, .. } if names == &["report.pdf"])),
+            "{heard:?}"
+        );
+    }
+
+    /// A call that didn't ask (an AI tool's, or an older command's) never sees a progress line.
+    #[tokio::test]
+    async fn no_progress_unless_asked_for() {
+        let (out, heard) = offer_over_memory(false).await;
+        assert!(out.is_ok());
+        assert!(heard.is_empty(), "{heard:?}");
+    }
+
+    #[test]
+    fn the_client_waits_longer_than_tug_for_files() {
+        let call = |wait_secs| Call::OfferFiles {
+            paths: vec![r"C:\a".into()],
+            stdin: None,
+            wait_secs,
+            progress: false,
+        };
+        assert!(time_limit(&call(None)) > offer_span(DEFAULT_WAIT_SECS));
+        assert!(time_limit(&call(Some(0))) > offer_span(DEFAULT_WAIT_SECS));
+        assert!(time_limit(&call(Some(600))) > offer_span(600));
+        assert_eq!(time_limit(&Call::PhoneStatus), CALL_TIMEOUT);
     }
 
     #[tokio::test]
@@ -486,7 +592,7 @@ mod tests {
             let _hello: ClientMsg = read_msg(&mut r, MAX_SERVER_LINE).await.unwrap();
             write_msg(&mut w, &reply).await.unwrap();
         });
-        let err = call_over(a, &info(), || Ok(auth::new_token()), &Call::PhoneStatus)
+        let err = call_over(a, &info(), || Ok(auth::new_token()), &Call::PhoneStatus, &mut |_| {})
             .await
             .unwrap_err();
         fake.await.unwrap();
@@ -595,6 +701,14 @@ mod tests {
             let v = client.call(&Call::PhoneStatus, CALL_TIMEOUT).await.unwrap();
             assert_eq!(v["who"], "test-agent");
         }
+        // `tug boat` over the real pipe: progress lines, then the answer.
+        let mut heard = Vec::new();
+        let v = client
+            .call_with_progress(&info(), &offer_call(true), CALL_TIMEOUT, &mut |p| heard.push(p))
+            .await
+            .unwrap();
+        assert_eq!(v["outcome"], "delivered");
+        assert_eq!(heard.first(), Some(&Progress::Confirming), "{heard:?}");
         // More at once than there are connection slots: the rest wait their turn.
         let tasks: Vec<_> = (0..12)
             .map(|_| {
