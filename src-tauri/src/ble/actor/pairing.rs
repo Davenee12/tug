@@ -284,7 +284,7 @@ impl Actor {
             }
         };
         self.carried_name = Some(ctx.name);
-        self.use_device(&le_id).await
+        self.adopt_device(&le_id, Some(&classic_id)).await
     }
 
     /// Remove a leftover Windows pairing: unpair both the LE and Classic bonds of the phone the id
@@ -328,6 +328,13 @@ impl Actor {
 
     /// Adopt a device as "the iPhone": persist it and start connecting.
     pub(super) async fn use_device(&mut self, id: &str) -> Result<(), String> {
+        self.adopt_device(id, None).await
+    }
+
+    /// `use_device`, where `paired_texts` is the Classic (texts) device this adoption just paired
+    /// and remembered, if any: it's kept. Without one, a different phone forgets the old texts
+    /// device, so texts don't keep reconnecting to the previous phone.
+    async fn adopt_device(&mut self, id: &str, paired_texts: Option<&str>) -> Result<(), String> {
         let transport = self.discovered.get(id).map(|d| d.transport);
         let le = resolve_le_device(id, transport).await.map_err(|e| match e {
             // WinRT reports "no such device" as a null result with S_OK.
@@ -364,7 +371,17 @@ impl Actor {
         self.drop_link();
         // A different phone: what the Bluetooth inventory knew (and its schedule) was the old one's,
         // and what the message worker knew (its session, health, contacts) too.
-        if self.device_id.as_deref() != Some(le_id.as_str()) {
+        let different = self.device_id.as_deref() != Some(le_id.as_str());
+        match texts_device_on_adopt(different, paired_texts) {
+            TextsDevice::Keep => {}
+            TextsDevice::Set(t) => {
+                let _ = self.shared.store.set_setting(keys::TEXTS_DEVICE_ID, t);
+            }
+            TextsDevice::Forget => {
+                let _ = self.shared.store.delete_setting(keys::TEXTS_DEVICE_ID);
+            }
+        }
+        if different {
             self.reset_inventory();
             if let Some(map) = self.shared.map.get() {
                 map.forget();
@@ -746,4 +763,49 @@ pub(super) fn uint_property(info: &DeviceInformation, key: &str) -> Option<u32> 
         return r.Value().ok().map(u32::from);
     }
     v.cast::<IReference<u32>>().and_then(|r| r.Value()).ok()
+}
+
+/// What adopting a phone does to the remembered texts (Classic) device.
+#[derive(Debug, PartialEq, Eq)]
+enum TextsDevice<'a> {
+    /// Same phone, nothing paired just now: leave it.
+    Keep,
+    /// This adoption just paired the phone's Classic side: that's the texts device.
+    Set(&'a str),
+    /// A different phone, and no texts device paired with it: forget the old phone's, or texts
+    /// would keep reconnecting to the previous phone.
+    Forget,
+}
+
+/// Pure, so the rule is tested without Bluetooth.
+fn texts_device_on_adopt(different_phone: bool, paired_texts: Option<&str>) -> TextsDevice<'_> {
+    match (paired_texts, different_phone) {
+        (Some(t), _) => TextsDevice::Set(t),
+        (None, true) => TextsDevice::Forget,
+        (None, false) => TextsDevice::Keep,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{texts_device_on_adopt, TextsDevice};
+
+    #[test]
+    fn a_different_phone_never_keeps_the_old_phones_texts_device() {
+        assert_eq!(texts_device_on_adopt(true, None), TextsDevice::Forget);
+        assert_eq!(
+            texts_device_on_adopt(true, Some("classic-new")),
+            TextsDevice::Set("classic-new"),
+            "the Classic side this pairing just set up is the texts device"
+        );
+        assert_eq!(
+            texts_device_on_adopt(false, None),
+            TextsDevice::Keep,
+            "re-adopting the same phone"
+        );
+        assert_eq!(
+            texts_device_on_adopt(false, Some("classic-1")),
+            TextsDevice::Set("classic-1")
+        );
+    }
 }
