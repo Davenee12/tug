@@ -38,6 +38,7 @@ mod text;
 pub mod toast;
 mod tray;
 mod tugboat;
+mod voice;
 mod wake;
 mod webview_watch;
 mod wedge;
@@ -187,6 +188,8 @@ pub fn run() {
             // on screen or a pop-up finds something to hide.
             #[cfg(windows)]
             share_privacy::start(app.handle(), &shared.store);
+            // Voice typing: off by default; when the owner turned it on, its shortcut is back now.
+            voice::start(app.handle(), &shared.store);
             app.manage(AppState {
                 shared,
                 ble,
@@ -312,6 +315,8 @@ pub fn run() {
             commands::code_hotkey_status,
             commands::take_quick_actions,
             commands::set_code_hotkey,
+            commands::voice_status,
+            commands::set_voice_typing,
             commands::set_conversation_hidden,
             commands::set_unread,
             commands::open_windows_settings,

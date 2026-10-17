@@ -41,6 +41,8 @@ import type {
   SpotifyTrack,
   ToastPressed,
   ToastSpec,
+  VoiceStatus,
+  VoiceTyped,
 } from "../types/protocol";
 
 export const api = {
@@ -92,6 +94,11 @@ export const api = {
   takeQuickActions: () => invoke<QuickAction[]>("take_quick_actions"),
   /** Register the type-the-code shortcut (or unregister it); says if another app holds it. */
   setCodeHotkey: (enabled: boolean, keys: string) => invoke<CodeHotkeyStatus>("set_code_hotkey", { enabled, keys }),
+  /** Voice typing's state; with `languages`, the speech languages installed on this PC too (Settings). */
+  voiceStatus: (languages: boolean) => invoke<VoiceStatus>("voice_status", { languages }),
+  /** Turn voice typing on (shortcut, language) or off, and save it; says if the shortcut is taken or no language is installed. */
+  setVoiceTyping: (enabled: boolean, keys: string, language: string | null) =>
+    invoke<VoiceStatus>("set_voice_typing", { enabled, keys, language }),
   /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */
   copyDiagnostics: () => invoke<string>("copy_diagnostics"),
   /** The Bluetooth inventory: what the iPhone exposes to tug (runs it now; privacy-safe). */
@@ -103,7 +110,7 @@ export const api = {
     invoke<void>("log_frontend_error", { kind, name, message, source }),
   setUnread: (count: number) => invoke<void>("set_unread", { count }),
   popupsBlocked: () => invoke<boolean>("popups_blocked"),
-  openWindowsSettings: (page: "bluetooth" | "location" | "notifications") => invoke<void>("open_windows_settings", { page }),
+  openWindowsSettings: (page: "bluetooth" | "location" | "notifications" | "microphone" | "language") => invoke<void>("open_windows_settings", { page }),
   /** Open an http(s) link (a notification's "Open in browser") in the default browser. */
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   /** Delete a conversation (all of it, by sender and address); returns the delete's stamp, which undoes it as `undoAt`. */
@@ -235,6 +242,8 @@ interface EventPayloads {
   "game-pad": GamePad;
   "devtools-status": DevToolsStatus;
   "pc-audio": PcAudioStatus;
+  "voice-status": VoiceStatus;
+  "voice-typed": VoiceTyped;
   /** A text an AI tool (or `tug text`) wants to send; null once it's answered or gone. */
   "devtools-confirm": DevToolsConfirm | null;
 }

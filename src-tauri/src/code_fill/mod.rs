@@ -12,6 +12,9 @@
 
 #[cfg(windows)]
 mod win;
+/// Voice typing waits for the same keys before it types.
+#[cfg(windows)]
+pub(crate) use win::wait_for_release;
 
 use std::sync::Mutex;
 use std::time::Duration;

@@ -412,6 +412,10 @@ pub fn open_windows_settings(page: String) -> Result<()> {
         "bluetooth" => "ms-settings:bluetooth",
         "location" => "ms-settings:privacy-location",
         "notifications" => "ms-settings:notifications",
+        // Voice typing's fix-it for a blocked microphone.
+        "microphone" => "ms-settings:privacy-microphone",
+        // ...and for a PC with no speech language to listen in.
+        "language" => "ms-settings:regionlanguage",
         other => return Err(format!("unknown settings page: {other}")),
     };
     std::process::Command::new("explorer.exe")
@@ -553,6 +557,38 @@ pub async fn set_code_hotkey(enabled: bool, keys: String) -> Result<crate::code_
         .map_err(|e| e.to_string())
 }
 
+/// Voice typing's state. With `languages` (Settings), the speech languages installed on this PC
+/// are listed too, the first time it's asked, so the list is there before voice typing is on.
+/// Off the main thread: listing recognizers waits for the voice thread.
+#[tauri::command]
+pub async fn voice_status(languages: bool) -> Result<crate::voice::VoiceStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if languages {
+            crate::voice::refresh_languages()
+        } else {
+            crate::voice::status()
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Turn voice typing on (with one of the offered shortcuts and an installed language) or off,
+/// and save the choice. Says whether another app holds the shortcut, or whether this PC has no
+/// speech recognizer. Off the main thread: it waits for the voice threads.
+#[tauri::command]
+pub async fn set_voice_typing(
+    state: State<'_, AppState>,
+    enabled: bool,
+    keys: String,
+    language: Option<String>,
+) -> Result<crate::voice::VoiceStatus> {
+    let shared = state.shared.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::voice::set(&shared.store, enabled, &keys, language.as_deref()))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Settings safe to print in a support report: scalar on/off flags, never the "seen"
 /// conversation map (its keys embed contact names) or anything carrying message content.
 const DIAGNOSTIC_SETTINGS: &[&str] = &[
@@ -565,6 +601,9 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.autoCopyCodes",
     "ui.typeCodeHotkey",
     "ui.typeCodeKeys",
+    "ui.voiceTyping",
+    "ui.voiceKeys",
+    "ui.voiceLanguage",
     "ui.zoom",
     "ui.onboarded",
     "ui.seenSince",

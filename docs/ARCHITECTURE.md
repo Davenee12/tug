@@ -66,6 +66,7 @@ Inside `tug.exe`:
 | Tugboat | `tugboat/` | An HTTP server, a 2 s supervisor (idle stop after 10 minutes, network changes) and per-connection tasks; exists only while the panel is open (or Tugboat Run asked for the phone as a controller). While the game's controller channel is open, a 150 ms watch notices a phone that went quiet. |
 | `tug-hotkey` | `code_fill/win.rs` (logic in `code_fill/mod.rs`) | Owns the type-the-code shortcut (RegisterHotKey belongs to the registering thread); each press types the newest code with SendInput on a short-lived `tug-code-fill` thread. |
 | `tug-share-watch` | `share_privacy/win.rs` (logic in `share_privacy/mod.rs`) | Hide previews while sharing or presenting: sleeps on a condition variable until tug's window is on screen or a pop-up finds the screen shared; then one look every 2 s (shell notification state, display topology, a pass over top-level window classes: about 0.3 ms) until the window hides and hiding clears. Each pop-up also takes a fresh look (on a short-lived `tug-share-look` helper, at most 500 ms) before it shows. |
+| `tug-voice-key`, `tug-voice` | `voice/win/` (logic in `voice/mod.rs`, `voice/text.rs`) | Only once voice typing is switched on. `tug-voice-key` owns the hold-to-talk shortcut (RegisterHotKey) and the GDI listening indicator; `tug-voice` is a COM thread that runs each hold (microphone while the key is down, Windows' offline SAPI recognizer, the text rules, SendInput) and keeps the recognizer between holds. |
 | Toasts, tray | `toast/`, `tray.rs` | Toast activations arrive on a pool thread and are handed to the async runtime; the tray runs on the main thread. |
 | `tug-jump-list` | `quick_actions/win.rs` (logic in `quick_actions/mod.rs`) | A short-lived COM thread that hands the taskbar jump list's Tasks to Windows, at startup and when Show games changes; nothing waits for it. |
 | Spotify, location | `commands.rs`, `spotify/`, `location.rs` | No background task: each command runs on `spawn_blocking`. The UI reads Spotify's player when the song changes. |
@@ -84,7 +85,7 @@ flight.
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
 `pairing-request-closed`, `message`, `contacts`, `calls`, `open-latest-conversation`,
 `open-settings`, `toast-pressed`, `code-filled`, `quick-action` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`,
-`tugboat-clip`, `tugboat-send-clipboard`, `game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`); `screen-share` (`share_privacy/`). The typed listener
+`tugboat-clip`, `tugboat-send-clipboard`, `game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`); `screen-share` (`share_privacy/`); `voice-status`, `voice-typed` (`voice/mod.rs`). The typed listener
 map is `EventPayloads` in `src/lib/ipc.ts`.
 
 ## Startup
@@ -272,6 +273,24 @@ phone's probe (`age` = how long the newest touch waited before going out, `rtt` 
 trip) gives a touch-to-PC estimate of `age + rtt/2`, logged as one summary line at debug level
 when the controller closes.
 
+**Voice typing (hold to talk)**
+
+```
+hold the shortcut ─WM_HOTKEY─► tug-voice-key: note the window in front ─► tug-voice
+  privacy switch blocks the mic? ─► "Microphone blocked" (indicator + Settings)
+  wave-in (16 kHz mono, memory only) while GetAsyncKeyState says the key is down, + 200 ms
+  ─► too short / silent? stop ─► SAPI in-process recognizer, dictation, from a memory stream
+  ─► voice::text::format (spoken symbols, casing, style from the program's .exe name)
+  ─► keys let go, same window still in front? ─► SendInput (Unicode; new line = Shift+Enter)
+  ─► emit "voice-typed" (the outcome only) ─► indicator hides or says what went wrong
+```
+
+Recognition sits behind `voice::engine::Engine`. Windows' desktop SAPI recognizer was chosen
+because it is offline, ships with Windows and needs nothing new to build. `Windows.Media.SpeechRecognition`
+was ruled out: its free-dictation grammar is recognized by Microsoft's online service and it needs
+package identity, which tug (an unpackaged installer) doesn't have. whisper.cpp (`whisper-rs`)
+would be more accurate but needs CMake and libclang that contributors don't have, plus a model
+download; it can be added later as another `Engine`.
 ## Where the testable logic lives
 
 Bluetooth can't run in CI, so decisions live in **pure modules** that take plain values and return
@@ -304,6 +323,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
 | `share_privacy/mod.rs` | Hide previews while sharing or presenting: which signals mean someone may be watching (shell state confirmed by the foreground window covering its monitor, duplicate display, known share and slideshow windows by program + class), which one names the reason, the log line, and what a hidden pop-up says |
+| `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, window changed); spoken symbols, casing commands, code vs prose style by program, keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
 
 Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attention`
@@ -323,7 +343,7 @@ they re-render), `startup` (startup reads that fail are retried, never block), `
 scoring, the speed curve, inertia, the weather's handling, merging the controls), `tugboatDaily` (the
 daily challenge: the date's seed, weather → water, the start screen's line, the streak), `tugboatRace`
 (two players: who steers what, the result, when a dropped phone pauses the race), `useCitySearch` (the
-weather card's city box), `vips`, `weather`, `weblinks`, `whatsNew`. Thin DOM composables such as
+weather card's city box), `vips`, `voice` (voice typing's Settings words and problems), `weather`, `weblinks`, `whatsNew`. Thin DOM composables such as
 `useElementSize` (an element's size in zoomed CSS pixels) feed these rules.
 The phone page has its own: `tugboat-page/chunks`, `crypto`, `clip` (the PC's clipboard: when to
 acknowledge it, copying without a secure context) and `pad` (the controller's wire format, pacing
@@ -338,7 +358,7 @@ handshake over a real named pipe (including a low-integrity impostor). Hardware 
 
 Everything the backend sends to the UI or takes from it is a serde type in Rust **mirrored by hand**
 in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messages.rs`,
-`map/calls.rs`, `map/health.rs`, `toast/`, `code_fill/`, `spotify/`, `tugboat/`, `bt_inventory/`, `devtools/`,
+`map/calls.rs`, `map/health.rs`, `toast/`, `code_fill/`, `spotify/`, `tugboat/`, `bt_inventory/`, `devtools/`, `voice/`,
 `pc_audio/policy.rs` and `share_privacy/`.
 
 - App-facing types use `#[serde(rename_all = "camelCase")]` (fields and enum variants), so
@@ -399,6 +419,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?quickaction=new-message` (`tugboat`, `copy-code`, `game`, `settings`; `&again`) | tug started from that taskbar task (and, with `&again`, the task clicked again 4 s later while running) |
 | `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
 | `/?sharing` (`&presenting`, `&stop`) | The screen is being shared: blurred texts and names under the `Previews hidden` banner with Show anyway (a slide show / sharing ends after 10 s); add `&call` for the call card |
+| `/?voice` (`&micblocked`, `&nospeech`, `&voicebusy`) | Settings › General › Voice typing on, with the microphone blocked / no speech language / the shortcut taken |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then

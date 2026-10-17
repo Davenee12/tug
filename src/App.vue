@@ -5,6 +5,7 @@ import { useTugStore } from "./stores/tug";
 import { useTugboatStore } from "./stores/tugboat";
 import { useDevToolsStore } from "./stores/devtools";
 import { usePcAudioStore } from "./stores/pcAudio";
+import { useVoiceStore } from "./stores/voice";
 import { useGameStore } from "./stores/game";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import ConnectPanel from "./components/ConnectPanel.vue";
@@ -33,6 +34,7 @@ const tug = useTugStore();
 const tugboat = useTugboatStore();
 const devtools = useDevToolsStore();
 const pcAudio = usePcAudioStore();
+const voice = useVoiceStore();
 const game = useGameStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
@@ -166,6 +168,8 @@ onMounted(async () => {
   void devtools.init();
   // Play iPhone audio on this PC: the Now Playing button and Settings › iPhone read this.
   void pcAudio.init();
+  // Voice typing: Settings › General and Ctrl+K read this.
+  void voice.init();
   try {
     await tug.init();
   } catch (e) {
@@ -195,6 +199,7 @@ onUnmounted(() => {
   tugboat.dispose();
   devtools.dispose();
   pcAudio.dispose();
+  voice.dispose();
 });
 </script>
 

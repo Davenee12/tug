@@ -159,6 +159,15 @@ describe("parseActions", () => {
     expect(parseActions("dndx", people, ctx)).toEqual([]);
   });
 
+  it("toggles voice typing and shows the resulting state", () => {
+    expect(parseActions("voice typing", people, ctx)[0]).toMatchObject({ kind: "voice", enabled: true, label: "Turn on voice typing" });
+    expect(parseActions("Voice", people, ctx)[0]).toMatchObject({ kind: "voice", enabled: true });
+    expect(parseActions("dictation", people, { ...ctx, voiceTyping: true })[0]).toMatchObject({ enabled: false, label: "Turn off voice typing" });
+    expect(parseActions("voice typing on", people, { ...ctx, voiceTyping: true })[0]).toMatchObject({ enabled: true });
+    expect(parseActions("voice to code off", people, ctx)[0]).toMatchObject({ enabled: false });
+    expect(parseActions("voice typing please", people, ctx).some((a) => a.kind === "voice")).toBe(false);
+  });
+
   it("jumps the feed to an app's notifications, matched on its name", () => {
     expect(parseActions("gmail", people, ctx)[0]).toMatchObject({
       kind: "show-app",

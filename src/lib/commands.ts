@@ -43,6 +43,8 @@ export interface ActionContext {
   spotifyConnected?: boolean;
   /** Settings › General › Show games is on, so "game" offers Tugboat Run. */
   showGames?: boolean;
+  /** Voice typing is switched on (Settings › General). */
+  voiceTyping?: boolean;
 }
 
 export type Action =
@@ -61,6 +63,8 @@ export type Action =
   | { kind: "clear-all"; items: PhoneNotification[]; label: string }
   | { kind: "mark-all-read"; count: number; label: string }
   | { kind: "dnd"; enabled: boolean; label: string }
+  /** Voice typing on or off: hold a shortcut, talk, and tug types it. */
+  | { kind: "voice"; enabled: boolean; label: string }
   | { kind: "show-app"; appId: string; focusId: number; label: string }
   /** Send what's on the PC's clipboard to the phone's Tugboat page. */
   | { kind: "send-clipboard"; label: string }
@@ -104,6 +108,7 @@ const SEND_CLIPBOARD = [
   "copy to phone",
 ];
 const DND = /^(?:do not disturb|dnd)(?:\s+(on|off))?$/i;
+const VOICE = /^(?:voice typing|voice to code|voice|dictation)(?:\s+(on|off))?$/i;
 
 const SEND = /^(?:text|msg|message|tell|send)\s+(.+)$/i;
 const CALL = /^(?:call|ring|phone)\s+(.+)$/i;
@@ -148,6 +153,8 @@ export function parseActions(query: string, people: Person[], ctx: ActionContext
   if (SEND_CLIPBOARD.includes(lower)) out.push({ kind: "send-clipboard", label: "Send clipboard to iPhone" });
   const dnd = DND.exec(lower);
   if (dnd) out.push(dndAction(dnd[1], ctx));
+  const voice = VOICE.exec(lower);
+  if (voice) out.push(voiceAction(voice[1], ctx));
   out.push(...appActions(q, ctx));
 
   const m = SEND.exec(q);
@@ -235,6 +242,12 @@ function markReadAction(ctx: ActionContext): Action {
 function dndAction(explicit: string | undefined, ctx: ActionContext): Action {
   const enabled = explicit ? explicit.toLowerCase() === "on" : !(ctx.doNotDisturb ?? false);
   return { kind: "dnd", enabled, label: `Turn ${enabled ? "on" : "off"} Do not disturb` };
+}
+
+/** Turn voice typing on or off, or set it outright with "on"/"off"; the row shows the result. */
+function voiceAction(explicit: string | undefined, ctx: ActionContext): Action {
+  const enabled = explicit ? explicit.toLowerCase() === "on" : !(ctx.voiceTyping ?? false);
+  return { kind: "voice", enabled, label: `Turn ${enabled ? "on" : "off"} voice typing` };
 }
 
 /** Typing an app's name offers to jump the feed to its notifications. Only apps that have some. */

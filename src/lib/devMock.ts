@@ -71,7 +71,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { RELEASE_NOTES } from "./whatsNew";
-import type { CallRecord, CodeHotkeyStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
+import type { CallRecord, CodeHotkeyStatus, VoiceStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -953,6 +953,24 @@ const shareState: ShareState = params.has("sharing")
   : { active: false, reason: null };
 
 const codeHotkey: CodeHotkeyStatus = { state: params.has("hotkeybusy") ? "inUse" : "on", keys: "ctrl+shift+v" };
+// Voice typing (voice/ in Rust): off by default; `/?voice` starts it on (`&micblocked`,
+// `&nospeech` for a PC without a speech language, `&voicebusy` for a taken shortcut).
+const voiceOn = params.has("voice");
+const voiceLanguages = params.has("nospeech")
+  ? []
+  : [
+      { id: "409", name: "English (US)" },
+      { id: "809", name: "English (UK)" },
+      { id: "407", name: "German (Germany)" },
+    ];
+const voice: VoiceStatus = {
+  enabled: voiceOn,
+  state: !voiceOn ? "off" : params.has("nospeech") ? "unavailable" : params.has("voicebusy") ? "inUse" : "on",
+  keys: "ctrl+alt+space",
+  language: voiceLanguages[0]?.id ?? null,
+  languages: [],
+  micBlocked: params.has("micblocked"),
+};
 
 mockIPC(
   (cmd, args) => {
@@ -1279,6 +1297,17 @@ mockIPC(
         const taken = params.has("hotkeybusy") && keys === "ctrl+shift+v";
         Object.assign(codeHotkey, { keys, state: !a.enabled ? "off" : taken ? "inUse" : "on" });
         return { ...codeHotkey };
+      }
+      case "voice_status":
+        if (a.languages) voice.languages = voiceLanguages;
+        return { ...voice };
+      case "set_voice_typing": {
+        const keys = String(a.keys);
+        const lang = voiceLanguages.find((l) => l.id === a.language)?.id ?? voiceLanguages[0]?.id ?? null;
+        const taken = params.has("voicebusy") && keys === "ctrl+alt+space";
+        const state = !a.enabled ? "off" : lang === null ? "unavailable" : taken ? "inUse" : "on";
+        Object.assign(voice, { enabled: Boolean(a.enabled), keys, language: lang, languages: voiceLanguages, state });
+        return { ...voice };
       }
       // Windows pop-ups don't exist in a browser; log what tug would have shown.
       case "show_toast":

@@ -878,3 +878,35 @@ export interface PcAudioStatus {
   /** "Turn on automatically when my iPhone connects", for the phone tug uses now. */
   auto: boolean;
 }
+
+// ---- Voice typing (`voice/mod.rs`) ----
+
+/** A speech language installed on this PC (`VoiceLanguage`). */
+export interface VoiceLanguage {
+  /** Windows' language id in hex ("409" is English, United States). */
+  id: string;
+  /** "English (US)". */
+  name: string;
+}
+
+/** off; on (shortcut registered); inUse (another app holds it); unavailable (no speech language on this PC). */
+export type VoiceState = "off" | "on" | "inUse" | "unavailable";
+
+/** Voice typing for Settings (`voice_status`, `set_voice_typing`, the `voice-status` event). */
+export interface VoiceStatus {
+  enabled: boolean;
+  state: VoiceState;
+  /** The hold-to-talk shortcut, one of `src/lib/voiceHotkeys.json`. */
+  keys: string;
+  /** The language listened in (an id from `languages`), null when none is installed. */
+  language: string | null;
+  /** Empty until Settings asks for them. */
+  languages: VoiceLanguage[];
+  /** Windows' privacy settings keep desktop apps from the microphone. */
+  micBlocked: boolean;
+}
+
+/** What one hold did (`voice-typed`). The words themselves are never sent. */
+export interface VoiceTyped {
+  outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "noTarget" | "unavailable" | "failed";
+}

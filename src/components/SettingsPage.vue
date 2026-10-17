@@ -19,6 +19,7 @@ import ConnectPanel from "./ConnectPanel.vue";
 import DeveloperSettings from "./DeveloperSettings.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsSwitch from "./SettingsSwitch.vue";
+import VoiceSettings from "./VoiceSettings.vue";
 
 const tug = useTugStore();
 const weather = useWeatherStore();
@@ -352,6 +353,10 @@ async function clearHistory() {
               <SettingsSwitch v-model="showGames" label="Show games" />
             </SettingsRow>
           </div>
+
+          <!-- Voice typing: hold a shortcut, talk, and tug types it (stores/voice, lib/voice). -->
+          <p class="caption-upper mt-6 mb-2 px-1 text-muted">Voice typing</p>
+          <VoiceSettings />
 
           <p class="caption-upper mt-6 mb-2 px-1 text-muted">Keyboard</p>
           <div class="grid grid-cols-1 gap-px overflow-hidden rounded-xl bg-hairline-soft lg:grid-cols-2">
@@ -791,6 +796,10 @@ async function clearHistory() {
             <SettingsRow
               label="Tugboat"
               description="Only while Tugboat is open: an encrypted link on your Wi-Fi. Nothing goes over the internet. Received files go to Pictures › Tugboat."
+            />
+            <SettingsRow
+              label="Voice typing"
+              description="Only while you hold its shortcut: Windows' own speech recognition turns your voice into text on this PC. The recording is never sent anywhere or saved."
             />
             <SettingsRow
               label="App icons"
