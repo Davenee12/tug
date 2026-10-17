@@ -83,9 +83,18 @@ pub fn read_limited(r: impl Read, max: u64) -> Result<Vec<u8>, StdinProblem> {
     Ok(bytes)
 }
 
+/// What a stdin copy's name starts with (tug only reads piped input from a file named like this,
+/// in the temp folder).
+pub const STDIN_PREFIX: &str = "tug-boat-";
+
 /// The command's own copy of stdin, in the user's temp folder, for tug to read once the person
-/// clicks Send. Deleted when dropped, whichever way the command ends.
-pub struct TempFile(PathBuf);
+/// clicks Send. It's opened with FILE_FLAG_DELETE_ON_CLOSE and the handle is kept for as long as
+/// the command runs, so Windows deletes it when the command ends whichever way it ends: done,
+/// Ctrl+C, or killed (Drop alone never runs then). Others may read it (tug does) but not change it.
+pub struct TempFile {
+    path: PathBuf,
+    _handle: std::fs::File,
+}
 
 impl TempFile {
     pub fn save(bytes: &[u8]) -> std::io::Result<TempFile> {
@@ -93,22 +102,37 @@ impl TempFile {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!("tug-boat-{}-{nanos}.tmp", std::process::id()));
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
-        let file = TempFile(path);
-        f.write_all(bytes)?;
-        f.flush()?;
-        Ok(file)
+        let path = std::env::temp_dir().join(format!("{STDIN_PREFIX}{}-{nanos}.tmp", std::process::id()));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const GENERIC_WRITE: u32 = 0x4000_0000;
+            const DELETE: u32 = 0x0001_0000;
+            const FILE_SHARE_READ: u32 = 0x1;
+            const FILE_SHARE_DELETE: u32 = 0x4;
+            const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+            options
+                .access_mode(GENERIC_WRITE | DELETE)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_DELETE_ON_CLOSE);
+        }
+        let mut handle = options.open(&path)?;
+        handle.write_all(bytes)?;
+        handle.flush()?;
+        Ok(TempFile { path, _handle: handle })
     }
 
     pub fn path(&self) -> String {
-        self.0.to_string_lossy().into_owned()
+        self.path.to_string_lossy().into_owned()
     }
 }
 
 impl Drop for TempFile {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        // On Windows closing the handle (just after this) deletes it anyway.
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -183,8 +207,24 @@ mod tests {
     fn the_stdin_copy_goes_when_dropped() {
         let t = TempFile::save(b"piped").unwrap();
         let path = t.path();
+        // tug can read it while the command holds it open.
         assert_eq!(std::fs::read(&path).unwrap(), b"piped");
         drop(t);
         assert!(!Path::new(&path).exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_stdin_copy_goes_with_its_handle_even_without_drop() {
+        let t = TempFile::save(b"piped").unwrap();
+        let path = PathBuf::from(t.path());
+        // Nobody else can change it while it waits for Send.
+        assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
+        // What a kill does: the handle is closed without TempFile's Drop running.
+        let t = std::mem::ManuallyDrop::new(t);
+        // SAFETY: the handle is read out once and `t` is never dropped or used again.
+        let handle = unsafe { std::ptr::read(&t._handle) };
+        drop(handle);
+        assert!(!path.exists(), "Windows deleted it on close");
     }
 }
