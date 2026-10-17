@@ -36,6 +36,15 @@ impl<T> PinConfirm<T> {
         self.last_id
     }
 
+    /// An informational prompt (ConfirmOnly: "confirm on your iPhone"): nothing to answer, but it
+    /// takes an id from the same counter, so only its own pairing's cleanup closes it.
+    pub fn open_info(&mut self) -> u64 {
+        self.last_id = self.last_id.wrapping_add(1).max(1);
+        self.open = Some(self.last_id);
+        self.answer = None;
+        self.last_id
+    }
+
     /// The user answered: take the channel to send it down (once). The prompt stays open until its
     /// helper has acted on the answer and closes it.
     pub fn take(&mut self) -> Option<T> {
@@ -88,6 +97,23 @@ mod tests {
         let id = slot.open(8);
         assert!(slot.close(id));
         assert_eq!(slot.take(), None, "a closed prompt can't be answered");
+    }
+
+    #[test]
+    fn an_informational_prompt_has_its_own_id_and_only_its_own_cleanup_closes_it() {
+        let mut slot = PinConfirm::default();
+        let first = slot.open_info();
+        assert_eq!(slot.take(), None, "nothing to answer");
+        // A second pairing shows its PIN before the first one's cleanup runs.
+        let second = slot.open(5u8);
+        assert_ne!(first, second);
+        assert!(
+            !slot.close(first),
+            "the first pairing's cleanup leaves the new dialog up"
+        );
+        assert!(slot.close(second));
+        let info = slot.open_info();
+        assert!(slot.close(info), "its own cleanup closes it");
     }
 
     #[test]

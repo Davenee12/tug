@@ -475,6 +475,12 @@ impl Shared {
         lock(&self.pairing_confirm).open(tx)
     }
 
+    /// An informational pairing prompt is showing (nothing to answer): returns its id, for
+    /// `close_pairing_confirm`.
+    pub fn open_pairing_info(&self) -> u64 {
+        lock(&self.pairing_confirm).open_info()
+    }
+
     pub fn take_pairing_confirm(&self) -> Option<SyncSender<bool>> {
         lock(&self.pairing_confirm).take()
     }

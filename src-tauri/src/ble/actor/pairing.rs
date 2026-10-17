@@ -640,12 +640,12 @@ impl Drop for PairingCleanup {
         let _ = self.custom.RemovePairingRequested(self.token);
         // This pairing's prompt, if still open: dropping its channel wakes its helper at once, which
         // then completes Windows' deferral without accepting. A newer pairing's prompt is left alone.
+        // Informational (ConfirmOnly) prompts have an id too, so this clears them as well; a newer
+        // pairing's dialog is never told to close.
         let id = self.last_prompt.load(Ordering::SeqCst);
-        if id != 0 {
-            self.shared.close_pairing_confirm(id);
+        if id != 0 && self.shared.close_pairing_confirm(id) {
+            self.shared.emit(events::PAIRING_REQUEST_CLOSED, ());
         }
-        // Clears an informational prompt too (ConfirmOnly has no helper to do it).
-        self.shared.emit(events::PAIRING_REQUEST_CLOSED, ());
     }
 }
 
@@ -679,6 +679,7 @@ pub(super) async fn pair_device(
             if args.PairingKind()? == DevicePairingKinds::ConfirmOnly {
                 // Windows accepts on its own; the user taps "Pair" on the iPhone. Show that in tug so
                 // the screen isn't blank while the phone waits for them.
+                prompt_ids.store(shared.open_pairing_info(), Ordering::SeqCst);
                 shared.emit(
                     events::PAIRING_REQUEST,
                     PairingRequest {
