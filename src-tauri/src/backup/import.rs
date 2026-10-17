@@ -4,10 +4,12 @@
 //! - Every imported text is a `messages` row with source `iphone-backup`, keyed by the backup's
 //!   message guid, so running the import again (after a cancel, a crash or a newer backup) adds
 //!   only what isn't there yet.
+//! - Only one-to-one conversations come in: Messages in tug holds the conversations it can reply
+//!   to, and iOS gives Bluetooth no way to send to a group, so group chats stay on the iPhone
+//!   (counted, so the wizard can say so).
 //! - A text tug already has from Bluetooth isn't added twice: same direction, same person (by
 //!   `store::match_key`), same words, and close in time. The Bluetooth copy stays; the backup only
-//!   adds what it lacked (the photos of a text Bluetooth showed as "Attachment: 1 Photo", or the
-//!   group it was sent in).
+//!   adds what it lacked (the photos of a text Bluetooth showed as "Attachment: 1 Photo").
 //! - People are tug's: a number the backup writes as `+447700900123` joins the conversation tug
 //!   already has under `07700 900123` (the same last 10 digits), and contacts' names apply as usual.
 //! - Photos and videos are copied in a second pass, through a `FileSink`, so they can be skipped
@@ -19,7 +21,6 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use super::smsdb::{Message, Service, SmsData};
 use crate::messages::SOURCE_IPHONE_BACKUP;
@@ -63,6 +64,8 @@ pub struct Scan {
     /// Texts in a new conversation that only photos are in (when texts are skipped): counted so
     /// "photos only" can say how many texts come with them.
     pub photo_texts: u64,
+    /// Texts in group chats, which aren't brought in.
+    pub group_texts: u64,
 }
 
 /// What an import did.
@@ -78,6 +81,8 @@ pub struct Summary {
     pub already: u64,
     /// Photos the backup listed but didn't have the file for.
     pub missing: u64,
+    /// Texts in group chats, left out.
+    pub group_texts: u64,
 }
 
 /// Where photos and videos go: copies the backup's file at `path` (relative to the phone's home)
@@ -117,28 +122,20 @@ pub enum Stage {
 /// How each backup message lands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Target {
-    /// A new row: the address (one-to-one, or the sender in a group; "" for one's own group text)
-    /// and the group.
-    New { address: String, group: Option<String> },
+    /// A new row, in the conversation with this address.
+    New { address: String },
     /// Imported before (that row).
     Imported(i64),
-    /// The same text tug has from Bluetooth (that row), and the group it was really in.
-    Bluetooth { id: i64, group: Option<String> },
+    /// The same text tug has from Bluetooth (that row).
+    Bluetooth { id: i64 },
+    /// In a group chat: left out (tug can't reply to a group).
+    Group,
     /// Nobody to put it with (no handle, no chat).
     Skip,
 }
 
 struct Plan<'a> {
     items: Vec<(&'a Message, Target)>,
-    /// Groups the new rows need: id → (name, members).
-    groups: HashMap<String, (Option<String>, Vec<String>)>,
-}
-
-/// The id tug keeps for a backup's group chat: opaque and fixed-length, the same every import.
-pub fn group_id(group_key: &str) -> String {
-    let digest = Sha256::digest(group_key.as_bytes());
-    let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
-    format!("g{hex}")
 }
 
 /// How a number or email is compared: the last 10 digits of a number, else the whole thing in
@@ -429,20 +426,18 @@ fn resolve(known: &Known, handle: &str) -> String {
 fn plan<'a>(store: &Store, data: &'a SmsData) -> Result<Plan<'a>> {
     let known = load_known(store)?;
     let mut used: HashSet<i64> = HashSet::new();
-    let mut groups = HashMap::new();
     let mut items = Vec::with_capacity(data.messages.len());
     for m in &data.messages {
         let chat = m.chat.and_then(|c| data.chats.get(&c));
-        let group = chat.filter(|c| c.is_group).map(|c| group_id(&c.group_key));
-        let address = match (&group, m.from_me) {
-            (Some(_), true) => Some(String::new()),
-            (Some(_), false) => m.handle.as_deref().map(|h| resolve(&known, h)),
-            (None, _) => m
-                .handle
-                .as_deref()
-                .or_else(|| chat.and_then(|c| c.members.first()).map(String::as_str))
-                .map(|h| resolve(&known, h)),
-        };
+        if chat.is_some_and(|c| c.is_group) {
+            items.push((m, Target::Group));
+            continue;
+        }
+        let address = m
+            .handle
+            .as_deref()
+            .or_else(|| chat.and_then(|c| c.members.first()).map(String::as_str))
+            .map(|h| resolve(&known, h));
         let target = if let Some(&id) = known.imported.get(&m.guid) {
             Target::Imported(id)
         } else if let Some(address) = address {
@@ -464,28 +459,16 @@ fn plan<'a>(store: &Store, data: &'a SmsData) -> Result<Plan<'a>> {
             match same {
                 Some(id) => {
                     used.insert(id);
-                    Target::Bluetooth {
-                        id,
-                        group: group.clone(),
-                    }
+                    Target::Bluetooth { id }
                 }
-                None => Target::New {
-                    address,
-                    group: group.clone(),
-                },
+                None => Target::New { address },
             }
         } else {
             Target::Skip
         };
-        if let (Some(gid), Some(chat)) = (&group, chat) {
-            if matches!(target, Target::New { .. } | Target::Bluetooth { .. }) && !groups.contains_key(gid) {
-                let members = chat.members.iter().map(|h| resolve(&known, h)).collect();
-                groups.insert(gid.clone(), (chat.name.clone(), members));
-            }
-        }
         items.push((m, target));
     }
-    Ok(Plan { items, groups })
+    Ok(Plan { items })
 }
 
 fn wanted(m: &Message, opts: Options) -> bool {
@@ -494,8 +477,7 @@ fn wanted(m: &Message, opts: Options) -> bool {
 
 fn conversation_key(target: &Target) -> Option<String> {
     match target {
-        Target::New { group: Some(g), .. } => Some(g.clone()),
-        Target::New { address, group: None } => Some(person_key(address)),
+        Target::New { address } => Some(person_key(address)),
         _ => None,
     }
 }
@@ -518,9 +500,10 @@ pub fn scan(store: &Store, data: &SmsData, sizes: &dyn Fn(&str) -> Option<u64>) 
                 }
             }
             Target::Imported(_) | Target::Bluetooth { .. } => scan.already += 1,
+            Target::Group => scan.group_texts += 1,
             Target::Skip => {}
         }
-        if matches!(target, Target::Skip) {
+        if matches!(target, Target::Skip | Target::Group) {
             continue;
         }
         for a in m.attachments.iter().filter(|a| a.ext.is_some()) {
@@ -569,29 +552,17 @@ pub fn import(
     progress: &mut dyn FnMut(Stage, u64, u64) -> bool,
 ) -> std::result::Result<Summary, ImportError> {
     let plan = plan(store, data)?;
-    let mut summary = Summary::default();
+    let mut summary = Summary {
+        group_texts: plan.items.iter().filter(|(_, t)| *t == Target::Group).count() as u64,
+        ..Summary::default()
+    };
     let record = serde_json::json!({ "backupDate": backup_date, "importedAt": crate::state::now_ms() });
     store.set_setting(IMPORT_RECORD, &record.to_string())?;
-    {
-        let mut conn = store.conn();
-        let tx = conn.transaction()?;
-        {
-            let mut upsert = tx.prepare(
-                "INSERT INTO message_groups (id, name, members, source) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT (id) DO UPDATE SET name = excluded.name, members = excluded.members",
-            )?;
-            for (id, (name, members)) in &plan.groups {
-                let members = serde_json::to_string(members).expect("members serialize");
-                upsert.execute(params![id, name, members, SOURCE_IPHONE_BACKUP])?;
-            }
-        }
-        tx.commit()?;
-    }
 
     let work: Vec<&(&Message, Target)> = plan
         .items
         .iter()
-        .filter(|(m, t)| !matches!(t, Target::Skip) && wanted(m, opts))
+        .filter(|(m, t)| !matches!(t, Target::Skip | Target::Group) && wanted(m, opts))
         .collect();
     let total = work.len() as u64;
     let mut convs = HashSet::new();
@@ -601,17 +572,16 @@ pub fn import(
         {
             let mut insert = tx.prepare(
                 "INSERT OR IGNORE INTO messages (source, handle, direction, address, body, sent_at, received_at,
-                     status, msg_type, group_id, edited, unsent)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                     status, msg_type, edited, unsent)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             )?;
-            let mut regroup = tx.prepare("UPDATE messages SET backup_group = ?2 WHERE id = ?1 AND group_id IS NULL")?;
             let mut attach = tx.prepare(
                 "INSERT OR IGNORE INTO message_attachments (message_id, source, source_key, kind, ext, bytes)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?;
             for (m, target) in batch.iter().map(|x| (&x.0, &x.1)) {
                 let row = match target {
-                    Target::New { address, group } => {
+                    Target::New { address } => {
                         let n = insert.execute(params![
                             SOURCE_IPHONE_BACKUP,
                             m.guid,
@@ -622,7 +592,6 @@ pub fn import(
                             m.at_ms,
                             if m.from_me { "sent" } else { "received" },
                             msg_type(m),
-                            group,
                             m.edited,
                             m.unsent,
                         ])?;
@@ -639,14 +608,11 @@ pub fn import(
                         summary.already += 1;
                         *id
                     }
-                    Target::Bluetooth { id, group } => {
+                    Target::Bluetooth { id } => {
                         summary.already += 1;
-                        if let Some(g) = group {
-                            regroup.execute(params![id, g])?;
-                        }
                         *id
                     }
-                    Target::Skip => continue,
+                    Target::Group | Target::Skip => continue,
                 };
                 for a in &m.attachments {
                     attach.execute(params![
@@ -778,9 +744,8 @@ pub fn imported(store: &Store) -> Result<Imported> {
     })
 }
 
-/// Remove imported history: every imported text, every attachment row (on Bluetooth texts too),
-/// the groups, the record, and the group a Bluetooth text was moved into. Returns how many texts
-/// went. The caller deletes the files.
+/// Remove imported history: every imported text, every attachment row (on Bluetooth texts too)
+/// and the record. Returns how many texts went. The caller deletes the files.
 pub fn remove_imported(store: &Store) -> Result<u64> {
     let mut conn = store.conn();
     let tx = conn.transaction()?;
@@ -788,11 +753,6 @@ pub fn remove_imported(store: &Store) -> Result<u64> {
     tx.execute(
         "DELETE FROM message_attachments WHERE source = ?1",
         [SOURCE_IPHONE_BACKUP],
-    )?;
-    tx.execute("DELETE FROM message_groups WHERE source = ?1", [SOURCE_IPHONE_BACKUP])?;
-    tx.execute(
-        "UPDATE messages SET backup_group = NULL WHERE backup_group IS NOT NULL",
-        [],
     )?;
     tx.execute("DELETE FROM settings WHERE key = ?1", [IMPORT_RECORD])?;
     tx.commit()?;
@@ -867,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn imports_texts_both_ways_with_groups_photos_and_edits() {
+    fn imports_texts_both_ways_with_photos_and_edits() {
         let store = Store::in_memory().unwrap();
         store
             .save_phonebook(&[("+15550100001".into(), "Jane Doe".into())])
@@ -875,13 +835,14 @@ mod tests {
         let data = data();
         let mut sink = FakeSink::default();
         let s = run(&store, &data, all(), &mut sink);
-        assert_eq!(s.texts, 9);
+        assert_eq!(s.texts, 6);
         assert_eq!((s.photos, s.videos), (1, 1));
-        assert_eq!(s.conversations, 2, "Jane and the group");
+        assert_eq!(s.conversations, 1, "Jane's");
         assert_eq!(s.already, 0);
+        assert_eq!(s.group_texts, 3, "the group chat stays on the phone");
 
         let msgs = store.recent_messages(100).unwrap();
-        let jane: Vec<_> = msgs.iter().filter(|m| m.group_id.is_none()).collect();
+        let jane: Vec<_> = msgs.iter().collect();
         assert!(jane.iter().all(|m| m.address == "+15550100001"));
         assert!(jane.iter().all(|m| m.contact_name.as_deref() == Some("Jane Doe")));
         let sent = jane.iter().find(|m| m.body == "yes! see you there").unwrap();
@@ -897,28 +858,49 @@ mod tests {
         assert!(photo.attachments.iter().all(|a| a.stored));
         assert_eq!(photo.attachments[0].kind, "photo");
         assert_eq!(photo.attachments[1].kind, "video");
-
-        let group: Vec<_> = msgs.iter().filter(|m| m.group_id.is_some()).collect();
-        assert_eq!(group.len(), 3);
-        let mine = group.iter().find(|m| m.body == "great, thanks").unwrap();
-        assert_eq!(mine.address, "", "one's own group text names no one person");
-        let gid = group[0].group_id.clone().unwrap();
-        assert_eq!(gid, group_id("G-CREW"));
-        let groups = store.message_groups().unwrap();
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].name.as_deref(), Some("Weekend crew"));
-        assert_eq!(groups[0].members, vec!["+15550100002", "alex@example.com"]);
-        // A group's texts never join a one-to-one conversation.
-        let alex_one_to_one = store
-            .conversation_messages(&["alex@example.com".into()], None, 100)
-            .unwrap();
-        assert!(alex_one_to_one.is_empty());
-        assert_eq!(store.conversation_messages(&[], Some(&gid), 100).unwrap().len(), 3);
         // Searchable like any text.
-        assert_eq!(store.search_messages("driving", 10).unwrap().len(), 1);
+        assert_eq!(store.search_messages("corner", 10).unwrap().len(), 1);
 
         let state = imported(&store).unwrap();
-        assert_eq!((state.texts, state.photos, state.backup_date), (9, 2, Some(T0)));
+        assert_eq!((state.texts, state.photos, state.backup_date), (6, 2, Some(T0)));
+    }
+
+    #[test]
+    fn group_chats_are_not_imported() {
+        let store = Store::in_memory().unwrap();
+        // Sam's text from the group reached tug over Bluetooth, as Bluetooth shows it: from Sam.
+        store
+            .insert_incoming(&IncomingMessage {
+                source: SOURCE_IPHONE_MAP,
+                handle: "H3",
+                address: "+15550100002",
+                sender_name: None,
+                body: "who's driving?",
+                sent_at: None,
+                received_at: T0 + 400_500,
+                unread_on_phone: false,
+                msg_type: None,
+            })
+            .unwrap();
+        let data = data();
+        let scan = scan(&store, &data, &|_| Some(10)).unwrap();
+        assert_eq!((scan.texts, scan.group_texts, scan.conversations), (6, 3, 1));
+        let s = run(&store, &data, all(), &mut FakeSink::default());
+        assert_eq!((s.texts, s.group_texts, s.already), (6, 3, 0));
+        let msgs = store.recent_messages(100).unwrap();
+        for words in ["I can", "great, thanks"] {
+            assert!(msgs.iter().all(|m| m.body != words), "{words} stays on the phone");
+        }
+        // No conversation with Alex (only ever in the group), and Sam's Bluetooth text is untouched.
+        assert!(msgs.iter().all(|m| m.address != "alex@example.com"));
+        let sam: Vec<_> = msgs.iter().filter(|m| m.address == "+15550100002").collect();
+        assert_eq!(sam.len(), 1);
+        assert_eq!(sam[0].source, SOURCE_IPHONE_MAP);
+        assert!(sam[0].attachments.is_empty());
+        // Imported again: still nothing from the group.
+        let s = run(&store, &data, all(), &mut FakeSink::default());
+        assert_eq!((s.texts, s.group_texts), (0, 3));
+        assert_eq!(imported(&store).unwrap().texts, 6);
     }
 
     #[test]
@@ -932,22 +914,22 @@ mod tests {
         };
         let r = import(&store, &data, all(), Some(T0), &mut sink, &mut |_, _, _| true);
         assert!(matches!(r, Err(ImportError::Cancelled)));
-        assert_eq!(imported(&store).unwrap().texts, 9);
+        assert_eq!(imported(&store).unwrap().texts, 6);
         assert_eq!(imported(&store).unwrap().photos, 0);
         // Run again: no text twice, and the photos are filled in.
         let mut sink = FakeSink::default();
         let s = run(&store, &data, all(), &mut sink);
         assert_eq!(s.texts, 0);
-        assert_eq!(s.already, 9);
+        assert_eq!(s.already, 6);
         assert_eq!((s.photos, s.videos), (1, 1));
-        assert_eq!(store.recent_messages(100).unwrap().len(), 9);
+        assert_eq!(store.recent_messages(100).unwrap().len(), 6);
         // And once more: nothing at all.
         let mut sink = FakeSink::default();
         let s = run(&store, &data, all(), &mut sink);
         assert_eq!((s.texts, s.photos), (0, 0));
         assert!(sink.stored.is_empty());
         let scan = scan(&store, &data, &|_| Some(10)).unwrap();
-        assert_eq!((scan.texts, scan.photos, scan.videos, scan.already), (0, 0, 0, 9));
+        assert_eq!((scan.texts, scan.photos, scan.videos, scan.already), (0, 0, 0, 6));
     }
 
     #[test]
@@ -966,7 +948,7 @@ mod tests {
         let first = imported(&store).unwrap().texts;
         assert!(first > 0, "the first batch is kept");
         let s = run(&store, &data, all(), &mut FakeSink::default());
-        assert_eq!(s.texts + first, 9);
+        assert_eq!(s.texts + first, 6);
     }
 
     #[test]
@@ -1007,57 +989,26 @@ mod tests {
         store
             .set_outgoing_status(out.id, crate::messages::Status::Accepted, None)
             .unwrap();
-        // Sam's group text came over Bluetooth as a one-to-one text.
-        store
-            .insert_incoming(&IncomingMessage {
-                source: SOURCE_IPHONE_MAP,
-                handle: "H3",
-                address: "+15550100002",
-                sender_name: None,
-                body: "who's driving?",
-                sent_at: None,
-                received_at: T0 + 400_500,
-                unread_on_phone: false,
-                msg_type: None,
-            })
-            .unwrap();
         let data = data();
         let scan = scan(&store, &data, &|_| Some(10)).unwrap();
-        assert_eq!((scan.texts, scan.already), (5, 4));
+        assert_eq!((scan.texts, scan.already), (3, 3));
         let s = run(&store, &data, all(), &mut FakeSink::default());
-        assert_eq!((s.texts, s.already), (5, 4));
+        assert_eq!((s.texts, s.already), (3, 3));
         let msgs = store.recent_messages(100).unwrap();
-        assert_eq!(msgs.len(), 9, "four from Bluetooth, five new");
-        // Each person's texts are in one conversation, under the address tug already used.
-        assert!(msgs
-            .iter()
-            .filter(|m| m.group_id.is_none())
-            .all(|m| m.address == "5550100001"));
+        assert_eq!(msgs.len(), 6, "three from Bluetooth, three new");
+        // Jane's texts are in one conversation, under the address tug already used.
+        assert!(msgs.iter().all(|m| m.address == "5550100001"));
         let photo = msgs.iter().find(|m| m.body == "Attachment: 2 Photos").unwrap();
         assert_eq!(photo.source, SOURCE_IPHONE_MAP, "the Bluetooth copy stays");
         assert_eq!(photo.attachments.len(), 2, "and gets the backup's photos");
-        let sam = msgs.iter().find(|m| m.body == "who's driving?").unwrap();
-        assert_eq!(
-            sam.group_id.as_deref(),
-            Some(group_id("G-CREW").as_str()),
-            "moved into its group"
-        );
-        assert_eq!(
-            store
-                .conversation_messages(&["+15550100002".into()], None, 10)
-                .unwrap()
-                .len(),
-            0
-        );
 
         // Remove imported history: the Bluetooth texts are exactly as they were.
-        assert_eq!(remove_imported(&store).unwrap(), 5);
+        assert_eq!(remove_imported(&store).unwrap(), 3);
         let left = store.recent_messages(100).unwrap();
-        assert_eq!(left.len(), 4);
+        assert_eq!(left.len(), 3);
         assert!(left
             .iter()
-            .all(|m| m.source == SOURCE_IPHONE_MAP && m.attachments.is_empty() && m.group_id.is_none()));
-        assert!(store.message_groups().unwrap().is_empty());
+            .all(|m| m.source == SOURCE_IPHONE_MAP && m.attachments.is_empty()));
         assert_eq!(imported(&store).unwrap(), Imported::default());
         assert!(file_keys(&store).unwrap().is_empty());
     }
@@ -1089,7 +1040,7 @@ mod tests {
         // A new text with the same words a day later is new.
         let again = catch_up("H9", "dinner at 7?", Some("2025-10-10T08:53:20Z"), T0 + 86_400_000);
         assert!(store.insert_incoming(&again).unwrap().is_some());
-        assert_eq!(store.recent_messages(100).unwrap().len(), 10);
+        assert_eq!(store.recent_messages(100).unwrap().len(), 7);
     }
 
     #[test]
@@ -1138,7 +1089,7 @@ mod tests {
             },
             &mut FakeSink::default(),
         );
-        assert_eq!((s.texts, s.photos), (9, 0));
+        assert_eq!((s.texts, s.photos), (6, 0));
         let photo = store
             .recent_messages(100)
             .unwrap()
@@ -1201,8 +1152,9 @@ mod tests {
         let data = data();
         let sizes = |p: &str| if p.ends_with(".MOV") { Some(4096) } else { Some(2048) };
         let s = scan(&store, &data, &sizes).unwrap();
-        assert_eq!(s.texts, 9);
-        assert_eq!(s.conversations, 2);
+        assert_eq!(s.texts, 6);
+        assert_eq!(s.conversations, 1);
+        assert_eq!(s.group_texts, 3);
         assert_eq!((s.photos, s.videos, s.media_bytes), (1, 1, 6144));
         assert_eq!(s.photo_texts, 1);
         // A photo the backup doesn't have isn't counted.
@@ -1233,13 +1185,5 @@ mod tests {
         assert_eq!(compare_body("Attachment: 2 are below"), "Attachment: 2 are below");
         assert_eq!(compare_body("  ok\r\n"), "ok");
         assert!(!is_attachment_line("attachment"));
-    }
-
-    #[test]
-    fn group_ids_are_stable_and_opaque() {
-        assert_eq!(group_id("G-CREW"), group_id("G-CREW"));
-        assert_ne!(group_id("G-CREW"), group_id("G-OTHER"));
-        assert_eq!(group_id("x").len(), 17);
-        assert!(!group_id("chat123456").contains("chat"));
     }
 }

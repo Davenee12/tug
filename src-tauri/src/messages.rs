@@ -151,8 +151,6 @@ pub struct StoredMessage {
     /// phone listed was new, so the phone's short list (iOS lists about 10) may have cut off older
     /// ones from while tug was away. The UI says so above it.
     pub gap_before: bool,
-    /// The group chat it belongs to (`message_groups`), or `None` for a one-to-one text.
-    pub group_id: Option<String>,
     /// Edited on the phone after it was sent (from a backup).
     pub edited: bool,
     /// Unsent on the phone: the words are gone, and the conversation says so (from a backup).
@@ -171,15 +169,6 @@ pub struct StoredAttachment {
     /// The file is on this PC (photos and videos); otherwise only its kind is known.
     pub stored: bool,
     pub bytes: Option<i64>,
-}
-
-/// A group chat from a backup: its name, if it has one, and the other people in it.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageGroup {
-    pub id: String,
-    pub name: Option<String>,
-    pub members: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -212,7 +201,7 @@ const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address,
                 FROM contacts k WHERE k.match_key = match_key(m.address)
             ), m.sender_name),
             m.body, m.sent_at, m.received_at, m.status, m.msg_type, m.gap_before,
-            COALESCE(m.group_id, m.backup_group), m.edited, m.unsent,
+            m.edited, m.unsent,
             (SELECT json_group_array(json_object('id', a.id, 'kind', a.kind,
                         'stored', json(CASE WHEN a.file IS NULL THEN 'false' ELSE 'true' END), 'bytes', a.bytes))
              FROM message_attachments a WHERE a.message_id = m.id)
@@ -221,7 +210,7 @@ const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address,
 fn map_row(r: &Row) -> Result<StoredMessage> {
     let direction: String = r.get(2)?;
     let status: String = r.get(8)?;
-    let attachments: Option<String> = r.get(14)?;
+    let attachments: Option<String> = r.get(13)?;
     Ok(StoredMessage {
         id: r.get(0)?,
         source: r.get(1)?,
@@ -238,9 +227,8 @@ fn map_row(r: &Row) -> Result<StoredMessage> {
         status: Status::parse(&status),
         msg_type: r.get(9)?,
         gap_before: r.get(10)?,
-        group_id: r.get(11)?,
-        edited: r.get(12)?,
-        unsent: r.get(13)?,
+        edited: r.get(11)?,
+        unsent: r.get(12)?,
         // Built by SQLite above, so it always parses; an empty list if it somehow didn't.
         attachments: attachments
             .and_then(|json| serde_json::from_str(&json).ok())
@@ -461,18 +449,18 @@ impl Store {
         rows.collect()
     }
 
-    /// The newest visible text of every conversation (one-to-one by address, groups by group), so
-    /// the window lists conversations whose texts are all older than the recent page it loads
-    /// (history brought in from a backup goes back years). Newest first.
+    /// The newest visible text of every conversation (by address), so the window lists
+    /// conversations whose texts are all older than the recent page it loads (history brought in
+    /// from a backup goes back years). Newest first.
     pub fn conversation_heads(&self, limit: u32) -> Result<Vec<StoredMessage>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "WITH ranked AS (
                  SELECT id, ROW_NUMBER() OVER (
-                     PARTITION BY COALESCE(group_id, backup_group, address) ORDER BY received_at DESC, id DESC
+                     PARTITION BY address ORDER BY received_at DESC, id DESC
                  ) AS rn, received_at
                  FROM messages
-                 WHERE hidden_at IS NULL AND (address <> '' OR group_id IS NOT NULL)
+                 WHERE hidden_at IS NULL AND address <> ''
              )
              {SELECT} WHERE m.id IN (SELECT id FROM ranked WHERE rn = 1 ORDER BY received_at DESC LIMIT ?1)
              ORDER BY m.received_at DESC, m.id DESC"
@@ -481,43 +469,19 @@ impl Store {
         rows.collect()
     }
 
-    /// Every visible text of one conversation, oldest first: the one-to-one texts with any of
-    /// `addresses`, or a group's. Opening a conversation loads its whole history this way.
-    pub fn conversation_messages(
-        &self,
-        addresses: &[String],
-        group: Option<&str>,
-        limit: u32,
-    ) -> Result<Vec<StoredMessage>> {
+    /// Every visible text of one conversation, oldest first: the texts with any of `addresses`.
+    /// Opening a conversation loads its whole history this way.
+    pub fn conversation_messages(&self, addresses: &[String], limit: u32) -> Result<Vec<StoredMessage>> {
         let addresses = serde_json::to_string(addresses).expect("addresses serialize");
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT * FROM (
                  {SELECT}
-                 WHERE m.hidden_at IS NULL AND (
-                     (?2 IS NOT NULL AND COALESCE(m.group_id, m.backup_group) = ?2)
-                     OR (?2 IS NULL AND m.group_id IS NULL AND m.backup_group IS NULL
-                         AND m.address IN (SELECT value FROM json_each(?1)))
-                 )
-                 ORDER BY m.received_at DESC, m.id DESC LIMIT ?3
+                 WHERE m.hidden_at IS NULL AND m.address IN (SELECT value FROM json_each(?1))
+                 ORDER BY m.received_at DESC, m.id DESC LIMIT ?2
              ) ORDER BY received_at, id"
         ))?;
-        let rows = stmt.query_map(params![addresses, group, limit], map_row)?;
-        rows.collect()
-    }
-
-    /// The group chats brought in from a backup.
-    pub fn message_groups(&self) -> Result<Vec<MessageGroup>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT id, name, members FROM message_groups ORDER BY id")?;
-        let rows = stmt.query_map([], |r| {
-            let members: String = r.get(2)?;
-            Ok(MessageGroup {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                members: serde_json::from_str(&members).unwrap_or_default(),
-            })
-        })?;
+        let rows = stmt.query_map(params![addresses, limit], map_row)?;
         rows.collect()
     }
 
@@ -1320,7 +1284,7 @@ mod tests {
         let jane = [(MESSAGES_APP.to_string(), "Jane Doe".to_string())];
         let address = ["+13025550100".to_string()];
 
-        s.set_conversation_hidden(&jane, &address, &[], 5_000, true).unwrap();
+        s.set_conversation_hidden(&jane, &address, 5_000, true).unwrap();
         assert_eq!(titles(&s), vec!["Sam"]);
         assert_eq!(bodies(&s), vec!["hello"]);
         assert!(s.search("lunch", 10, None).unwrap().is_empty(), "not in search either");
@@ -1331,7 +1295,7 @@ mod tests {
         assert_eq!(titles(&s), vec!["Jane Doe", "Sam"]);
 
         // Undo brings back exactly what that delete hid, and leaves the new one alone.
-        s.set_conversation_hidden(&jane, &address, &[], 5_000, false).unwrap();
+        s.set_conversation_hidden(&jane, &address, 5_000, false).unwrap();
         assert_eq!(titles(&s).len(), 5);
         assert_eq!(bodies(&s).len(), 2);
     }
@@ -1341,10 +1305,10 @@ mod tests {
         let s = Store::in_memory().unwrap();
         notify(&s, 1, "Jane Doe", "old", 100);
         let jane = [(MESSAGES_APP.to_string(), "Jane Doe".to_string())];
-        s.set_conversation_hidden(&jane, &[], &[], 1_000, true).unwrap();
+        s.set_conversation_hidden(&jane, &[], 1_000, true).unwrap();
         notify(&s, 2, "Jane Doe", "new", 2_000);
-        s.set_conversation_hidden(&jane, &[], &[], 3_000, true).unwrap();
-        s.set_conversation_hidden(&jane, &[], &[], 3_000, false).unwrap();
+        s.set_conversation_hidden(&jane, &[], 3_000, true).unwrap();
+        s.set_conversation_hidden(&jane, &[], 3_000, false).unwrap();
         let rows = s.recent(10, None, None).unwrap();
         assert_eq!(rows.iter().map(|n| n.message.as_str()).collect::<Vec<_>>(), vec!["new"]);
     }

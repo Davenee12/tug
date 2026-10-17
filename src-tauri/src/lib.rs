@@ -432,7 +432,6 @@ pub fn run() {
             updater::update_take_resume,
             commands::conversation_heads,
             commands::conversation_messages,
-            commands::list_message_groups,
             commands::attachment_preview,
             commands::open_attachment,
             commands::backup_list,

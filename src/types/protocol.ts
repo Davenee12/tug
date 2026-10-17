@@ -225,11 +225,6 @@ export interface SmsMessage {
    * listed was new, so older ones from while tug was away may only be on the iPhone.
    */
   gapBefore: boolean;
-  /**
-   * The group chat it belongs to (`MessageGroup.id`), for history brought in from an iPhone
-   * backup; null (or absent, in older payloads and fixtures) for a one-to-one text.
-   */
-  groupId?: string | null;
   /** Edited on the phone after it was sent (from a backup). */
   edited?: boolean;
   /** Unsent on the phone: the words are gone (from a backup). */
@@ -245,14 +240,6 @@ export interface MessageAttachment {
   /** The file is on this PC (photos and videos); otherwise only its kind is known. */
   stored: boolean;
   bytes: number | null;
-}
-
-/** A group chat from an iPhone backup: its name, if it has one, and the other people in it. */
-export interface MessageGroup {
-  id: string;
-  name: string | null;
-  /** Addresses, normalised like message addresses. */
-  members: string[];
 }
 
 /** A stored photo's preview (`backup/files.rs`). */
@@ -288,6 +275,8 @@ export interface BackupScan {
   mediaBytes: number;
   /** New texts that carry photos (what "photos only" brings in). */
   photoTexts: number;
+  /** Texts in group chats, which aren't brought in. */
+  groupTexts: number;
 }
 
 /** What an import did (`backup/import.rs` `Summary`). */
@@ -300,6 +289,8 @@ export interface BackupSummary {
   already: number;
   /** Photos the backup listed but didn't have the file for. */
   missing: number;
+  /** Texts in group chats, left out. */
+  groupTexts: number;
 }
 
 export type BackupPhase = "idle" | "unlocking" | "reading" | "ready" | "importing" | "done" | "cancelled" | "failed";

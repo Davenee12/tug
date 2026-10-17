@@ -23,14 +23,14 @@ import { conversationReplies } from "../lib/smartReplies";
 import type { SmsMessage } from "../types/protocol";
 
 const tug = useTugStore();
-// History brought in from an iPhone backup: group chats, conversations older than the recent page,
-// and each conversation's whole history when it's opened (stores/backup).
+// History brought in from an iPhone backup: conversations older than the recent page, and each
+// conversation's whole history when it's opened (stores/backup).
 const backup = useBackupStore();
 onMounted(() => void backup.ensureLoaded());
 // Regrouped on every text and notification, but kept stable: a conversation whose contents didn't
 // change keeps its object, so only the rows that changed re-render (lib/stableList).
 const grouped = computed<Conversation[]>((prev) =>
-  reuseUnchanged(prev, groupConversations(tug.notifications, tug.messages, tug.contacts, backup.groups), sameConversation),
+  reuseUnchanged(prev, groupConversations(tug.notifications, tug.messages, tug.contacts), sameConversation),
 );
 const convs = computed(() => {
   const list = grouped.value;
@@ -242,11 +242,6 @@ const contentOf = (i: ConversationItem): Shown => contents.value.get(i.id) ?? it
 const attachmentsOf = (i: ConversationItem) => (i.kind === "message" ? (i.m.attachments ?? []) : []);
 const unsent = (i: ConversationItem) => i.kind === "message" && !!i.m.unsent;
 const edited = (i: ConversationItem) => i.kind === "message" && !!i.m.edited;
-// In a group, who sent each received text.
-function senderOf(i: ConversationItem): string {
-  if (!selected.value?.group || i.kind !== "message" || i.m.direction !== "in") return "";
-  return i.m.contactName ?? formatAddress(i.m.address);
-}
 // "From your iPhone backup, Oct 12": once, above the oldest history the backup brought in.
 const firstImported = computed(() => selected.value?.items.find((i) => i.kind === "message" && isImported(i.m))?.id ?? null);
 const importedLabel = computed(() => backupLabel(backup.imported));
@@ -298,8 +293,6 @@ const canReply = computed(
 const replyHint = computed(() => {
   // Every conversation here is a Messages one (other chat apps stay in the Feed: lib/format).
   if (!selected.value) return "";
-  // iOS gives Bluetooth no way to send to a group.
-  if (selected.value.group) return "Reply to group texts on your iPhone.";
   const unavailable = replyUnavailable(tug.status, tug.switchContext);
   if (unavailable) return unavailable;
   if (!selected.value.addresses.length) return "tug will learn this number when their next text arrives.";
@@ -457,7 +450,6 @@ async function retry(m: SmsMessage) {
               <span v-if="item.kind === 'notification' && item.n.subtitle" class="mb-0.5 block text-[12px] font-medium text-muted">
                 {{ item.n.subtitle }}
               </span>
-              <span v-else-if="senderOf(item)" class="mb-0.5 block text-[12px] font-medium opacity-70">{{ senderOf(item) }}</span>
               <span v-if="unsent(item)" class="italic opacity-70">{{ contentOf(item).text }}</span>
               <template v-else-if="contentOf(item).text">{{ contentOf(item).text }}</template>
               <MessageAttachments

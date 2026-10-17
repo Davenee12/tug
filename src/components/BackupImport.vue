@@ -9,6 +9,7 @@ import { useFocusTrap } from "../lib/focusTrap";
 import {
   backupDetails,
   backupUnusable,
+  groupsNote,
   HOW_TO_BACK_UP,
   photosChoice,
   problemMessage,
@@ -93,7 +94,8 @@ function back() {
         <div class="min-w-0 flex-1">
           <h2 id="backup-title" class="headline text-[24px] leading-tight text-ink">Bring in your full history</h2>
           <p class="mt-1 text-[13px] text-muted">
-            Every text, sent ones included, and your photos, from a backup of your iPhone on this PC. It all stays on this PC.
+            Your conversations with each person, sent texts included, and their photos, from a backup of your iPhone on this
+            PC. It all stays on this PC.
           </p>
         </div>
         <button
@@ -208,6 +210,7 @@ function back() {
         <!-- 4. What to bring in -->
         <template v-else-if="step === 'choose' && backup.status.scan">
           <p class="mt-2 text-[14px] text-ink">{{ scanLine(backup.status.scan) }}</p>
+          <p v-if="groupsNote(backup.status.scan)" class="mt-1 text-[12px] text-muted">{{ groupsNote(backup.status.scan) }}</p>
           <p v-if="backup.status.scan.already" class="mt-1 text-[12px] text-muted">
             {{ backup.status.scan.already.toLocaleString("en-US") }} already in tug won't be added twice.
           </p>
@@ -249,6 +252,7 @@ function back() {
         <template v-else-if="step === 'done' && backup.status.summary">
           <p class="mt-2 text-[15px] font-medium text-ink" role="status">{{ summaryLine(backup.status.summary) }}</p>
           <p v-if="summaryNote(backup.status.summary)" class="mt-1 text-[13px] text-muted">{{ summaryNote(backup.status.summary) }}</p>
+          <p v-if="groupsNote(backup.status.summary)" class="mt-1 text-[13px] text-muted">{{ groupsNote(backup.status.summary) }}</p>
           <p class="mt-2 text-[13px] text-muted">They're in Messages with the rest of your conversations.</p>
           <div class="mt-5"><button class="btn-primary btn-sm" @click="backup.closeWizard()">Done</button></div>
         </template>

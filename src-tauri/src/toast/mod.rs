@@ -794,7 +794,6 @@ mod tests {
             status: Status::Accepted,
             msg_type: None,
             gap_before: false,
-            group_id: None,
             edited: false,
             unsent: false,
             attachments: Vec::new(),

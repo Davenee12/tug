@@ -10,8 +10,10 @@
 //! - Tapbacks (`associated_message_type` 2000–3999) are reactions to another message; group events
 //!   (`item_type` ≠ 0: renamed, someone added or left) aren't messages. Both are skipped.
 //! - Edited (`date_edited`) and unsent (`date_retracted`, or an edit that left nothing) messages.
-//! - `chat` and `chat_handle_join`: a chat with more than one other person is a group, with its
-//!   `display_name` if it has one. `chat_message_join` puts each message in its chat.
+//! - `chat` and `chat_handle_join`: a chat with more than one other person is a group, and so is
+//!   one iOS marks as a group (`style` 43, or a `chat…` identifier) even with one person left in
+//!   it. `chat_message_join` puts each message in its chat. tug brings in only one-to-one chats
+//!   (the conversations it can reply to), so groups are only recognised here, to be left out.
 //! - `attachment` and `message_attachment_join`: each attachment's path on the phone
 //!   (`~/Library/SMS/Attachments/…`), type, size and whether it's a sticker.
 //!
@@ -112,12 +114,23 @@ pub struct Attachment {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chat {
     pub id: i64,
-    /// Stable across the chat's rows for one group (iMessage and SMS halves share it).
-    pub group_key: String,
-    pub name: Option<String>,
     /// The other people in it (raw handles, as the phone stores them).
     pub members: Vec<String>,
+    /// A group chat: more than one other person, or marked as a group by iOS. Never imported.
     pub is_group: bool,
+}
+
+/// iOS's `chat.style` for a group chat (a one-to-one chat is 45).
+const GROUP_STYLE: i64 = 43;
+
+/// Whether a chat is a group: more than one other person, or iOS marks it as one (its style, a
+/// `chat123…` identifier, or a `;+;` guid), so a group with only one other person left in it is
+/// still a group.
+pub fn is_group_chat(members: usize, style: Option<i64>, identifier: Option<&str>, guid: Option<&str>) -> bool {
+    members > 1
+        || style == Some(GROUP_STYLE)
+        || identifier.is_some_and(|i| i.starts_with("chat"))
+        || guid.is_some_and(|g| g.contains(";+;"))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -258,12 +271,7 @@ pub fn read(conn: &Connection) -> rusqlite::Result<SmsData> {
     };
 
     let chat_cols = columns(conn, "chat")?;
-    let group_col = if chat_cols.contains("group_id") {
-        "NULLIF(c.group_id, '')"
-    } else {
-        "NULL"
-    };
-    let style_col = if chat_cols.contains("style") { "c.style" } else { "0" };
+    let style_col = if chat_cols.contains("style") { "c.style" } else { "NULL" };
     let mut members: HashMap<i64, Vec<String>> = HashMap::new();
     {
         let mut stmt = conn.prepare("SELECT chat_id, handle_id FROM chat_handle_join ORDER BY chat_id, handle_id")?;
@@ -280,34 +288,30 @@ pub fn read(conn: &Connection) -> rusqlite::Result<SmsData> {
     }
     {
         let mut stmt = conn.prepare(&format!(
-            "SELECT c.ROWID, c.guid, {group_col}, NULLIF(TRIM(c.display_name), ''), {style_col}, c.chat_identifier FROM chat c"
+            "SELECT c.ROWID, c.guid, {style_col}, c.chat_identifier FROM chat c"
         ))?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, Option<String>>(1)?,
-                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<i64>>(2)?,
                 r.get::<_, Option<String>>(3)?,
-                r.get::<_, Option<i64>>(4)?,
-                r.get::<_, Option<String>>(5)?,
             ))
         })?;
         for row in rows {
-            let (id, guid, group_id, name, style, identifier) = row?;
+            let (id, guid, style, identifier) = row?;
             let mut list = members.remove(&id).unwrap_or_default();
-            if list.is_empty() {
+            let is_group = is_group_chat(list.len(), style, identifier.as_deref(), guid.as_deref());
+            if list.is_empty() && !is_group {
                 // A one-to-one chat whose join row is missing still names its person.
-                if let Some(ident) = identifier.filter(|i| !i.starts_with("chat")) {
+                if let Some(ident) = identifier {
                     list.push(ident);
                 }
             }
-            let is_group = list.len() > 1 || style == Some(43);
             data.chats.insert(
                 id,
                 Chat {
                     id,
-                    group_key: group_id.or(guid).unwrap_or_else(|| format!("chat-{id}")),
-                    name,
                     members: list,
                     is_group,
                 },
@@ -463,7 +467,7 @@ pub(crate) mod tests {
     }
 
     /// A tiny made-up Messages database: Jane (one-to-one, both directions, a photo, an edit, a
-    /// tapback, an attributedBody-only text), and a named group with Sam and Alex.
+    /// tapback, an attributedBody-only text), and a named group with Sam and Alex (never imported).
     pub(crate) fn sample(conn: &Connection) {
         conn.execute_batch(SCHEMA).unwrap();
         conn.execute_batch(
@@ -624,10 +628,9 @@ pub(crate) mod tests {
 
         let crew = &data.chats[&2];
         assert!(crew.is_group);
-        assert_eq!(crew.name.as_deref(), Some("Weekend crew"));
         assert_eq!(crew.members, vec!["+15550100002", "alex@example.com"]);
-        assert_eq!(crew.group_key, "G-CREW");
         assert!(!data.chats[&1].is_group);
+        assert_eq!(data.chats[&1].members, vec!["+15550100001"]);
         assert_eq!(m("GUID-10").chat, Some(2));
         assert_eq!(m("GUID-10").handle, None, "a sent group text names no one person");
     }
@@ -655,7 +658,41 @@ pub(crate) mod tests {
         assert_eq!(data.messages.len(), 1);
         assert_eq!(data.messages[0].service, Service::Sms);
         assert_eq!(data.messages[0].body, "old school");
-        assert_eq!(data.chats[&1].name, None, "a blank name is no name");
+        assert!(!data.chats[&1].is_group);
+    }
+
+    #[test]
+    fn groups_are_recognised_even_with_one_person_left() {
+        // Two or more other people.
+        assert!(is_group_chat(2, Some(45), Some("+15550100001"), None));
+        // iOS's group style, a chat… identifier or a group guid, with one person (or none) left.
+        assert!(is_group_chat(1, Some(43), Some("+15550100001"), None));
+        assert!(is_group_chat(1, None, Some("chat123456789"), None));
+        assert!(is_group_chat(0, None, None, Some("iMessage;+;chat123456789")));
+        // A one-to-one chat.
+        assert!(!is_group_chat(
+            1,
+            Some(45),
+            Some("+15550100001"),
+            Some("iMessage;-;+15550100001")
+        ));
+        assert!(!is_group_chat(
+            1,
+            None,
+            Some("jane@example.com"),
+            Some("SMS;-;jane@example.com")
+        ));
+
+        // A group whose join rows are gone never turns into a one-to-one chat with its identifier.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(
+            "INSERT INTO chat VALUES (1, 'iMessage;+;chat99', 43, 'chat99', 'iMessage', NULL, 'G-OLD');",
+        )
+        .unwrap();
+        let data = read(&conn).unwrap();
+        assert!(data.chats[&1].is_group);
+        assert!(data.chats[&1].members.is_empty());
     }
 
     #[test]

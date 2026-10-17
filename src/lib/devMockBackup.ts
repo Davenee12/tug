@@ -1,15 +1,15 @@
 // Dev-only: the iPhone-backup commands for the browser preview (`npm run dev`), so the "Bring in
-// your full history" wizard, imported conversations, group chats and photos can be reviewed
+// your full history" wizard, imported conversations and photos can be reviewed
 // without a backup. Loaded by devMock.ts; never bundled into tug.
 //
 //   /?backup            two made-up backups (one encrypted: its password is "test"); the import
-//                       adds a few weeks of history, a group chat and photos
+//                       adds a few weeks of history and photos (group chats stay out)
 //   /?backup&none       no backups on this PC: the "how to make one" step
 //   /?backup&imported   history already brought in (Settings shows Remove, Messages the label)
 //   /?backup&heif       photos show as "Open photo" with the HEIF Image Extensions hint
 
 import { emit } from "@tauri-apps/api/event";
-import type { BackupImported, BackupInfo, BackupStatus, MessageGroup, SmsMessage } from "../types/protocol";
+import type { BackupImported, BackupInfo, BackupStatus, SmsMessage } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const on = params.has("backup");
@@ -57,7 +57,6 @@ let status: BackupStatus = {
 };
 let timer: number | undefined;
 let imported: BackupImported = { texts: 0, photos: 0, backupDate: null };
-const groups: MessageGroup[] = [];
 
 function set(patch: Partial<BackupStatus>) {
   status = { ...status, ...patch, rev: status.rev + 1 };
@@ -90,13 +89,11 @@ function history(nextId: () => number, zoe: string): SmsMessage[] {
     status: direction === "in" ? "received" : "sent",
     msgType: "IM",
     gapBefore: false,
-    groupId: null,
     edited: false,
     unsent: false,
     attachments: [],
     ...extra,
   });
-  groups.splice(0, groups.length, { id: "gmock", name: "Climbing crew", members: [zoe, "+12145550199", "+15550100077"] });
   let att = 900;
   const photo = () => ({ id: att++, kind: "photo" as const, stored: true, bytes: 2_400_000 });
   return [
@@ -106,9 +103,6 @@ function history(nextId: () => number, zoe: string): SmsMessage[] {
     m("out", "that view 😍", 60 * 24 * 12 - 2, { edited: true }),
     m("out", "", 60 * 24 * 12 - 4, { unsent: true }),
     m("in", "the summit at sunrise", 60 * 24 * 3, { attachments: [photo()] }),
-    m("in", "who's bringing rope?", 60 * 24 * 2, { groupId: "gmock" }),
-    m("in", "I've got two", 60 * 24 * 2 - 5, { groupId: "gmock", address: "+12145550199", contactName: "Priya" }),
-    m("out", "I'll bring snacks", 60 * 24 * 2 - 9, { groupId: "gmock", address: "", contactName: null }),
   ];
 }
 
@@ -147,7 +141,7 @@ export function backupMock(
         stop();
         set({
           phase: "ready",
-          scan: { texts: 12431, already: 9, conversations: 214, photos: 1100, videos: 104, mediaBytes: 3_200_000_000, photoTexts: 980 },
+          scan: { texts: 12431, already: 9, conversations: 214, photos: 1100, videos: 104, mediaBytes: 3_200_000_000, photoTexts: 980, groupTexts: 1832 },
         });
       }, 120);
       return null;
@@ -180,6 +174,7 @@ export function backupMock(
             conversations: 214,
             already: 9,
             missing: a.photos ? 3 : 0,
+            groupTexts: 1832,
           },
         });
       }, 150);
@@ -195,12 +190,9 @@ export function backupMock(
     case "backup_remove_imported": {
       const before = ctx.messages.length;
       for (let i = ctx.messages.length - 1; i >= 0; i--) if (ctx.messages[i].source === "iphone-backup") ctx.messages.splice(i, 1);
-      groups.splice(0);
       imported = { texts: 0, photos: 0, backupDate: null };
       return before - ctx.messages.length;
     }
-    case "list_message_groups":
-      return groups.map((g) => ({ ...g }));
     case "conversation_heads":
     case "conversation_messages":
       return ctx.messages.map((m) => ({ ...m }));

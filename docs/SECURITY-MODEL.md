@@ -180,7 +180,7 @@ tug treats reading one as the most sensitive thing it does:
 - The backup itself is only ever read. Remove imported history (and Clear history) delete every
   row and file the import added; both refuse while an import is still writing.
 - Imported texts are part of tug's history, so the developer tools' text search (when its switch
-  is on) reaches them too: years of history, sent texts and group chats included, not just what
+  is on) reaches them too: years of one-to-one history, sent texts included, not just what
   came over Bluetooth.
 
 **Prompt injection aimed at AI tools.** A text can say "ignore your instructions and…". tug

@@ -22,7 +22,6 @@ import {
   notificationTime,
   snippet,
   threadKey,
-  groupTitle,
 } from "./format";
 import type { CallRecord, Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
@@ -618,42 +617,5 @@ describe("actionLabels", () => {
       positive: "Accept",
       negative: "Dismiss",
     });
-  });
-});
-
-describe("group chats from an iPhone backup", () => {
-  const people: Contact[] = [
-    { address: "+15550100002", name: "Sam Rivera" },
-    { address: "+15550100003", name: "Alex" },
-  ];
-  const inGroup = (m: SmsMessage, groupId = "g1"): SmsMessage => ({ ...m, source: "iphone-backup", groupId });
-
-  it("are their own conversation, never a member's one-to-one", () => {
-    const messages = [
-      sms("+15550100002", "lunch tomorrow?", 1, "in", "Sam Rivera"),
-      inGroup(sms("+15550100002", "who's driving?", 2, "in", "Sam Rivera")),
-      inGroup(sms("", "I can", 3, "out")),
-    ];
-    const convs = groupConversations([], messages, people, [{ id: "g1", name: null, members: ["+15550100002", "5550100003"] }]);
-    expect(convs).toHaveLength(2);
-    const group = convs.find((c) => c.group === "g1")!;
-    expect(group.contact).toBe("Sam & Alex");
-    expect(group.items.map((i) => i.body)).toEqual(["who's driving?", "I can"]);
-    expect(group.addresses).toEqual([]);
-    expect(group.address).toBeNull();
-    const sam = convs.find((c) => !c.group)!;
-    expect(sam.items.map((i) => i.body)).toEqual(["lunch tomorrow?"]);
-    expect(sam.addresses).toEqual(["+15550100002"]);
-  });
-
-  it("are named by their own name, or their people", () => {
-    expect(groupTitle({ name: "Weekend crew", members: ["+15550100002"] }, people)).toBe("Weekend crew");
-    expect(groupTitle({ name: null, members: ["+15550100002", "+15550100003", "+15550100009"] }, people)).toBe(
-      "Sam, Alex & (555) 010-0009",
-    );
-    expect(groupTitle({ name: "  ", members: ["+15550100002", "+15550100003", "+15550100008", "+15550100009"] }, people)).toBe(
-      "Sam, Alex & 2 others",
-    );
-    expect(groupTitle(undefined, people)).toBe("Group");
   });
 });

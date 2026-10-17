@@ -4,6 +4,7 @@ import {
   backupLabel,
   backupUnusable,
   formatBytes,
+  groupsNote,
   importedLine,
   isImported,
   photosChoice,
@@ -28,6 +29,7 @@ const scan = (s: Partial<BackupScan> = {}): BackupScan => ({
   videos: 0,
   mediaBytes: 0,
   photoTexts: 0,
+  groupTexts: 0,
   ...s,
 });
 
@@ -101,7 +103,7 @@ describe("backup import words", () => {
   });
 
   it("sums up what came in", () => {
-    const s = { texts: 0, photos: 0, videos: 0, conversations: 0, already: 0, missing: 0 };
+    const s = { texts: 0, photos: 0, videos: 0, conversations: 0, already: 0, missing: 0, groupTexts: 0 };
     expect(summaryLine({ ...s, texts: 12431, photos: 1204, conversations: 214 })).toBe(
       "Added 12,431 texts and 1,204 photos from 214 conversations.",
     );
@@ -114,6 +116,14 @@ describe("backup import words", () => {
     expect(summaryLine({ ...s, already: 9 })).toBe("Everything in this backup was already in tug.");
     expect(summaryNote({ ...s, texts: 1, conversations: 1 })).toBeNull();
     expect(summaryNote({ ...s, texts: 1, conversations: 1, missing: 2 })).toMatch(/^2 photos or videos weren't/);
+  });
+
+  it("says group chats stay on the iPhone, before and after", () => {
+    expect(groupsNote(scan())).toBeNull();
+    expect(groupsNote(scan({ texts: 40, groupTexts: 1832 }))).toBe(
+      "Group chats stay on your iPhone (1,832 texts), since tug can't reply to a group.",
+    );
+    expect(groupsNote({ groupTexts: 1 })).toBe("Group chats stay on your iPhone (1 text), since tug can't reply to a group.");
   });
 
   it("says what's in tug from a backup", () => {

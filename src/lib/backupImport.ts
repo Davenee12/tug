@@ -146,6 +146,15 @@ export function summaryLine(s: BackupSummary): string {
   return `Added ${what}${from}.`;
 }
 
+/**
+ * Group chats aren't brought in: Messages in tug holds only conversations it can reply to, and
+ * Bluetooth has no way to send to a group. Said before and after, so nobody looks for them.
+ */
+export function groupsNote(s: Pick<BackupScan, "groupTexts">): string | null {
+  if (!s.groupTexts) return null;
+  return `Group chats stay on your iPhone (${plural(s.groupTexts, "text")}), since tug can't reply to a group.`;
+}
+
 /** A second line when some photos weren't in the backup. */
 export function summaryNote(s: BackupSummary): string | null {
   if (!s.missing) return null;

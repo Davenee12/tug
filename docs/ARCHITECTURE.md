@@ -176,20 +176,23 @@ backup_open(id, password?) ─► tug-backup thread (BackupService in backup/mod
   (+ -wal), MediaDomain Library/SMS/Attachments/* ─► decrypt.rs (per-file key, AES-256-CBC, chunked)
   ─► smsdb.rs + typedstream.rs ─► SmsData in memory; the decrypted databases deleted at once
   ─► import::scan ─► "backup-import" { phase: ready, scan }
-backup_import(texts, photos) ─► import.rs: plan (guid already imported? the same text from
-  Bluetooth by direction + match_key + words + time? which address tug already uses?) ─► batches
+backup_import(texts, photos) ─► import.rs: plan (a group chat? left out; guid already imported?
+  the same text from Bluetooth by direction + match_key + words + time? which address tug already
+  uses?) ─► batches
   of 500 in transactions ─► photos: decrypt to scratch → SHA-256 → attachments\<hash>.<ext>
   ─► "backup-import" { phase: done, summary } ─► the session (keys, data, scratch folder) dropped
-window: stores/backup.ts re-reads messages, conversation heads and groups; MessageThreads loads a
+window: stores/backup.ts re-reads messages and conversation heads; MessageThreads loads a
   conversation's whole history when it opens (conversation_messages); photos via attachment_preview
   (wic.rs: JPEG preview, HEIC needs HEIF Image Extensions) and open_attachment (default app)
 ```
 
 Imported rows are ordinary `messages` with source `iphone-backup` (keyed by the backup's message
-guid, so a re-run or a cancelled run adds only what's new), plus `group_id` (a group chat,
-`message_groups`), `edited`/`unsent`, and `message_attachments`. A Bluetooth text the import
-matched is never changed: its photos are attachment rows pointing at it, and its group is
-`backup_group`, both undone by Remove imported history.
+guid, so a re-run or a cancelled run adds only what's new), plus `edited`/`unsent` and
+`message_attachments`. Only one-to-one conversations come in: group chats (more than one other
+person, or marked as a group by iOS) stay on the iPhone, because Messages in tug holds only
+conversations it can reply to and Bluetooth can't send to a group. A Bluetooth text the import
+matched is never changed: its photos are attachment rows pointing at it, undone by Remove imported
+history.
 
 **A media command**
 
@@ -417,7 +420,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `album_art.rs` | Album art from Apple's catalog: names normalised (editions like Remastered/Deluxe and featured artists set aside), the best match by artist and album, the cache key, the day-long miss memory, the debounce and rate limit (`Gate`); the cache and setting tested with a fake network |
 | `share_privacy/mod.rs` | Hide previews while sharing or presenting: which signals mean someone may be watching (shell state confirmed by the foreground window covering its monitor, duplicate display, known share and slideshow windows by program + class), which one names the reason, the log line, what a hidden pop-up says, and that no answer means hidden (which looks to join, start or give up on), which pop-ups to take back when hiding starts |
 | `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, keys still held, window changed) and what the pill says; spoken symbols, casing commands, code vs prose style and where "new line" may break a line, by program; keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
-| `backup/discover.rs`, `keybag.rs`, `decrypt.rs`, `manifest.rs`, `smsdb.rs`, `typedstream.rs`, `import.rs`, `files.rs` | Bring in your full history: which backups exist and what they are; iOS backup encryption (keybag TLV, both PBKDF2 steps, RFC 3394 unwrap, AES-256-CBC streaming, against RFC vectors and a generated encrypted backup); Manifest.db and its NSKeyedArchiver file records; Messages' tables across iOS versions, Apple-epoch times, groups, edits, unsends, tapbacks; the text in `attributedBody`; what's new, dedupe against Bluetooth texts, resumable batches, Remove imported; content-addressed photo files, key checks, the scratch folder and its startup sweep. `backup/mod.rs` runs a whole encrypted backup end to end in a test |
+| `backup/discover.rs`, `keybag.rs`, `decrypt.rs`, `manifest.rs`, `smsdb.rs`, `typedstream.rs`, `import.rs`, `files.rs` | Bring in your full history: which backups exist and what they are; iOS backup encryption (keybag TLV, both PBKDF2 steps, RFC 3394 unwrap, AES-256-CBC streaming, against RFC vectors and a generated encrypted backup); Manifest.db and its NSKeyedArchiver file records; Messages' tables across iOS versions, Apple-epoch times, which chats are groups (left out), edits, unsends, tapbacks; the text in `attributedBody`; what's new, dedupe against Bluetooth texts, resumable batches, Remove imported; content-addressed photo files, key checks, the scratch folder and its startup sweep. `backup/mod.rs` runs a whole encrypted backup end to end in a test |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
 | `updater/policy.rs` | Automatic updates: whether the build is set up (a real minisign public key, not a debug build), installed vs portable, newer-only version comparison (no downgrades), the check schedule, what a check leads to, what holds a restart (a ringing call, a Tugboat transfer, voice typing), applying on quit, the release-notes headline |
 
@@ -528,7 +531,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
 | `/?sharing` (`&presenting`, `&stop`) | The screen is being shared: blurred texts and names under the `Previews hidden` banner with Show anyway (a slide show / sharing ends after 10 s); add `&call` for the call card |
 | `/?voice` (`&micblocked`, `&nospeech`, `&voicebusy`) | Settings › General › Voice typing on, with the microphone blocked / no speech language / the shortcut taken |
-| `/?backup` (`&none`, `&imported`, `&heif`) | Settings › Messages › Bring in your full history with made-up backups (the encrypted one's password is `test`) / no backups / history already brought in (the label, photos, a group chat) / photos Windows can't show without HEIF Image Extensions |
+| `/?backup` (`&none`, `&imported`, `&heif`) | Settings › Messages › Bring in your full history with made-up backups (the encrypted one's password is `test`) / no backups / history already brought in (the label, photos) / photos Windows can't show without HEIF Image Extensions |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then

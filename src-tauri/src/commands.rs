@@ -241,24 +241,14 @@ pub async fn conversation_heads(state: State<'_, AppState>, limit: u32) -> Resul
         .map_err(|e| e.to_string())
 }
 
-/// One conversation's whole history (one-to-one by its numbers, or a group by id), for opening it.
+/// One conversation's whole history (by its numbers), for opening it.
 #[tauri::command]
-pub async fn conversation_messages(
-    state: State<'_, AppState>,
-    addresses: Vec<String>,
-    group: Option<String>,
-) -> Result<Vec<StoredMessage>> {
+pub async fn conversation_messages(state: State<'_, AppState>, addresses: Vec<String>) -> Result<Vec<StoredMessage>> {
     let store = state.shared.store.clone();
-    tauri::async_runtime::spawn_blocking(move || store.conversation_messages(&addresses, group.as_deref(), 50_000))
+    tauri::async_runtime::spawn_blocking(move || store.conversation_messages(&addresses, 50_000))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
-}
-
-/// Group chats brought in from an iPhone backup.
-#[tauri::command]
-pub fn list_message_groups(state: State<'_, AppState>) -> Result<Vec<crate::messages::MessageGroup>> {
-    state.shared.store.message_groups().map_err(|e| e.to_string())
 }
 
 /// A stored photo's preview for its bubble (a JPEG data URI), or why there's none (a HEIC photo
@@ -557,7 +547,6 @@ pub fn set_conversation_hidden(
     state: State<'_, AppState>,
     senders: Vec<(String, String)>,
     addresses: Vec<String>,
-    groups: Option<Vec<String>>,
     undo_at: Option<i64>,
 ) -> Result<i64> {
     let (at, hidden) = match undo_at {
@@ -573,7 +562,7 @@ pub fn set_conversation_hidden(
     state
         .shared
         .store
-        .set_conversation_hidden(&senders, &addresses, &groups.unwrap_or_default(), at, hidden)
+        .set_conversation_hidden(&senders, &addresses, at, hidden)
         .map_err(|e| e.to_string())?;
     Ok(at)
 }

@@ -8,7 +8,6 @@ import type {
   BackupImported,
   BackupInfo,
   BackupStatus,
-  MessageGroup,
   BtInventory,
   CallRecord,
   CodeFilled,
@@ -122,11 +121,11 @@ export const api = {
   /** Open an http(s) link (a notification's "Open in browser") in the default browser. */
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   /**
-   * Delete a conversation (all of it, by sender and address, or a backup's group chat by id);
+   * Delete a conversation (all of it, by sender and address);
    * returns the delete's stamp, which undoes it as `undoAt`.
    */
-  setConversationHidden: (senders: [string, string][], addresses: string[], undoAt: number | null, groups: string[] = []) =>
-    invoke<number>("set_conversation_hidden", { senders, addresses, groups, undoAt }),
+  setConversationHidden: (senders: [string, string][], addresses: string[], undoAt: number | null) =>
+    invoke<number>("set_conversation_hidden", { senders, addresses, undoAt }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),
   setWatching: (on: boolean) => invoke<void>("set_watching", { on }),
   /** Check the iPhone's switches now (Sync Contacts is read by asking the phone). */
@@ -237,10 +236,8 @@ export const api = {
   // --- Full message history (an iPhone backup) ---
   /** The newest text of every conversation, so ones older than the recent page still list. */
   conversationHeads: (limit: number) => invoke<SmsMessage[]>("conversation_heads", { limit }),
-  /** One conversation's whole history: one-to-one by its numbers, or a group by id. */
-  conversationMessages: (addresses: string[], group: string | null) =>
-    invoke<SmsMessage[]>("conversation_messages", { addresses, group }),
-  listMessageGroups: () => invoke<MessageGroup[]>("list_message_groups"),
+  /** One conversation's whole history, by its numbers. */
+  conversationMessages: (addresses: string[]) => invoke<SmsMessage[]>("conversation_messages", { addresses }),
   attachmentPreview: (id: number) => invoke<AttachmentPreview>("attachment_preview", { id }),
   /** Open a stored photo or video in its default app (usually Photos). */
   openAttachment: (id: number) => invoke<void>("open_attachment", { id }),

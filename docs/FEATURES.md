@@ -120,13 +120,14 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   iPhone (a one-time tip under the conversation says so), unless you bring in your full history.
 - **Bring in your full history** (Settings › Messages): from a backup of your iPhone on this PC
   (Apple Devices app or iTunes, encrypted or not), tug brings in every text, the ones you sent from
-  the phone included, group chats, and your photos and videos, once, as a snapshot. Pick a backup
+  the phone included, and your photos and videos, once, as a snapshot. Pick a backup
   (or a folder), enter its password if it's encrypted, see how many texts and photos (and how much
   space) before choosing, then watch it come in with Cancel. Texts tug already had aren't added
   twice, people are matched to your contacts, and running it again (or after a cancel) adds only
   what's new. Old history carries a quiet "From your iPhone backup, Oct 12" label; photos show in
-  the conversation and open in Photos; group chats are their own read-only conversations; edited
-  and unsent texts say so; reactions are left out. **Remove imported history** takes it all out
+  the conversation and open in Photos; edited and unsent texts say so; reactions are left out.
+  Group chats stay on your iPhone (the wizard says how many texts): Messages in tug holds only
+  conversations you can reply to, and iOS gives Bluetooth no way to send to a group. **Remove imported history** takes it all out
   again. iPhone photos (HEIC) need the free HEIF Image Extensions from the Microsoft Store to show
   in tug; without it they open in Photos and tug says why, once.
 - When the iPhone may not have shared every text from while tug was away, the conversation says so.

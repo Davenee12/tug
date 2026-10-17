@@ -16,7 +16,6 @@ import {
   dayLabel,
   formatAddress,
   groupConversations,
-  groupKey,
   highlight,
   notificationTime,
   snippet,
@@ -271,8 +270,7 @@ function pick(o: Option | undefined) {
     // An old text (brought in from a backup) may be older than what the window has loaded: add it,
     // so the conversation has it to scroll to while the rest of its history loads.
     if (!tug.messages.some((m) => m.id === o.m.id)) tug.messages = [...tug.messages, o.m].sort(byArrival);
-    if (o.m.groupId) tug.openThread(groupKey(o.m.groupId));
-    else openConversation(o.m.address, messageName(o.m));
+    openConversation(o.m.address, messageName(o.m));
     tug.focusItem = `m${o.m.id}`;
   } else {
     // A text's notification opens its conversation; any other app's (WhatsApp, Teams…) its Feed row.

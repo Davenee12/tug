@@ -278,7 +278,7 @@ export const useTugStore = defineStore("tug", () => {
   /** Who counts as a known sender (contacts, numbers you've texted, ones you moved), for Filter unknown senders. */
   const senders = computed(() => senderIndex(contacts.value, outgoingAddresses(messages.value), settings.value.knownSenders));
   /** With the filter off, everyone is treated as known, exactly as before it existed. */
-  function isKnown(c: Pick<Conversation, "appId" | "contact" | "addresses" | "group">): boolean {
+  function isKnown(c: Pick<Conversation, "appId" | "contact" | "addresses">): boolean {
     return !settings.value.filterUnknown || isKnownConversation(c, senders.value);
   }
   const countsTowardUnread = (t: Thread) => !settings.value.filterUnknown || threadCounts(t, senders.value);
@@ -1086,20 +1086,16 @@ export const useTugStore = defineStore("tug", () => {
    * Messages, search) but nothing changes on the phone. Undo is offered for a few seconds;
    * a new text from them starts the conversation again.
    */
-  async function deleteConversation(c: { key: string; contact: string; addresses: string[]; notifications: PhoneNotification[]; group?: string }) {
+  async function deleteConversation(c: { key: string; contact: string; addresses: string[]; notifications: PhoneNotification[] }) {
     // The backend hides the whole conversation by sender and address, not just the rows loaded
-    // here (the newest pages), so its older part can't come back in Feed scroll or search. A
-    // backup's group chat goes by its id; its texts never belong to a member's own conversation.
+    // here (the newest pages), so its older part can't come back in Feed scroll or search.
     const senders = [...new Map(c.notifications.map((n) => [`${n.appId}\u0000${n.title}`, [n.appId, n.title] as [string, string]])).values()];
     const keys = new Set(c.notifications.map(threadKey));
-    const groups = c.group ? [c.group] : [];
     const removedNotifications = notifications.value.filter((n) => keys.has(threadKey(n)));
-    const removedMessages = messages.value.filter((m) =>
-      m.groupId ? groups.includes(m.groupId) : c.addresses.includes(m.address),
-    );
+    const removedMessages = messages.value.filter((m) => c.addresses.includes(m.address));
     let at: number;
     try {
-      at = await api.setConversationHidden(senders, c.addresses, null, groups);
+      at = await api.setConversationHidden(senders, c.addresses, null);
     } catch (e) {
       notify("error", errorMessage(e));
       return;
@@ -1116,7 +1112,7 @@ export const useTugStore = defineStore("tug", () => {
       run: () => {
         flash.value = null;
         void attempt(async () => {
-          await api.setConversationHidden(senders, c.addresses, at, groups);
+          await api.setConversationHidden(senders, c.addresses, at);
           for (const n of removedNotifications) {
             rowGuard.touched(n.id);
             upsert(notifications.value, n);

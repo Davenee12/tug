@@ -1,5 +1,5 @@
 // Bring in your full message history from an iPhone backup: the wizard's state, what's in tug
-// from a backup, group chats, whole-conversation history and photo previews. The work happens in
+// from a backup, whole-conversation history and photo previews. The work happens in
 // Rust (`backup/`); this follows its `backup-import` status and keeps the window's lists in step.
 
 import { defineStore } from "pinia";
@@ -8,7 +8,7 @@ import { api, errorMessage, on } from "../lib/ipc";
 import { BACKUP_SOURCE, problemMessage, summaryLine } from "../lib/backupImport";
 import { byArrival, missingMessages } from "../lib/messageSync";
 import { useTugStore } from "./tug";
-import type { AttachmentPreview, BackupImported, BackupInfo, BackupStatus, MessageGroup, SmsMessage } from "../types/protocol";
+import type { AttachmentPreview, BackupImported, BackupInfo, BackupStatus, SmsMessage } from "../types/protocol";
 
 /** How many conversations' newest texts the window lists beyond its recent page. */
 const HEADS = 2000;
@@ -38,7 +38,6 @@ export const useBackupStore = defineStore("backup", () => {
   /** The backup chosen in the picker (it may need a password next). */
   const chosen = ref<BackupInfo | null>(null);
   const imported = ref<BackupImported | null>(null);
-  const groups = ref<MessageGroup[]>([]);
   /** A HEIC photo couldn't be shown (no HEIF Image Extensions); the hint says why, once. */
   const needsHeif = ref(false);
   const heifHintDismissed = ref(true);
@@ -64,17 +63,15 @@ export const useBackupStore = defineStore("backup", () => {
   }
 
   let loaded: Promise<void> | null = null;
-  /** Group chats, every conversation's newest text, and what's imported: once, when Messages opens. */
+  /** Every conversation's newest text, and what's imported: once, when Messages opens. */
   function ensureLoaded(): Promise<void> {
     listen();
     loaded ??= (async () => {
-      const [g, heads, i, settings] = await Promise.all([
-        api.listMessageGroups().catch(() => [] as MessageGroup[]),
+      const [heads, i, settings] = await Promise.all([
         api.conversationHeads(HEADS).catch(() => [] as SmsMessage[]),
         api.backupImported().catch(() => null),
         api.getSettings().catch(() => ({}) as Record<string, string>),
       ]);
-      groups.value = g;
       imported.value = i;
       heifHintDismissed.value = settings["ui.heifHintDismissed"] === "true";
       mergeMessages(heads);
@@ -89,11 +86,11 @@ export const useBackupStore = defineStore("backup", () => {
 
   const historyLoaded = new Set<string>();
   /** A conversation's whole history, when it's opened (the window keeps only recent texts). */
-  async function loadHistory(c: { key: string; addresses: string[]; group?: string }) {
-    if (historyLoaded.has(c.key) || (!c.group && !c.addresses.length)) return;
+  async function loadHistory(c: { key: string; addresses: string[] }) {
+    if (historyLoaded.has(c.key) || !c.addresses.length) return;
     historyLoaded.add(c.key);
     try {
-      mergeMessages(await api.conversationMessages(c.addresses, c.group ?? null));
+      mergeMessages(await api.conversationMessages(c.addresses));
     } catch {
       historyLoaded.delete(c.key);
     }
@@ -101,15 +98,13 @@ export const useBackupStore = defineStore("backup", () => {
 
   async function refreshAfterImport() {
     historyLoaded.clear();
-    const [recent, heads, g, i] = await Promise.all([
+    const [recent, heads, i] = await Promise.all([
       api.listMessages(2000).catch(() => [] as SmsMessage[]),
       api.conversationHeads(HEADS).catch(() => [] as SmsMessage[]),
-      api.listMessageGroups().catch(() => groups.value),
       api.backupImported().catch(() => imported.value),
     ]);
-    groups.value = g;
     imported.value = i;
-    // A Bluetooth text the import matched now carries its photos or its group: take the new copy.
+    // A Bluetooth text the import matched now carries its photos: take the new copy.
     const fresh = new Map([...recent, ...heads].map((m) => [m.id, m]));
     tug.messages = tug.messages.map((m) => fresh.get(m.id) ?? m);
     mergeMessages([...recent, ...heads]);
@@ -196,7 +191,6 @@ export const useBackupStore = defineStore("backup", () => {
 
   /** After Clear history, which takes imported history with it. */
   function historyCleared() {
-    groups.value = [];
     imported.value = { texts: 0, photos: 0, backupDate: null };
     historyLoaded.clear();
     previews.clear();
@@ -212,8 +206,7 @@ export const useBackupStore = defineStore("backup", () => {
     }
     tug.messages = tug.messages
       .filter((m) => m.source !== BACKUP_SOURCE)
-      .map((m) => (m.attachments?.length || m.groupId ? { ...m, attachments: [], groupId: null } : m));
-    groups.value = [];
+      .map((m) => (m.attachments?.length ? { ...m, attachments: [] } : m));
     imported.value = { texts: 0, photos: 0, backupDate: null };
     historyLoaded.clear();
     previews.clear();
@@ -260,7 +253,6 @@ export const useBackupStore = defineStore("backup", () => {
     listError,
     chosen,
     imported,
-    groups,
     needsHeif,
     heifHintDismissed,
     ensureLoaded,

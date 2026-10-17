@@ -823,7 +823,8 @@ mod tests {
         let s = wait_for(&service, &[Phase::Failed, Phase::Ready]);
         assert_eq!(s.phase, Phase::Ready, "{:?}", s.problem);
         let scan = s.scan.unwrap();
-        assert_eq!(scan.texts, 9);
+        assert_eq!(scan.texts, 6);
+        assert_eq!(scan.group_texts, 3, "the group chat isn't brought in");
         assert_eq!((scan.photos, scan.videos), (1, 0), "the video isn't in the backup");
         // While it waits for "Bring it in", nothing decrypted is on disk.
         let scratch = local.join(files::TEMP_DIR);
@@ -834,7 +835,7 @@ mod tests {
         let s = wait_for(&service, &[Phase::Done, Phase::Failed, Phase::Cancelled]);
         assert_eq!(s.phase, Phase::Done, "{:?}", s.problem);
         let summary = s.summary.unwrap();
-        assert_eq!((summary.texts, summary.photos, summary.missing), (9, 1, 1));
+        assert_eq!((summary.texts, summary.photos, summary.missing), (6, 1, 1));
         // The photo is stored, decrypted and named by its content; the scratch folder is gone.
         let keys = import::file_keys(&store).unwrap();
         assert_eq!(keys.len(), 1);
