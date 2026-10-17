@@ -227,9 +227,9 @@ impl Actor {
                         self.adopt_timeouts = self.adopt_timeouts.saturating_add(1);
                     }
                 }
-                // Refusals for want of a pairing (or the link flapping, in `on_connection`) mean the
-                // phone forgot this PC (`crate::forgotten`). A newly adopted phone that never
-                // connects and keeps timing out needs pairing again too.
+                // Windows' stale-bond error, or refusals while the link flaps (`on_connection`),
+                // mean the phone forgot this PC (`crate::forgotten`); refusals alone don't. A newly
+                // adopted phone that never connects and keeps timing out needs pairing again too.
                 let awaiting_unlock = self.shared.status().awaiting_unlock;
                 let change = self
                     .forgotten

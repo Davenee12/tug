@@ -13,10 +13,16 @@
 //!   no working session in between. A phone out of range brings no link up at all; one at the edge
 //!   of range comes and goes far more slowly, and gets a working session now and then (which starts
 //!   the count again); a single blip or an adapter hiccup is a handful of edges, not ten in a minute.
-//! - **Refused:** `REFUSALS` connect attempts within `REFUSAL_WINDOW` that the phone refused for
-//!   want of a pairing (insufficient authentication or encryption, access denied, or Windows'
-//!   stale-bond error). The stale-bond error is definitive on its own, so it counts even for a phone
-//!   that hasn't connected yet (what the previous check did).
+//! - **Stale bond:** `REFUSALS` connect attempts within `REFUSAL_WINDOW` that failed with Windows'
+//!   stale-bond error (0x80070016). It's definitive on its own, so it counts even for a phone that
+//!   hasn't connected yet (what the previous check did).
+//! - **Refused while flapping:** `REFUSALS` attempts the phone refused (ATT insufficient
+//!   authentication, authorization or encryption, access denied, or the stale-bond error) within
+//!   `FLAP_WINDOW`, together with at least `FLAP_EVIDENCE` short link-ups in that same window.
+//!
+//! ATT refusals on their own never trip it: a healthy phone returns them too, for example with
+//! Share System Notifications off or after the person tapped Don't Allow. Pair again removes the
+//! pairing, so a false verdict costs far more than a late one.
 //!
 //! Never while the phone is locked: a phone that just restarted keeps its link up but withholds
 //! notifications until it's unlocked, and that has its own "unlock your iPhone" state. A wake, the
@@ -34,17 +40,22 @@ pub const SHORT_LINK: Duration = Duration::from_secs(5);
 /// Short link-ups within `FLAP_WINDOW` that mean the phone keeps refusing this PC.
 pub const FLAPS: usize = 10;
 pub const FLAP_WINDOW: Duration = Duration::from_secs(60);
-/// Refused connect attempts within `REFUSAL_WINDOW` that mean the phone has no pairing for this PC.
+/// Stale-bond errors within `REFUSAL_WINDOW` that mean the phone has no pairing for this PC; also
+/// how many refusals of any kind, with `FLAP_EVIDENCE` short link-ups in `FLAP_WINDOW`, do.
 pub const REFUSALS: usize = 2;
 pub const REFUSAL_WINDOW: Duration = Duration::from_secs(120);
+/// Short link-ups within `FLAP_WINDOW` that turn refusals in that window into a verdict: half the
+/// flapping rule, so refusals alone (a healthy phone saying no) never trip it.
+pub const FLAP_EVIDENCE: usize = FLAPS / 2;
 
 /// What a failed connect attempt says about the bond.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Attempt {
     /// Windows reported the stale-bond error: the phone no longer has this PC's keys.
     StaleBond,
-    /// The phone refused for want of a pairing (insufficient authentication or encryption, or
-    /// access denied).
+    /// The phone refused (insufficient authentication, authorization or encryption, or access
+    /// denied). A healthy phone can say this too (Share System Notifications off, Don't Allow), so
+    /// it only counts alongside flapping.
     Refused,
     /// The phone answered but offers no notifications: locked after a restart, not forgotten.
     Locked,
@@ -184,8 +195,16 @@ impl ForgottenWatch {
         }
         let stale_bonds = self.refusals.iter().filter(|(_, stale)| *stale).count();
         let flapping = self.bonded && self.flaps.len() >= FLAPS;
-        let refused = self.refusals.len() >= REFUSALS && (self.bonded || stale_bonds >= REFUSALS);
-        if !(flapping || refused) {
+        let stale_bond = stale_bonds >= REFUSALS;
+        // Flaps are already trimmed to FLAP_WINDOW; refusals keep a longer window for the
+        // stale-bond rule, so count only the ones in the flaps' window here.
+        let recent_refusals = self
+            .refusals
+            .iter()
+            .filter(|(t, _)| now.saturating_duration_since(*t) < FLAP_WINDOW)
+            .count();
+        let refused_while_flapping = self.bonded && recent_refusals >= REFUSALS && self.flaps.len() >= FLAP_EVIDENCE;
+        if !(flapping || stale_bond || refused_while_flapping) {
             return None;
         }
         self.forgotten = true;
@@ -409,22 +428,81 @@ mod tests {
     }
 
     #[test]
-    fn two_refusals_for_want_of_a_pairing_mean_forgotten() {
+    fn att_refusals_alone_never_mean_forgotten() {
+        // A healthy phone refuses too: Share System Notifications off, or Don't Allow tapped. Pair
+        // again would remove a working pairing, so refusals on a steady link never trip it.
         let t0 = Instant::now();
         let mut w = ForgottenWatch::new(true);
+        for i in 0..20 {
+            assert_eq!(w.attempt_failed(t0 + S(i * 5), Attempt::Refused, false), None);
+        }
+        assert!(!w.forgotten());
+        // Nor does one stale-bond error mixed in with them.
+        let mut w = ForgottenWatch::new(true);
+        w.attempt_failed(t0, Attempt::Refused, false);
+        assert_eq!(w.attempt_failed(t0 + S(5), Attempt::StaleBond, false), None);
+        // Nor a few short link-ups (a blip or two) beside them.
+        let mut w = ForgottenWatch::new(true);
+        let (_, t) = flap(&mut w, t0, FLAP_EVIDENCE - 1, S(2), MS(600));
+        w.attempt_failed(t, Attempt::Refused, false);
+        assert_eq!(w.attempt_failed(t + S(1), Attempt::Refused, false), None);
+        assert!(!w.forgotten());
+    }
+
+    #[test]
+    fn refusals_with_flapping_in_the_same_window_mean_forgotten() {
+        let t0 = Instant::now();
+        let mut w = ForgottenWatch::new(true);
+        let (_, t) = flap(&mut w, t0, FLAP_EVIDENCE, S(2), MS(600));
         assert_eq!(
-            w.attempt_failed(t0, Attempt::Refused, false),
+            w.attempt_failed(t, Attempt::Refused, false),
             None,
             "one can be a glitch"
         );
         assert_eq!(
-            w.attempt_failed(t0 + S(30), Attempt::Refused, false),
+            w.attempt_failed(t + S(1), Attempt::Refused, false),
+            Some(Change::Entered {
+                flaps: FLAP_EVIDENCE,
+                refusals: 2
+            })
+        );
+        // Refusals first, then the flapping: the verdict comes on the flap that completes it.
+        let mut w = ForgottenWatch::new(true);
+        w.attempt_failed(t0, Attempt::Refused, false);
+        w.attempt_failed(t0 + S(1), Attempt::Refused, false);
+        assert!(flap(&mut w, t0 + S(2), FLAP_EVIDENCE, S(2), MS(600)).0.is_some());
+        // Not the same window: the refusals are older than a minute when the flapping comes.
+        let mut w = ForgottenWatch::new(true);
+        w.attempt_failed(t0, Attempt::Refused, false);
+        w.attempt_failed(t0 + S(1), Attempt::Refused, false);
+        assert_eq!(
+            flap(&mut w, t0 + FLAP_WINDOW + S(2), FLAP_EVIDENCE, S(2), MS(600)).0,
+            None
+        );
+        // A phone that never worked here: flapping has other explanations there.
+        let mut w = ForgottenWatch::new(false);
+        let (_, t) = flap(&mut w, t0, FLAP_EVIDENCE, S(2), MS(600));
+        w.attempt_failed(t, Attempt::Refused, false);
+        assert_eq!(w.attempt_failed(t + S(1), Attempt::Refused, false), None);
+    }
+
+    #[test]
+    fn two_stale_bond_errors_mean_forgotten() {
+        let t0 = Instant::now();
+        let mut w = ForgottenWatch::new(true);
+        assert_eq!(
+            w.attempt_failed(t0, Attempt::StaleBond, false),
+            None,
+            "one can be a glitch"
+        );
+        assert_eq!(
+            w.attempt_failed(t0 + S(30), Attempt::StaleBond, false),
             Some(Change::Entered { flaps: 0, refusals: 2 })
         );
         // Too far apart: not a run.
         let mut w = ForgottenWatch::new(true);
-        w.attempt_failed(t0, Attempt::Refused, false);
-        assert_eq!(w.attempt_failed(t0 + REFUSAL_WINDOW, Attempt::Refused, false), None);
+        w.attempt_failed(t0, Attempt::StaleBond, false);
+        assert_eq!(w.attempt_failed(t0 + REFUSAL_WINDOW, Attempt::StaleBond, false), None);
     }
 
     #[test]
