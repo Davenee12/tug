@@ -833,6 +833,12 @@ impl Session {
         }
     }
 
+    /// Whether the clipboard waiting for the phone has been handed to its page yet.
+    #[cfg(test)]
+    pub fn clip_served(&self) -> bool {
+        self.state().clip.served()
+    }
+
     /// Drop a clipboard no phone took within two minutes (called every couple of seconds).
     pub fn clip_tick(&self) {
         let mut st = self.state();

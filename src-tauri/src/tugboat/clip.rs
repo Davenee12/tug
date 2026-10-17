@@ -133,6 +133,12 @@ impl Outbox {
         Outbox::default()
     }
 
+    /// Whether the waiting clipboard was handed to a page (tests check who it was handed to).
+    #[cfg(test)]
+    pub fn served(&self) -> bool {
+        matches!(&self.current, Some(Entry::Waiting(w)) if w.served)
+    }
+
     /// A new clipboard to send. Returns the one it replaces, if the phone hadn't taken it yet (its
     /// picture offer, if any, is withdrawn by the caller).
     pub fn send(&mut self, id: u32, payload: Payload, now: Instant, now_ms: i64) -> Option<Payload> {

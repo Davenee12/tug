@@ -955,6 +955,52 @@ async fn a_player_2_code_only_steers_and_never_owns_the_session() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// A race's second phone polling the state while the PC's clipboard waits for the owner: it neither
+/// sees the clipboard nor counts as having been handed it (`page_state` answers a guest before the
+/// clipboard is looked at), and the owner still gets it afterwards.
+#[tokio::test]
+async fn a_guest_poll_never_sees_or_takes_the_owners_clipboard() {
+    let root = temp_dir();
+    let secret = crypto::new_secret();
+    let session = Arc::new(Session::new(
+        &secret,
+        root.join("Tugboat"),
+        root.join("incoming"),
+        Arc::new(TestSink::default()),
+    ));
+    let (addr, stop, server) = start_server(session.clone(), server::Limits::default()).await;
+    let mut owner = Phone::new(addr, &secret, "ownerAAAAAAAAAAAAAAAAA");
+    let mut guest = Phone::guest(addr, &secret, "guestBBBBBBBBBBBBBBBBB");
+    assert_eq!(owner.raw("GET", "/api/state", Vec::new()).await.status, 200);
+    session.pad_open(2);
+    let id = session.send_clip(Prepared::Text("for the owner's phone only".into()));
+    assert!(!session.clip_served());
+
+    for _ in 0..3 {
+        let (status, state) = guest.call::<StateReply>("GET", "/api/state", None).await;
+        assert_eq!(status, 200);
+        let state = state.unwrap();
+        assert!(state.guest && state.clip.is_none());
+    }
+    assert!(
+        !session.clip_served(),
+        "a guest's poll doesn't count as handing it over"
+    );
+    assert_eq!(session.snapshot().clip.unwrap().state, ClipState::Waiting);
+
+    let (_, state) = owner.call::<StateReply>("GET", "/api/state", None).await;
+    let clip = state.unwrap().clip.unwrap();
+    assert_eq!(
+        (clip.id, clip.text.as_deref()),
+        (id, Some("for the owner's phone only"))
+    );
+    assert!(session.clip_served());
+
+    let _ = stop.send(());
+    server.await.unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// The phone's controller keeps reusing one kept-alive connection, even across a refusal (a reply
 /// that left the body unread would close it and cost the phone a new connection).
 #[tokio::test]
