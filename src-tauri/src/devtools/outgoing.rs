@@ -139,7 +139,10 @@ mod tests {
         // Explorer hides .url even with extensions shown: the phone gets it defused.
         assert_eq!(p.name, "Holiday.url.download");
         assert_eq!(p.size, 18);
-        assert_eq!(p.folder.as_deref().map(Path::new), Some(d.as_path()));
+        // The folder as it really is: links followed and short (8.3) names spelled out, as on a
+        // CI runner whose temp folder is under C:\Users\RUNNER~1.
+        let real = tug_bridge::outgoing::plain(&std::fs::canonicalize(&d).unwrap().to_string_lossy());
+        assert_eq!(p.folder.as_deref(), Some(real.as_str()));
         assert!(!p.stdin);
         assert_eq!(p.card().name, "Holiday.url.download");
         std::fs::remove_dir_all(&d).unwrap();
