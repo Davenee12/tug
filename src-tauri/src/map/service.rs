@@ -597,16 +597,18 @@ mod worker {
             forget_gen: 0,
         };
         // Interrupted sends were already marked failed in `start`, before any send could be queued.
-        // Old names from renames that happened while tug wasn't keeping track.
-        match w.shared.store.learn_aliases() {
-            Ok(0) => {}
-            Ok(n) => {
-                log::info!("learned {n} earlier contact name(s)");
+        // The full name-learning pass: names for senders whose notification arrived after their
+        // text (the sync's per-sender pass had already looked), and old names from renames that
+        // happened while tug wasn't keeping track.
+        match w.shared.store.learn_all_names() {
+            Ok(false) => {}
+            Ok(true) => {
+                log::info!("learned contact names from earlier texts");
                 if let Ok(all) = w.shared.store.contacts() {
                     w.shared.emit(events::CONTACTS, all);
                 }
             }
-            Err(e) => log::warn!("learning old contact names failed: {e}"),
+            Err(e) => log::warn!("learning contact names failed: {e}"),
         }
         let mut next = Instant::now() + FIRST_SYNC_DELAY;
         loop {
@@ -1383,9 +1385,10 @@ mod worker {
                     match self.shared.store.save_phonebook(&rows) {
                         Ok(n) => {
                             log::info!("contacts synced: {} people, {n} numbers", entries.len());
-                            // A rename on the phone may leave history under the old name.
-                            if let Err(e) = self.shared.store.learn_aliases() {
-                                log::warn!("learning old contact names failed: {e}");
+                            // A rename on the phone may leave history under the old name, and a
+                            // sender's late notification may name them: the full pass covers both.
+                            if let Err(e) = self.shared.store.learn_all_names() {
+                                log::warn!("learning contact names failed: {e}");
                             }
                             if let Ok(all) = self.shared.store.contacts() {
                                 self.shared.emit(events::CONTACTS, all);

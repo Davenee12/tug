@@ -583,6 +583,16 @@ impl Store {
         )
     }
 
+    /// The full name-learning pass (every sender): names from matching notifications, then old
+    /// names from renames. Run at startup and after each contacts sync, so a sender whose
+    /// notification arrived after their text (after that sync's per-sender pass) still gets a
+    /// name. True if anything was learned.
+    pub fn learn_all_names(&self) -> Result<bool> {
+        let named = !self.learn_contacts()?.is_empty();
+        let aliased = self.learn_aliases()? > 0;
+        Ok(named || aliased)
+    }
+
     /// Learn names for addresses that have none yet, by finding a Messages
     /// notification with the same text as an incoming message, arriving close in
     /// time. Only unambiguous matches count: the text must have come from exactly
@@ -1540,5 +1550,37 @@ mod tests {
         let msgs = s.recent_messages(10).unwrap();
         assert_eq!(msgs[0].contact_name.as_deref(), Some("zoe 💜"));
         assert_eq!(msgs[1].contact_name, None);
+    }
+
+    #[test]
+    fn the_full_pass_names_a_sender_whose_notification_came_after_the_sync() {
+        // The text came in first (the sync's per-sender pass found no notification yet); the
+        // Messages notification landed later. Only a full pass (startup, after a contacts sync)
+        // looks at that sender again, and it must learn the name, not just old aliases.
+        let s = Store::in_memory().unwrap();
+        s.insert_incoming(&incoming("H1", "+13025550173", "omw, 10 mins"))
+            .unwrap();
+        assert!(s.learn_contacts_for(&["+13025550173".into()]).unwrap().is_empty());
+        let attrs = NotificationAttributes {
+            app_id: MESSAGES_APP.into(),
+            title: "zoe 💜".into(),
+            message: "omw, 10 mins".into(),
+            ..Default::default()
+        };
+        s.upsert_notification(&NewNotification {
+            session: "s1",
+            uid: 1,
+            category: Category::Social,
+            flags: EventFlags::default(),
+            attrs: &attrs,
+            received_at: 900,
+        })
+        .unwrap();
+        assert!(s.learn_all_names().unwrap(), "the full pass learns the name");
+        assert_eq!(
+            s.recent_messages(10).unwrap()[0].contact_name.as_deref(),
+            Some("zoe 💜")
+        );
+        assert!(!s.learn_all_names().unwrap(), "nothing new the second time");
     }
 }
