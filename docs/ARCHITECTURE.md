@@ -247,7 +247,9 @@ tug boat report.pdf ─► tug-cli: resolve against its folder, outgoing::check 
 
 Progress lines (`{"type":"progress",...}`) go only to a call that asked for them, after the
 handshake. The supervisor's 2 s tick also settles holds (`held_tick`), so a command stopped with
-Ctrl+C never leaves files on offer past their window.
+Ctrl+C never leaves files on offer past their window, and switching sending files off (its switch,
+the master switch, Revoke access) withdraws every hold at once (`Session::cancel_all_holds`), even
+one whose `--no-wait` caller has gone.
 
 **A Tugboat upload**
 

@@ -1517,6 +1517,25 @@ impl Session {
         self.sink.changed(true);
     }
 
+    /// Stop every hold still waiting (sending files was switched off, the master switch went off,
+    /// or access was revoked), including ones whose caller already went (`tug boat --no-wait`):
+    /// what the phone hasn't fetched is withdrawn. Returns how many holds that ended.
+    pub fn cancel_all_holds(&self) -> usize {
+        let mut st = self.state();
+        let ids = st.holds.ids();
+        for id in &ids {
+            if let Some(hold) = st.holds.finish(*id, Verdict::Withdrawn) {
+                withdraw_unfetched(&mut st, &hold.offers);
+            }
+        }
+        drop(st);
+        if !ids.is_empty() {
+            log::info!("tugboat: files held for the phone: {} cancelled", ids.len());
+            self.sink.changed(true);
+        }
+        ids.len()
+    }
+
     /// Text for the phone to copy (replaces the previous one; empty clears it).
     pub fn set_pc_text(&self, text: &str) -> Result<(), String> {
         if text.len() > MAX_TEXT {

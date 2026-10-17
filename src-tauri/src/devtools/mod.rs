@@ -422,9 +422,12 @@ impl DevTools {
         }
     }
 
-    /// Files held for the phone by a `tug boat` still waiting are withdrawn (it notices).
+    /// Every file held for the phone is withdrawn: a `tug boat` still waiting notices and answers
+    /// Cancelled, and one that already returned (`--no-wait`) loses its files too, so turning the
+    /// switch off really stops what it allowed.
     fn stop_sending_files(&self) {
         self.files_epoch.fetch_add(1, Ordering::SeqCst);
+        self.tugboat.cancel_all_holds();
     }
 
     /// Drop the card on screen if `which` says it's affected.
@@ -578,6 +581,14 @@ impl DevTools {
             self.tugboat.show_panel();
         }
         if no_wait {
+            // Switched off between the card and here: what was just held goes again.
+            if self.files_epoch.load(Ordering::SeqCst) != epoch {
+                session.cancel_hold(hold);
+                return Ok(answer(
+                    OfferOutcome::Cancelled,
+                    Some("sending files was switched off in tug.".into()),
+                ));
+            }
             return Ok(answer(OfferOutcome::Offered, None));
         }
         // The hold settles itself within its window plus the grace; this is only a backstop.

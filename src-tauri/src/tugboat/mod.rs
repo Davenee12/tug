@@ -781,6 +781,14 @@ impl TugboatService {
 
     /// Show the Tugboat panel (its code, with nothing waiting on the phone's page yet). Uses the
     /// same event as files dropped onto the window, with nothing skipped.
+    /// Withdraw every file still held for the phone (see `Session::cancel_all_holds`), if Tugboat
+    /// is open.
+    pub fn cancel_all_holds(&self) {
+        if let Some(session) = self.session() {
+            session.cancel_all_holds();
+        }
+    }
+
     pub fn show_panel(&self) {
         let _ = self.inner.app.emit(DROPPED_EVENT, Vec::<Skipped>::new());
     }

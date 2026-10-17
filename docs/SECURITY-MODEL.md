@@ -98,7 +98,9 @@ says: regular readable files only (no folders, devices or pipes, which the bridg
 name), links followed to their target, Tugboat's size limits, names through `tugboat/names.rs`.
 The files then travel only over Tugboat's existing channel (same port, secret, MACs, binding and
 sealing), held for the phone for the wait (2 minutes unless asked otherwise) and withdrawn if it
-hasn't downloaded them by then, so "timed out" is true. What's piped into `tug boat -` (up to
+hasn't downloaded them by then, so "timed out" is true. Turning the switch off, turning Developer
+tools off or **Revoke access** withdraws every file still held, including ones a `tug boat
+--no-wait` already left on offer. What's piped into `tug boat -` (up to
 64 MB) is held in memory, never written to disk by tug. An AI tool's paths are used exactly as
 given, never looked up by name across the PC. Logs record counts and sizes, never names or paths.
 Tugboat's honest limit applies: an active attacker who tampered with the first page load could

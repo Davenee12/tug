@@ -485,6 +485,23 @@ async fn files_held_for_the_phone_are_delivered_or_withdrawn() {
     assert_eq!(session.held(cancelled), Verdict::Withdrawn);
     assert!(!session.snapshot().outgoing.iter().any(|o| o.name == "cancelled.pdf"));
 
+    // --- The switch goes off (or access is revoked) with two holds out, one whose caller already
+    // went (`--no-wait`): both are withdrawn, nothing left on offer for the phone ---
+    let first = session.hold(vec![file("first.pdf")], Duration::from_secs(120)).unwrap();
+    let second = session
+        .hold(vec![file("second.pdf"), piped()], Duration::from_secs(120))
+        .unwrap();
+    assert_eq!(session.cancel_all_holds(), 2);
+    assert_eq!(session.held(first), Verdict::Withdrawn);
+    assert_eq!(session.held(second), Verdict::Withdrawn);
+    assert!(session.snapshot().held.is_none());
+    assert!(!session
+        .snapshot()
+        .outgoing
+        .iter()
+        .any(|o| o.name == "first.pdf" || o.name == "second.pdf"));
+    assert_eq!(session.cancel_all_holds(), 0, "nothing left to cancel");
+
     // --- More than Tugboat offers at once: nothing is added ---
     let many: Vec<Outgoing> = (0..60).map(|_| piped()).collect();
     assert!(session.hold(many, Duration::from_secs(120)).is_none());
