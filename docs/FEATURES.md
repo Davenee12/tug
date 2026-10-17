@@ -218,7 +218,7 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
     conversation;
   - `call sam` to call back a missed call (or call, if Call from tug is on);
   - `play <song or playlist>` and `queue <song>` with Spotify connected;
-  - `copy code`, `clear all`, `mark all read`, `dnd on` / `dnd off`;
+  - `copy code`, `clear all`, `mark all read`, `dnd on` / `dnd off`, `voice typing on` / `off`;
   - an app's name to show its notifications;
   - `new message`, `settings`, `spotify`, `tugboat` to open them, and `game` for Tugboat Run.
 - If a name matches several people, tug lists them and waits for you to pick.
@@ -226,6 +226,27 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 **Other shortcuts:** Ctrl+N new message · Ctrl+Shift+C copy the latest code · Ctrl+, Settings ·
 Ctrl+plus / Ctrl+minus / Ctrl+0 zoom · Esc closes dialogs and Settings.
 
+## Voice typing (voice to code)
+
+- **Hold a shortcut, talk, let go**: tug types what you said into whatever has focus (a code
+  editor, a terminal, a browser, Claude Code). **Off until you turn it on** in Settings › General.
+- The shortcut is **Ctrl+Alt+Space** by default, or Ctrl+Shift+Alt+Space, Ctrl+Alt+F12 or
+  Ctrl+Shift+F11; Settings says if another app already holds it and offers the others.
+- Recognition is **Windows' own offline speech recognizer**: nothing to download, and your voice
+  is **never sent anywhere or saved**. Pick the language if Windows has more than one installed.
+- **Code-aware:** say symbols ("open paren", "dot", "equals", "semicolon", "quote … quote", "new
+  line") and casing ("camel case user id" → `userId`; also snake, pascal, kebab and constant
+  case, "capitalize", "all caps", and "literal" to type a command word as a word). In code editors
+  and terminals (VS Code, Cursor, Visual Studio, JetBrains IDEs, Windows Terminal, PowerShell…)
+  there are no sentence capitals; elsewhere the first word is capitalised.
+- A spoken new line is typed as **Shift+Enter**, so it never sends a chat message; in a terminal
+  it's left out, so dictation never runs a command by itself.
+- A small **Listening…** pill shows at the bottom of the screen while you hold the keys, then
+  **Typing…**; if something's wrong it says so there ("Microphone blocked", "Didn't catch that").
+  One hold types once; letting go early or switching windows never leaves anything stuck.
+- If Windows' privacy settings block the microphone, Settings says so with a button to fix it.
+- Spoken commands are English; untrained, Windows' recognizer is less accurate than cloud
+  dictation, best for short phrases in a quiet room.
 ## Developer tools (MCP server and the `tug` command)
 
 Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
@@ -250,7 +271,8 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
 ## Settings
 
 - **General:** Windows pop-ups, Pop-up sound, Do not disturb, Low phone battery, Keep running when
-  closed, Start with Windows (starts in the tray), Zoom, Show games, and the keyboard shortcuts.
+  closed, Start with Windows (starts in the tray), Zoom, Show games, Voice typing (shortcut and
+  language), and the keyboard shortcuts.
 - **iPhone:** connection health, Copy diagnostics, Open logs folder, help for the texts pairing,
   Visible to iPhone, Call from tug, and your iPhone's Connect panel.
 - **Notifications:** Filter unknown senders, Quiet hours, Mute calls, Always let through, and

@@ -71,6 +71,17 @@ and the shortcut types only what the backend picks from tug's own history. Copie
 of clipboard history and cloud sync and are cleared after 2 minutes if still there; the shortcut
 never types into tug's own window; logs say a code was copied or typed, never which.
 
+**Voice typing.** Off by default. While it's on, tug registers one global shortcut from a fixed
+list and opens the microphone only between that shortcut's press and release (polled with
+GetAsyncKeyState; no keyboard hook, so tug never sees other keys). Audio stays in memory for that
+one hold and goes to Windows' offline SAPI recognizer, never to the network or a file; tug adds no
+network access, download or CSP change for it. The text is typed only into the window that was in
+front when the shortcut was pressed, after the shortcut's keys are let go; a spoken new line is
+Shift+Enter (which doesn't send in chat boxes) and is dropped entirely in terminals, so dictation
+can't run a command by itself. Logs record lengths and durations, never the words. Anyone who can
+speak near the PC while the person holds the shortcut can put words into the focused window, like
+anyone at the keyboard.
+
 **Prompt injection aimed at AI tools.** A text can say "ignore your instructions and…". tug
 assumes it will: reading tools are separate switches the person turns on, and the one tool that
 *acts* (sending a text) always stops at a confirmation card in tug's window. An AI tool can be

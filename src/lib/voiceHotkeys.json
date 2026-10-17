@@ -1,0 +1,4 @@
+{
+  "about": "The hold-to-talk shortcuts Settings offers for voice typing (src/lib/voice.ts) and the ones the backend will register (src-tauri/src/voice/mod.rs). Both test suites read this file, so the two lists can't drift. First is the default.",
+  "hotkeys": ["ctrl+alt+space", "ctrl+shift+alt+space", "ctrl+alt+f12", "ctrl+shift+f11"]
+}

@@ -232,7 +232,7 @@ fn key_down(vk: VIRTUAL_KEY) -> bool {
 }
 
 /// Wait (briefly) for Ctrl, Shift, Alt and Windows to be let go.
-fn wait_for_release() {
+pub(crate) fn wait_for_release() {
     let started = Instant::now();
     while started.elapsed() < RELEASE_WAIT
         && [VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN]

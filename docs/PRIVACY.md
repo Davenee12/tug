@@ -52,6 +52,11 @@ Disconnect any time in Settings › Connectors, which removes the stored sign-in
   Tugboat panel is open. Everything is encrypted with a key from the QR code, only the phone that
   scanned it can join, and nothing goes over the internet. It stops when you close it or after 10
   idle minutes. tug never changes your Windows Firewall.
+- **Voice typing** is **off by default**. When you turn it on and hold its shortcut, tug listens to
+  your microphone only while the keys are down, and Windows' own speech recognizer turns it into
+  text **on this PC**: the recording is never sent anywhere, never saved to disk, and dropped as
+  soon as the words are typed. tug's logs note how long you spoke and how many characters were
+  typed, never what you said. It downloads nothing.
 - **Developer tools** are **off by default**. When you turn them on, AI tools and the `tug` command
   on your PC can connect through a local channel (a Windows named pipe) that only your Windows
   account can open; there's no network port. AI tools you connect can read only what you allow

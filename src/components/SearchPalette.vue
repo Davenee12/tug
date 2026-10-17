@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Bell, CheckCheck, Copy, FastForward, Gamepad2, ListMusic, ListPlus, MessageSquare, Moon, Music2, Phone, Plus, QrCode, Repeat, Rewind, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, ThumbsDown, ThumbsUp, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
+import { Bell, CheckCheck, Copy, FastForward, Gamepad2, ListMusic, ListPlus, MessageSquare, Mic, Moon, Music2, Phone, Plus, QrCode, Repeat, Rewind, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, ThumbsDown, ThumbsUp, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
 import { useGameStore } from "../stores/game";
+import { useVoiceStore } from "../stores/voice";
 import { useFocusTrap } from "../lib/focusTrap";
 import { parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
 import {
@@ -28,6 +29,7 @@ import AppAvatar from "./AppAvatar.vue";
 const tug = useTugStore();
 const tugboat = useTugboatStore();
 const game = useGameStore();
+const voice = useVoiceStore();
 const root = ref<HTMLElement | null>(null);
 const input = ref<HTMLInputElement | null>(null);
 const list = ref<HTMLElement | null>(null);
@@ -102,6 +104,7 @@ const ctx = computed<ActionContext>(() => {
     code: tug.latestCode(),
     clearable: feed.filter(canClear),
     doNotDisturb: tug.settings.doNotDisturb,
+    voiceTyping: voice.enabled,
     unread: conversations.filter((c) => tug.newCount(c.key, c.notifications) > 0).length,
     apps: [...apps.values()],
     canDial: tug.canDial,
@@ -161,6 +164,7 @@ function actionIcon(a: Action) {
   if (a.kind === "clear-all") return Trash2;
   if (a.kind === "mark-all-read") return CheckCheck;
   if (a.kind === "dnd") return Moon;
+  if (a.kind === "voice") return Mic;
   if (a.kind === "show-app") return Bell;
   if (a.target === "spotify") return Music2;
   if (a.target === "tugboat") return QrCode;
@@ -221,6 +225,8 @@ async function run(a: Action) {
     if (a.count) tug.markAllRead();
   } else if (a.kind === "dnd") {
     void tug.setSetting("doNotDisturb", a.enabled);
+  } else if (a.kind === "voice") {
+    void voice.toggleFromPalette(a.enabled);
   } else if (a.kind === "show-app") {
     tug.view = "feed";
     tug.focusItem = `n${a.focusId}`;

@@ -101,6 +101,12 @@ windows = { version = "0.62", features = [
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+  # Voice typing: the microphone (wave-in), Windows' offline speech recognizer (SAPI 5, a COM API),
+  # and its small on-screen listening indicator (GDI).
+  "Win32_Graphics_Gdi",
+  "Win32_Media_Audio",
+  "Win32_Media_Speech",
+  "Win32_System_Com",
 ] }
 windows-collections = "0.3"
 # Same version Tauri already pulls in (see Cargo.lock), so the WebView2 controller handed back by
