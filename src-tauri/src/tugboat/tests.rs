@@ -14,8 +14,8 @@ use serde_json::{json, Value};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::auth;
-use super::crypto::{self, ad, Keys};
 use super::auth::Authorized;
+use super::crypto::{self, ad, Keys};
 use super::pad::{PadEvent, PadReply, BURST, FIRST, SECOND};
 use super::server;
 use super::session::{self, FinishReply, Session, Sink, StateReply, UploadReply, OFFER_CHUNK};
@@ -674,18 +674,22 @@ async fn a_two_player_game_takes_exactly_two_controllers() {
             .0,
         403
     );
-    assert_eq!(
-        second.raw("GET", "/api/down/x/0", Vec::new()).await.status,
-        403
-    );
+    assert_eq!(second.raw("GET", "/api/down/x/0", Vec::new()).await.status, 403);
     let snap = session.snapshot();
     assert!(snap.texts.is_empty() && snap.incoming.is_empty());
-    assert_eq!(snap.phone.as_deref(), Some("iPhone"), "the panel's phone is still the first");
+    assert_eq!(
+        snap.phone.as_deref(),
+        Some("iPhone"),
+        "the panel's phone is still the first"
+    );
 
     // Back to one player: seat 2's phone is let go (the game hears it's gone), and it waits.
     session.pad_open(1);
     assert_eq!(*sink.pads.lock().unwrap().last().unwrap(), PadEvent::gone(SECOND));
-    assert_eq!(second.call::<PadReply>("POST", "/api/pad", input(0, false)).await.0, 409);
+    assert_eq!(
+        second.call::<PadReply>("POST", "/api/pad", input(0, false)).await.0,
+        409
+    );
     let (_, state) = second.call::<StateReply>("GET", "/api/state", None).await;
     let state = state.unwrap();
     assert!(!state.game && state.guest);
@@ -701,7 +705,10 @@ async fn a_two_player_game_takes_exactly_two_controllers() {
     session.pad_close();
     let pads = sink.pads.lock().unwrap()[before..].to_vec();
     assert_eq!(pads, vec![PadEvent::gone(FIRST), PadEvent::gone(SECOND)]);
-    assert_eq!(second.call::<PadReply>("POST", "/api/pad", input(0, false)).await.0, 409);
+    assert_eq!(
+        second.call::<PadReply>("POST", "/api/pad", input(0, false)).await.0,
+        409
+    );
 
     let _ = stop.send(());
     server.await.unwrap();
@@ -807,7 +814,9 @@ async fn controller_latency_bench() {
                 if sender.ready().await.is_err() {
                     return;
                 }
-                let Ok(res) = sender.send_request(req).await else { return };
+                let Ok(res) = sender.send_request(req).await else {
+                    return;
+                };
                 assert_eq!(res.status().as_u16(), 200);
                 let _ = res.into_body().collect().await;
                 tokio::time::sleep(std::time::Duration::from_millis(12)).await;

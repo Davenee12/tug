@@ -339,9 +339,7 @@ impl Pad {
     pub fn tick(&mut self, now: Instant) -> Vec<PadEvent> {
         let mut gone = Vec::new();
         for (i, s) in self.seats.iter_mut().enumerate() {
-            let quiet = s
-                .last_input
-                .is_none_or(|t| now.saturating_duration_since(t) >= QUIET);
+            let quiet = s.last_input.is_none_or(|t| now.saturating_duration_since(t) >= QUIET);
             if s.connected && quiet {
                 s.connected = false;
                 s.input = PadInput::default();
