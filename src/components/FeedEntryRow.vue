@@ -127,7 +127,8 @@ function open() {
           <template v-else>{{ preview }}</template>
         </span>
       </span>
-      <CodeChip v-if="code" :code="code.code" :from="[latest]" />
+      <!-- An open stack shows each notification's code on its own line instead. -->
+      <CodeChip v-if="code && !expanded" :code="code.code" :from="[latest]" />
       <span
         v-if="fresh"
         class="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-ink px-1.5 text-[11px] font-semibold text-on-dark"

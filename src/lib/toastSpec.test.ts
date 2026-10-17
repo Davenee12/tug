@@ -175,6 +175,39 @@ describe("toastSpec", () => {
     const sticky = note("x", "y", { appId: "com.apple.mobilecal", appName: "Calendar", flags: { silent: false, important: false, preExisting: false, positiveAction: false, negativeAction: false } });
     expect(toastSpec(sticky, [], contacts)).toMatchObject({ clear: false, markRead: false, replyTo: null });
   });
+
+  describe("other chat apps (tug can't send to them)", () => {
+    const on = { enabled: true, defaults: ["👍", "OK", "Talk soon"] };
+    const apps: Array<[string, string]> = [
+      ["net.whatsapp.WhatsApp", "WhatsApp"],
+      ["com.microsoft.skype.teams", "Teams"],
+      ["com.tinyspeck.chatlyio", "Slack"],
+      ["com.burbn.instagram", "Instagram"],
+      ["com.facebook.Messenger", "Messenger"],
+      ["ph.telegra.Telegraph", "Telegram"],
+      ["org.whispersystems.signal", "Signal"],
+      ["com.hammerandchisel.discord", "Discord"],
+      ["com.example.newchat", "NewChat"],
+    ];
+
+    it("never get a reply box, suggestions, Open in tug or Mark read, even from a contact's name", () => {
+      for (const [appId, appName] of apps) {
+        // Zoe is a contact with one number, and "where are you?" picks replies for a text.
+        const spec = toastSpec(note("Zoe", "where are you?", { appId, appName }), [sms("+13025550123", "Zoe")], contacts, on);
+        expect(spec, appName).toMatchObject({ replyTo: null, replies: [], open: false, markRead: false });
+      }
+    });
+
+    it("keep what iOS offers (Clear) and still say they're a message while previews are hidden", () => {
+      const spec = toastSpec(note("Zoe", "hi", { appId: "net.whatsapp.WhatsApp", appName: "WhatsApp" }), [], contacts, on);
+      expect(spec).toMatchObject({ title: "WhatsApp · Zoe", clear: true, kind: "message", app: "WhatsApp" });
+    });
+
+    it("a code from WhatsApp still gets Copy code", () => {
+      const spec = toastSpec(note("WhatsApp", "Your WhatsApp code: 384-221", { appId: "net.whatsapp.WhatsApp", appName: "WhatsApp" }), [], contacts, on);
+      expect(spec).toMatchObject({ code: "384221", replyTo: null, replies: [] });
+    });
+  });
 });
 
 describe("replyReadsConversation", () => {
