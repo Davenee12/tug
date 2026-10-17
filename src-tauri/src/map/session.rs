@@ -637,6 +637,16 @@ fn parse_phonebook(raw: &[u8], kind: &'static str) -> Vec<PhonebookEntry> {
     vcard::parse(&text)
 }
 
+/// Whether a failed PBAP 1.2 CONNECT (with PbapSupportedFeatures) is worth one plain CONNECT: an
+/// OBEX refusal of the CONNECT, or the phone closing the link or never answering it (a phone that
+/// chokes on the extra header may just drop it). Not a consent refusal or anything else. Pure.
+fn retry_plain_pbap_connect(e: &MapError) -> bool {
+    matches!(
+        e,
+        MapError::Obex { op: "CONNECT", .. } | MapError::Closed | MapError::Timeout
+    )
+}
+
 /// What a contacts check found (`check_contacts`).
 #[derive(Debug)]
 pub enum PhonebookCheck {
@@ -669,8 +679,8 @@ pub async fn check_contacts(
     let consent = || MapError::ContactsConsent;
     let mut link = match ObexLink::connect_with(device_id, PSE_UUID, &PBAP_TARGET, consent(), false, &features).await {
         Ok(link) => link,
-        Err(MapError::Obex { op: "CONNECT", code }) => {
-            log::info!("the iPhone refused a PBAP 1.2 connect (OBEX {code:#04x}); connecting without counters");
+        Err(e) if retry_plain_pbap_connect(&e) => {
+            log::info!("the iPhone didn't take a PBAP 1.2 connect ({e}); connecting once without counters");
             ObexLink::connect(device_id, PSE_UUID, &PBAP_TARGET, consent()).await?
         }
         Err(e) => return Err(e),
@@ -871,6 +881,21 @@ mod tests {
         read_fingerprint(&answer(&[(0x0D, &[3; 16])]), &mut fp);
         read_fingerprint(&answer(&[(0x08, &[0, 1])]), &mut fp);
         assert_eq!((fp.size, fp.database), (Some(1), Some([3; 16])));
+    }
+
+    #[test]
+    fn a_pbap_12_connect_that_is_refused_dropped_or_unanswered_falls_back_once() {
+        assert!(retry_plain_pbap_connect(&MapError::Obex {
+            op: "CONNECT",
+            code: 0xC0
+        }));
+        assert!(retry_plain_pbap_connect(&MapError::Closed));
+        assert!(retry_plain_pbap_connect(&MapError::Timeout));
+        assert!(
+            !retry_plain_pbap_connect(&MapError::ContactsConsent),
+            "the user said no"
+        );
+        assert!(!retry_plain_pbap_connect(&MapError::Obex { op: "GET", code: 0xC4 }));
     }
 
     #[test]
