@@ -277,3 +277,44 @@ describe("loading older notifications", () => {
     expect(tug.notifications).toEqual([]);
   });
 });
+
+describe("unread texts count Messages only", () => {
+  let nid = 500;
+  const note = (appId: string, title: string): PhoneNotification => ({
+    id: nid++,
+    appId,
+    appName: null,
+    category: "social",
+    title,
+    subtitle: "",
+    message: "hi",
+    postedAt: null,
+    // After the store's "seen since" (its creation), so each one is new.
+    receivedAt: Date.now() + 60_000,
+    flags: { silent: false, important: false, preExisting: false, positiveAction: false, negativeAction: true },
+    positiveLabel: "",
+    negativeLabel: "Clear",
+    removedAt: null,
+    live: true,
+    fresh: false,
+  });
+
+  it("WhatsApp, Teams and other chat apps never add to the Messages badge, tray or taskbar dot", async () => {
+    const tug = useTugStore();
+    tug.notifications = [
+      note("com.apple.MobileSMS", "Jane Doe"),
+      note("com.apple.MobileSMS", "Jane Doe"),
+      note("net.whatsapp.WhatsApp", "Jane Doe"),
+      note("com.microsoft.skype.teams", "Jane Doe"),
+      note("com.tinyspeck.chatlyio", "Sam"),
+      note("com.example.newchat", "Sam"),
+    ];
+    await flush();
+    expect(tug.unreadTexts).toBe(2);
+    // Only other apps waiting: nothing unread in Messages, and the taskbar is told so.
+    tug.notifications = [note("net.whatsapp.WhatsApp", "Sam"), note("com.microsoft.skype.teams", "Sam")];
+    await flush();
+    expect(tug.unreadTexts).toBe(0);
+    expect(called.filter(([name]) => name === "setUnread").at(-1)?.[1]).toEqual([0]);
+  });
+});

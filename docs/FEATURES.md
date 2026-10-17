@@ -43,8 +43,8 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 ## Notifications & pop-ups
 
-- The **Feed** shows live notifications from every app on your iPhone; chat apps are grouped one
-  row per person, other apps stack.
+- The **Feed** shows live notifications from every app on your iPhone; texts are grouped one row
+  per person, and every other app stacks, chat apps such as WhatsApp and Teams included.
 - The Feed shows what's still waiting on your phone; cleared notifications leave the Feed but stay
   in search, and older history loads as you scroll.
 - Act on a notification with the phone's own buttons (answer, decline and so on), or **Call back**
@@ -119,8 +119,9 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - Texts you send from tug show in the conversation; texts you send on your iPhone stay on your
   iPhone (a one-time tip under the conversation says so).
 - When the iPhone may not have shared every text from while tug was away, the conversation says so.
-- Messages from other chat apps (WhatsApp and so on) show as read-only conversations: reply on your
-  phone.
+- Messages holds only texts tug can send and receive. Other chat apps (WhatsApp, Teams, Slack and
+  so on) stay in the Feed, with no reply box or suggested replies (reply on your phone), and never
+  join a text conversation, even from someone with the same name.
 - **Verification codes** in texts and notifications get a **Copy code** button, a code text with no
   notification gets its own Feed row, and **Ctrl+Shift+C** copies the latest code.
 - Copying a code clears its notification on the phone.

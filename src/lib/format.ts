@@ -5,7 +5,10 @@ import { isUnreadable } from "./attachments";
 /** The iPhone's Messages app: texts (SMS/iMessage) that MAP can also read and send. */
 export const MESSAGES_APP = "com.apple.MobileSMS";
 
-/** Bundle ids whose notifications are conversations, grouped as threads. */
+/**
+ * Chat apps tug knows by name. Only the Messages app's notifications are conversations (see
+ * `isConversation`): the others are chats tug can't answer, so they stay in the Feed.
+ */
 export const MESSAGING_APPS: Record<string, string> = {
   "com.apple.MobileSMS": "Messages",
   "net.whatsapp.WhatsApp": "WhatsApp",
@@ -127,8 +130,23 @@ export interface Thread {
   latest: PhoneNotification;
 }
 
-/** Notifications from chat apps that name a sender are conversations. */
-export function isConversation(n: PhoneNotification): boolean {
+/**
+ * A notification that belongs in Messages: one from the iPhone's Messages app that names a sender.
+ * Only those pair with the texts tug reads and sends over message access, so only they form
+ * conversations, count toward unread texts and get a reply box. An allow-list on purpose: every
+ * other app (WhatsApp, Teams, Slack, a chat app tug has never heard of) stays in the Feed, where
+ * nothing offers a reply tug couldn't send.
+ */
+export function isConversation(n: Pick<PhoneNotification, "appId" | "title">): boolean {
+  return n.appId === MESSAGES_APP && !!n.title;
+}
+
+/**
+ * Someone's chat message, from any chat app tug knows (Messages, WhatsApp, Teams…). Only for how a
+ * pop-up is worded while previews are hidden ("message" rather than "notification"); where it
+ * shows and whether it can be answered go by `isConversation`.
+ */
+export function isChatMessage(n: Pick<PhoneNotification, "appId" | "title">): boolean {
   return n.appId in MESSAGING_APPS && !!n.title;
 }
 
@@ -179,7 +197,7 @@ const byTime = (a: PhoneNotification, b: PhoneNotification) =>
   notificationTime(a).getTime() - notificationTime(b).getTime();
 
 /**
- * Group messaging notifications into conversations by app + sender.
+ * Group Messages notifications into conversations by sender (`isConversation`).
  * ANCS only carries what was on the lock screen, so these are incoming-only.
  */
 export function groupThreads(notifications: PhoneNotification[]): Thread[] {
@@ -232,8 +250,9 @@ export function entryLatest(e: FeedEntry): PhoneNotification {
 }
 
 /**
- * The compact feed: one row per conversation, one collapsible stack per other
- * app, ordered by whichever has the newest notification.
+ * The compact feed: one row per Messages conversation, one collapsible stack per other app
+ * (WhatsApp, Teams and every other chat app included), ordered by whichever has the newest
+ * notification.
  */
 export function groupFeed(notifications: PhoneNotification[]): FeedEntry[] {
   const entries: FeedEntry[] = groupThreads(notifications).map((thread) => ({ kind: "thread", key: thread.key, thread }));
@@ -319,9 +338,10 @@ function itemOrder(a: ConversationItem, b: ConversationItem): number {
 const SAME_MESSAGE_MS = 10 * 60 * 1000;
 
 /**
- * Conversations for the Messages view: notifications from chat apps merged with
- * messages from message access (MAP). Keys match `threadKey`, so opening a feed
- * row lands on the merged conversation. A text reported by both is shown once.
+ * Conversations for the Messages view: Messages-app notifications merged with messages from
+ * message access (MAP). Other apps' notifications never form or join one, even under the same
+ * name: tug can't reply to them, so they stay in the Feed. Keys match `threadKey`, so opening a
+ * feed row lands on the merged conversation. A text reported by both is shown once.
  */
 export function groupConversations(
   notifications: PhoneNotification[],
@@ -339,15 +359,15 @@ export function groupConversations(
     numbersFor.set(k, list);
   }
   const convs = new Map<string, Conversation>();
-  const get = (appId: string, label: string, contact: string): Conversation => {
-    const key = threadKey({ appId, title: contact });
+  const get = (contact: string): Conversation => {
+    const key = threadKey({ appId: MESSAGES_APP, title: contact });
     let c = convs.get(key);
     if (!c) {
       const placeholder = { kind: "message", id: "", at: new Date(0), body: "" } as unknown as ConversationItem;
       c = {
         key,
-        appId,
-        appLabel: label,
+        appId: MESSAGES_APP,
+        appLabel: "Messages",
         contact,
         address: null,
         addresses: [],
@@ -365,7 +385,7 @@ export function groupConversations(
     // shown as the number, so it keys the same as `senderName` does for their notifications.
     const known = m.contactName ?? nameFor.get(m.address);
     const name = known && !isAddressLike(known) ? cleanName(known) : formatAddress(m.address);
-    const c = get(MESSAGES_APP, "Messages", name);
+    const c = get(name);
     c.items.push({ kind: "message", id: `m${m.id}`, at: messageTime(m), body: m.body, m });
   }
   // Each fetched message can stand in for at most one notification, so two
@@ -375,9 +395,8 @@ export function groupConversations(
   const titleNumbers = new Map<string, Set<string>>();
   for (const n of notifications) {
     if (!isConversation(n)) continue;
-    const sms = n.appId === MESSAGES_APP;
-    const c = get(n.appId, appLabel(n), sms ? senderName(n.title) : cleanName(n.title));
-    if (sms && isAddressLike(n.title)) {
+    const c = get(senderName(n.title));
+    if (isAddressLike(n.title)) {
       const set = titleNumbers.get(c.key) ?? new Set<string>();
       set.add(normalizeAddress(n.title));
       titleNumbers.set(c.key, set);
@@ -407,10 +426,8 @@ export function groupConversations(
   for (const c of out) {
     c.items.sort(itemOrder);
     c.latest = c.items[c.items.length - 1];
-    if (c.appId === MESSAGES_APP) {
-      const fromContacts = numbersFor.get(nameKey(c.contact)) ?? [];
-      resolveNumbers(c, [...fromContacts, ...(titleNumbers.get(c.key) ?? [])]);
-    }
+    const fromContacts = numbersFor.get(nameKey(c.contact)) ?? [];
+    resolveNumbers(c, [...fromContacts, ...(titleNumbers.get(c.key) ?? [])]);
   }
   return out.sort((a, b) => b.latest.at.getTime() - a.latest.at.getTime());
 }

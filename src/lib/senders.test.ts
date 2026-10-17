@@ -199,10 +199,11 @@ describe("grouping unknown senders", () => {
     expect(isKnownConversation(after, senderIndex(contacts, outgoingAddresses(out), []))).toBe(true);
   });
 
-  it("other chat apps are never filtered", () => {
+  it("other chat apps are never filtered: they aren't Messages conversations at all", () => {
     const wa = note("+44 7700 900456", "hi", 0, { appId: "net.whatsapp.WhatsApp", appName: "WhatsApp" });
-    const [c] = groupConversations([wa], [], []);
-    expect(isKnownConversation(c, senderIndex([], [], []))).toBe(true);
+    // Not in Messages (known or unknown); it stays in the Feed and still pops up.
+    expect(groupConversations([wa], [], [])).toEqual([]);
+    expect(senderMayToast(wa, senderIndex([], [], []))).toBe(true);
     expect(senderName("+1 (555) 013-2244")).toBe("(555) 013-2244");
   });
 });
