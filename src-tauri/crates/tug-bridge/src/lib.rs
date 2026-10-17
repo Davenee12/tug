@@ -9,6 +9,7 @@
 pub mod auth;
 pub mod client;
 pub mod framing;
+pub mod outgoing;
 pub mod paths;
 pub mod protocol;
 pub mod server;

@@ -79,8 +79,24 @@ reach tug over a named pipe that only the current user can open; low-integrity p
 remote machines are refused. Each connection proves it holds the bridge token (an HMAC
 challenge over fresh nonces) before any call. Developer tools are off by default, each tool has
 its own switch (`status` needs only the master switch, so it leaves the phone out unless Phone
-status is on), calls are rate limited, and sending a text always needs the person to click
-**Send** on tug's own card.
+status is on), calls are rate limited, and sending a text or sending files to the phone always
+needs the person to click **Send** on tug's own card.
+
+**Files sent to the phone (`tug boat`, `send_file_to_phone`).** Pushing a PC file to the phone
+moves it off the PC, so it's guarded like a text. Its switch (**Send files to your iPhone**) is off
+by default and enforced in Rust in the bridge's permission map; requests are rate limited (10 a
+minute). Every request stops at tug's card, which shows each file's name as the phone will get it,
+its size and the folder it's in, with focus on **Don't send** and **Send** enabled only while tug
+is in front; nothing is offered before Send. tug re-checks every path itself whatever the caller
+says: regular readable files only (no folders, devices or pipes, which the bridge also refuses by
+name), links followed to their target, Tugboat's size limits, names through `tugboat/names.rs`.
+The files then travel only over Tugboat's existing channel (same port, secret, MACs, binding and
+sealing), held for the phone for the wait (2 minutes unless asked otherwise) and withdrawn if it
+hasn't downloaded them by then, so "timed out" is true. What's piped into `tug boat -` (up to
+64 MB) is held in memory, never written to disk by tug. An AI tool's paths are used exactly as
+given, never looked up by name across the PC. Logs record counts and sizes, never names or paths.
+Tugboat's honest limit applies: an active attacker who tampered with the first page load could
+read files the person chose to send.
 
 **Malicious content in notifications and texts.** Message and notification text comes from other
 people. The window renders it as text (Vue escapes it; there's no `v-html`), and the webview is
@@ -128,9 +144,9 @@ speak near the PC while the person holds the shortcut can put words into the foc
 anyone at the keyboard.
 
 **Prompt injection aimed at AI tools.** A text can say "ignore your instructions and…". tug
-assumes it will: reading tools are separate switches the person turns on, and the one tool that
-*acts* (sending a text) always stops at a confirmation card in tug's window. An AI tool can be
-fooled into *asking*; it can't send without the person.
+assumes it will: reading tools are separate switches the person turns on, and the tools that send
+something off the PC (a text, files to the phone) always stop at a confirmation card in tug's
+window. An AI tool can be fooled into *asking*; it can't send without the person.
 
 **Supply chain.** Rust dependencies are checked by `cargo-deny` (advisories, licences, crates.io
 only), production npm dependencies by `npm audit`, the code by CodeQL, and Dependabot keeps

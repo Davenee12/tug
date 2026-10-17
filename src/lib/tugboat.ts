@@ -1,6 +1,6 @@
 // Tugboat on the desktop side: the small decisions the Tugboat panel makes, kept pure for tests.
 
-import type { TugboatClip, TugboatClipEvent, TugboatSkipped, TugboatStatus } from "../types/protocol";
+import type { TugboatClip, TugboatClipEvent, TugboatHeld, TugboatSkipped, TugboatStatus } from "../types/protocol";
 
 export { formatSize } from "../tugboat-page/chunks";
 
@@ -27,6 +27,7 @@ export const TUGBOAT_OFF: TugboatStatus = {
   receiving: false,
   ended: null,
   clip: null,
+  held: null,
 };
 
 /** No phone has turned up ~30 s after the code appeared: time for "Can't connect?" help. */
@@ -191,8 +192,15 @@ export function clipLine(clip: TugboatClip | null, s: Pick<TugboatStatus, "phone
   }
 }
 
-/** Under the QR code: with a clipboard waiting, scanning is how it gets to the phone. */
-export function codeCaption(clip: TugboatClip | null): string {
+/**
+ * Under the QR code: with files from `tug boat` or a clipboard waiting, scanning is how they get
+ * to the phone ("Scan to receive report.pdf on your iPhone.").
+ */
+export function codeCaption(clip: TugboatClip | null, held: TugboatHeld | null = null): string {
+  if (held && held.names.length) {
+    const what = held.names.length === 1 ? held.names[0] : `${held.names.length} files`;
+    return `Scan to receive ${what} on your iPhone.`;
+  }
   return clip?.state === "waiting"
     ? "Scan to receive your clipboard on your iPhone."
     : "Scan with your phone's camera to send photos, files and text.";

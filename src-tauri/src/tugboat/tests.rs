@@ -359,6 +359,142 @@ async fn phone_session_over_a_socket() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// Fetch every chunk of an offer, as the page's Get does.
+async fn fetch_offer(phone: &mut Phone, offer: &session::PageOffer) -> Vec<u8> {
+    let mut got = Vec::new();
+    for i in 0..offer.chunks {
+        let r = phone
+            .raw("GET", &format!("/api/down/{}/{i}", offer.id), Vec::new())
+            .await;
+        assert_eq!(r.status, 200);
+        got.extend(phone.keys.open(&ad::down(&offer.id, i), &r.body).expect("chunk opens"));
+    }
+    got
+}
+
+/// `tug boat` (and `send_file_to_phone`): files held for the phone once the person clicked Send.
+/// The page sees them like any offer; the hold is delivered once the phone fetched every file
+/// (and they stay listed for the page's Save); one the phone never got to is withdrawn when its
+/// window ends, so "timed out" is true; one removed in tug, or cancelled, ends withdrawn.
+#[tokio::test]
+async fn files_held_for_the_phone_are_delivered_or_withdrawn() {
+    use super::held::Verdict;
+    use super::session::Outgoing;
+    use std::time::Duration;
+
+    let root = temp_dir();
+    let secret = crypto::new_secret();
+    let session = Arc::new(Session::new(
+        &secret,
+        root.join("Tugboat"),
+        root.join("incoming"),
+        Arc::new(TestSink::default()),
+    ));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(server::serve(listener, session.clone(), async {
+        let _ = stop_rx.await;
+    }));
+
+    let report = pattern(OFFER_CHUNK as usize + 500, 3);
+    let report_path = root.join("report.pdf");
+    std::fs::write(&report_path, &report).unwrap();
+    let file = |name: &str| Outgoing::File {
+        path: report_path.clone(),
+        name: name.into(),
+        size: report.len() as u64,
+    };
+    let piped = || Outgoing::Memory {
+        name: "notes<1>.txt".into(),
+        bytes: Arc::new(b"piped in".to_vec()),
+    };
+
+    // --- Delivered: the phone connects later and fetches both ---
+    let id = session
+        .hold(vec![file("report.pdf"), piped()], Duration::from_secs(120))
+        .unwrap();
+    assert_eq!(session.held(id), Verdict::Waiting { fetched: 0, total: 2 });
+    // The panel shows what's waiting, by its safe name.
+    assert_eq!(
+        session.snapshot().held.unwrap().names,
+        vec!["report.pdf".to_string(), "notes_1_.txt".to_string()]
+    );
+    let mut phone = Phone::new(addr, &secret, "phoneAAAAAAAAAAAAAAAAA");
+    let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
+    let offers = state.unwrap().offers;
+    assert_eq!(offers.len(), 2);
+    assert_eq!(offers[1].name, "notes_1_.txt");
+    assert_eq!(fetch_offer(&mut phone, &offers[0]).await, report);
+    assert_eq!(session.held(id), Verdict::Waiting { fetched: 1, total: 2 });
+    assert_eq!(fetch_offer(&mut phone, &offers[1]).await, b"piped in");
+    assert_eq!(session.held(id), Verdict::Delivered);
+    assert_eq!(session.held(id), Verdict::Delivered, "asked again, same answer");
+    assert!(session.snapshot().held.is_none());
+    // Still listed, so the page can offer Save.
+    let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
+    assert_eq!(state.unwrap().offers.len(), 2);
+
+    // --- Timed out: nobody fetched it in its window; the tick withdraws it unasked ---
+    let short = session
+        .hold(vec![file("late.pdf")], Duration::from_millis(150))
+        .unwrap();
+    let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
+    let late = state
+        .unwrap()
+        .offers
+        .into_iter()
+        .find(|o| o.name == "late.pdf")
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    session.held_tick();
+    assert!(session.snapshot().held.is_none());
+    assert_eq!(session.held(short), Verdict::TimedOut);
+    assert_eq!(
+        phone
+            .raw("GET", &format!("/api/down/{}/0", late.id), Vec::new())
+            .await
+            .status,
+        404,
+        "a timed-out file can't be fetched afterwards"
+    );
+    let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
+    assert_eq!(state.unwrap().offers.len(), 2);
+
+    // --- Removed in tug's panel: withdrawn ---
+    let removed = session
+        .hold(vec![file("removed.pdf")], Duration::from_secs(120))
+        .unwrap();
+    let offer_id = session
+        .snapshot()
+        .outgoing
+        .iter()
+        .find(|o| o.name == "removed.pdf")
+        .unwrap()
+        .id
+        .clone();
+    session.remove_offer(&offer_id);
+    assert_eq!(session.held(removed), Verdict::Withdrawn);
+
+    // --- Cancelled (the switch went off): what wasn't fetched goes ---
+    let cancelled = session
+        .hold(vec![file("cancelled.pdf")], Duration::from_secs(120))
+        .unwrap();
+    session.cancel_hold(cancelled);
+    assert_eq!(session.held(cancelled), Verdict::Withdrawn);
+    assert!(!session.snapshot().outgoing.iter().any(|o| o.name == "cancelled.pdf"));
+
+    // --- More than Tugboat offers at once: nothing is added ---
+    let many: Vec<Outgoing> = (0..60).map(|_| piped()).collect();
+    assert!(session.hold(many, Duration::from_secs(120)).is_none());
+    assert_eq!(session.snapshot().outgoing.len(), 2);
+
+    session.close();
+    let _ = stop_tx.send(());
+    server.await.unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn the_link_never_carries_a_client_id() {
     use std::net::Ipv4Addr;

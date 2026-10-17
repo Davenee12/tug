@@ -67,7 +67,7 @@ async function togglePath() {
 
 const COMMANDS: Array<[string, string]> = [
   ["tug code", "Print the newest verification code (add --copy to put it on the clipboard)"],
-  ["tug boat photo.png", "Send files to your phone with Tugboat"],
+  ["tug boat report.pdf", "Send files to your iPhone with Tugboat (tug asks you first)"],
   ['tug text Sam "On my way"', "Text someone (tug asks you first)"],
   ["tug status", "Is tug running, and how's the phone"],
 ];

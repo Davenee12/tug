@@ -326,10 +326,18 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
   server, with copy-paste setup for each.
 - Once on, AI tools can: get the newest verification code, search your texts and notifications,
   read developer notifications (GitHub, Slack, Linear, Jira, Sentry, PagerDuty, Vercel, Netlify),
-  list and view files sent with Tugboat, see phone status, control music, and ask to send a text.
-- Each has its own switch; **verification codes, music controls and sending texts start off**.
-- A text from an AI tool is sent only after you click **Send** on tug's card within 2 minutes.
-- The **`tug` command**: `tug code [--copy]`, `tug boat <file>`, `tug text <name> "<message>"`,
+  list and view files sent with Tugboat, see phone status, control music, ask to send a text, and
+  ask to send files to your iPhone.
+- Each has its own switch; **verification codes, music controls, sending texts and sending files
+  start off**.
+- A text or a file from an AI tool is sent only after you click **Send** on tug's card within 2
+  minutes. The file card shows each file's name, size and folder.
+- **`tug boat report.pdf`** (or an AI tool's `send_file_to_phone`) sends files to your iPhone: after
+  Send, Tugboat opens with its code if your phone's page isn't open ("Scan the code in tug to
+  receive report.pdf on your iPhone…"), and the command waits up to 2 minutes for the phone to
+  download them (`--wait <secs>`, `--no-wait`). `tug boat - --name notes.txt` sends what's piped in.
+  Regular files only; files the phone didn't download in time are taken off offer.
+- The **`tug` command**: `tug code [--copy]`, `tug boat <file>` (or `-` for stdin), `tug text <name> "<message>"`,
   `tug status`, `tug mcp`.
 - **Add tug to PATH** puts the command in new terminals for your account only; **Remove from PATH**
   undoes it.
