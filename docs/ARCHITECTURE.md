@@ -132,10 +132,19 @@ conversation. iOS lists only about 10 inbox texts, so after a long gap tug flags
 ```
 composer ─► invoke send_message ─► map::service::send_text
   store.insert_outgoing (pending) + emit "message"      ← shows at once, even if the worker is busy
-  ─► MapCommand::Deliver(row id) ─► worker pushes the bMessage over OBEX
+  ─► MapCommand::Deliver(row id) ─► command_queue: ahead of every refresh, check and mark-read
+  ─► worker pushes the bMessage over OBEX (on the open session: the PushMessage alone)
   ─► accepted / unconfirmed ("May have sent") / failed (Retry) ─► emit "message"
   ─► later MNS SendingSuccess/Failure ─► mns::choose_outgoing settles it
 ```
+
+A send never waits for a whole refresh: the worker looks at its queue between a refresh's steps
+(after the listing, before each download, before the contacts and calls pulls, between mark-reads),
+and a contacts or calls pull in progress is dropped (its own PBAP connection) and retried later.
+What it can't cut into is one OBEX exchange already on the wire, or a message-access connect in
+progress. Typing a text opens message access if it isn't open (`warm_texts`). The log follows each
+send by id only: `send N: queued`, `pushing after … ms in the queue`, `accepted it in … ms`, and the
+phone's own report `… ms after accepting it`.
 
 **A media command**
 
@@ -213,6 +222,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `wedge.rs` | An adapter that's connected but not answering: relink with backoff and a cap |
 | `wake.rs` | A real sleep vs a stalled thread, from two clocks and the resume flag |
 | `map/contacts_watch.rs` | When to pull the phonebook; when an empty phonebook means Sync Contacts is off |
+| `map/command_queue.rs` | The message worker's priority order: sends before refreshes, mark-read last |
 | `map/obex.rs`, `bmessage.rs`, `listing.rs`, `vcard.rs`, `mns_event.rs`, `mns.rs`, `pick.rs` | OBEX framing, MAP/PBAP parsers, MNS event handling, which paired device is the iPhone |
 | `devtools/confirm.rs`, `rate_limit.rs`, `recipient.rs`, `settings.rs` | The send-confirmation state machine, per-tool limits, name → contact, switch defaults |
 | `crates/tug-bridge` (`auth`, `protocol`, `framing`, `paths`, `time`) | Bridge protocol and handshake; the whole exchange is also tested over a real pipe |

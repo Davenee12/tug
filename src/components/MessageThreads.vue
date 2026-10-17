@@ -241,6 +241,10 @@ const drafts = reactive(new Map<string, string>());
 const draftFor = (key: string) => drafts.get(key) ?? "";
 const setDraftFor = (key: string, text: string) => drafts.set(key, text);
 const draft = computed(() => (selected.value ? draftFor(selected.value.key) : ""));
+// Typing a text gets message access open by the time it's sent (throttled in the store).
+watch(draft, (text) => {
+  if (text.trim()) tug.warmTexts();
+});
 const sending = ref(false);
 /** Number chosen in the To: picker, per conversation (several numbers under one name). */
 const chosen = ref<Record<string, string>>({});

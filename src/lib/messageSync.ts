@@ -16,6 +16,17 @@ export const RESYNC_AFTER_MS = 60_000;
 /** How many of the newest texts a re-read compares (cheap; what a missed event could cover). */
 export const RESYNC_LIMIT = 200;
 
+/**
+ * Typing a text asks the backend to have message access open by the time Send is pressed (so the
+ * send doesn't wait on a reconnect), at most this often: the backend does nothing when it's open.
+ */
+export const WARM_GAP_MS = 15_000;
+
+/** Whether a "the user is typing" warm-up may go out, given when the last one did (null: never). */
+export function warmDue(lastAt: number | null, now: number): boolean {
+  return lastAt == null || now - lastAt >= WARM_GAP_MS || now < lastAt;
+}
+
 /** The window's order for texts: oldest first by arrival, ties by id (as `list_messages` gives them). */
 export function byArrival(a: SmsMessage, b: SmsMessage): number {
   return a.receivedAt - b.receivedAt || a.id - b.id;

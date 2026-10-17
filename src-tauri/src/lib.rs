@@ -265,6 +265,7 @@ pub fn run() {
             commands::mark_read,
             commands::set_watching,
             commands::check_switches,
+            commands::warm_texts,
             commands::get_calls,
             commands::refresh_calls,
             commands::dial,

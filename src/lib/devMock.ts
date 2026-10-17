@@ -869,6 +869,7 @@ mockIPC(
         }
         return null;
       case "set_watching":
+      case "warm_texts":
         return null;
       case "get_status":
         return status;

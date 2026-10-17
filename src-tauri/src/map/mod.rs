@@ -11,6 +11,7 @@
 pub mod address;
 pub mod bmessage;
 pub mod calls;
+pub mod command_queue;
 pub mod contacts_watch;
 pub mod health;
 pub mod listing;

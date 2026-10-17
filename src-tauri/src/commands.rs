@@ -342,6 +342,14 @@ pub fn check_switches(state: State<'_, AppState>) {
     }
 }
 
+/// The user is writing a text: have message access open by the time they press Send.
+#[tauri::command]
+pub fn warm_texts(state: State<'_, AppState>) {
+    if let Some(map) = state.shared.map.get() {
+        map.warm();
+    }
+}
+
 /// The user opened these messages in tug: mark them read on the phone too.
 #[tauri::command]
 pub fn mark_read(state: State<'_, AppState>, message_ids: Vec<i64>) {
