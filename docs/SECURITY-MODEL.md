@@ -127,6 +127,35 @@ terminals, browsers), so dictation can't send, accept a suggestion or run a comm
 speak near the PC while the person holds the shortcut can put words into the focused window, like
 anyone at the keyboard.
 
+**Your iPhone backup (Bring in your full history).** A backup holds everything on the phone, so
+tug treats reading one as the most sensitive thing it does:
+
+- Nothing goes online: reading, decrypting and importing are all local, with no new network access,
+  dependency on a service, or CSP change.
+- The window never names a folder or a file. It picks a backup by an id tug handed it (from the
+  list of backups tug found, or Windows' folder picker, which tug opens itself), and a photo by its
+  row id; tug builds every path. File ids from the backup's manifest must be 40 hex digits before
+  they touch a path, attachment paths must stay under `Library/SMS/Attachments`, and stored files
+  are named by their SHA-256 with an extension from a short list of picture and video types, so
+  nothing tug stores or opens (with the default app, via **Open photo**) can run.
+- An encrypted backup's password arrives once over IPC, is wrapped in `Zeroizing` and dropped as
+  soon as the keys are derived (iOS 10.2+: PBKDF2-HMAC-SHA256 then PBKDF2-HMAC-SHA1, as the
+  keybag says; RFC 3394 AES key unwrap of the class and file keys; AES-256-CBC). Keys are wiped
+  when the session ends. The password is never stored, logged or sent anywhere. (Copies a
+  WebView2 or IPC buffer may briefly hold are outside tug's control.)
+- Decrypted files (the manifest, Messages' database, each attachment on its way in) live only in
+  a per-session folder under `%LOCALAPPDATA%\dev.davejames.tug\backup-tmp`, protected by the
+  user's profile permissions. The databases are deleted as soon as they're read; the folder goes
+  when the import ends, is cancelled or fails, and the whole of `backup-tmp` is swept at every
+  start in case tug crashed or the PC lost power.
+- The backup is untrusted input: its plists, keybag, SQLite databases and `attributedBody`
+  typedstreams go through bounds-checked parsers that refuse what they can't read (tested on cut
+  and garbled input), and a damaged photo is skipped rather than stopping the import.
+- Logs record counts and timings only, never a word of a message, a name, a number, a file name, a
+  path or the password.
+- The backup itself is only ever read. Remove imported history (and Clear history) delete every
+  row and file the import added.
+
 **Prompt injection aimed at AI tools.** A text can say "ignore your instructions and…". tug
 assumes it will: reading tools are separate switches the person turns on, and the one tool that
 *acts* (sending a text) always stops at a confirmation card in tug's window. An AI tool can be
@@ -147,10 +176,13 @@ both lockfiles current. CI actions from third parties are pinned to commit SHAs.
 
 ## Data at rest
 
-History (`tug.db`), settings, logs and caches live unencrypted under your Windows profile
+History (`tug.db`, including any history brought in from an iPhone backup), settings, logs,
+caches and imported photos live unencrypted under your Windows profile
 (`%APPDATA%` and `%LOCALAPPDATA%`, see [ARCHITECTURE.md](ARCHITECTURE.md#storage)), protected by
 Windows' per-user file permissions, not by tug. Use BitLocker or device encryption to protect
-them from someone with the disk. The Spotify refresh token is the exception: it's kept in Windows
+them from someone with the disk. That includes history brought in from an *encrypted* iPhone
+backup: once imported, those texts and photos are stored like the rest of tug's history, no longer
+behind the backup's password (the wizard's privacy note and PRIVACY.md say so). The Spotify refresh token is the exception: it's kept in Windows
 Credential Manager. Logs never record message contents, contact or device names, numbers or
 tokens (devices are logged by a short tag). **Copy diagnostics** also masks phone numbers, emails,
 Bluetooth addresses, the phone's name, and your Windows account name and profile folder.

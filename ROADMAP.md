@@ -105,8 +105,10 @@ recognition (for example whisper.cpp), no account.
 - **Tugboat v2:** a zip of several files, HEIC → JPEG, Save to Photos (needs HTTPS for the share
   sheet), mDNS.
 - **PC media** next to the phone's (Windows media sessions, e.g. YouTube in a browser).
-- **Full history import** from a local iPhone backup (sent messages, photos/attachments), since iOS
-  doesn't expose those over Bluetooth.
+- ~~**Full history import**~~ from a local iPhone backup (sent messages, photos/attachments), since
+  iOS doesn't expose those over Bluetooth: built as Settings › Messages › Bring in your full history
+  (see [docs/FEATURES.md](docs/FEATURES.md)). Still open: keeping it in step with newer backups
+  automatically.
 - Ideas are curated in [docs/PRODUCT.md](docs/PRODUCT.md) and move here once approved.
 
 ## Parked — companion apps and Android (see [docs/COMPANION-PLAN.md](docs/COMPANION-PLAN.md))

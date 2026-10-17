@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
+import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, History, Info, MessageSquare, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
+import { useBackupStore } from "../stores/backup";
+import { importedLine } from "../lib/backupImport";
+import BackupImport from "./BackupImport.vue";
 import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
@@ -31,6 +34,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string; icon: Component }> =
   { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "iphone", label: "iPhone", icon: Smartphone },
   { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "messages", label: "Messages", icon: MessageSquare },
   { id: "connectors", label: "Connectors", icon: Plug },
   { id: "weather", label: "Weather", icon: CloudSun },
   { id: "developer", label: "Developer tools", icon: SquareTerminal },
@@ -248,6 +252,23 @@ function changePlace() {
   tug.closeSettings();
   tug.view = "feed";
 }
+
+// ---- Messages: Bring in your full history (an iPhone backup) ----
+const backup = useBackupStore();
+const importedNow = computed(() => importedLine(backup.imported));
+const confirmRemove = ref(false);
+let removeTimer: number | undefined;
+async function removeImported() {
+  if (!confirmRemove.value) {
+    confirmRemove.value = true;
+    window.clearTimeout(removeTimer);
+    removeTimer = window.setTimeout(() => (confirmRemove.value = false), 4000);
+    return;
+  }
+  confirmRemove.value = false;
+  await backup.removeImported();
+}
+onMounted(() => void backup.refreshImported());
 
 // ---- Data ----
 const confirmClear = ref(false);
@@ -779,6 +800,32 @@ async function clearHistory() {
         </template>
 
         <!-- Data & privacy -->
+        <!-- Messages: the full history from an iPhone backup on this PC. -->
+        <template v-else-if="current.id === 'messages'">
+          <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Bring in your full history"
+              description="Over Bluetooth your iPhone shares only its newest texts, never the ones you send from it, and no photos. A backup of your iPhone on this PC has them all: tug can bring them in once, and keeps everything on this PC."
+            >
+              <button class="btn-secondary btn-sm" @click="backup.openWizard()">
+                <History :size="14" /> Choose a backup…
+              </button>
+              <template #below>
+                <p v-if="importedNow" class="mt-1.5 text-[13px] text-body">{{ importedNow }}</p>
+              </template>
+            </SettingsRow>
+            <SettingsRow
+              v-if="importedNow"
+              label="Remove imported history"
+              description="Deletes every text and photo tug brought in from your iPhone backup. Texts tug got over Bluetooth stay."
+            >
+              <button :class="['btn-secondary btn-sm', confirmRemove ? 'text-error' : '']" @click="removeImported">
+                {{ confirmRemove ? "Click again to remove" : "Remove" }}
+              </button>
+            </SettingsRow>
+          </div>
+        </template>
+
         <template v-else-if="current.id === 'privacy'">
           <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow
@@ -800,6 +847,10 @@ async function clearHistory() {
             <SettingsRow
               label="Voice typing"
               description="Only while you hold its shortcut: Windows' own speech recognition turns your voice into text on this PC. The recording is never sent anywhere or saved."
+            />
+            <SettingsRow
+              label="iPhone backup"
+              description="Only when you bring in your full history: tug reads a backup on this PC and copies your texts and photos into its own folder. Nothing goes online, and an encrypted backup's password is used once and never saved."
             />
             <SettingsRow
               label="App icons"
@@ -846,5 +897,6 @@ async function clearHistory() {
         </template>
       </div>
     </main>
+    <BackupImport v-if="backup.wizardOpen" />
   </div>
 </template>

@@ -225,6 +225,113 @@ export interface SmsMessage {
    * listed was new, so older ones from while tug was away may only be on the iPhone.
    */
   gapBefore: boolean;
+  /**
+   * The group chat it belongs to (`MessageGroup.id`), for history brought in from an iPhone
+   * backup; null (or absent, in older payloads and fixtures) for a one-to-one text.
+   */
+  groupId?: string | null;
+  /** Edited on the phone after it was sent (from a backup). */
+  edited?: boolean;
+  /** Unsent on the phone: the words are gone (from a backup). */
+  unsent?: boolean;
+  /** Photos, videos and other attachments a backup had for it (absent means none). */
+  attachments?: MessageAttachment[];
+}
+
+/** One attachment of a text, from an iPhone backup (`messages.rs` `StoredAttachment`). */
+export interface MessageAttachment {
+  id: number;
+  kind: "photo" | "gif" | "sticker" | "video" | "audio" | "contact" | "location" | "file";
+  /** The file is on this PC (photos and videos); otherwise only its kind is known. */
+  stored: boolean;
+  bytes: number | null;
+}
+
+/** A group chat from an iPhone backup: its name, if it has one, and the other people in it. */
+export interface MessageGroup {
+  id: string;
+  name: string | null;
+  /** Addresses, normalised like message addresses. */
+  members: string[];
+}
+
+/** A stored photo's preview (`backup/files.rs`). */
+export interface AttachmentPreview {
+  /** A JPEG data URI, when there's a picture to show. */
+  dataUri: string | null;
+  /** A HEIC photo Windows can't open without HEIF Image Extensions. */
+  needsHeif: boolean;
+}
+
+/** One iPhone backup on this PC (`backup/discover.rs`). */
+export interface BackupInfo {
+  /** Opaque: names the backup back to tug, which keeps the folder itself. */
+  id: string;
+  deviceName: string;
+  /** Apple's model identifier ("iPhone15,2"). */
+  model: string | null;
+  iosVersion: string | null;
+  /** When it was last made (ms since 1970). */
+  lastBackup: number | null;
+  sizeBytes: number;
+  encrypted: boolean;
+  problem: "tooOld" | "incomplete" | "unreadable" | null;
+}
+
+/** What an import would add (`backup/import.rs` `Scan`). */
+export interface BackupScan {
+  texts: number;
+  already: number;
+  conversations: number;
+  photos: number;
+  videos: number;
+  mediaBytes: number;
+  /** New texts that carry photos (what "photos only" brings in). */
+  photoTexts: number;
+}
+
+/** What an import did (`backup/import.rs` `Summary`). */
+export interface BackupSummary {
+  texts: number;
+  photos: number;
+  conversations: number;
+  already: number;
+  /** Photos the backup listed but didn't have the file for. */
+  missing: number;
+}
+
+export type BackupPhase = "idle" | "unlocking" | "reading" | "ready" | "importing" | "done" | "cancelled" | "failed";
+export type BackupProblem =
+  | "needsPassword"
+  | "wrongPassword"
+  | "tooOld"
+  | "incomplete"
+  | "unreadable"
+  | "noMessages"
+  | "cantWrite"
+  | "failed";
+
+/** The import's status (`backup/mod.rs` `BackupStatus`), sent as `backup-import` events. */
+export interface BackupStatus {
+  rev: number;
+  phase: BackupPhase;
+  backup: BackupInfo | null;
+  /** 0–1 through the current step, when it can be measured. */
+  progress: number | null;
+  stage: "texts" | "photos" | null;
+  done: number;
+  total: number;
+  scan: BackupScan | null;
+  summary: BackupSummary | null;
+  problem: BackupProblem | null;
+}
+
+/** What's in tug from a backup now (`backup/import.rs` `Imported`). */
+export interface BackupImported {
+  texts: number;
+  photos: number;
+  /** When the backup was made (ms since 1970). */
+  backupDate: number | null;
 }
 
 export interface Contact {
