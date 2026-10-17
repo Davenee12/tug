@@ -197,6 +197,24 @@ send_text: recipient::resolve ─► confirm.rs opens a card ─► emit "devtoo
   ─► Approved? map::service::send_text (same path as above) ─► result back over the pipe
 ```
 
+**Files to the phone (`tug boat`, `send_file_to_phone`)**
+
+```
+tug boat report.pdf ─► tug-cli: resolve against its folder, outgoing::check (regular file, links
+  followed) ─► Call::OfferFiles { paths, stdin?, wait_secs, progress: true }
+  ─► DevTools::handle: "Send files to your iPhone" on? rate limit ─► devtools/outgoing.rs checks
+     again (size, names::sanitize) ─► Progress::Confirming ─► confirm.rs card (Ask::Files)
+  ─► Send? TugboatService::hold (starts Tugboat) ─► Session::hold: offers + held.rs Hold (window)
+     no phone page open? the panel opens, "Scan to receive report.pdf on your iPhone"
+  ─► every 500 ms Session::held: Progress::Waiting ─► phone fetches every chunk ─► Delivered
+     window over (+ up to 60 s for a file still coming) ─► withdrawn, TimedOut
+  ─► OfferResult ─► "Delivered: your iPhone downloaded report.pdf." (exit 0) / exit 1
+```
+
+Progress lines (`{"type":"progress",...}`) go only to a call that asked for them, after the
+handshake. The supervisor's 2 s tick also settles holds (`held_tick`), so a command stopped with
+Ctrl+C never leaves files on offer past their window.
+
 **A Tugboat upload**
 
 ```
@@ -339,13 +357,14 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `map/command_queue.rs` | The message worker's priority order: sends before refreshes, mark-read last |
 | `map/obex.rs`, `bmessage.rs`, `listing.rs`, `vcard.rs`, `mns_event.rs`, `mns.rs`, `pick.rs` | OBEX framing, MAP/PBAP parsers, MNS event handling, which paired device is the iPhone |
 | `map/charset.rs`, `sms_pdu.rs` | A text's bytes to words without U+FFFD: UTF-8, then UTF-16, CESU-8, a cut-off last character, Windows-1252; native SMS PDUs |
-| `devtools/confirm.rs`, `rate_limit.rs`, `recipient.rs`, `settings.rs` | The send-confirmation state machine, per-tool limits, name → contact, switch defaults |
+| `devtools/confirm.rs`, `rate_limit.rs`, `recipient.rs`, `settings.rs` | The send-confirmation state machine (texts and files), per-tool limits, name → contact, switch defaults |
 | `crates/tug-bridge` (`auth`, `protocol`, `framing`, `paths`, `time`) | Bridge protocol and handshake; the whole exchange is also tested over a real pipe |
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
 | `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone, two seats for a two-player game |
 | `tugboat/net.rs`, `tugboat/tally.rs`, `tugboat/session.rs` (`choose_folder`) | Which adapter the phone can reach (including a Hyper-V external switch); logging strangers' refused requests once a minute with a count; Pictures or the Downloads fallback |
 | `autostart.rs`, `session_end.rs` | Start with Windows over a `Registry` trait (tested with a fake: HKCU only, moving an old HKLM entry only for a tug in the process user's own Local AppData); what exit skips when Windows is ending the session |
+| `tugboat/held.rs`, `devtools/outgoing.rs`, `crates/tug-bridge` `outgoing` | Files sent to the phone with `tug boat`: when a hold is delivered, timed out (with grace for a file still coming) or withdrawn; which paths may be sent at all (regular files, links followed, no devices or pipes) |
 | `tugboat/clip.rs`, `tugboat/dib.rs` | The shared clipboard: one waiting clipboard at a time, delivered only on the phone's word, dropped after 2 minutes, what can be sent; a clipboard bitmap to PNG |
 | `quick_actions/mod.rs` | Taskbar quick actions: reading `--action` from a launch, the jump list's tasks (the game only with Show games on), the AppUserModelID for installed, portable and cargo builds, the take-once queue |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
@@ -448,7 +467,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?gamephone` | Tugboat Run with the phone controller: Tugboat's code, a phone scanning it, then the phone starting the run and steering |
 | `/?game2p` (`&p2drop`) | Tugboat Run for two players with two phones (Player 2's phone drops mid-race: the waiting card and Continue solo) |
 | `/?game&weather=rain` | The daily challenge in made-up weather for the preview: `rain`, `storm`, `snow`, `night`, `windy` or `off` |
-| `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
+| `/?devtools`, `/?devconfirm`, `/?devconfirmfiles` | Settings › Developer tools / the send-text confirmation card / the send-files card (Send opens Tugboat with the files waiting) |
 | `/?pcaudio`, `/?pcaudiofail`, `/?pcaudiodrop`, `/?pcaudioold` | iPhone audio playing on this PC / Play on this PC times out / it drops after 6 s (Reconnect) / Windows too old for it |
 | `/?whatsnew` | The What's new card for the newest release |
 | `/?quickaction=new-message` (`tugboat`, `copy-code`, `game`, `settings`; `&again`) | tug started from that taskbar task (and, with `&again`, the task clicked again 4 s later while running) |

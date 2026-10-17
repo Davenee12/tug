@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { askerName, countdown, lastUsedLabel, PERMISSION_HELP, secondsLeft, sendArmed, setupSnippets, tomlString } from "./devtools";
+import { askerName, countdown, fileFrom, filesQuestion, lastUsedLabel, PERMISSION_HELP, secondsLeft, sendArmed, setupSnippets, tomlString } from "./devtools";
 
 const CLI = "C:\\Users\\Pat\\AppData\\Local\\tug\\bin\\tug.exe";
 
@@ -64,5 +64,20 @@ describe("copy", () => {
   it("names an unnamed asker", () => {
     expect(askerName("  ")).toBe("An AI tool");
     expect(askerName("claude-code")).toBe("claude-code");
+  });
+});
+
+describe("the file card", () => {
+  const report = { name: "report.pdf", size: 2.1 * 1024 * 1024, folder: "C:\\Users\\Pat\\Documents" };
+  it("asks about one file by name and size", () => {
+    expect(filesQuestion([report])).toBe("Send report.pdf (2.1 MB) to your iPhone?");
+  });
+  it("counts several and adds up their sizes", () => {
+    const shot = { name: "shot.png", size: 512 * 1024, folder: "C:\\Users\\Pat\\Pictures" };
+    expect(filesQuestion([report, shot, shot])).toBe("Send 3 files (3.1 MB) to your iPhone?");
+  });
+  it("says where each file comes from", () => {
+    expect(fileFrom(report)).toBe("C:\\Users\\Pat\\Documents");
+    expect(fileFrom({ name: "notes.txt", size: 5, folder: null })).toBe("Piped into the tug command");
   });
 });

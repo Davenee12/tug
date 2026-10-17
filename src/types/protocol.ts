@@ -603,6 +603,16 @@ export interface TugboatStatus {
   ended: "idle" | "hidden" | null;
   /** The last clipboard sent to the phone: its kind and whether the phone has it, never its contents. */
   clip: TugboatClip | null;
+  /** Files `tug boat` (or an AI tool) is holding for the phone: names and when the hold ends. */
+  held: TugboatHeld | null;
+}
+
+/** Files held for the phone after Send on tug's card (`tugboat/held.rs` `HeldStatus`). */
+export interface TugboatHeld {
+  /** What the phone sees them called. */
+  names: string[];
+  /** When the soonest hold ends (Unix ms). */
+  expiresAt: number;
 }
 
 /** "tugboat-text": text from the phone went (or failed to go) onto the PC clipboard. */
@@ -840,17 +850,39 @@ export interface DevToolsClient {
   lastUsed: number;
 }
 
-/** The "send this text?" card (`ConfirmRequest`). */
-export interface DevToolsConfirm {
+/** What the "send this?" card has in common (`ConfirmRequest`). */
+interface DevToolsConfirmBase {
   id: number;
   /** Who's asking, as it named itself. */
   tool: string;
-  toName: string;
-  toAddress: string;
-  message: string;
   /** Unix ms after which it counts as not sent. */
   expiresAt: number;
 }
+
+/** "<tool> wants to text <name>" (`Ask::Text`). */
+export interface DevToolsConfirmText extends DevToolsConfirmBase {
+  kind: "text";
+  toName: string;
+  toAddress: string;
+  message: string;
+}
+
+/** One file on the card (`ConfirmFile`): the name the phone will see, its size, and its folder. */
+export interface DevToolsConfirmFile {
+  name: string;
+  size: number;
+  /** null for what was piped into `tug boat -`. */
+  folder: string | null;
+}
+
+/** "Send report.pdf (2.1 MB) to your iPhone?" (`Ask::Files`). */
+export interface DevToolsConfirmFiles extends DevToolsConfirmBase {
+  kind: "files";
+  files: DevToolsConfirmFile[];
+}
+
+/** The "send this?" card: a text, or files for the phone. */
+export type DevToolsConfirm = DevToolsConfirmText | DevToolsConfirmFiles;
 
 /** Everything Settings › Developer tools shows (`DevToolsStatus`). */
 export interface DevToolsStatus {

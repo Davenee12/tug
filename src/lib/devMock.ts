@@ -724,6 +724,7 @@ const dropState: TugboatStatus = {
   receiving: false,
   ended: null,
   clip: null,
+  held: null,
 };
 const sendDrop = () => void emit("tugboat-status", structuredClone(dropState));
 function startDrop() {
@@ -930,10 +931,10 @@ const DEV_LABELS: Array<[DevToolsStatus["permissions"][number]["key"], string, b
   ["phone_status", "Phone status", true],
   ["media", "Music controls", false],
   ["send_text", "Send texts", false],
-  ["tugboat_send", "Send files to your phone", true],
+  ["tugboat_send", "Send files to your iPhone", params.has("devconfirmfiles")],
 ];
 const devState: DevToolsStatus = {
-  enabled: params.has("devtools") || params.has("devconfirm"),
+  enabled: params.has("devtools") || params.has("devconfirm") || params.has("devconfirmfiles"),
   permissions: DEV_LABELS.map(([key, label, on]) => ({ key, label, on })),
   clients: params.has("devtools")
     ? [
@@ -962,6 +963,7 @@ if (params.has("devconfirm")) {
   setTimeout(() => {
     devState.pending = {
       id: 1,
+      kind: "text",
       tool: "Claude Code",
       toName: "Zoe",
       toAddress: ZOE,
@@ -970,6 +972,35 @@ if (params.has("devconfirm")) {
     };
     void emit("devtools-confirm", structuredClone(devState.pending));
   }, 900);
+}
+
+// `tug boat report.pdf notes.txt` from an AI tool (?devconfirmfiles): the file card, and on Send,
+// Tugboat's code with the files waiting for the phone.
+if (params.has("devconfirmfiles")) {
+  setTimeout(() => {
+    devState.pending = {
+      id: 2,
+      kind: "files",
+      tool: "Claude Code",
+      files: [
+        { name: "report.pdf", size: 2_202_010, folder: "C:\\Users\\Jordan\\Projects\\harbor\\docs" },
+        { name: "notes.txt", size: 1_804, folder: null },
+      ],
+      expiresAt: Date.now() + 120_000,
+    };
+    void emit("devtools-confirm", structuredClone(devState.pending));
+  }, 900);
+}
+function holdFilesMock() {
+  startDrop();
+  Object.assign(dropState, { phase: "waiting", phone: null, phoneActive: false });
+  dropState.outgoing.push(
+    { id: "held1", name: "report.pdf", size: 2_202_010, downloads: 0 },
+    { id: "held2", name: "notes.txt", size: 1_804, downloads: 0 },
+  );
+  dropState.held = { names: ["report.pdf", "notes.txt"], expiresAt: Date.now() + 120_000 };
+  sendDrop();
+  void emit("tugboat-dropped", []);
 }
 
 // Play iPhone audio on this PC (?pcaudio, ?pcaudiofail, ?pcaudiodrop, ?pcaudioold).
@@ -1212,7 +1243,7 @@ mockIPC(
       case "tugboat_status":
         return structuredClone(dropState);
       case "tugboat_stop":
-        Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, guestUrl: null, guestQr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null, clip: null });
+        Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, guestUrl: null, guestQr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null, clip: null, held: null });
         return null;
       case "tugboat_pick_files": {
         startDrop();
@@ -1266,6 +1297,7 @@ mockIPC(
         return sendDev();
       case "devtools_confirm":
         console.log("[devMock] confirmation answered:", a.send ? "Send" : "Don't send");
+        if (a.send && devState.pending?.kind === "files") holdFilesMock();
         devState.pending = null;
         void emit("devtools-confirm", null);
         return null;
