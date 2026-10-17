@@ -49,6 +49,15 @@ pub const FINISH_GRACE_SECS: u64 = 60;
 /// Largest input `tug boat -` takes: it's held in memory until the phone has it, like a picture
 /// from the clipboard (Tugboat's limit for those).
 pub const MAX_STDIN_BYTES: u64 = 64 * 1024 * 1024;
+/// What the `tug` command's copy of piped input is called: `tug-boat-<pid>-<n>.tmp`, right in
+/// the user's temp folder. tug reads piped input from nothing else.
+pub const STDIN_PREFIX: &str = "tug-boat-";
+
+/// The file name of a stdin copy the `tug` command made (`STDIN_PREFIX` … `.tmp`), by spelling.
+pub fn is_stdin_copy_name(path: &str) -> bool {
+    let name = path.rsplit(['\\', '/']).next().unwrap_or("");
+    name.len() > STDIN_PREFIX.len() + 4 && name.starts_with(STDIN_PREFIX) && name.ends_with(".tmp")
+}
 /// Developer notifications look back this far when no `since` is given.
 pub const DEFAULT_DEV_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -616,6 +625,9 @@ impl Call {
                         )));
                     }
                 }
+                if stdin.as_ref().is_some_and(|s| !is_stdin_copy_name(&s.path)) {
+                    return Err(BridgeError::invalid("Piped input must come from the tug command."));
+                }
                 let stdin = match stdin {
                     Some(s) => Some(StdinFile {
                         path: s.path.clone(),
@@ -1106,6 +1118,33 @@ mod tests {
             progress: false,
         };
         assert!(relative.validate(NOW).is_err());
+    }
+
+    #[test]
+    fn piped_input_must_be_the_commands_own_copy() {
+        let piped = |path: &str| Call::OfferFiles {
+            paths: Vec::new(),
+            stdin: Some(StdinFile {
+                path: path.into(),
+                name: "notes.txt".into(),
+            }),
+            wait_secs: None,
+            progress: false,
+        };
+        assert!(piped(r"C:\Users\me\AppData\Local\Temp\tug-boat-41-7.tmp")
+            .validate(NOW)
+            .is_ok());
+        for other in [
+            r"C:\Users\me\.ssh\id_rsa",
+            r"C:\Users\me\AppData\Local\Temp\in.tmp",
+            r"C:\Users\me\AppData\Local\Temp\tug-boat-.tmp",
+            r"C:\Users\me\tug-boat-1.txt",
+        ] {
+            let e = piped(other).validate(NOW).unwrap_err();
+            assert!(e.message.contains("tug command"), "{other}: {e}");
+        }
+        assert!(is_stdin_copy_name("tug-boat-1-2.tmp"));
+        assert!(!is_stdin_copy_name("tug-boat-.tmp"));
     }
 
     #[test]

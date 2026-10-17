@@ -6,7 +6,7 @@ use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 
 use tug_bridge::outgoing::{self, Refusal};
-use tug_bridge::protocol::MAX_STDIN_BYTES;
+use tug_bridge::protocol::{MAX_STDIN_BYTES, STDIN_PREFIX};
 
 /// `input` as a full path against `cwd`, checked: links followed, folders, devices and pipes
 /// refused.
@@ -82,10 +82,6 @@ pub fn read_limited(r: impl Read, max: u64) -> Result<Vec<u8>, StdinProblem> {
     }
     Ok(bytes)
 }
-
-/// What a stdin copy's name starts with (tug only reads piped input from a file named like this,
-/// in the temp folder).
-pub const STDIN_PREFIX: &str = "tug-boat-";
 
 /// The command's own copy of stdin, in the user's temp folder, for tug to read once the person
 /// clicks Send. It's opened with FILE_FLAG_DELETE_ON_CLOSE and the handle is kept for as long as

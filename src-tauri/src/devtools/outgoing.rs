@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tug_bridge::outgoing::{check, Refusal};
-use tug_bridge::protocol::{BridgeError, StdinFile, MAX_STDIN_BYTES};
+use tug_bridge::protocol::{is_stdin_copy_name, BridgeError, StdinFile, MAX_STDIN_BYTES};
 
 use super::confirm::ConfirmFile;
 use crate::tugboat::names::sanitize;
@@ -73,8 +73,23 @@ fn pick_within(path: &Path, shown: &str, limit: u64) -> Result<Picked, BridgeErr
     })
 }
 
+/// Whether `path` is the `tug` command's own copy of piped input: a `tug-boat-….tmp` file right
+/// in this user's temp folder. The card shows piped input without a folder, so anything else
+/// passed off as "stdin" (`.ssh\id_rsa`, say) is refused rather than sent under a made-up name.
+fn is_stdin_copy(path: &Path, temp: &Path) -> bool {
+    let parent = path.parent().and_then(|p| std::fs::canonicalize(p).ok());
+    is_stdin_copy_name(&path.to_string_lossy()) && parent.is_some() && parent == std::fs::canonicalize(temp).ok()
+}
+
 /// What came in on stdin: the command's own copy, under the name it was given.
 pub fn pick_stdin(s: &StdinFile) -> Result<Picked, BridgeError> {
+    pick_stdin_from(s, &std::env::temp_dir())
+}
+
+fn pick_stdin_from(s: &StdinFile, temp: &Path) -> Result<Picked, BridgeError> {
+    if !is_stdin_copy(Path::new(&s.path), temp) {
+        return Err(BridgeError::invalid("Piped input must come from the tug command."));
+    }
     let mut p = pick_within(Path::new(&s.path), &s.name, MAX_STDIN_BYTES)?;
     p.name = sanitize(&s.name);
     p.folder = None;
@@ -174,7 +189,8 @@ mod tests {
             path: copy.to_string_lossy().into_owned(),
             name: "notes<1>.txt".into(),
         };
-        let picked = pick_all(&[], Some(&s)).unwrap();
+        // `d` stands in for the temp folder here.
+        let picked = vec![pick_stdin_from(&s, &d).unwrap()];
         assert_eq!(picked[0].name, "notes_1_.txt");
         assert_eq!(
             picked[0].folder, None,
@@ -192,6 +208,30 @@ mod tests {
         std::fs::write(&copy, b"something else entirely").unwrap();
         assert!(to_offer(&picked).is_err());
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn only_the_commands_own_stdin_copy_is_read_as_piped_input() {
+        let d = dir("stdin-only");
+        let elsewhere = dir("stdin-elsewhere");
+        let real = d.join("tug-boat-7-1.tmp");
+        std::fs::write(&real, b"piped").unwrap();
+        let as_stdin = |p: &Path| StdinFile {
+            path: p.to_string_lossy().into_owned(),
+            name: "notes.txt".into(),
+        };
+        assert!(pick_stdin_from(&as_stdin(&real), &d).is_ok());
+        // Another file passed off as piped input: refused, whatever it's called.
+        let secret = d.join("id_rsa");
+        std::fs::write(&secret, b"key").unwrap();
+        assert!(pick_stdin_from(&as_stdin(&secret), &d).is_err());
+        // The right name in the wrong folder: refused too.
+        let moved = elsewhere.join("tug-boat-7-1.tmp");
+        std::fs::write(&moved, b"piped").unwrap();
+        let e = pick_stdin_from(&as_stdin(&moved), &d).unwrap_err();
+        assert!(e.message.contains("tug command"), "{e}");
+        std::fs::remove_dir_all(&d).unwrap();
+        std::fs::remove_dir_all(&elsewhere).unwrap();
     }
 
     #[test]
