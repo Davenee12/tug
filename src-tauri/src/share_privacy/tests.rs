@@ -176,6 +176,7 @@ fn signals_combine_with_sharing_named_first() {
         quns: Some(QUNS_BUSY),
         foreground_full_screen: true,
         duplicating: false,
+        incomplete: false,
         windows: vec![
             win("screenClass", "powerpnt.exe", None),
             win("ZPFloatToolbarClass", "zoom.exe", None),
@@ -198,6 +199,7 @@ fn signals_combine_with_sharing_named_first() {
         quns: Some(QUNS_BUSY),
         foreground_full_screen: true,
         duplicating: true,
+        incomplete: false,
         windows: vec![],
     };
     assert_eq!(evaluate(&duplicated), Some(Signal::DuplicateDisplay));
@@ -217,6 +219,84 @@ fn signals_combine_with_sharing_named_first() {
         ..Default::default()
     };
     assert_eq!(evaluate(&stray), None);
+}
+
+#[test]
+fn no_answer_means_hidden() {
+    let zoom = Some(Signal::ShareWindow("zoom-share"));
+    // With the setting on, only a fresh look that found nothing shows a preview.
+    assert!(hide_preview(true, Answer::Unknown), "no fresh answer: hidden");
+    assert!(hide_preview(true, Answer::Known(zoom)));
+    assert!(!hide_preview(true, Answer::Known(None)));
+    // With the setting off nothing is hidden, as before.
+    assert!(!hide_preview(false, Answer::Unknown));
+    assert!(!hide_preview(false, Answer::Known(zoom)));
+}
+
+#[test]
+fn a_failed_call_makes_finding_nothing_unknown() {
+    let failed = Snapshot {
+        quns: None,
+        incomplete: true,
+        ..Default::default()
+    };
+    assert_eq!(judge(&failed), Answer::Unknown);
+    // Anything found still counts, whatever else failed.
+    let found_anyway = Snapshot {
+        incomplete: true,
+        windows: vec![win("ZPFloatToolbarClass", "zoom.exe", None)],
+        ..Default::default()
+    };
+    assert_eq!(
+        judge(&found_anyway),
+        Answer::Known(Some(Signal::ShareWindow("zoom-share")))
+    );
+    // Every call worked and nothing was found: previews show.
+    let clear = Snapshot {
+        quns: Some(QUNS_ACCEPTS_NOTIFICATIONS),
+        ..Default::default()
+    };
+    assert_eq!(judge(&clear), Answer::Known(None));
+}
+
+#[test]
+fn not_knowing_hides_the_window_too_and_says_so() {
+    let unknown = share_state(true, None, true);
+    assert_eq!(
+        unknown,
+        ShareState {
+            active: true,
+            reason: Some(Reason::Unknown)
+        }
+    );
+    // Not knowing wins over an older answer's reason, which may no longer be true.
+    assert_eq!(share_state(true, Some(Signal::FullScreen), true), unknown);
+    assert_eq!(
+        share_state(true, Some(Signal::FullScreen), false),
+        ShareState::from_signal(Some(Signal::FullScreen))
+    );
+    assert_eq!(share_state(true, None, false), ShareState::default());
+    // Setting off: nothing hidden, known or not.
+    assert_eq!(
+        share_state(false, Some(Signal::FullScreen), true),
+        ShareState::default()
+    );
+    let json = serde_json::to_string(&unknown).unwrap();
+    assert_eq!(json, r#"{"active":true,"reason":"unknown"}"#);
+}
+
+#[test]
+fn a_stuck_look_doesnt_block_the_next_one() {
+    let ms = std::time::Duration::from_millis;
+    assert_eq!(plan_look(None, 0), LookPlan::Start);
+    // A look started moments ago: wait for its answer rather than starting another.
+    assert_eq!(plan_look(Some(ms(40)), 1), LookPlan::Join);
+    // Stuck for 2 s: start a fresh one instead of skipping.
+    assert_eq!(plan_look(Some(LOOK_STUCK_AFTER), 1), LookPlan::Start);
+    assert_eq!(plan_look(Some(ms(9_000)), MAX_LOOKS - 1), LookPlan::Start);
+    // Windows is hung: stop starting threads; the answer is unknown (so hidden).
+    assert_eq!(plan_look(Some(ms(9_000)), MAX_LOOKS), LookPlan::GiveUp);
+    assert_eq!(plan_look(None, MAX_LOOKS), LookPlan::GiveUp);
 }
 
 #[test]

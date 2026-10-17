@@ -21,7 +21,7 @@ export function stillRevealed(revealed: boolean, share: ShareState): boolean {
   return revealed && share.active;
 }
 
-const WHILE: Record<ShareReason, string> = {
+const WHILE: Record<Exclude<ShareReason, "unknown">, string> = {
   sharing: "while you share your screen",
   presenting: "while you present",
   fullScreen: "while an app is full screen",
@@ -30,6 +30,10 @@ const WHILE: Record<ShareReason, string> = {
 /** The banner: why previews are hidden (or showing, after Show anyway). Null when not sharing. */
 export function shareBanner(enabled: boolean, share: ShareState, revealed: boolean): string | null {
   if (!enabled || !share.active) return null;
+  // tug couldn't check the screen (Windows didn't answer): it hides to be safe, and says so.
+  if (share.reason === "unknown") {
+    return revealed ? "Previews showing, though tug can't check your screen right now" : "Previews hidden until tug can check your screen";
+  }
   const why = WHILE[share.reason ?? "sharing"];
   return revealed ? `Previews showing ${why}` : `Previews hidden ${why}`;
 }

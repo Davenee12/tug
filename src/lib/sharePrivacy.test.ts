@@ -58,6 +58,14 @@ describe("shareBanner", () => {
     // An active state with no reason still says something true.
     expect(shareBanner(true, { active: true, reason: null }, false)).toBe("Previews hidden while you share your screen");
   });
+
+  it("says so when tug couldn't check the screen, and hides to be safe", () => {
+    const unknown: ShareState = { active: true, reason: "unknown" };
+    expect(previewsHidden(true, unknown, false)).toBe(true);
+    expect(shareBanner(true, unknown, false)).toBe("Previews hidden until tug can check your screen");
+    expect(shareBanner(true, unknown, true)).toBe("Previews showing, though tug can't check your screen right now");
+    expect(shareBanner(false, unknown, false)).toBeNull();
+  });
 });
 
 describe("toastKind", () => {

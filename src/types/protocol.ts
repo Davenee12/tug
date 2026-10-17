@@ -343,8 +343,8 @@ export interface ToastSpec {
 /** What a pop-up is about (`ToastKind` in `toast/xml.rs`); `info` is tug's own words, never hidden. */
 export type ToastKind = "notification" | "message" | "call" | "missedCall" | "info";
 
-/** Why previews are hidden (`share_privacy::Reason`). */
-export type ShareReason = "sharing" | "presenting" | "fullScreen";
+/** Why previews are hidden (`share_privacy::Reason`); `unknown` when tug couldn't check, so it hides to be safe. */
+export type ShareReason = "sharing" | "presenting" | "fullScreen" | "unknown";
 
 /** Whether previews are hidden right now because the screen is shared or presented (`screen-share`, `share_privacy/`). */
 export interface ShareState {

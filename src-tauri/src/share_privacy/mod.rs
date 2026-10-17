@@ -8,6 +8,10 @@
 //! and only while tug could show something (a pop-up is about to appear, or tug's window is on
 //! screen), and keeps checking while hiding is on so it clears as soon as sharing stops.
 //!
+//! **It fails closed.** With the setting on, a look that couldn't tell (Windows didn't answer in
+//! 500 ms, a look is stuck, a call failed with nothing found) counts as someone watching
+//! ([`judge`], [`hide_preview`]), and the window says tug couldn't check ([`Reason::Unknown`]).
+//!
 //! **The signals, and where each comes from.** Every one is something Windows or the app
 //! itself makes visible to any program running as the same user; none needs admin rights.
 //!
@@ -42,6 +46,8 @@
 #[cfg(windows)]
 mod win;
 
+use std::time::Duration;
+
 use serde::Serialize;
 
 use crate::toast::xml::{ToastKind, ToastSpec};
@@ -67,6 +73,9 @@ pub enum Reason {
     Presenting,
     /// An app or game is full screen.
     FullScreen,
+    /// tug couldn't check (Windows didn't answer, or a call failed): previews stay hidden until it
+    /// can.
+    Unknown,
 }
 
 /// One thing that says someone may be watching this screen. Only its name is ever logged.
@@ -113,6 +122,8 @@ impl Signal {
             Reason::Sharing => 0,
             Reason::Presenting => 1,
             Reason::FullScreen => 2,
+            // No signal has this reason: it's what tug says when it couldn't look.
+            Reason::Unknown => 3,
         }
     }
 }
@@ -331,7 +342,8 @@ pub fn window_signal(w: &TopWindow) -> Option<Signal> {
 /// One look at the screen: everything [`evaluate`] combines.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Snapshot {
-    /// `SHQueryUserNotificationState`'s answer; `None` if the call failed.
+    /// `SHQueryUserNotificationState`'s answer; `None` if the call failed (then `incomplete` is
+    /// set too).
     pub quns: Option<i32>,
     /// The foreground window covers its monitor and isn't the shell ([`covers_monitor`]).
     pub foreground_full_screen: bool,
@@ -339,6 +351,9 @@ pub struct Snapshot {
     pub duplicating: bool,
     /// Visible top-level windows of a class some rule names.
     pub windows: Vec<TopWindow>,
+    /// A Windows call failed (the shell state, the display topology or the pass over windows), so
+    /// finding nothing doesn't mean nothing is there ([`judge`]).
+    pub incomplete: bool,
 }
 
 /// The strongest signal in this snapshot, or `None` when nothing says anyone is watching.
@@ -351,6 +366,76 @@ pub fn evaluate(s: &Snapshot) -> Option<Signal> {
         signals.push(Signal::DuplicateDisplay);
     }
     signals.into_iter().min_by_key(|sig| sig.rank())
+}
+
+/// What one look could tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    /// The look finished: the strongest signal, or nothing.
+    Known(Option<Signal>),
+    /// No fresh answer: Windows didn't answer in time, too many looks are stuck, or a call failed
+    /// and nothing was found. While the setting is on this counts as "someone may be watching":
+    /// hiding fails closed, never open.
+    Unknown,
+}
+
+/// A look's answer: anything found counts even if another call failed; finding nothing counts
+/// only if every call worked.
+pub fn judge(s: &Snapshot) -> Answer {
+    match evaluate(s) {
+        Some(signal) => Answer::Known(Some(signal)),
+        None if s.incomplete => Answer::Unknown,
+        None => Answer::Known(None),
+    }
+}
+
+/// Whether a pop-up about to show hides its preview. With the setting off nothing is hidden; with
+/// it on, only a fresh look that found nothing lets the preview show.
+pub fn hide_preview(enabled: bool, answer: Answer) -> bool {
+    enabled && answer != Answer::Known(None)
+}
+
+/// What the window reads, from what tug knows: with the setting on, not knowing hides previews
+/// too, and says so ([`Reason::Unknown`]).
+pub fn share_state(enabled: bool, signal: Option<Signal>, unknown: bool) -> ShareState {
+    if !enabled {
+        ShareState::default()
+    } else if unknown {
+        ShareState {
+            active: true,
+            reason: Some(Reason::Unknown),
+        }
+    } else {
+        ShareState::from_signal(signal)
+    }
+}
+
+/// How long a look may run before tug stops waiting on it and starts a fresh one: the stuck one
+/// can't hold up every later pop-up.
+pub const LOOK_STUCK_AFTER: Duration = Duration::from_secs(2);
+/// At most this many looks may be running (stuck in Windows) at once. Past it tug starts no more
+/// helper threads, so a hung Windows can't pile them up; the answer is [`Answer::Unknown`].
+pub const MAX_LOOKS: usize = 3;
+
+/// What a caller that wants a fresh look does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LookPlan {
+    /// A look started moments ago is still running: wait for its answer.
+    Join,
+    /// Start a new look.
+    Start,
+    /// Too many looks are stuck: don't start another; the answer is unknown.
+    GiveUp,
+}
+
+/// `running_for`: how long the newest look has been running (`None` when none is). `looks`: how
+/// many look threads haven't finished, stuck ones included.
+pub fn plan_look(running_for: Option<Duration>, looks: usize) -> LookPlan {
+    match running_for {
+        Some(d) if d < LOOK_STUCK_AFTER => LookPlan::Join,
+        _ if looks >= MAX_LOOKS => LookPlan::GiveUp,
+        _ => LookPlan::Start,
+    }
 }
 
 /// What hiding started or stopped, for one INFO line in the log (signal names only).

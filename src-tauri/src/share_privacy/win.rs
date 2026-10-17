@@ -12,12 +12,18 @@
 //! Otherwise (tug in the tray, nothing hidden) the thread sleeps on a condition variable and
 //! never wakes, so idle CPU is unchanged.
 //!
+//! **Failing closed.** Every look runs on a short-lived `tug-share-look` helper and nothing waits
+//! on it for more than 500 ms. No answer in time, a look stuck for 2 s (a fresh one is started;
+//! at most three can be stuck), or a failed call with nothing found all mean "couldn't tell":
+//! with the setting on, the pop-up hides its preview and the window blurs with a banner that
+//! says why, until a look can tell.
+//!
 //! The decisions are in `mod.rs`; this file only asks Windows and reports.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Condvar, Mutex, MutexGuard, OnceLock};
-use std::time::Duration;
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter};
 use windows::core::BOOL;
@@ -26,7 +32,9 @@ use windows::Win32::Devices::Display::{
     GetDisplayConfigBufferSizes, QueryDisplayConfig, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
     DISPLAYCONFIG_TOPOLOGY_CLONE, DISPLAYCONFIG_TOPOLOGY_ID, QDC_DATABASE_CURRENT,
 };
-use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HWND, LPARAM, RECT};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HWND, LPARAM, RECT, WIN32_ERROR,
+};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONULL};
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -38,14 +46,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::{
-    class_of_interest, covers_monitor, enabled_from_setting, evaluate, needs_title, transition, Rect, ShareState,
-    Signal, Snapshot, TopWindow, EVENT, QUNS_APP, QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, SETTING,
+    class_of_interest, covers_monitor, enabled_from_setting, hide_preview, judge, needs_title, plan_look, share_state,
+    transition, Answer, LookPlan, Rect, ShareState, Signal, Snapshot, TopWindow, EVENT, QUNS_APP, QUNS_BUSY,
+    QUNS_RUNNING_D3D_FULL_SCREEN, SETTING,
 };
 use crate::store::Store;
 
 /// How often to look while the window is on screen or previews are hidden.
 const POLL: Duration = Duration::from_secs(2);
-/// How long a pop-up waits for a fresh look before going with the last answer.
+/// The longest anything waits for a fresh look: past it the answer is unknown, and a pop-up hides
+/// its preview rather than trusting an old answer.
 const CHECK_LIMIT: Duration = Duration::from_millis(500);
 
 struct Inner {
@@ -53,8 +63,10 @@ struct Inner {
     enabled: bool,
     /// tug's window is on screen (the window says so).
     watched: bool,
-    /// The last look's strongest signal.
+    /// The last finished look's strongest signal.
     signal: Option<Signal>,
+    /// The last look couldn't tell: previews are hidden until one can.
+    unknown: bool,
 }
 
 struct Monitor {
@@ -64,8 +76,6 @@ struct Monitor {
 }
 
 static MONITOR: OnceLock<Monitor> = OnceLock::new();
-/// A time-limited look is still running (Windows didn't answer): don't start another.
-static HELPER_BUSY: AtomicBool = AtomicBool::new(false);
 
 impl Monitor {
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -74,23 +84,40 @@ impl Monitor {
 
     fn state(&self) -> ShareState {
         let g = self.lock();
-        ShareState::from_signal(if g.enabled { g.signal } else { None })
+        share_state(g.enabled, g.signal, g.unknown)
     }
 
     /// Record a look's answer: log what changed (the signal's name only) and tell the window if
     /// hiding started or stopped. With the setting off, nothing is hidden whatever the look said.
-    fn apply(&self, found: Option<Signal>) {
-        let (before, after) = {
+    /// Not knowing keeps the last signal for the log, and hides previews until a look can tell.
+    fn apply(&self, answer: Answer) {
+        let (before, after, was, now, was_unknown, now_unknown) = {
             let mut g = self.lock();
-            let found = if g.enabled { found } else { None };
-            let before = g.signal;
-            g.signal = found;
-            (before, found)
+            let was = share_state(g.enabled, g.signal, g.unknown);
+            let (before, was_unknown) = (g.signal, g.unknown);
+            match answer {
+                _ if !g.enabled => {
+                    g.signal = None;
+                    g.unknown = false;
+                }
+                Answer::Known(found) => {
+                    g.signal = found;
+                    g.unknown = false;
+                }
+                Answer::Unknown => g.unknown = true,
+            }
+            let now = share_state(g.enabled, g.signal, g.unknown);
+            (before, g.signal, was, now, was_unknown, g.unknown)
         };
+        // Once per episode, not once per pop-up.
+        if now_unknown && !was_unknown {
+            log::warn!("share privacy: couldn't check the screen in time; hiding previews until tug can");
+        } else if was_unknown && !now_unknown {
+            log::info!("share privacy: checking the screen again");
+        }
         if let Some(line) = transition(before, after) {
             log::info!("share privacy: {line}");
         }
-        let (was, now) = (ShareState::from_signal(before), ShareState::from_signal(after));
         if was != now {
             if let Err(e) = self.app.emit(EVENT, now) {
                 log::warn!("emit {EVENT} failed: {e}");
@@ -111,6 +138,7 @@ pub fn start(app: &AppHandle, store: &Store) {
             enabled,
             watched: false,
             signal: None,
+            unknown: false,
         }),
         wake: Condvar::new(),
     };
@@ -129,58 +157,114 @@ fn run() {
         {
             let mut g = m.lock();
             // Nothing could show a preview right now: sleep until that changes.
-            while !(g.enabled && (g.watched || g.signal.is_some())) {
+            while !(g.enabled && (g.watched || g.signal.is_some() || g.unknown)) {
                 g = m.wake.wait(g).unwrap_or_else(|e| e.into_inner());
             }
         }
-        m.apply(evaluate(&snapshot()));
+        m.apply(look_now());
         let g = m.lock();
         let _ = m.wake.wait_timeout(g, POLL);
     }
 }
 
-/// A fresh look, limited in time: a pop-up never waits more than [`CHECK_LIMIT`] on Windows.
-/// `None` when Windows didn't answer in time (the last answer stands).
-fn look_now() -> Option<Option<Signal>> {
-    if HELPER_BUSY.swap(true, Ordering::AcqRel) {
-        return None;
-    }
-    let (tx, rx) = mpsc::channel();
-    let spawned = std::thread::Builder::new()
-        .name("tug-share-look".into())
-        .spawn(move || {
-            let found = evaluate(&snapshot());
-            HELPER_BUSY.store(false, Ordering::Release);
-            let _ = tx.send(found);
-        });
-    if spawned.is_err() {
-        HELPER_BUSY.store(false, Ordering::Release);
-        return None;
-    }
-    match rx.recv_timeout(CHECK_LIMIT) {
-        Ok(found) => Some(found),
-        Err(_) => {
-            log::warn!("share privacy: Windows didn't answer in time; going with the last check");
-            None
+/// The looks running on `tug-share-look` helpers, so callers share one rather than each starting
+/// their own, and a stuck one can't block the rest.
+struct Looks {
+    /// The newest look still running: its number and when it started.
+    running: Option<(u64, Instant)>,
+    /// The number the next look gets.
+    next: u64,
+    /// The newest finished look: its number and answer.
+    finished: Option<(u64, Answer)>,
+    /// Look threads that haven't finished, stuck ones included.
+    threads: usize,
+}
+
+static LOOKS: Mutex<Looks> = Mutex::new(Looks {
+    running: None,
+    next: 0,
+    finished: None,
+    threads: 0,
+});
+static LOOK_DONE: Condvar = Condvar::new();
+/// Said once: helper threads can't start.
+static SPAWN_WARNED: AtomicBool = AtomicBool::new(false);
+
+fn looks() -> MutexGuard<'static, Looks> {
+    LOOKS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A fresh look, limited in time: nothing waits more than [`CHECK_LIMIT`] on Windows. Joins a
+/// look started moments ago; starts a fresh one when the last has been stuck for
+/// [`super::LOOK_STUCK_AFTER`]. [`Answer::Unknown`] when no fresh answer came in time.
+fn look_now() -> Answer {
+    let deadline = Instant::now() + CHECK_LIMIT;
+    let mut g = looks();
+    let plan = plan_look(g.running.map(|(_, at)| at.elapsed()), g.threads);
+    let id = match (plan, g.running) {
+        (LookPlan::Join, Some((id, _))) => id,
+        (LookPlan::GiveUp, _) => return Answer::Unknown,
+        _ => {
+            let id = g.next;
+            g.next += 1;
+            let spawned = std::thread::Builder::new()
+                .name("tug-share-look".into())
+                .spawn(move || finish_look(id, judge(&snapshot())));
+            if let Err(e) = spawned {
+                if !SPAWN_WARNED.swap(true, Ordering::Relaxed) {
+                    log::warn!("share privacy: couldn't start a look ({e})");
+                }
+                return Answer::Unknown;
+            }
+            g.running = Some((id, Instant::now()));
+            g.threads += 1;
+            id
         }
+    };
+    loop {
+        if let Some((done, answer)) = g.finished {
+            // This look's answer, or a newer one's.
+            if done >= id {
+                return answer;
+            }
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Answer::Unknown;
+        }
+        g = LOOK_DONE.wait_timeout(g, left).unwrap_or_else(|e| e.into_inner()).0;
     }
 }
 
+/// A look finished (however late): keep its answer if nothing newer has finished.
+fn finish_look(id: u64, answer: Answer) {
+    let mut g = looks();
+    g.threads = g.threads.saturating_sub(1);
+    if g.finished.is_none_or(|(done, _)| done < id) {
+        g.finished = Some((id, answer));
+    }
+    if g.running.is_some_and(|(running, _)| running == id) {
+        g.running = None;
+    }
+    LOOK_DONE.notify_all();
+}
+
 /// Right before a pop-up: should it hide its preview? Looks again rather than trusting the last
-/// answer, since tug is usually in the tray when pop-ups matter and nothing was watching.
+/// answer, since tug is usually in the tray when pop-ups matter and nothing was watching. With
+/// the setting on and no fresh answer, the preview is hidden (`hide_preview`).
 pub fn previews_hidden_now() -> bool {
     let Some(m) = MONITOR.get() else { return false };
     if !m.lock().enabled {
         return false;
     }
-    if let Some(found) = look_now() {
-        m.apply(found);
-    }
-    m.state().active
+    let answer = look_now();
+    m.apply(answer);
+    hide_preview(m.lock().enabled, answer)
 }
 
 /// tug's window came on screen (`on`) or went away. On screen, look now and every 2 s after, so
-/// the banner is right; returns the answer so the window can show it at once.
+/// the banner is right; returns the answer so the window can show it at once (hidden, saying
+/// so, when tug couldn't tell).
 pub fn watch(on: bool) -> ShareState {
     let Some(m) = MONITOR.get() else {
         return ShareState::default();
@@ -191,9 +275,7 @@ pub fn watch(on: bool) -> ShareState {
         g.enabled
     };
     if on && enabled {
-        if let Some(found) = look_now() {
-            m.apply(found);
-        }
+        m.apply(look_now());
     }
     m.wake.notify_all();
     m.state()
@@ -204,21 +286,25 @@ pub fn set_enabled(on: bool) {
     let Some(m) = MONITOR.get() else { return };
     m.lock().enabled = on;
     if !on {
-        m.apply(None);
+        m.apply(Answer::Known(None));
     }
     m.wake.notify_all();
 }
 
-/// One look at the screen. See the module docs for what each part costs.
+/// One look at the screen. See the module docs for what each part costs. A call that fails
+/// marks the look incomplete, so finding nothing then means "couldn't tell" (`judge`).
 fn snapshot() -> Snapshot {
     // SAFETY: plain FFI call with no arguments.
     let quns = unsafe { SHQueryUserNotificationState() }.ok().map(|s| s.0);
     let full_screen_answer = matches!(quns, Some(QUNS_BUSY | QUNS_APP | QUNS_RUNNING_D3D_FULL_SCREEN));
+    let duplicating = display_duplicated();
+    let windows = windows_of_interest();
     Snapshot {
         quns,
         foreground_full_screen: full_screen_answer && foreground_covers_monitor(),
-        duplicating: display_duplicated(),
-        windows: windows_of_interest(),
+        duplicating: duplicating.unwrap_or(false),
+        incomplete: quns.is_none() || duplicating.is_none() || windows.is_none(),
+        windows: windows.unwrap_or_default(),
     }
 }
 
@@ -265,14 +351,32 @@ fn foreground_covers_monitor() -> bool {
     }
 }
 
-/// Windows+P "Duplicate": the current display topology is a clone.
-fn display_duplicated() -> bool {
+/// Windows+P "Duplicate": the current display topology is a clone. `None` when Windows couldn't
+/// say. Access denied means a remote session or the secure desktop (UAC, lock screen), where this
+/// session has no local display to duplicate: that's an answer, not a failure.
+/// <https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-querydisplayconfig>
+fn display_duplicated() -> Option<bool> {
+    // The display set-up can change between the size query and the read (a projector plugged in):
+    // Windows then says the buffer is too small, so ask again.
+    for _ in 0..3 {
+        match read_topology() {
+            Ok(topology) => return Some(topology == DISPLAYCONFIG_TOPOLOGY_CLONE),
+            Err(e) if e == ERROR_ACCESS_DENIED => return Some(false),
+            Err(e) if e == ERROR_INSUFFICIENT_BUFFER => continue,
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+fn read_topology() -> Result<DISPLAYCONFIG_TOPOLOGY_ID, WIN32_ERROR> {
     let (mut paths, mut modes) = (0u32, 0u32);
     // SAFETY: out-pointers are locals; the arrays are sized from GetDisplayConfigBufferSizes and
     // their lengths are passed alongside.
     unsafe {
-        if GetDisplayConfigBufferSizes(QDC_DATABASE_CURRENT, &mut paths, &mut modes) != ERROR_SUCCESS {
-            return false;
+        let sized = GetDisplayConfigBufferSizes(QDC_DATABASE_CURRENT, &mut paths, &mut modes);
+        if sized != ERROR_SUCCESS {
+            return Err(sized);
         }
         let mut path_info = vec![DISPLAYCONFIG_PATH_INFO::default(); paths as usize];
         let mut mode_info = vec![DISPLAYCONFIG_MODE_INFO::default(); modes as usize];
@@ -285,7 +389,11 @@ fn display_duplicated() -> bool {
             mode_info.as_mut_ptr(),
             Some(&mut topology),
         );
-        result == ERROR_SUCCESS && topology == DISPLAYCONFIG_TOPOLOGY_CLONE
+        if result == ERROR_SUCCESS {
+            Ok(topology)
+        } else {
+            Err(result)
+        }
     }
 }
 
@@ -314,15 +422,16 @@ struct Scan {
 }
 
 /// Visible, not minimized top-level windows of a class some rule names, with their program (and
-/// their title only where a rule matches by title).
-fn windows_of_interest() -> Vec<TopWindow> {
+/// their title only where a rule matches by title). `None` if the pass over windows failed
+/// (`visit` never stops it early, so a failure is Windows').
+fn windows_of_interest() -> Option<Vec<TopWindow>> {
     let mut scan = Scan {
         found: Vec::new(),
         exes: HashMap::new(),
     };
     // SAFETY: `scan` outlives EnumWindows, which calls `visit` synchronously on this thread.
-    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&mut scan as *mut Scan as isize)) };
-    scan.found
+    let walked = unsafe { EnumWindows(Some(visit), LPARAM(&mut scan as *mut Scan as isize)) };
+    walked.ok().map(|()| scan.found)
 }
 
 unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -367,11 +476,11 @@ mod tests {
         let each = start.elapsed() / rounds;
         let s = last.unwrap();
         println!(
-            "one look: {each:?} (quns {:?}, duplicating {}, {} windows of interest, signal {:?})",
+            "one look: {each:?} (quns {:?}, duplicating {}, {} windows of interest, answer {:?})",
             s.quns,
             s.duplicating,
             s.windows.len(),
-            super::evaluate(&s).map(super::Signal::name)
+            super::judge(&s)
         );
     }
 }
