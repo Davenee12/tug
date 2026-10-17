@@ -1,7 +1,8 @@
 //! "Copy diagnostics": a plain-text report the owner can send for support. It gathers the
 //! app and Windows versions, the live `DeviceStatus`, the non-sensitive settings flags and the
 //! tail of the rotated log files, with phone numbers, emails, the phone's own name, Bluetooth
-//! addresses and the Windows profile folder and account name masked out (tug never logs contact
+//! addresses and the Windows profile folder (with its 8.3 short and URL-encoded forms) and account
+//! name masked out (tug never logs contact
 //! names, device names or message text). The pieces
 //! that read files or the OS live in the command; the redaction and the report layout are pure
 //! here so they can be unit-tested without hardware.
@@ -65,43 +66,137 @@ pub fn redact(text: &str) -> String {
 }
 
 /// Who's signed in to Windows, kept out of the report: the profile folder (`C:\Users\Sam Lee`,
-/// which shows up in every logged path) and the account name.
+/// which shows up in every logged path), its 8.3 short form (`C:\Users\SAMLEE~1`, which some
+/// Windows APIs hand back) and the account name.
 #[derive(Debug, Clone, Default)]
 pub struct WindowsUser {
     pub profile: Option<String>,
+    /// The profile folder's 8.3 short form, when Windows has one that differs.
+    pub short_profile: Option<String>,
     pub name: Option<String>,
 }
+
+/// How long the short-path lookup may take before the report goes without it.
+const SHORT_PATH_LIMIT: std::time::Duration = std::time::Duration::from_millis(500);
 
 impl WindowsUser {
     pub fn current() -> WindowsUser {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+        let profile = var("USERPROFILE");
+        let short_profile = profile
+            .clone()
+            .and_then(short_path_limited)
+            .filter(|s| Some(s) != profile.as_ref());
         WindowsUser {
-            profile: var("USERPROFILE"),
+            profile,
+            short_profile,
             name: var("USERNAME"),
         }
     }
 }
 
-/// Replace the profile folder with `%USERPROFILE%` (any case, either slash, and the doubled
-/// backslashes of a debug-printed path), then the account name, as a whole word, with `[user]`.
+/// `short_path` on a helper thread, given up on after `SHORT_PATH_LIMIT` (a file-system call).
+fn short_path_limited(long: String) -> Option<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("tug-short-path".into())
+        .spawn(move || {
+            let _ = tx.send(short_path(&long));
+        })
+        .ok()?;
+    rx.recv_timeout(SHORT_PATH_LIMIT).ok().flatten()
+}
+
+/// The 8.3 short form of an existing path (GetShortPathNameW), if Windows has one.
+#[cfg(windows)]
+fn short_path(long: &str) -> Option<String> {
+    use windows::core::HSTRING;
+    use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+    let long = HSTRING::from(long);
+    // SAFETY: a size query, then a call into a buffer of that size; both only read `long`.
+    unsafe {
+        let needed = GetShortPathNameW(&long, None);
+        if needed == 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; needed as usize];
+        let n = GetShortPathNameW(&long, Some(&mut buf)) as usize;
+        (n > 0 && n < buf.len()).then(|| String::from_utf16_lossy(&buf[..n]))
+    }
+}
+
+#[cfg(not(windows))]
+fn short_path(_long: &str) -> Option<String> {
+    None
+}
+
+/// Account names that are also ordinary words: replacing them would fill the report with
+/// `[user]` ("the user tapped…", "Run as administrator") and hide nothing.
+const COMMON_NAMES: &[&str] = &["user", "owner", "admin", "administrator", "guest"];
+
+/// Whether the bare account name is worth masking on its own: four or more characters and not a
+/// common word. (The profile folder is always masked.)
+fn maskable_name(name: &str) -> bool {
+    name.chars().count() >= 4 && !COMMON_NAMES.iter().any(|w| w.eq_ignore_ascii_case(name))
+}
+
+/// Percent-encode everything but unreserved characters and `keep` (as in a URL).
+fn percent_encode(s: &str, keep: &[u8]) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) || keep.contains(&b) {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// The ways a folder shows up in a log: as is, forward slashes, the doubled backslashes of a
+/// debug-printed path, and URL-encoded (as a URL's path, `C:/Users/Sam%20Lee`, and as one encoded
+/// component, `C%3A%5CUsers%5CSam%20Lee`, either slash).
+fn path_variants(path: &str) -> Vec<String> {
+    let slash = path.replace('\\', "/");
+    let mut out: Vec<String> = Vec::new();
+    for v in [
+        path.to_string(),
+        slash.clone(),
+        path.replace('\\', "\\\\"),
+        percent_encode(&slash, b"/:"),
+        percent_encode(path, b""),
+        percent_encode(&slash, b""),
+    ] {
+        if !out.contains(&v) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// Replace the profile folder (and its 8.3 short form) with `%USERPROFILE%` (any case, either
+/// slash, doubled backslashes, URL-encoded), then the account name, as a whole word (and
+/// URL-encoded), with `[user]` when it's long enough and not a common word.
 pub fn redact_user(text: &str, user: &WindowsUser) -> String {
     let mut out = text.to_string();
-    if let Some(profile) = user
-        .profile
-        .as_deref()
+    let folders = [user.profile.as_deref(), user.short_profile.as_deref()];
+    for folder in folders
+        .into_iter()
+        .flatten()
         .map(|p| p.trim().trim_end_matches(['\\', '/']))
         .filter(|p| p.len() >= 3)
     {
-        let variants = [
-            profile.to_string(),
-            profile.replace('\\', "/"),
-            profile.replace('\\', "\\\\"),
-        ];
-        for v in variants {
+        for v in path_variants(folder) {
             out = replace_ignoring_case(&out, &v, "%USERPROFILE%", false);
         }
     }
-    if let Some(name) = user.name.as_deref().map(str::trim).filter(|n| n.chars().count() >= 2) {
+    if let Some(name) = user.name.as_deref().map(str::trim).filter(|n| maskable_name(n)) {
+        // Encoded, it's only different when the name has a space or symbol, which makes it
+        // specific enough to mask without word boundaries (it often follows another `%20`).
+        let encoded = percent_encode(name, b"");
+        if encoded != name {
+            out = replace_ignoring_case(&out, &encoded, "[user]", false);
+        }
         out = replace_ignoring_case(&out, name, "[user]", true);
     }
     out
@@ -539,9 +634,81 @@ mod tests {
     }
 
     #[test]
+    fn the_short_and_url_encoded_profile_folder_are_masked_too() {
+        let user = WindowsUser {
+            profile: Some(r"C:\Users\Sam Lee".into()),
+            short_profile: Some(r"C:\Users\SAMLEE~1".into()),
+            name: Some("Sam Lee".into()),
+        };
+        // The 8.3 short form some Windows APIs hand back, either slash.
+        assert_eq!(
+            redact_user(
+                r"temp C:\Users\SAMLEE~1\AppData\Local\Temp\x and c:/users/samlee~1/y",
+                &user
+            ),
+            r"temp %USERPROFILE%\AppData\Local\Temp\x and %USERPROFILE%/y"
+        );
+        // URL-encoded: a file URL's path, and the whole path as one encoded component.
+        assert_eq!(
+            redact_user("open file:///C:/Users/Sam%20Lee/Pictures/a.png", &user),
+            "open file:///%USERPROFILE%/Pictures/a.png"
+        );
+        assert_eq!(
+            redact_user("dir=C%3A%5CUsers%5CSam%20Lee%5CDownloads&x=1", &user),
+            "dir=%USERPROFILE%%5CDownloads&x=1"
+        );
+        assert_eq!(
+            redact_user("dir=c%3a%2fusers%2fsam%20lee%2fx", &user),
+            "dir=%USERPROFILE%%2fx"
+        );
+        // The account name URL-encoded on its own.
+        assert_eq!(redact_user("OneDrive%20-%20Sam%20Lee", &user), "OneDrive%20-%20[user]");
+    }
+
+    /// The Windows side: an existing folder has a short form (the same path when 8.3 names are
+    /// off), a missing one has none, and the time-limited wrapper agrees.
+    #[cfg(windows)]
+    #[test]
+    fn short_path_reads_an_existing_folder_only() {
+        let temp = std::env::temp_dir().display().to_string();
+        assert!(short_path(&temp).is_some_and(|s| !s.is_empty()));
+        assert_eq!(short_path(r"C:\tug-no-such-folder\x"), None);
+        assert_eq!(short_path_limited(temp.clone()), short_path(&temp));
+    }
+
+    #[test]
+    fn short_or_common_account_names_arent_masked_on_their_own() {
+        // "[user]" everywhere the word "user" appears would be noise and hide nothing; the profile
+        // folder is still masked.
+        for name in ["user", "Owner", "ADMIN", "Administrator", "guest", "al", "Jo"] {
+            let user = WindowsUser {
+                profile: Some(format!(r"C:\Users\{name}")),
+                short_profile: None,
+                name: Some(name.into()),
+            };
+            let line = format!(r"the user tapped Run as administrator; owner guest al Jo; C:\Users\{name}\x");
+            let out = redact_user(&line, &user);
+            assert!(
+                out.starts_with("the user tapped Run as administrator; owner guest al Jo;"),
+                "{out}"
+            );
+            assert!(out.ends_with(r"%USERPROFILE%\x"), "{out}");
+        }
+        // Four or more characters, not a common word: masked.
+        let user = WindowsUser {
+            profile: None,
+            short_profile: None,
+            name: Some("Jordan".into()),
+        };
+        assert_eq!(redact_user("signed in as jordan.", &user), "signed in as [user].");
+        assert!(maskable_name("Robin") && !maskable_name("Kim") && !maskable_name("Guest"));
+    }
+
+    #[test]
     fn the_windows_user_is_never_named() {
         let user = WindowsUser {
             profile: Some(r"C:\Users\Sam Lee".into()),
+            short_profile: None,
             name: Some("Sam Lee".into()),
         };
         assert_eq!(
@@ -560,11 +727,16 @@ mod tests {
             redact_user(r"D:\Sam Lee\files; OneDrive - Sam Lee", &user),
             r"D:\[user]\files; OneDrive - [user]"
         );
+        // A short account name is left alone as a word; its profile folder still goes.
         let short = WindowsUser {
             profile: Some(r"C:\Users\al".into()),
+            short_profile: None,
             name: Some("al".into()),
         };
-        assert_eq!(redact_user("all good, al", &short), "all good, [user]");
+        assert_eq!(
+            redact_user(r"all good, al: C:\Users\al\x", &short),
+            r"all good, al: %USERPROFILE%\x"
+        );
         // Nothing known about the user: untouched.
         assert_eq!(redact_user(r"C:\Users\x", &WindowsUser::default()), r"C:\Users\x");
 
