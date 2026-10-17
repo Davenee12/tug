@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { PhoneNotification, ShareState } from "../types/protocol";
-import { callerLine, NOT_SHARING, previewsHidden, shareBanner, stillRevealed, toastKind } from "./sharePrivacy";
+import {
+  awaitingShareAnswer,
+  callerLine,
+  NOT_SHARING,
+  previewsHidden,
+  SHARE_UNKNOWN,
+  SHARE_WATCH_START,
+  shareBanner,
+  shareWatchAnswered,
+  shareWatchAsked,
+  stillRevealed,
+  toastKind,
+} from "./sharePrivacy";
 import { toastSpec } from "./toastSpec";
 
 const sharing: ShareState = { active: true, reason: "sharing" };
@@ -34,6 +46,43 @@ describe("previewsHidden", () => {
     expect(previewsHidden(true, sharing, true)).toBe(false);
     expect(previewsHidden(false, sharing, false)).toBe(false);
     expect(previewsHidden(true, NOT_SHARING, false)).toBe(false);
+  });
+});
+
+describe("waiting for the backend's first answer", () => {
+  it("hides previews from the moment the window shows until the backend answers", () => {
+    // tug comes back on screen: the last answer was "not sharing", but that's from before.
+    const asked = shareWatchAsked(SHARE_WATCH_START);
+    const awaiting = awaitingShareAnswer(asked, true, true);
+    expect(awaiting).toBe(true);
+    expect(previewsHidden(true, NOT_SHARING, false, awaiting)).toBe(true);
+    // The answer for this ask: whatever it says now decides.
+    const answered = shareWatchAnswered(asked, asked.episode);
+    expect(awaitingShareAnswer(answered, true, true)).toBe(false);
+    expect(previewsHidden(true, NOT_SHARING, false, awaitingShareAnswer(answered, true, true))).toBe(false);
+    expect(previewsHidden(true, sharing, false, awaitingShareAnswer(answered, true, true))).toBe(true);
+  });
+
+  it("only counts the answer to the newest ask", () => {
+    // Shown, hidden and shown again before the first answer came back.
+    const first = shareWatchAsked(SHARE_WATCH_START);
+    const third = shareWatchAsked(shareWatchAsked(first));
+    const late = shareWatchAnswered(third, first.episode);
+    expect(awaitingShareAnswer(late, true, true)).toBe(true);
+    expect(awaitingShareAnswer(shareWatchAnswered(third, third.episode), true, true)).toBe(false);
+  });
+
+  it("doesn't wait with the setting off or the window hidden, and Show anyway still works", () => {
+    const asked = shareWatchAsked(SHARE_WATCH_START);
+    expect(awaitingShareAnswer(asked, true, false)).toBe(false);
+    expect(awaitingShareAnswer(asked, false, true)).toBe(false);
+    expect(previewsHidden(false, NOT_SHARING, false, true)).toBe(false);
+    expect(previewsHidden(true, sharing, true, true)).toBe(false);
+  });
+
+  it("assumes hidden, and says why, when the backend can't be asked", () => {
+    expect(previewsHidden(true, SHARE_UNKNOWN, false)).toBe(true);
+    expect(shareBanner(true, SHARE_UNKNOWN, false)).toBe("Previews hidden until tug can check your screen");
   });
 });
 

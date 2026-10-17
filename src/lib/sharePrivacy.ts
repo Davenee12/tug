@@ -7,10 +7,43 @@ import type { PhoneNotification, ShareReason, ShareState, ToastKind } from "../t
 import { isConversation } from "./format";
 
 export const NOT_SHARING: ShareState = { active: false, reason: null };
+/** What the window assumes when the backend couldn't be asked: hidden, saying tug couldn't check. */
+export const SHARE_UNKNOWN: ShareState = { active: true, reason: "unknown" };
 
-/** Whether the window hides texts and names right now. "Show anyway" lasts until sharing stops. */
-export function previewsHidden(enabled: boolean, share: ShareState, revealed: boolean): boolean {
-  return enabled && share.active && !revealed;
+/**
+ * Whether the window hides texts and names right now. "Show anyway" lasts until sharing stops.
+ * `awaiting`: the window just came on screen and the backend hasn't answered yet, so an old
+ * "not sharing" can't flash texts in front of a meeting ({@link awaitingShareAnswer}).
+ */
+export function previewsHidden(enabled: boolean, share: ShareState, revealed: boolean, awaiting = false): boolean {
+  return enabled && !revealed && (share.active || awaiting);
+}
+
+/**
+ * Each time the window asks the backend to start (or stop) watching is an episode; only the answer
+ * to the newest one counts as fresh, so a late answer from an earlier time on screen can't end
+ * the wait.
+ */
+export interface ShareWatch {
+  episode: number;
+  answered: boolean;
+}
+
+export const SHARE_WATCH_START: ShareWatch = { episode: 0, answered: false };
+
+/** The window asked again (it came on screen, went away, or the setting changed). */
+export function shareWatchAsked(w: ShareWatch): ShareWatch {
+  return { episode: w.episode + 1, answered: false };
+}
+
+/** The backend answered the ask numbered `episode`. */
+export function shareWatchAnswered(w: ShareWatch, episode: number): ShareWatch {
+  return episode === w.episode ? { ...w, answered: true } : w;
+}
+
+/** Previews count as hidden while the window is on screen with the setting on and no fresh answer yet. */
+export function awaitingShareAnswer(w: ShareWatch, visible: boolean, enabled: boolean): boolean {
+  return visible && enabled && !w.answered;
 }
 
 /**

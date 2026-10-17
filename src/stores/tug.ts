@@ -92,7 +92,18 @@ import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../l
 import { coalesce, nextFrame } from "../lib/coalesce";
 import { isCurrent, NewestRev, SnapshotGuard } from "../lib/ordering";
 import { retryDelay, settleAll, START_FAILED, STILL_LOADING, type StartupRead } from "../lib/startup";
-import { NOT_SHARING, previewsHidden, shareBanner, stillRevealed } from "../lib/sharePrivacy";
+import {
+  awaitingShareAnswer,
+  NOT_SHARING,
+  previewsHidden,
+  SHARE_UNKNOWN,
+  SHARE_WATCH_START,
+  shareBanner,
+  type ShareWatch,
+  shareWatchAnswered,
+  shareWatchAsked,
+  stillRevealed,
+} from "../lib/sharePrivacy";
 import { useTugboatStore } from "./tugboat";
 import { useDevToolsStore } from "./devtools";
 
@@ -436,8 +447,15 @@ export const useTugStore = defineStore("tug", () => {
   const screenShare = ref<ShareState>(NOT_SHARING);
   /** "Show anyway" for the share in progress; forgotten when sharing stops. */
   const shareRevealed = ref(false);
+  /** Which ask of `screen_share_watch` is newest, and whether it has been answered. */
+  const shareWatch = ref<ShareWatch>(SHARE_WATCH_START);
   const previewsHiddenNow = computed(() =>
-    previewsHidden(settings.value.hidePreviewsWhileSharing, screenShare.value, shareRevealed.value),
+    previewsHidden(
+      settings.value.hidePreviewsWhileSharing,
+      screenShare.value,
+      shareRevealed.value,
+      awaitingShareAnswer(shareWatch.value, pageVisible.value, settings.value.hidePreviewsWhileSharing),
+    ),
   );
   const shareBannerText = computed(() =>
     shareBanner(settings.value.hidePreviewsWhileSharing, screenShare.value, shareRevealed.value),
@@ -461,10 +479,15 @@ export const useTugStore = defineStore("tug", () => {
     const on = pageVisible.value && settings.value.hidePreviewsWhileSharing;
     if (on === shareWatching) return;
     shareWatching = on;
+    // Until this ask is answered, previews on screen count as hidden (no flash of an old answer).
+    shareWatch.value = shareWatchAsked(shareWatch.value);
+    const episode = shareWatch.value.episode;
     void api
       .screenShareWatch(on)
       .then(setScreenShare)
-      .catch(() => undefined);
+      // No answer at all: stay hidden, and say tug couldn't check (with Show anyway).
+      .catch(() => (on ? setScreenShare(SHARE_UNKNOWN) : undefined))
+      .finally(() => (shareWatch.value = shareWatchAnswered(shareWatch.value, episode)));
   }
   watch([pageVisible, () => settings.value.hidePreviewsWhileSharing], () => {
     if (started) syncShareWatch();
