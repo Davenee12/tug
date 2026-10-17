@@ -209,6 +209,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `wake.rs` | A real sleep vs a stalled thread, from two clocks and the resume flag |
 | `map/contacts_watch.rs` | When to pull the phonebook; when an empty phonebook means Sync Contacts is off |
 | `map/obex.rs`, `bmessage.rs`, `listing.rs`, `vcard.rs`, `mns_event.rs`, `mns.rs`, `pick.rs` | OBEX framing, MAP/PBAP parsers, MNS event handling, which paired device is the iPhone |
+| `map/charset.rs`, `sms_pdu.rs` | A text's bytes to words without U+FFFD: UTF-8, then UTF-16, CESU-8, a cut-off last character, Windows-1252; native SMS PDUs |
 | `devtools/confirm.rs`, `rate_limit.rs`, `recipient.rs`, `settings.rs` | The send-confirmation state machine, per-tool limits, name → contact, switch defaults |
 | `crates/tug-bridge` (`auth`, `protocol`, `framing`, `paths`, `time`) | Bridge protocol and handshake; the whole exchange is also tested over a real pipe |
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
@@ -219,7 +220,8 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
 
-Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attention`
+Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attachments`
+("Attachment: 1 Photo" → a photo chip), `attention`
 (is the window really visible), `battery`, `coalesce` (one render per frame for bursts of
 updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),
