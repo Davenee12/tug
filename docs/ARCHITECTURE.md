@@ -72,7 +72,8 @@ Inside `tug.exe`:
 **Talking between them.** `BleHandle` and `MapHandle` are unbounded mpsc senders of commands, with
 oneshot replies. `Shared` (`state.rs`) is the one `Arc` everything holds; `update_status` and
 `update_now_playing` emit to the UI only when something changed, under the lock, with a `rev` that
-counts the changes (PC audio's status has one too). Events and reads can still reach the window out
+counts the changes (PC audio's status has one too; Tugboat's and Developer tools' statuses number
+each copy as it's composed, `RevCounter`). Events and reads can still reach the window out
 of order (a startup read, a command's answer), so the stores keep the highest `rev`
 (`lib/ordering`), and a notification list read can't undo a removal that landed while it was in
 flight.

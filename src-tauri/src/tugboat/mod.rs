@@ -39,6 +39,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
+use crate::state::RevCounter;
 use qr::Qr;
 use session::{Session, Sink, Skipped, TugboatIncoming, TugboatOffer, TugboatText};
 
@@ -128,6 +129,8 @@ pub enum Ended {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TugboatStatus {
+    /// Numbers each copy in the order it was composed (`state::RevCounter`); the UI keeps the newest.
+    pub rev: u64,
     pub phase: Phase,
     /// The full link in the QR code (with the secret), also shown as the manual fallback.
     pub url: Option<String>,
@@ -205,6 +208,7 @@ struct Inner {
     ended: Mutex<Option<Ended>>,
     generation: AtomicU64,
     emit_pending: AtomicBool,
+    revs: RevCounter,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -327,14 +331,22 @@ impl TugboatService {
                 ended: Mutex::new(None),
                 generation: AtomicU64::new(0),
                 emit_pending: AtomicBool::new(false),
+                revs: RevCounter::default(),
             }),
         }
     }
 
+    /// Compose, number and emit under one lock (`RevCounter`), so racing updates reach the window
+    /// in order and a command's answer composed earlier can't replace a newer event.
     fn emit(&self) {
-        if let Err(e) = self.inner.app.emit(EVENT, self.status()) {
-            log::warn!("emit {EVENT} failed: {e}");
-        }
+        self.inner.revs.stamp(
+            |rev| self.compose(rev),
+            |s| {
+                if let Err(e) = self.inner.app.emit(EVENT, s) {
+                    log::warn!("emit {EVENT} failed: {e}");
+                }
+            },
+        );
     }
 
     fn session(&self) -> Option<Arc<Session>> {
@@ -342,6 +354,10 @@ impl TugboatService {
     }
 
     pub fn status(&self) -> TugboatStatus {
+        self.inner.revs.stamp(|rev| self.compose(rev), |_| ())
+    }
+
+    fn compose(&self, rev: u64) -> TugboatStatus {
         let folder = tugboat_folder(&self.inner.app)
             .ok()
             .map(|p| p.to_string_lossy().into_owned());
@@ -360,6 +376,7 @@ impl TugboatService {
         };
         let Some(session) = session else {
             return TugboatStatus {
+                rev,
                 phase: Phase::Off,
                 url: None,
                 address: None,
@@ -387,6 +404,7 @@ impl TugboatService {
             None => (None, None, None),
         };
         TugboatStatus {
+            rev,
             phase,
             url,
             address,

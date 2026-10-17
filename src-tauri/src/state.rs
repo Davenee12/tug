@@ -277,6 +277,24 @@ fn update_stamped<T: Clone>(
     Some(v.clone())
 }
 
+/// Numbers every copy of a state that is composed fresh each time it's sent (Tugboat's and
+/// Developer tools' status): each copy, whether emitted or returned to a command, is composed and
+/// numbered under one lock, so a higher `rev` always means a later, newer picture. Emitting under
+/// the same lock keeps events in that order; the UI keeps the highest `rev` it has seen.
+#[derive(Default)]
+pub struct RevCounter(Mutex<u64>);
+
+impl RevCounter {
+    /// Compose the next copy (`compose` gets its `rev`) and hand it to `emit`, all under the lock.
+    pub fn stamp<T>(&self, compose: impl FnOnce(u64) -> T, emit: impl FnOnce(&T)) -> T {
+        let mut rev = lock(&self.0);
+        *rev += 1;
+        let value = compose(*rev);
+        emit(&value);
+        value
+    }
+}
+
 /// Whether a status with revision `rev` is newer than the newest one seen (`seen`), recording it if
 /// so. For code that follows the status from `Shared`'s status hook, which runs outside the lock and
 /// so can see two updates in the wrong order.
@@ -585,6 +603,31 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(serde_json::to_value(&s).unwrap()["rev"], 7);
+    }
+
+    /// Tugboat and Developer tools: emits from several threads and a command's read. Every copy
+    /// gets a distinct rev in the order it was composed, and emits leave in that order.
+    #[test]
+    fn rev_counter_numbers_copies_in_composition_order() {
+        let counter = Arc::new(RevCounter::default());
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let (counter, sent) = (counter.clone(), sent.clone());
+                std::thread::spawn(move || {
+                    for _ in 0..250 {
+                        counter.stamp(|rev| rev, |rev| lock(&sent).push(*rev));
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(*lock(&sent), (1..=2000).collect::<Vec<u64>>());
+        // A command's read composed after the last event outranks it.
+        let read = counter.stamp(|rev| rev, |_| ());
+        assert!(read > 2000);
     }
 
     #[test]

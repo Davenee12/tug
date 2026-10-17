@@ -522,6 +522,11 @@ export interface TugboatText {
 
 /** Everything the Tugboat panel shows; also the "tugboat-status" event. */
 export interface TugboatStatus {
+  /**
+   * Numbers each copy in the order the backend composed it; the store keeps the newest
+   * (`lib/ordering`). Always sent; optional for fixtures and the store's own Off placeholder.
+   */
+  rev?: number;
   phase: TugboatPhase;
   /** The QR link (with the secret), also shown as the manual fallback. */
   url: string | null;
@@ -773,6 +778,8 @@ export interface DevToolsConfirm {
 
 /** Everything Settings › Developer tools shows (`DevToolsStatus`). */
 export interface DevToolsStatus {
+  /** Numbers each copy in the order the backend composed it; the store keeps the newest. Optional for fixtures. */
+  rev?: number;
   enabled: boolean;
   permissions: DevToolsPermission[];
   clients: DevToolsClient[];
