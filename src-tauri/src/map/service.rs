@@ -1263,6 +1263,8 @@ mod worker {
                 );
             }
             let mut added = 0;
+            // Who this sync brought texts from: name learning only needs to look at them.
+            let mut new_senders: Vec<String> = Vec::new();
             // A download that timed out leaves the session in an unknown state: stop the sync there
             // (dropping the session) once what's been fetched is saved.
             let mut stop: Option<MapError> = None;
@@ -1338,6 +1340,9 @@ mod worker {
                         m = shared.store.mark_gap_before(m.id)?;
                         mark_gap = false;
                     }
+                    if !new_senders.contains(&m.address) {
+                        new_senders.push(m.address.clone());
+                    }
                     shared.emit(events::MESSAGE, m);
                     added += 1;
                 }
@@ -1346,8 +1351,10 @@ mod worker {
                 }
             }
             if added > 0 {
-                let named = !shared.store.learn_contacts()?.is_empty();
-                let aliased = shared.store.learn_aliases()? > 0;
+                // Only the senders with new texts (all their texts still count); a full pass runs at
+                // startup and after each contacts sync.
+                let named = !shared.store.learn_contacts_for(&new_senders)?.is_empty();
+                let aliased = shared.store.learn_aliases_for(&new_senders)? > 0;
                 if named || aliased {
                     shared.emit(events::CONTACTS, shared.store.contacts()?);
                 }

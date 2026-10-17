@@ -166,6 +166,14 @@ const MIGRATIONS: &[&str] = &[
     UPDATE contacts SET match_key = match_key(address);
     CREATE INDEX contacts_match_key ON contacts (match_key);
     "#,
+    // v12: indexes for learning names (`messages.rs` learn_contacts / learn_aliases), which match a
+    // Messages notification's text to an incoming text's body. Without them every pass scanned the
+    // whole history per text while holding the store, after every sync. Partial, so they only
+    // cover incoming texts and Messages notifications.
+    r#"
+    CREATE INDEX messages_in_body ON messages (body, address) WHERE direction = 'in';
+    CREATE INDEX notifications_sms_text ON notifications (app_id, message, received_at) WHERE app_id = 'com.apple.MobileSMS';
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
@@ -1030,6 +1038,10 @@ mod tests {
 
     /// Back to a real older database: undo the schema later migrations added, so they apply again.
     fn rewind(conn: &Connection, version: i64) {
+        if version < 12 {
+            conn.execute_batch("DROP INDEX messages_in_body; DROP INDEX notifications_sms_text;")
+                .unwrap();
+        }
         if version < 11 {
             conn.execute_batch("DROP INDEX contacts_match_key; ALTER TABLE contacts DROP COLUMN match_key;")
                 .unwrap();
