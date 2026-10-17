@@ -204,8 +204,13 @@ both lockfiles current. CI actions from third parties are pinned to commit SHAs.
 **Release builds.** Releases are built by GitHub Actions (`.github/workflows/release.yml`) from a
 version tag on a commit on `main`, after the same checks as every pull request, and land as a
 *draft* that the owner publishes by hand. The workflow's token is read-only except in the one job
-that creates the draft. Secrets (the updater signing key, SignPath's token) are only read on a real
-release run, never on pull requests or dry runs, and never echoed. The build fails if a local path
+that creates the draft. Secrets (the updater signing key, SignPath's token) are secrets of a GitHub
+environment, `release`, that only `v*` tags may deploy to and that waits for the owner's approval;
+only an admin may create a `v*` tag (a ruleset). They're read only in the `sign` job, which runs
+for a real release only, checks out just the scripts, `tauri.conf.json` and `CHANGELOG.md`, runs no
+npm or cargo (the Tauri CLI that signs is pinned and installed with `--ignore-scripts`), and never
+echoes them; the job that builds has no secrets at all, and neither do pull requests or dry runs.
+First-party and third-party actions are pinned to commit SHAs. The build fails if a local path
 survived in the exes, and the checksums and `latest.json` are made after any code signing, so they
 describe the files people download. See [RELEASING.md](RELEASING.md).
 

@@ -7,13 +7,17 @@ it approves the project.
 
 - **[.github/workflows/release.yml](../.github/workflows/release.yml)** builds the release on a
   Windows runner whenever a `v*` tag is pushed, and leaves it as a **draft**. Nothing is public
-  until you publish the draft.
+  until you publish the draft. It has three jobs: `build` (checks and builds, with no secrets at
+  all), `sign` (code signing and the updater signature, in the `release` environment, which you
+  approve each time and which only `v*` tags may use) and `release` (creates the draft). The
+  signing key is never in a job that runs npm or cargo.
 - **Automatic updates** (`src-tauri/src/updater/`) read `latest.json` from the newest *published*
   release, so publishing is also what offers the update to installed copies.
 
 ## One-time setup
 
-Do these once. Steps 1 to 4 switch on automatic updates; step 5 is for code signing later.
+Do these once. Steps 1 to 4 switch on automatic updates; step 5 is for code signing later. Nothing
+here changes by itself: each step is something you run or click.
 
 ### 1. Make the updater signing key
 
@@ -46,26 +50,80 @@ Until this is done every build says "Automatic updates aren't set up for this bu
 About and never contacts GitHub, so it's safe to merge this feature first and add the key later.
 `cargo test` checks the value is either empty or a real minisign public key.
 
-### 3. Give the release workflow the private key
+### 3. Lock releases down, then give the `release` environment the private key
 
-GitHub › the tug repository › **Settings › Secrets and variables › Actions › New repository
-secret**, twice:
+The signing key must be readable only by a release you approved, built from a version tag only
+you can create. A plain repository secret isn't enough: any branch's copy of the workflow could
+read it. So the key lives in a GitHub **environment** called `release`, which only `v*` tags may
+deploy to and which waits for your approval, and a **tag ruleset** stops anyone but an admin
+creating a `v*` tag. Do 3a to 3d in order, from PowerShell with the GitHub CLI signed in as you
+(`gh auth status`). Each command prints JSON when it worked.
 
-| Name | Value |
-|---|---|
-| `TAURI_SIGNING_PRIVATE_KEY` | The whole content of `tug-updater.key` |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | The password from step 1 |
-
-Or from PowerShell with the GitHub CLI (it never echoes the values):
+**3a. Create the `release` environment**, with you as its required reviewer and custom
+deployment rules (you can approve your own runs, as the only maintainer):
 
 ```powershell
-Get-Content -Raw "$env:USERPROFILE\.tauri\tug-updater.key" | gh secret set TAURI_SIGNING_PRIVATE_KEY --repo Davenee12/tug
-gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo Davenee12/tug
+$me = gh api users/Davenee12 --jq .id
+@"
+{
+  "wait_timer": 0,
+  "prevent_self_review": false,
+  "reviewers": [ { "type": "User", "id": $me } ],
+  "deployment_branch_policy": { "protected_branches": false, "custom_branch_policies": true }
+}
+"@ | gh api -X PUT repos/Davenee12/tug/environments/release --input -
 ```
 
-The workflow reads these only on a real release run (a tag push, or a manual run with dry run
-off), never on pull requests or dry runs, and checks that the signature it makes matches the public
-key in `tauri.conf.json` before it publishes anything.
+**3b. Let only version tags deploy to it:**
+
+```powershell
+gh api -X POST repos/Davenee12/tug/environments/release/deployment-branch-policies -f name='v*' -f type=tag
+```
+
+Check it: `gh api repos/Davenee12/tug/environments/release/deployment-branch-policies` lists one
+policy, `v*`, of type `tag`. (In the browser: Settings › Environments › release shows "Required
+reviewers: Davenee12" and "Deployment branches and tags: Selected… v* (tag)".)
+
+**3c. Put the key and its password in the environment** (not the repository; the CLI never echoes
+them):
+
+```powershell
+Get-Content -Raw "$env:USERPROFILE\.tauri\tug-updater.key" | gh secret set TAURI_SIGNING_PRIVATE_KEY --env release --repo Davenee12/tug
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --env release --repo Davenee12/tug
+```
+
+`gh secret list --env release --repo Davenee12/tug` shows both names. If you ever saved them as
+*repository* secrets, delete those, because any branch could read them:
+
+```powershell
+gh secret list --repo Davenee12/tug
+gh secret delete TAURI_SIGNING_PRIVATE_KEY --repo Davenee12/tug
+gh secret delete TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo Davenee12/tug
+```
+
+**3d. Only admins may create, move or delete `v*` tags** (a ruleset; actor `5` is the repository
+admin role, which may bypass it):
+
+```powershell
+@"
+{
+  "name": "Release tags",
+  "target": "tag",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/tags/v*"], "exclude": [] } },
+  "rules": [ { "type": "creation" }, { "type": "update" }, { "type": "deletion" } ],
+  "bypass_actors": [ { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" } ]
+}
+"@ | gh api -X POST repos/Davenee12/tug/rulesets --input -
+```
+
+Check it: `gh api repos/Davenee12/tug/rulesets` lists "Release tags" as `active` (Settings ›
+Rules › Rulesets in the browser).
+
+The `sign` job only exists on a real release run (a tag push, or a manual run on a tag with dry run
+off); pull requests and dry runs run `build` alone, which has no secrets at all. Before it reads
+anything, GitHub waits for you to approve the deployment to `release`, and it checks that the
+signature it makes matches the public key in `tauri.conf.json` before the draft is created.
 
 ### 4. Back the private key up, offline
 
@@ -82,7 +140,8 @@ sign an update every installed tug would accept.
 ### 5. Code signing with SignPath (later, optional)
 
 When SignPath approves tug for free open-source signing (see the application draft), add these
-repository secrets; until all three exist the signing steps are skipped.
+as secrets of the `release` environment (`gh secret set <NAME> --env release --repo
+Davenee12/tug`, like step 3c); until all three exist the signing steps are skipped.
 
 | Name | Value |
 |---|---|
@@ -92,32 +151,23 @@ repository secrets; until all three exist the signing steps are skipped.
 | `SIGNPATH_SIGNING_POLICY_SLUG` | Optional; defaults to `release-signing` |
 
 In the SignPath project, link the GitHub repository (GitHub.com as the trusted build system) and
-create two artifact configurations with these slugs (adjust to SignPath's current schema if it
-asks for more):
+create one artifact configuration with the slug `downloads` (adjust to SignPath's current schema if
+it asks for more):
 
-- `binaries`, for the app and the `tug` command, which go inside the installer:
+```xml
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="*-setup.exe"><authenticode-sign /></pe-file>
+    <pe-file path="*-portable.exe"><authenticode-sign /></pe-file>
+  </zip-file>
+</artifact-configuration>
+```
 
-  ```xml
-  <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
-    <zip-file>
-      <pe-file path="tug.exe"><authenticode-sign /></pe-file>
-      <pe-file path="tug-cli.exe"><authenticode-sign /></pe-file>
-    </zip-file>
-  </artifact-configuration>
-  ```
-
-- `installer`, for the NSIS installer built around them:
-
-  ```xml
-  <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
-    <zip-file>
-      <pe-file path="*-setup.exe"><authenticode-sign /></pe-file>
-    </zip-file>
-  </artifact-configuration>
-  ```
-
-Each release then makes two signing requests that wait (up to an hour each) for you to approve them
-in SignPath. The workflow fails if a signature isn't valid afterwards. The checksums, the updater
+Each release then makes one signing request that waits (up to an hour) for you to approve it in
+SignPath. The workflow fails if a signature isn't valid afterwards. Signing happens in the `sign`
+job, which runs no npm or cargo, so the installer isn't rebuilt there: what's signed is the
+installer you download and the portable app. The copy of `tug.exe` inside the installer isn't
+signed on its own. The checksums, the updater
 signature and `latest.json` are made after signing, so they match the signed files. Once the first
 signed release is out, add the "Code signing policy" section from the application draft to the
 README.
@@ -140,7 +190,8 @@ README.
    The tag must match the version files exactly, and the commit must be on `main`, or the workflow
    stops before building.
 3. **Watch the run** under Actions › release (about 45–60 minutes: the full `npm run check`, then the
-   release build). With SignPath set up, approve its two requests when they arrive.
+   release build). When `build` is done, the run waits on **Review deployments**: check it's your
+   tag, then approve `release` so `sign` can run. With SignPath set up, approve its request too.
 4. **Review the draft** under Releases › "tug 0.5.19". It carries `tug-0.5.19-setup.exe`,
    `tug-0.5.19-portable.exe`, `SHA256SUMS.txt` and, with the updater key set up,
    `tug-0.5.19-setup.exe.sig` and `latest.json`. The notes are the CHANGELOG section followed by the
@@ -149,10 +200,12 @@ README.
    from Settings › About › Check for updates), download it quietly and show the **Update** button.
 
 **A manual run** (Actions › release › Run workflow) takes the version (as in `package.json`) and a
-**dry run** switch, on by default. A dry run builds and checks everything and uploads the files as
-a workflow artifact for 14 days, but signs nothing and creates no release. Pull requests that change
-the release workflow or its scripts run the same dry run automatically. A manual run with dry run
-off makes a draft exactly like a tag push; its tag is created at that commit when you publish.
+**dry run** switch, on by default. A dry run runs only `build`: it builds and checks everything and
+uploads the unsigned files as a workflow artifact for 14 days, but has no secrets, signs nothing
+and creates no release. Pull requests that change the release workflow or its scripts run the same
+dry run automatically. A manual run with dry run off makes a draft exactly like a tag push, but only
+when it's started on the tag (`release` refuses anything else):
+`gh workflow run release.yml --repo Davenee12/tug --ref v0.5.19 -f version=0.5.19 -f dry_run=false`.
 
 **The first release with the public key** can't update the copies people already have, because
 those versions don't have the updater yet. Say so in that release's notes: install it by hand once,
@@ -191,7 +244,7 @@ shipping a fixed, newer version.
   3. For anyone who can't wait, the previous version's installer is still on its release page;
      installing it by hand over the bad one works (it's a normal per-user install).
 - **The updater key is lost or leaked:** make a new key (step 1), put its public key in tug (step
-  2), replace both secrets (step 3) and release. Installed copies can't verify the new key, so say
+  2), replace both environment secrets (step 3c) and release. Installed copies can't verify the new key, so say
   in the notes that this one version must be installed by hand. If the key leaked, replace the
   secrets right away, before anything else.
 
@@ -206,3 +259,9 @@ shipping a fixed, newer version.
   this build would leave every installed copy refusing the update.
 - **"A release for v0.5.19 already exists":** delete the old draft first; the workflow never
   overwrites a release.
+- **The run stops at "Waiting for review":** that's the `release` environment asking you to
+  approve `sign` (step 3a). Approve it from the run's page.
+- **"Branch … is not allowed to deploy to release" / "Tag … is not allowed":** the run wasn't on a
+  `v*` tag (a manual run from `main`, say). Start it on the tag (see A manual run above).
+- **The tag push is refused ("Cannot create ref due to creations being restricted"):** the tag
+  ruleset (step 3d) allows only admins; push it as the owner.
