@@ -37,6 +37,7 @@ import {
   shouldAutoCopy,
 } from "../lib/codeFill";
 import { MESSAGES_APP } from "../lib/format";
+import { toastBody } from "../lib/attachments";
 import { batteryAlert, restoreBatteryAlerted, saveBatteryAlerted } from "../lib/battery";
 import { isAddressLike, normalizeAddress } from "../lib/address";
 import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync, warmDue } from "../lib/messageSync";
@@ -615,6 +616,15 @@ export const useTugStore = defineStore("tug", () => {
   const seenSince = ref(Date.now());
   /** Code-text rows the user cleared from the Feed (hidden, not deleted); persisted in `ui.clearedCodes`. */
   const clearedCodes = ref<number[]>([]);
+  /**
+   * The one-time hint under a conversation ("Texts you send from tug show here…") was dismissed;
+   * persisted in `ui.sentHintDismissed`. True until settings load, so it never flashes.
+   */
+  const sentHintDismissed = ref(true);
+  function dismissSentHint() {
+    sentHintDismissed.value = true;
+    void attempt(() => api.setSetting("ui.sentHintDismissed", "true"));
+  }
   /** Ticks each minute so the code Feed drops rows once their texts age out of the recency window. */
   const clock = ref(Date.now());
   let clockTimer: number | undefined;
@@ -900,6 +910,8 @@ export const useTugStore = defineStore("tug", () => {
       enabled: settings.value.smartReplies,
       defaults: settings.value.smartReplyDefaults,
     });
+    // A photo text says "📷 Photo" and where to see it, not "Attachment: 1 Photo" (lib/attachments).
+    if (n.appId === MESSAGES_APP) spec = { ...spec, body: toastBody(spec.body) };
     // Already on the clipboard: "482193 copied, from Chase", no Copy button.
     if (copied && code !== null) spec = copiedToastSpec(spec, code, spec.name || appLabel(n));
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
@@ -1322,6 +1334,7 @@ export const useTugStore = defineStore("tug", () => {
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
     batteryAlerted = restoreBatteryAlerted(raw["ui.batteryAlerted"], Date.now());
+    sentHintDismissed.value = raw["ui.sentHintDismissed"] === "true";
     // A missing key is a fresh install: null (not ""), so the first launch records the version
     // silently instead of greeting a brand-new user with a card about changes they never saw.
     // Before 0.5.9 nothing recorded a seen version. Someone who finished the old setup wizard
@@ -2061,6 +2074,8 @@ export const useTugStore = defineStore("tug", () => {
   );
 
   return {
+    sentHintDismissed,
+    dismissSentHint,
     status,
     statusKnown,
     switches,

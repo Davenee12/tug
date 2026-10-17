@@ -14,6 +14,7 @@ use windows::Storage::Streams::{DataReader, DataWriter, InputStreamOptions};
 
 use super::bmessage::{self, BMessage};
 use super::calls::{self, CallDirection, CallRecord};
+use super::charset;
 use super::contacts_watch::Fingerprint;
 use super::listing::{self, ListedMessage};
 use super::obex::{self, Header, ObexError, Response};
@@ -38,6 +39,10 @@ pub const PBAP_TARGET: [u8; 16] = [
 /// `try_lock`: a busy turn means "defer" (or, for the inventory, "skip"), never wait — the MAP
 /// worker that runs the contacts and calls pulls also carries texts, which must not stall.
 pub static PBAP_TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The "attachment line in another language" shape is logged once per launch: enough to learn
+/// a language exists, without a line per text.
+static ATTACHMENT_SHAPE_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Device lookup + RFCOMM connect + OBEX CONNECT, end to end.
@@ -427,7 +432,8 @@ impl MapSession {
             ]),
         ];
         let xml = self.link.get("GetMessagesListing", headers).await?;
-        Ok(listing::parse(&String::from_utf8_lossy(&xml)))
+        // A subject that isn't UTF-8 reads as Windows-1252 rather than turning into U+FFFD.
+        Ok(listing::parse(&charset::decode_line(&xml)))
     }
 
     pub async fn get_message(&mut self, handle: &str) -> Result<BMessage> {
@@ -438,7 +444,24 @@ impl MapSession {
             obex::app_params(&[(AP_ATTACHMENT, &[0]), (AP_CHARSET, &[CHARSET_UTF8])]),
         ];
         let raw = self.link.get("GetMessage", headers).await?;
-        Ok(bmessage::parse(&String::from_utf8_lossy(&raw)))
+        // Decoded from the bytes (never lossily as a whole), so a body in another encoding still
+        // reads as words. When that took a fallback, log how and the bytes' shape, never the text.
+        let message = bmessage::parse_bytes(&raw);
+        if message.decoding.is_fallback() {
+            log::debug!(
+                "message {handle}: text decoded as {:?} ({})",
+                message.decoding,
+                message.body_pattern
+            );
+        }
+        if let Some(shape) = bmessage::unknown_attachment_shape(&message.body) {
+            if !ATTACHMENT_SHAPE_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log::info!(
+                    "a text looks like an attachment line in another language (shape \"{shape}\"); shown as text"
+                );
+            }
+        }
+        Ok(message)
     }
 
     /// Ask the phone to refresh its inbox view before listing.

@@ -1,5 +1,6 @@
 import type { CallRecord, Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 import { isAddressLike, normalizeAddress } from "./address";
+import { isUnreadable } from "./attachments";
 
 /** The iPhone's Messages app: texts (SMS/iMessage) that MAP can also read and send. */
 export const MESSAGES_APP = "com.apple.MobileSMS";
@@ -392,8 +393,14 @@ export function groupConversations(
         i.body.trim() === body.trim() &&
         Math.abs(i.at.getTime() - at.getTime()) < SAME_MESSAGE_MS,
     );
+    // The phone sends some texts over MAP as a lone U+FFFD while their notification has the words:
+    // the notification nearest in time fills that text instead of showing beside a "�".
+    const stand = twin ? undefined : unreadableTwin(c.items, absorbed, at, body);
     if (twin) absorbed.add(twin.id);
-    else c.items.push({ kind: "notification", id: `n${n.id}`, at, body, n });
+    else if (stand) {
+      absorbed.add(stand.id);
+      stand.body = body;
+    } else c.items.push({ kind: "notification", id: `n${n.id}`, at, body, n });
   }
 
   const out = [...convs.values()].filter((c) => c.items.length > 0);
@@ -406,6 +413,21 @@ export function groupConversations(
     }
   }
   return out.sort((a, b) => b.latest.at.getTime() - a.latest.at.getTime());
+}
+
+/** How far apart an unreadable text and the notification that fills it may be (it usually lands ~10 s after). */
+const UNREADABLE_MATCH_MS = 3 * 60 * 1000;
+
+/** The received text with no readable characters closest in time to a notification, if any is close. */
+function unreadableTwin(items: ConversationItem[], absorbed: Set<string>, at: Date, body: string) {
+  if (!body.trim() || isUnreadable(body)) return undefined;
+  let best: Extract<ConversationItem, { kind: "message" }> | undefined;
+  for (const i of items) {
+    if (i.kind !== "message" || i.m.direction !== "in" || absorbed.has(i.id) || !isUnreadable(i.body)) continue;
+    const gap = Math.abs(i.at.getTime() - at.getTime());
+    if (gap < UNREADABLE_MATCH_MS && (!best || gap < Math.abs(best.at.getTime() - at.getTime()))) best = i;
+  }
+  return best;
 }
 
 /** Fill `addresses` (most recent first) and pick a default reply number, if one is safe. */

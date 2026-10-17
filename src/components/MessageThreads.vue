@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from "vue";
-import { ChevronRight, Info, Phone, Plus, RotateCcw, ShieldQuestionMark } from "lucide-vue-next";
+import { ChevronRight, Info, Phone, Plus, RotateCcw, ShieldQuestionMark, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { replyUnavailable } from "../lib/availability";
 import { clockTime, dayLabel, formatAddress, groupConversations, threadKey, type Conversation, type ConversationItem } from "../lib/format";
 import { shouldStickToBottom } from "../lib/scroll";
 import { reuseUnchanged, sameConversation, sameItems } from "../lib/stableList";
 import { olderWindowStart, REVEAL_PX, startIncluding, windowStart } from "../lib/threadWindow";
-import { bubbleKind, distinguishesIMessage, messageText } from "../lib/messageType";
+import { bubbleKind, distinguishesIMessage, itemContent, type Shown } from "../lib/messageType";
 import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import ConversationRow from "./ConversationRow.vue";
+import MediaChip from "./MediaChip.vue";
 import MessageComposer from "./MessageComposer.vue";
 import SmartReplyChips from "./SmartReplyChips.vue";
 import { findCode } from "../lib/codes";
@@ -218,6 +219,9 @@ function bubbleClass(i: ConversationItem): string {
   return `rounded-bl-sm ${bg}`;
 }
 const codeIn = (i: ConversationItem) => findCode(i.body);
+// What each bubble shows: words, a photo chip ("Attachment: 1 Photo"), or both (lib/messageType).
+const contents = computed(() => new Map(shownItems.value.map((i) => [i.id, itemContent(i)])));
+const contentOf = (i: ConversationItem): Shown => contents.value.get(i.id) ?? itemContent(i);
 const statusLabel = (i: ConversationItem) => {
   if (i.kind !== "message" || i.m.direction !== "out") return "";
   // "accepted" (the iPhone took it) and "sent" (a MAP SendingSuccess event confirmed it, when
@@ -405,7 +409,13 @@ async function retry(m: SmsMessage) {
               <span v-if="item.kind === 'notification' && item.n.subtitle" class="mb-0.5 block text-[12px] font-medium text-muted">
                 {{ item.n.subtitle }}
               </span>
-              {{ item.kind === "message" ? messageText(item.m) : item.body || "(no preview)" }}
+              <template v-if="contentOf(item).text">{{ contentOf(item).text }}</template>
+              <MediaChip
+                v-if="contentOf(item).media || contentOf(item).unreadable"
+                :media="contentOf(item).media"
+                :unreadable="contentOf(item).unreadable"
+                :class="contentOf(item).text ? 'mt-2' : ''"
+              />
             </div>
             <span class="mx-1 mt-1 flex items-center gap-1.5 font-mono text-[11px] text-muted-soft">
               {{ clockTime(item.at) }}
@@ -465,8 +475,17 @@ async function retry(m: SmsMessage) {
           <Info :size="14" class="shrink-0" />
           {{ replyHint }}
         </p>
-        <p v-if="canReply" class="mt-1.5 px-1 text-[11px] text-muted-soft">
-          Sent through your iPhone. Messages you send from the phone itself don't appear here.
+        <!-- Once, until dismissed: why a reply typed on the phone isn't in the thread. -->
+        <p v-if="canReply && !tug.sentHintDismissed" class="mt-1.5 flex items-start gap-2 px-1 text-[11px] text-muted-soft">
+          <span class="min-w-0 flex-1">Texts you send from tug show here. Texts you send on your iPhone stay on your iPhone.</span>
+          <button
+            class="shrink-0 rounded p-0.5 hover:bg-surface-card hover:text-ink"
+            aria-label="Dismiss this tip"
+            title="Got it"
+            @click="tug.dismissSentHint()"
+          >
+            <X :size="12" />
+          </button>
         </p>
       </footer>
     </section>

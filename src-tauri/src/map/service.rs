@@ -292,6 +292,7 @@ mod worker {
 
     use super::MapCommand;
     use crate::map::address::normalize;
+    use crate::map::bmessage;
     use crate::map::command_queue::{CommandQueue, Laned};
     use crate::map::contacts_watch::{check_now_at, ContactsWatch, Fingerprint, Pull, Transition, TriggerGate};
     use crate::map::health::{Attempt, Health, LiveTexts, TextsPairing};
@@ -1790,11 +1791,14 @@ mod worker {
                     }
                 };
                 let address = normalize(originator.as_deref().unwrap_or(&item.sender_addressing));
-                let body = if full_body.is_empty() {
-                    item.subject.clone()
-                } else {
-                    full_body
-                };
+                // The listing's preview stands in for a body with no words (empty, or only U+FFFD
+                // as the phone sends for some texts) when the preview has some.
+                let body =
+                    if full_body.is_empty() || (!bmessage::has_text(&full_body) && bmessage::has_text(&item.subject)) {
+                        item.subject.clone()
+                    } else {
+                        full_body
+                    };
                 let sent_at = listing::datetime_to_iso(&item.datetime);
                 let sender_name = Some(item.sender_name.as_str()).filter(|n| !n.is_empty() && *n != address);
                 let stored = shared.store.insert_incoming(&IncomingMessage {

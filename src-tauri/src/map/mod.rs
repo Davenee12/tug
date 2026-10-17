@@ -11,6 +11,7 @@
 pub mod address;
 pub mod bmessage;
 pub mod calls;
+pub mod charset;
 pub mod command_queue;
 pub mod contacts_watch;
 pub mod health;
@@ -24,4 +25,5 @@ pub mod probe;
 pub mod service;
 #[cfg(windows)]
 pub mod session;
+pub mod sms_pdu;
 pub mod vcard;

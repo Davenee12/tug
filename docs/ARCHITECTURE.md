@@ -310,6 +310,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `pin_confirm.rs` | The PIN prompt waiting on the user, by id, so one pairing's leftovers can't close the next's |
 | `map/command_queue.rs` | The message worker's priority order: sends before refreshes, mark-read last |
 | `map/obex.rs`, `bmessage.rs`, `listing.rs`, `vcard.rs`, `mns_event.rs`, `mns.rs`, `pick.rs` | OBEX framing, MAP/PBAP parsers, MNS event handling, which paired device is the iPhone |
+| `map/charset.rs`, `sms_pdu.rs` | A text's bytes to words without U+FFFD: UTF-8, then UTF-16, CESU-8, a cut-off last character, Windows-1252; native SMS PDUs |
 | `devtools/confirm.rs`, `rate_limit.rs`, `recipient.rs`, `settings.rs` | The send-confirmation state machine, per-tool limits, name → contact, switch defaults |
 | `crates/tug-bridge` (`auth`, `protocol`, `framing`, `paths`, `time`) | Bridge protocol and handshake; the whole exchange is also tested over a real pipe |
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
@@ -326,7 +327,8 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, window changed); spoken symbols, casing commands, code vs prose style by program, keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
 
-Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attention`
+Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attachments`
+("Attachment: 1 Photo" → a photo chip), `attention`
 (is the window really visible), `battery`, `coalesce` (one render per frame for bursts of
 updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),

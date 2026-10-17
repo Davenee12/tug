@@ -7,6 +7,8 @@
 // today's neutral look rather than guessing a colour.
 
 import type { SmsMessage } from "../types/protocol";
+import { isUnreadable, parseAttachments, previewLine, UNREADABLE, type Media } from "./attachments";
+import { MESSAGES_APP, type ConversationItem } from "./format";
 
 export type MessageKind = "imessage" | "sms" | "unknown";
 
@@ -40,18 +42,65 @@ export function distinguishesIMessage(messages: Pick<SmsMessage, "msgType">[]): 
   return false;
 }
 
-/** Shown for a text with no words: a photo or other attachment the phone won't send over. */
-export const ATTACHMENT_ONLY = "Photo or attachment — open it on your iPhone";
+/** What a text (or a Messages notification) shows: its words, a media chip, or both. */
+export interface Shown {
+  /** The words (a caption beside a chip); "" for a photo on its own. */
+  text: string;
+  /** Attachments to show as a chip ("Photo · Open it on your iPhone"), or null. */
+  media: Media | null;
+  /** The phone sent no readable characters (only U+FFFD): say so instead of showing "�". */
+  unreadable: boolean;
+}
+
+const plain = (text: string): Shown => ({ text, media: null, unreadable: false });
 
 /**
- * What to show for a text. The phone sends no text for a photo or other attachment (MAP leaves
- * attachments out), so an empty MMS or untyped text says so instead of "(no preview)". An empty
- * plain text or iMessage is just empty.
+ * A received text's body or a Messages notification's message: "Attachment: 1 Photo" becomes a
+ * chip (with any caption kept), a body of only U+FFFD reads as "didn't come through", and
+ * anything else is shown exactly as it came.
  */
-export function messageText(m: Pick<SmsMessage, "body" | "msgType">): string {
-  if (m.body) return m.body;
-  const t = (m.msgType ?? "").toUpperCase();
-  return t === "MMS" || classifyType(m.msgType) === "unknown" ? ATTACHMENT_ONLY : "(no preview)";
+export function textContent(body: string): Shown {
+  if (isUnreadable(body)) return { text: "", media: null, unreadable: true };
+  const p = parseAttachments(body);
+  return { text: p.text, media: p.media, unreadable: false };
+}
+
+type MessageLike = Pick<SmsMessage, "body" | "msgType"> & { direction?: SmsMessage["direction"] };
+
+/**
+ * What to show for a text. A photo arrives as words ("Attachment: 1 Photo", see lib/attachments).
+ * An empty MMS or untyped text is an attachment the phone said nothing about (MAP leaves
+ * attachments out), so it's a "Photo or attachment" chip; an empty plain text or iMessage is just
+ * empty. Texts sent from tug are shown as typed. `body` overrides the stored body (a conversation
+ * may fill an unreadable text from its notification).
+ */
+export function messageContent(m: MessageLike, body = m.body): Shown {
+  if (m.direction === "out") return plain(body);
+  if (!body) {
+    const t = (m.msgType ?? "").toUpperCase();
+    return t === "MMS" || classifyType(m.msgType) === "unknown"
+      ? { text: "", media: { kind: "attachment", count: null }, unreadable: false }
+      : plain("(no preview)");
+  }
+  return textContent(body);
+}
+
+/** One item of a conversation. Other chat apps' notifications are shown as they are. */
+export function itemContent(item: ConversationItem): Shown {
+  if (item.kind === "message") return messageContent(item.m, item.body);
+  if (item.n.appId === MESSAGES_APP) return textContent(item.body);
+  return plain(item.body || "(no preview)");
+}
+
+/** One line for previews: "📷 Photo", "📷 " + caption, or "This text didn't come through". */
+export function previewOf(s: Shown): string {
+  if (s.unreadable) return UNREADABLE;
+  return previewLine(s);
+}
+
+/** A text as one line of words (conversation lists, search). */
+export function messageText(m: MessageLike): string {
+  return previewOf(messageContent(m));
 }
 
 /**

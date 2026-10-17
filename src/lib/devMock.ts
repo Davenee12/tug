@@ -380,6 +380,9 @@ const messages: SmsMessage[] = noPhone
       // so the dev view shows the blue/green tinting when the phone distinguishes them.
       sms("in", "are you coming tonight?", 40),
       sms("out", "yeah! leaving soon", 38),
+      // Photos arrive as words over MAP ("Attachment: 2 Photos"); the thread shows photo chips.
+      sms("in", "Attachment: 2 Photos", 6),
+      sms("in", "the view from up here\nAttachment: 1 Photo", 5),
       sms("in", "did you see the photos I sent?", 4),
       sms("in", "omw, 10 mins 🚗", 1),
       // The spammer's earlier text, read over MAP: same conversation as their notification.
