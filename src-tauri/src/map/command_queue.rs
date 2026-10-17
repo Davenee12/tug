@@ -91,6 +91,14 @@ impl<T: Laned> CommandQueue<T> {
     pub fn len(&self) -> usize {
         self.lanes.iter().map(VecDeque::len).sum()
     }
+
+    /// Keep only the queued commands `keep` accepts, in order (Start over drops the old phone's
+    /// queued reads).
+    pub fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
+        for lane in &mut self.lanes {
+            lane.retain(&mut keep);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -124,6 +132,18 @@ mod tests {
 
     fn drain(q: &mut CommandQueue<Job>) -> Vec<Job> {
         std::iter::from_fn(|| q.pop()).collect()
+    }
+
+    #[test]
+    fn retain_drops_only_what_it_rejects_and_keeps_the_order() {
+        let mut q = CommandQueue::default();
+        q.push(Job::MarkRead(1));
+        q.push(Job::Deliver(7));
+        q.push(Job::Refresh);
+        q.push(Job::MarkRead(2));
+        q.push(Job::Deliver(8));
+        q.retain(|j| !matches!(j, Job::MarkRead(_)));
+        assert_eq!(drain(&mut q), vec![Job::Deliver(7), Job::Deliver(8), Job::Refresh]);
     }
 
     #[test]

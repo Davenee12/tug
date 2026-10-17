@@ -210,6 +210,12 @@ async fn deliver_or_fail(shared: &Shared, map: &MapHandle, id: i64) -> Result<St
     }
 }
 
+/// What stays queued after a Start over: everything but mark-reads, which were for the old
+/// phone's texts (a send still goes out: it's already shown as Sending…).
+pub(crate) fn kept_after_forget(cmd: &MapCommand) -> bool {
+    !matches!(cmd, MapCommand::MarkRead(_))
+}
+
 /// What a MAP `Sending{Success,Failure}` report settled (`settle_send_report`).
 #[derive(Debug, PartialEq)]
 pub(crate) enum Settled {
@@ -1117,6 +1123,8 @@ mod worker {
             self.quick_retry = None;
             self.session_synced = false;
             self.queued_reads.clear();
+            // Reads still in the queue are for the old phone's texts.
+            self.queue.retain(super::kept_after_forget);
             self.accepted_at.clear();
             self.pushed_at.clear();
             self.mns_reopened_at = None;
@@ -1949,6 +1957,9 @@ mod worker {
         /// Mark messages read on the phone. Only those it still lists as unread are
         /// sent, so reopening a conversation costs nothing.
         async fn mark_read(&mut self, ids: &[i64]) {
+            // A Start over while this runs (it can cut in between steps) means these reads were
+            // the old phone's: never queue them again for the next one.
+            let gen = self.forget_gen;
             let handles = match self.shared.store.unread_on_phone(SOURCE_IPHONE_MAP, ids) {
                 Ok(h) if !h.is_empty() => h,
                 Ok(_) => return,
@@ -1957,7 +1968,7 @@ mod worker {
             let store = self.shared.store.clone();
             if let Err(e) = self.ensure().await {
                 log::debug!("mark read: {e}; will try after the next sync");
-                return queue_reads(&mut self.queued_reads, ids);
+                return requeue_reads(&mut self.queued_reads, ids, gen, self.forget_gen);
             }
             let epoch = self.session_epoch;
             let mut marked = 0;
@@ -1966,7 +1977,7 @@ mod worker {
                 self.serve_sends().await;
                 let Some(session) = self.session_for(epoch) else {
                     log::debug!("mark read: message access changed while sending; will try after the next sync");
-                    return queue_reads(&mut self.queued_reads, ids);
+                    return requeue_reads(&mut self.queued_reads, ids, gen, self.forget_gen);
                 };
                 marked += 1;
                 match session.set_read(handle, true).await {
@@ -1987,7 +1998,7 @@ mod worker {
                     Err(MapError::Obex { code, .. }) => log::info!("phone refused mark-read for {handle}: {code:#04x}"),
                     Err(e) => {
                         log::debug!("mark read failed: {e}; will try after the next sync");
-                        queue_reads(&mut self.queued_reads, ids);
+                        requeue_reads(&mut self.queued_reads, ids, gen, self.forget_gen);
                         return self.fail(&e);
                     }
                 }
@@ -2142,6 +2153,14 @@ mod worker {
 
     /// Add reads to the waiting queue, once each, keeping the newest `QUEUED_READS_MAX`. Pure, so
     /// it's unit-tested.
+    /// `queue_reads`, unless a Start over happened since the mark-read began (`forget_gen` moved):
+    /// those reads were for the old phone. Pure.
+    fn requeue_reads(queue: &mut Vec<i64>, ids: &[i64], started_gen: u64, now_gen: u64) {
+        if started_gen == now_gen {
+            queue_reads(queue, ids);
+        }
+    }
+
     fn queue_reads(queue: &mut Vec<i64>, ids: &[i64]) {
         for id in ids {
             if !queue.contains(id) {
@@ -2255,8 +2274,8 @@ mod worker {
     mod tests {
         use super::{
             after_failure, after_push_failure, map_retry_delay, may_have_missed, photo_sync_due, pushed_after,
-            queue_reads, remember_accepted, take_accepted, texts_unreachable, warm_allowed, FetchTries, PushOutcome,
-            Warm, ACCEPTED_KEEP, MAP_RETRY_CAP, QUEUED_READS_MAX,
+            queue_reads, remember_accepted, requeue_reads, take_accepted, texts_unreachable, warm_allowed, FetchTries,
+            PushOutcome, Warm, ACCEPTED_KEEP, MAP_RETRY_CAP, QUEUED_READS_MAX,
         };
         use crate::map::session::MapError;
         use std::time::Duration;
@@ -2418,6 +2437,16 @@ mod worker {
         }
 
         #[test]
+        fn reads_from_before_a_start_over_are_never_queued_for_the_next_phone() {
+            let mut q = Vec::new();
+            requeue_reads(&mut q, &[1, 2], 4, 4);
+            assert_eq!(q, vec![1, 2], "no Start over: they wait for the phone");
+            let mut q = Vec::new();
+            requeue_reads(&mut q, &[1, 2], 4, 5);
+            assert!(q.is_empty(), "a Start over cut in: they were the old phone's");
+        }
+
+        #[test]
         fn a_dead_link_retries_once_only_before_the_phone_could_have_the_text() {
             assert_eq!(after_push_failure(&MapError::Closed, false), PushOutcome::RetryOnce);
             assert_eq!(after_push_failure(&MapError::Timeout, false), PushOutcome::RetryOnce);
@@ -2529,6 +2558,18 @@ mod lane_tests {
         );
         let order: Vec<String> = std::iter::from_fn(|| q.pop()).map(|c| name(&c)).collect();
         assert_eq!(order, ["send 4", "switches", "read [1]"]);
+    }
+
+    #[test]
+    fn start_over_drops_the_old_phones_queued_reads_but_not_its_sends() {
+        let mut q = CommandQueue::default();
+        q.push(MapCommand::MarkRead(vec![1]));
+        q.push(deliver(4));
+        q.push(MapCommand::Refresh);
+        q.push(MapCommand::MarkRead(vec![2]));
+        q.retain(super::kept_after_forget);
+        let order: Vec<String> = std::iter::from_fn(|| q.pop()).map(|c| name(&c)).collect();
+        assert_eq!(order, ["send 4", "refresh"]);
     }
 
     #[test]
