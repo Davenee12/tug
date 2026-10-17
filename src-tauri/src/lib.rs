@@ -1,3 +1,4 @@
+mod album_art;
 mod ams;
 mod ancs;
 mod ancs_queue;
@@ -216,9 +217,12 @@ pub fn run() {
             // re-fetched, and are pruned by reference instead.
             let icons_dir = dir.join("icons");
             let art_dir = dir.join("spotify_art");
+            let album_dir = dir.join(album_art::DIR);
             std::thread::spawn(move || {
                 cache_trim::APP_ICONS_TRIM.trim_now(&icons_dir, cache_trim::APP_ICONS_CAP);
                 cache_trim::SPOTIFY_ART_TRIM.trim_now(&art_dir, cache_trim::SPOTIFY_ART_CAP);
+                cache_trim::ALBUM_ART_TRIM.trim_now(&album_dir, cache_trim::ALBUM_ART_CAP);
+                album_art::sweep_misses(&album_dir, std::time::SystemTime::now());
             });
             // Nice to have, never a reason not to start.
             if let Err(e) = tray::install(app.handle()) {
@@ -338,6 +342,7 @@ pub fn run() {
             commands::place_lookup,
             commands::app_icon,
             commands::app_website,
+            commands::album_art,
             commands::contact_photo,
             commands::mark_read,
             commands::set_watching,

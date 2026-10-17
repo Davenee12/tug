@@ -280,6 +280,11 @@ export interface UiSettings {
   closeToTray: boolean;
   /** Real app icons in the Feed, fetched once per app from Apple's App Store. */
   appIcons: boolean;
+  /**
+   * Album art on the Now Playing card from Apple's public catalog when Spotify has none (on by
+   * default; read by the backend, `album_art.rs`). Sends only the artist and album name.
+   */
+  albumArt: boolean;
   /** A Windows pop-up when the iPhone's battery drops to 20% and 10%. */
   lowBattery: boolean;
   /** tug's pop-ups play the Windows sound (read by the backend, `toast/mod.rs`). */

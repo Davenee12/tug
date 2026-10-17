@@ -1,6 +1,6 @@
 # tug privacy policy
 
-*Last updated: 2026-10-07 (tug v0.5.12)*
+*Last updated: 2026-10-17 (album art)*
 
 **In short: tug has no servers and no accounts, and it collects nothing.** It talks to your iPhone
 over Bluetooth and keeps what it receives on your PC. Nothing is sent to the people who make tug.
@@ -21,12 +21,14 @@ in your Windows user profile, readable by your Windows account:
 | What | Where |
 |---|---|
 | Notifications, texts, contacts, recent calls and settings (a SQLite database, `tug.db`) | `%APPDATA%\dev.davejames.tug` |
-| Contact photos, app icons and Spotify album art (caches) | `%APPDATA%\dev.davejames.tug` |
+| Contact photos, app icons, album art and Spotify album art (caches) | `%APPDATA%\dev.davejames.tug` |
 | Logs (rotated, at most about 10 MB), the window's web storage (for example the weather forecast cache), the developer tools' access token, and half-received Tugboat files | `%LOCALAPPDATA%\dev.davejames.tug` |
 | Files you receive with Tugboat | Your **Pictures\Tugboat** folder |
 | Your Spotify sign-in (if you connect Spotify) | Windows Credential Manager (`tug/spotify-refresh-token`) |
 
-tug's logs record connection events and errors, never message text or contact names. **Copy
+tug's logs record connection events and errors, never message text or contact names (album art
+lookups are logged as found, no match or failed, with how long they took: never the artist or
+album). **Copy
 diagnostics** (Settings › iPhone or About) copies recent logs to your clipboard only when you press
 it, with phone numbers, email addresses, names, Bluetooth addresses and your phone's name removed;
 it goes nowhere unless you paste it somewhere yourself.
@@ -38,6 +40,7 @@ it goes nowhere unless you paste it somewhere yourself.
 | **Weather** | Open-Meteo (`api.open-meteo.com`, `geocoding-api.open-meteo.com`) | Your chosen place's coordinates, rounded to 2 decimals (about 1 km), or the city name you type to search | Only after you set up the weather card; then every 15 minutes and when you come back to tug, until you hide it |
 | **"Use my location"** for weather | Windows location services, then BigDataCloud (`api.bigdatacloud.net`) | Rounded coordinates, to name the place | Only when you press Use my location |
 | **App icons** | Apple's public App Store lookup (`itunes.apple.com`) and Apple's image servers | The app's identifier (for example `com.example.app`), once per app; nothing about you or your notifications | While **App icons** is on (Settings › Data & privacy; on by default) |
+| **Album art** | Apple's public iTunes Search API (`itunes.apple.com`) and Apple's image servers | The artist and album name of the song playing on your iPhone, and nothing else: no account, no song title, nothing about you. Only for albums tug has no cover for yet; an album Apple doesn't know is asked again after a day at most | While **Show album art** is on (Settings › General; on by default). When Spotify is connected and playing, its own cover is used and nothing is looked up |
 | **Spotify** | Spotify (`accounts.spotify.com`, `api.spotify.com`, Spotify's image servers) | Your Spotify sign-in, and the requests you make (search, play, queue, like) | Only after you connect Spotify in Settings › Connectors |
 | **Open on the web** | The website, in your browser | Whatever your browser sends | Only when you click it |
 

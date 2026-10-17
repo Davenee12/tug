@@ -110,6 +110,8 @@ What goes online, and only when you use it:
   "Use my location" names the place through BigDataCloud.
 - **App icons** (on by default, switchable): Apple's App Store lookup, sending only the app's
   identifier.
+- **Album art** (on by default, switchable): Apple's music catalog, sending only the artist and
+  album name.
 - **Spotify**, only if you connect it.
 
 Tugboat stays on your local network, and the developer bridge only accepts programs on your PC
