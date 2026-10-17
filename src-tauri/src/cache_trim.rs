@@ -1,6 +1,6 @@
-//! A size cap for the purely-cached image folders — album art and playlist covers
-//! (`<cache>/spotify_art`) and app icons (`<data>/icons`). Both are rebuilt on demand from the
-//! network, so the oldest entries can be dropped freely to keep the folder from growing without
+//! A size cap for the purely-cached image folders — Spotify album art and playlist covers
+//! (`<cache>/spotify_art`), album art from Apple's catalog (`<data>/album_art`) and app icons
+//! (`<data>/icons`). All are rebuilt on demand from the network, so the oldest entries can be dropped freely to keep the folder from growing without
 //! limit. Contact photos are *not* capped here: they never leave the machine and can't be re-fetched,
 //! so they're pruned only by reference (see `contact_photos::cleanup`).
 //!
@@ -21,6 +21,9 @@ use std::time::{Duration, Instant, SystemTime};
 pub const SPOTIFY_ART_CAP: u64 = 100 * 1024 * 1024;
 /// App icons: one small icon per app the phone surfaces, so a tighter cap is plenty.
 pub const APP_ICONS_CAP: u64 = 50 * 1024 * 1024;
+/// Album art from Apple's catalog: one 600 px cover (about 50–150 KB) per album played, so this
+/// keeps several hundred albums.
+pub const ALBUM_ART_CAP: u64 = 50 * 1024 * 1024;
 
 /// The shortest gap between two write-triggered trims of the same cache.
 pub const TRIM_INTERVAL: Duration = Duration::from_secs(60);
@@ -34,6 +37,8 @@ pub struct TrimThrottle {
 pub static SPOTIFY_ART_TRIM: TrimThrottle = TrimThrottle::new();
 /// The app icon cache's throttle (startup trim in `lib.rs`, writes in `app_icons`).
 pub static APP_ICONS_TRIM: TrimThrottle = TrimThrottle::new();
+/// The album art cache's throttle (startup trim in `lib.rs`, writes in `album_art`).
+pub static ALBUM_ART_TRIM: TrimThrottle = TrimThrottle::new();
 
 impl TrimThrottle {
     const fn new() -> Self {

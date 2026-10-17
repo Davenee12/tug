@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { FastForward, Heart, ListMusic, Music2, Pause, Play, Repeat, Repeat1, Rewind, RotateCcw, Shuffle, SkipBack, SkipForward, Speaker, Square, ThumbsDown, ThumbsUp, Volume1, Volume2 } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { usePcAudioStore } from "../stores/pcAudio";
+import { useAlbumArtStore } from "../stores/albumArt";
 import {
   canRestart,
   createHoldRepeater,
@@ -51,10 +52,18 @@ const heading = computed(() => {
 
 // Spotify augmentation: only when connected and Spotify is the AMS player (see the store).
 const sp = computed(() => (tug.spotifyActive ? tug.spotifyPlayer : null));
-// Art and Like belong to one song: only show them once Spotify reports the song the phone is
-// playing (right after a skip it can still describe the previous one).
+// Like belongs to one song: only show it once Spotify reports the song the phone is playing (right
+// after a skip it can still describe the previous one).
 const sameSong = computed(() => !!sp.value && tug.spotifyTrackVerified);
-const art = computed(() => (sameSong.value ? sp.value?.albumArt ?? null : null));
+// The cover (Spotify's for its own song, else Apple's catalog while Show album art is on; see
+// stores/albumArt) and the card's colours from it. No cover: the placeholder and the usual colours.
+const albumArt = useAlbumArtStore();
+const art = computed(() => albumArt.src);
+const tintStyle = computed(() => {
+  const t = albumArt.tint;
+  if (!t) return undefined;
+  return { "--art-from": t.from, "--art-to": t.to, ...(t.accent ? { "--art-accent": t.accent } : {}) };
+});
 
 // Click/drag-to-seek: only when Spotify is the player and we know the song length. Otherwise the
 // bar is a plain progress indicator, exactly as before. The bar and times tick on their own in
@@ -186,7 +195,7 @@ function restart() {
 </script>
 
 <template>
-  <section class="rounded-xl bg-surface-dark-elevated p-4">
+  <section class="album-tint rounded-xl p-4" :style="tintStyle">
     <div class="caption-upper mb-2.5 flex items-center gap-2 text-on-dark-soft">
       <Speaker v-if="pc.active" :size="13" class="text-on-dark" />
       <Music2 v-else :size="13" />
@@ -247,7 +256,10 @@ function restart() {
 
     <template v-if="available">
       <div class="flex items-center gap-3">
-        <img v-if="art" :src="art" alt="" class="size-11 shrink-0 rounded-md object-cover" />
+        <img v-if="art" :src="art" alt="" class="size-12 shrink-0 rounded-lg object-cover shadow-md ring-1 ring-on-dark/10" />
+        <span v-else class="flex size-12 shrink-0 items-center justify-center rounded-lg bg-surface-dark-soft text-on-dark-soft" aria-hidden="true">
+          <Music2 :size="20" />
+        </span>
         <div class="min-w-0 flex-1">
           <p class="truncate font-display text-[22px] leading-tight text-on-dark" style="letter-spacing: -0.01em">
             {{ track.title }}

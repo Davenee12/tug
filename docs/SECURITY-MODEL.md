@@ -87,8 +87,9 @@ people. The window renders it as text (Vue escapes it; there's no `v-html`), and
 locked down so injected markup couldn't do much anyway:
 
 - A strict Content Security Policy (`src-tauri/tauri.conf.json`): scripts only from tug itself, no
-  `eval`, no plugins, no framing, no form posts, images only from tug or `data:` URIs (remote art
-  and app icons are fetched and checked by Rust and handed over as `data:`), and network access
+  `eval`, no plugins, no framing, no form posts, images only from tug or `data:` URIs (remote art,
+  album art and app icons are fetched and checked by Rust and handed over as `data:`; album art
+  only from Apple's image servers over `https`), and network access
   only to the weather service. Inline `style` attributes are allowed (Vue writes static style
   attributes as markup); `<style>` elements are not.
 - `Object.prototype` is frozen before tug's scripts run (`freezePrototype`), which blunts
@@ -99,8 +100,9 @@ locked down so injected markup couldn't do much anyway:
   from Rust.
 - tug's own commands validate what the webview passes in: `open_url` opens only `http(s)` links,
   Settings pages are an allowlist, Tugboat can only reveal files it saved this session, app-icon
-  IDs are checked before they touch a path, and UI settings can't write Bluetooth or developer-tool
-  keys.
+  IDs are checked before they touch a path, album art is cached under a hash of the artist and
+  album (the names never reach a path, and over-long ones aren't looked up), and UI settings can't
+  write Bluetooth or developer-tool keys.
 - Developer tools (the WebView2 inspector) are compiled out of release builds.
 
 **Code fill.** Auto-copy and the type-the-code shortcut only ever handle a code `findCode` found

@@ -41,7 +41,7 @@ Inside `tug.exe`:
                     └───────────▲ Tauri events (device-status, notification, message, …)  │ invoke ─┘
                                 │                                                         ▼
   ┌──────────────┐  Shared (Arc: status, now playing, calls, store, MapHandle) ┌──────────────────────┐
-  │ tug-ble      │◄────────────── commands.rs (105 Tauri commands) ───────────►│ tug-map              │
+  │ tug-ble      │◄────────────── commands.rs (106 Tauri commands) ───────────►│ tug-map              │
   │ BLE actor    │  BleHandle (mpsc + oneshot replies)    MapHandle (mpsc)     │ MAP worker           │
   │ 1 s tick     │                                                             │ MAP/MNS/PBAP/HFP     │
   └──┬───────┬───┘                                                             └──┬───────────────────┘
@@ -168,6 +168,21 @@ Now Playing / Ctrl+K / Windows media keys / MCP media_control
   ─► Command::Media ─► BLE actor ─► ams::CommandGate (drop a duplicate queued behind a stall)
   ─► AMS Remote Command write
 Spotify-specific (seek, like, shuffle, repeat, search, Play on) ─► Spotify Web API (spotify/)
+```
+
+**Album art on Now Playing**
+
+```
+song changes ─► stores/albumArt: lib/albumArt artChoice
+  Spotify is the player? wait until it reports this song ─► its cover (no lookup)
+  else, Show album art on, artist + album known, tug on screen ─► invoke album_art(artist, album)
+    ─► album_art.rs: <data>/album_art/<sha256(artist, album)>.img? ─► data: URI (no network)
+       a miss in the last day (.none)? ─► nothing
+       Gate: wait 600 ms (a newer song gives up this one), ≤ 1 lookup / 2 s
+       ─► iTunes Search (artist + album only) ─► pick: artist and album, normalised ─► 600 px cover
+       ─► cache (50 MB, least recently used trimmed) ─► data: URI
+  cover ─► lib/artCanvas: one 24 px canvas pass ─► extractPalette ─► cardTint (WCAG AA or none)
+  ─► NowPlayingCard: --art-from/--art-to/--art-accent (eased, swapped with reduced motion)
 ```
 
 **An MCP tool call**
@@ -335,11 +350,13 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
+| `album_art.rs` | Album art from Apple's catalog: names normalised (editions like Remastered/Deluxe and featured artists set aside), the best match by artist and album, the cache key, the day-long miss memory, the debounce and rate limit (`Gate`); the cache and setting tested with a fake network |
 | `share_privacy/mod.rs` | Hide previews while sharing or presenting: which signals mean someone may be watching (shell state confirmed by the foreground window covering its monitor, duplicate display, known share and slideshow windows by program + class), which one names the reason, the log line, what a hidden pop-up says, and that no answer means hidden (which looks to join, start or give up on), which pop-ups to take back when hiding starts |
 | `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, keys still held, window changed) and what the pill says; spoken symbols, casing commands, code vs prose style and where "new line" may break a line, by program; keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
 
-Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attachments`
+Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `albumArt`
+(which art Now Playing shows, its palette, and a tint that keeps WCAG AA contrast), `attachments`
 ("Attachment: 1 Photo" → a photo chip), `attention`
 (is the window really visible), `battery`, `callKeys` (no keystroke answers or declines a call), `coalesce` (one render per frame for bursts of
 updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
@@ -387,7 +404,7 @@ in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messag
 | What | Where |
 |---|---|
 | History and settings (SQLite, FTS5) | `%APPDATA%\<app id>\tug.db` |
-| App icons, Spotify art, contact photos | `%APPDATA%\<app id>\` (`icons/` 50 MB cap, `spotify_art/` 100 MB cap, `contacts/`) |
+| App icons, album art, Spotify art, contact photos | `%APPDATA%\<app id>\` (`icons/` 50 MB cap, `album_art/` 50 MB cap, `spotify_art/` 100 MB cap, `contacts/`) |
 | Logs (2 MB × 5, rotated) | `%LOCALAPPDATA%\<app id>\logs` |
 | Bridge token, half-received Tugboat files | `%LOCALAPPDATA%\<app id>\` |
 | Files received with Tugboat | `Pictures\Tugboat` (`Downloads\Tugboat` while Controlled folder access refuses Pictures) |
@@ -419,6 +436,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?popupreply` (`&missed`) | A text answered from the Windows pop-up (with its events dropped) |
 | `/?nodial` | Settings › iPhone › Calls check fails |
 | `/?applemusic`, `/?norepeat`, `/?repeatignored` | Apple Music controls and repeat edge cases |
+| `/?albumart` | Album art from the (mocked) catalog lookup: Next and Previous step through a light, a dark, a vivid and a grey cover, then an album with none |
 | `/?speaker`, `/?spotifyoff` | Spotify on a Connect speaker / Spotify not connected |
 | `/?novolume` | A player that doesn't report its volume: no volume bar |
 | `/?tugboat` (`&android`, `&cfa`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring (Controlled folder access refusing Pictures) / waiting for a phone / no usable network |

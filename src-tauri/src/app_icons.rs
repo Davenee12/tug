@@ -156,8 +156,9 @@ pub fn icon(dir: &Path, app_id: &str) -> Result<Option<String>, String> {
     }
 }
 
+/// Windows' HTTP client, time-limited; also used by the album art lookup (`album_art`).
 #[cfg(windows)]
-mod http {
+pub(crate) mod http {
     use std::time::Duration;
     use windows::core::HSTRING;
     use windows::Foundation::Uri;
@@ -183,7 +184,7 @@ mod http {
             let uri = Uri::CreateUri(&HSTRING::from(url)).map_err(err)?;
             let body = tokio::time::timeout(TIMEOUT, client.GetStringAsync(&uri).map_err(err)?)
                 .await
-                .map_err(|_| "App Store lookup timed out".to_string())?
+                .map_err(|_| "Lookup timed out".to_string())?
                 .map_err(err)?;
             Ok(body.to_string())
         })
@@ -195,7 +196,7 @@ mod http {
             let uri = Uri::CreateUri(&HSTRING::from(url)).map_err(err)?;
             let buf = tokio::time::timeout(TIMEOUT, client.GetBufferAsync(&uri).map_err(err)?)
                 .await
-                .map_err(|_| "Icon download timed out".to_string())?
+                .map_err(|_| "Download timed out".to_string())?
                 .map_err(err)?;
             crate::ble::winrt::from_buffer(&buf).map_err(err)
         })
@@ -203,7 +204,7 @@ mod http {
 }
 
 #[cfg(not(windows))]
-mod http {
+pub(crate) mod http {
     pub fn get_string(_url: &str) -> Result<String, String> {
         Err("App icons are only fetched on Windows".into())
     }
