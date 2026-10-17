@@ -626,17 +626,23 @@ export interface TugboatClipEvent {
   state: TugboatClipState;
 }
 
+/** Which of tug's games has the phone controller (`tugboat/pad.rs` `GameId`). */
+export type GameId = "tugboat-run" | "harbor-stack";
+
 /**
- * The phone as Tugboat Run's controller (`game-pad` event, `tugboat/pad.rs` `PadEvent`). Sent when
- * steering or boost changes, and when the phone arrives or goes quiet.
+ * The phone as a game's controller (`game-pad` event, `tugboat/pad.rs` `PadEvent`). Sent when
+ * steering, boost or drop changes, and when the phone arrives or goes quiet.
  */
 export interface GamePad {
   /** Which phone: 1 is the one that opened Tugboat, 2 a second phone (two-player games only). */
   seat: 1 | 2;
   connected: boolean;
-  /** -1 (full left) to 1 (full right); 0 whenever not connected. */
+  /** -1 (full left) to 1 (full right); 0 whenever not connected. Harbor Stack: the crane nudge. */
   steer: number;
+  /** Tugboat Run's Boost (always false in Harbor Stack). */
   boost: boolean;
+  /** Harbor Stack's Drop (always false in Tugboat Run). */
+  drop: boolean;
 }
 
 /** A file that couldn't be offered to the phone, and why. */

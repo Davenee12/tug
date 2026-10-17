@@ -16,7 +16,7 @@ use super::auth::{Auth, Authorized, GuestPolicy, Rejected};
 use super::clip::{self, Ack, ClipEvent, ClipState, ClipStatus, Outbox, Payload, Prepared};
 use super::crypto::{self, ad, Keys};
 use super::names;
-use super::pad::{self, Pad, PadEvent, PadReply, SeatNo, FIRST, SECOND};
+use super::pad::{self, GameId, Pad, PadEvent, PadReply, SeatNo, FIRST, SECOND};
 use super::upload::{Plan, PlanError, Received};
 
 /// Largest file the PC offers to the phone: the page assembles it in memory before saving.
@@ -272,6 +272,9 @@ pub struct StateReply {
     pub text: Option<PageText>,
     /// tug's game wants this phone as its controller: the page offers the controller.
     pub game: bool,
+    /// Which game, while `game` is true, so the page shows that game's buttons.
+    #[serde(rename = "gameId", default, skip_serializing_if = "Option::is_none")]
+    pub game_id: Option<GameId>,
     /// The PC's clipboard, sent with "Send clipboard to iPhone", until the phone says it has it.
     pub clip: Option<PageClip>,
     /// This phone is the second controller of a two-player game: it only ever steers (no files, no
@@ -739,10 +742,12 @@ impl Session {
     pub fn page_state(&self, req: &Authorized) -> StateReply {
         let mut st = self.state();
         if req.guest {
+            let race = st.pad.as_ref().filter(|p| p.open_for(SECOND));
             return StateReply {
                 offers: Vec::new(),
                 text: None,
-                game: st.pad.as_ref().is_some_and(|p| p.open_for(SECOND)),
+                game: race.is_some(),
+                game_id: race.map(Pad::game),
                 clip: None,
                 guest: true,
             };
@@ -764,6 +769,7 @@ impl Session {
                 text: t.text.clone(),
             }),
             game: st.pad.is_some(),
+            game_id: st.pad.as_ref().map(Pad::game),
             clip,
             guest: false,
         }
@@ -869,14 +875,18 @@ impl Session {
 
     // --- The game controller (see pad.rs) ---
 
-    /// tug's game wants a controller (`players` 1), or two (a two-player game, 2): the phone pages
-    /// offer it at their next check-in. Asking again changes how many; going back to one lets the
-    /// second phone go (the game hears it's gone). Returns whether the channel was newly opened
-    /// (the caller starts watching it).
-    pub fn pad_open(&self, players: u8) -> bool {
+    /// tug's game (`game`) wants a controller (`players` 1), or two (a two-player game, 2): the
+    /// phone pages offer it at their next check-in, with that game's buttons. Asking again changes
+    /// how many (or which game); going back to one lets the second phone go (the game hears it's
+    /// gone). Returns whether the channel was newly opened (the caller starts watching it).
+    pub fn pad_open(&self, players: u8, game: GameId) -> bool {
         let mut st = self.state();
         st.last_activity = Instant::now();
         if let Some(p) = st.pad.as_mut() {
+            if p.game() != game {
+                log::info!("tugboat: game controller now for {game:?}");
+                p.set_game(game);
+            }
             let was = p.players();
             let gone = p.set_players(players, Instant::now());
             let now = p.players();
@@ -889,9 +899,12 @@ impl Session {
             }
             return false;
         }
-        st.pad = Some(Pad::new(Instant::now(), players));
+        st.pad = Some(Pad::new(Instant::now(), players, game));
         drop(st);
-        log::info!("tugboat: game controller on ({} player(s))", players.clamp(1, 2));
+        log::info!(
+            "tugboat: game controller on ({game:?}, {} player(s))",
+            players.clamp(1, 2)
+        );
         true
     }
 
@@ -942,11 +955,17 @@ impl Session {
         let seat = seat_of(req);
         let mut st = self.state();
         let pad = st.pad.as_mut().filter(|p| p.open_for(seat)).ok_or(ApiError::NoGame)?;
+        let arrived = !pad.connected(seat);
         let event = pad.input(seat, req.seq, decoded, Instant::now());
+        let arrived = arrived && pad.connected(seat);
         let reply = pad.reply(seat);
         // A guest's steering is someone playing (its check-ins aren't: see `authorize`).
         st.last_activity = Instant::now();
         drop(st);
+        if arrived {
+            // Once per arrival (its going quiet is logged too), never per input.
+            log::info!("tugboat: game controller {seat} sending");
+        }
         if let Some(e) = event {
             self.sink.pad(e);
         }
@@ -959,8 +978,13 @@ impl Session {
         let Some(pad) = st.pad.as_mut() else {
             return false;
         };
-        let events = pad.tick(Instant::now());
+        let now = Instant::now();
+        let events = pad.tick(now);
+        let summary = pad.summary(now);
         drop(st);
+        for line in summary {
+            log::debug!("tugboat: {line}");
+        }
         for e in events {
             log::info!("tugboat: game controller {} went quiet", e.seat);
             self.sink.pad(e);
@@ -1793,7 +1817,7 @@ mod tests {
             seq += 1;
             (header(keys, who, seq, method, path), seq)
         };
-        s.pad_open(2);
+        s.pad_open(2, GameId::TugboatRun);
         // Small enough that the clock (time since boot) can always go back this far.
         let quiet = Duration::from_secs(30);
         s.age_activity(quiet);

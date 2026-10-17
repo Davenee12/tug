@@ -219,7 +219,7 @@ clipboard from such a page, so the page shows the picture to press and hold.
 
 ```
 right-click tug on the taskbar / in Start ─► Tasks: New message · Tugboat · Copy latest code ·
-  Play Tugboat Run (only while Show games is on) · Settings
+  Play a game (only while Show games is on; opens the games picker) · Settings
   each task is a shell link: tug.exe --action <id>   (the exe path made plain by shell_path: tauri's
   current_exe is a \\?\ verbatim path, which IShellLinkW::SetPath rejects; registered by quick_actions/win.rs under the
   AppUserModelID the process claims: the bundle identifier, which the installer stamps on the
@@ -235,20 +235,26 @@ UI (App.vue), only after tug.init() has loaded history and settings, and on ever
 A nudge carries nothing, so one lost to a page that's still loading loses nothing: the action
 waits in the queue until the next take.
 
-**A game controller input (Tugboat Run)**
+**A game controller input (Tugboat Run, Harbor Stack)**
 
 ```
-game: "Use your phone as a controller" ─► invoke game_pad_open ─► Tugboat starts if off; Session::pad_open
-phone page polls GET /api/state ─► { game: true } ─► Controller.vue (slider pad + Boost)
-  POST /api/pad the moment the input changes (touch, slide, Boost down/up), coalesced to one per
+game: "Use your phone as a controller" ─► invoke game_pad_open(players, game) ─► Tugboat starts if
+  off; Session::pad_open(players, GameId)    (lib/useGameController.ts, shared by both games)
+phone page polls GET /api/state ─► { game: true, gameId } ─► Controller.vue with that game's buttons,
+  held sideways: left thumb the slider (Tugboat Run steers; Harbor Stack nudges the crane and
+  springs back), right thumb the button (Boost / Drop); upright, "Turn your phone sideways to play"
+  POST /api/pad the moment the input changes (touch, slide, button down/up), coalesced to one per
   16 ms (~60/s), up to two in flight, newest wins; a heartbeat every 200 ms while nothing changes
   signed like every request (same secret, MAC, replay window, first phone binds); body sealed to it
-  ─► authorize ─► ≤ 104-byte body ─► channel open? (else 409 no-game) ─► rate limit (else 429 busy)
-  ─► pad::decode: exactly {"steer": -100..=100, "boost": bool} (+ optional "age"/"rtt" probe)
+  ─► authorize ─► ≤ 120-byte body ─► channel open? (else 409 no-game) ─► rate limit (else 429 busy)
+  ─► pad::decode: exactly {"steer": -100..=100, "boost": bool} (+ optional "drop": bool, + optional
+     "age"/"rtt" probe) ─► GameId::allow: Tugboat Run never sees a drop, Harbor Stack never a boost
   ─► older sequence numbers ignored
-  ─► Pad state changed? emit "game-pad" ─► TugboatRun.vue applies it on the next frame: the slider
-     position is the boat's target (critically damped follow, τ 50 ms); the keyboard keeps inertia
-  reply (sealed): { paused, hits } from game_pad_feedback, so the phone shows Paused and buzzes
+  ─► Pad state changed? emit "game-pad" ─► the open game applies it on the next frame. Tugboat Run:
+     the slider position is the boat's target (critically damped follow, τ 50 ms); the keyboard
+     keeps inertia. Harbor Stack: a fresh Drop drops, the slider speeds or slows the crane ±35%
+  reply (sealed): { paused, hits, player?, game } (game_pad_feedback + the channel's GameId), so the
+     phone shows Paused, buzzes, and switches buttons if another game took the channel over
 150 ms watch: no input for 700 ms ─► emit "game-pad" { connected: false } (the keyboard has it)
 game closes ─► game_pad_close ─► inputs get 409 ─► the page goes back to Tugboat
 ```
@@ -262,7 +268,7 @@ code** beside Tugboat's own (Player 1 scans Tugboat's usual code). The Player 2 
 (`secret.ts`), derives keys from the guest secret the usual way and signs and seals with them, and
 shows only the race. `auth.rs` checks a request against the session's keys first (the owner,
 bound by the first such request as always) and then the guest's: a guest-key request may only be
-`GET /api/state` (which tells it only whether there's a race) or `POST /api/pad`, anything else is
+`GET /api/state` (which tells it only whether there's a game to join, and which) or `POST /api/pad`, anything else is
 403 `in-use`; it can never bind the session, even as the first request; and it joins as the guest
 only while seat 2 is open (else 403 `no-race`), one at a time with its own replay window (a guest
 quiet for 8 s gives way to the next, otherwise 403 `full`). A second phone with Tugboat's own code
@@ -283,7 +289,16 @@ timeout (10 s) doubles as the idle limit for a kept-alive connection; it restart
 request, so an active controller never meets it, and only connections left idle are closed. The
 phone's probe (`age` = how long the newest touch waited before going out, `rtt` = its last round
 trip) gives a touch-to-PC estimate of `age + rtt/2`, logged as one summary line at debug level
-when the controller closes.
+when the controller closes. While the channel is open, the 150 ms watch also logs, at most once a
+second and only for a phone that sent anything, a debug line of counts (`controller 1: inputs 58,
+late 0, presses 2 in 1.0 s`), and an info line when a phone starts sending (`game controller 1
+sending`), so "the button does nothing" can be told apart from "nothing arrives".
+
+A quick tap on the phone can't be lost between sends: the press stays in every input until a reply
+to one that carried it comes back, and only then does the release go (`PressLatch` in
+`tugboat-page/pad.ts`); the game latches a fresh press until its next frame. `padBody` builds the
+sealed body, and `padVector.json` pins the page's bodies against the Rust decoder (vitest and
+cargo test both read it).
 
 **Voice typing (hold to talk)**
 
@@ -327,7 +342,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `crates/tug-bridge` (`auth`, `protocol`, `framing`, `paths`, `time`) | Bridge protocol and handshake; the whole exchange is also tested over a real pipe |
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
-| `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone, two seats for a two-player game |
+| `tugboat/pad.rs` | The game controller channel: which game has it (`GameId`) and the one action each game may see, what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone, two seats for a two-player game |
 | `tugboat/net.rs`, `tugboat/tally.rs`, `tugboat/session.rs` (`choose_folder`) | Which adapter the phone can reach (including a Hyper-V external switch); logging strangers' refused requests once a minute with a count; Pictures or the Downloads fallback |
 | `autostart.rs`, `session_end.rs` | Start with Windows over a `Registry` trait (tested with a fake: HKCU only, moving an old HKLM entry only for a tug in the process user's own Local AppData); what exit skips when Windows is ending the session |
 | `tugboat/clip.rs`, `tugboat/dib.rs` | The shared clipboard: one waiting clipboard at a time, delivered only on the phone's word, dropped after 2 minutes, what can be sent; a clipboard bitmap to PNG |
@@ -356,12 +371,16 @@ they re-render), `startup` (startup reads that fail are retried, never block), `
 `quickActions` (routing a taskbar task, one take at a time), `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
 scoring, the speed curve, inertia, the weather's handling, merging the controls), `tugboatDaily` (the
 daily challenge: the date's seed, weather → water, the start screen's line, the streak), `tugboatRace`
-(two players: who steers what, the result, when a dropped phone pauses the race), `useCitySearch` (the
+(two players: who steers what, the result, when a dropped phone pauses the race; Harbor Stack's
+stack-off uses it too), `harborStack` (Harbor Stack's rules: slicing the overhang, perfect drops, the
+combo and width back, the crane's speed curve, the seeded sway and gusts, the daily's weather, the
+controls), `useGameController` (the phone controller's channel, shared by both games), `useCitySearch` (the
 weather card's city box), `vips`, `voice` (voice typing's Settings words and problems), `weather`, `weblinks`, `whatsNew`. Thin DOM composables such as
 `useElementSize` (an element's size in zoomed CSS pixels) and `useCallButtonGate` (a ringing call's Feed buttons) feed these rules.
 The phone page has its own: `tugboat-page/chunks`, `crypto`, `clip` (the PC's clipboard: when to
-acknowledge it, copying without a secure context) and `pad` (the controller's wire format, pacing
-and errors). Components and
+acknowledge it, copying without a secure context) and `pad` (the controller's wire format, each
+game's buttons, pacing, errors, sideways or upright, and tilt only where it's really available).
+Components and
 stores should call these rather than grow logic of their own.
 
 Integration tests: `tugboat/tests.rs` plays the phone over a real socket; `tug-bridge` tests run the
@@ -427,6 +446,8 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?gamephone` | Tugboat Run with the phone controller: Tugboat's code, a phone scanning it, then the phone starting the run and steering |
 | `/?game2p` (`&p2drop`) | Tugboat Run for two players with two phones (Player 2's phone drops mid-race: the waiting card and Continue solo) |
 | `/?game&weather=rain` | The daily challenge in made-up weather for the preview: `rain`, `storm`, `snow`, `night`, `windy` or `off` |
+| `/?games` | The games picker (the Play button, Ctrl+K "game", the taskbar's Play a game) |
+| `/?stack`, `/?stackphone`, `/?stack2p` (`&p2drop`) | Harbor Stack: ready to start / with the phone controller (it drops every 1.6 s) / a stack-off with two phones; `&weather=` works here too |
 | `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
 | `/?pcaudio`, `/?pcaudiofail`, `/?pcaudiodrop`, `/?pcaudioold` | iPhone audio playing on this PC / Play on this PC times out / it drops after 6 s (Reconnect) / Windows too old for it |
 | `/?whatsnew` | The What's new card for the newest release |
@@ -437,10 +458,11 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then
-`http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`, `&game` for the controller, `&clip` /
+`http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`, `&game` for the controller with
+`&stack` for Harbor Stack's or `&switch` for a game change mid-way, `&clip` /
 `&clipimage` for the PC's clipboard). To drive the real page against a real server (real signing and
 sealing), see `manual_page` in `tugboat/tests.rs` (`TUGBOAT_GAME=1` opens the controller channel and
-prints each input; `TUGBOAT_CLIP=1` sends a made-up clipboard; `TUGBOAT_HOST=<LAN address>` serves
+prints each input, `TUGBOAT_GAME=stack` for Harbor Stack; `TUGBOAT_CLIP=1` sends a made-up clipboard; `TUGBOAT_HOST=<LAN address>` serves
 it where it isn't a secure context, as on a phone).
 
 ## Adding a feature safely

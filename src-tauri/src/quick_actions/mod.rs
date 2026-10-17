@@ -1,5 +1,5 @@
 //! Quick actions: the Tasks in tug's taskbar jump list (right-click tug's taskbar button or its
-//! Start menu entry): New message, Tugboat, Copy latest code, Play Tugboat Run and Settings.
+//! Start menu entry): New message, Tugboat, Copy latest code, Play a game and Settings.
 //!
 //! Each task launches `tug.exe --action <id>`. tug is single-instance, so when tug is already
 //! running that second launch only hands its arguments to the running tug (lib.rs) and exits;
@@ -25,7 +25,7 @@ use crate::state::events;
 
 /// The command-line switch a task passes: `--action new-message` (or `--action=new-message`).
 pub const ACTION_ARG: &str = "--action";
-/// Settings › General › Show games: Play Tugboat Run is only offered while it's on.
+/// Settings › General › Show games: Play a game is only offered while it's on.
 pub const SHOW_GAMES_SETTING: &str = "ui.showGames";
 /// Actions waiting for the UI beyond this are dropped (nobody clicks this fast on purpose).
 const MAX_PENDING: usize = 8;
@@ -72,7 +72,7 @@ impl QuickAction {
             QuickAction::NewMessage => "New message",
             QuickAction::Tugboat => "Tugboat",
             QuickAction::CopyCode => "Copy latest code",
-            QuickAction::Game => "Play Tugboat Run",
+            QuickAction::Game => "Play a game",
             QuickAction::Settings => "Settings",
         }
     }
@@ -83,7 +83,7 @@ impl QuickAction {
             QuickAction::NewMessage => "Start a new text from your iPhone",
             QuickAction::Tugboat => "Send files and text to and from your phone",
             QuickAction::CopyCode => "Copy the newest verification code from your iPhone",
-            QuickAction::Game => "A little boat game",
+            QuickAction::Game => "Tugboat Run or Harbor Stack",
             QuickAction::Settings => "Open tug's settings",
         }
     }
@@ -124,7 +124,7 @@ pub struct Task {
     pub arguments: String,
 }
 
-/// The Tasks section. Play Tugboat Run only while Settings › General › Show games is on, so
+/// The Tasks section. Play a game only while Settings › General › Show games is on, so
 /// turning games off takes them out of the taskbar too.
 pub fn tasks(show_games: bool) -> Vec<Task> {
     QuickAction::ALL
@@ -339,13 +339,7 @@ mod tests {
         let all = tasks(true);
         assert_eq!(
             all.iter().map(|t| t.title).collect::<Vec<_>>(),
-            [
-                "New message",
-                "Tugboat",
-                "Copy latest code",
-                "Play Tugboat Run",
-                "Settings"
-            ]
+            ["New message", "Tugboat", "Copy latest code", "Play a game", "Settings"]
         );
         for task in &all {
             let args: Vec<&str> = task.arguments.split(' ').collect();
