@@ -5,6 +5,7 @@ import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
 import { AnswerGate, type CallKeyTarget } from "../lib/callKeys";
 import { appLabel, cleanName, duration, initials } from "../lib/format";
+import { callerLine } from "../lib/sharePrivacy";
 import type { PhoneNotification } from "../types/protocol";
 
 // The phone is ringing: a card over everything, answered or declined on the iPhone (ANCS
@@ -17,6 +18,9 @@ const declineButton = ref<HTMLButtonElement | null>(null);
 const busy = ref<"answer" | "decline" | null>(null);
 
 const name = computed(() => cleanName(props.call.title) || "Unknown caller");
+// While the screen is shared or presented, the card says only that a call is ringing (lib/sharePrivacy).
+const hidden = computed(() => tug.previewsHidden);
+const shownName = computed(() => callerLine(name.value, hidden.value));
 const source = computed(() => appLabel(props.call));
 // iOS puts "mobile", "iPhone" and the like here; a bare "Incoming Call" says nothing new.
 const detail = computed(() => {
@@ -92,21 +96,22 @@ onUnmounted(() => {
         <X :size="16" />
       </button>
 
-      <p class="caption-upper relative text-on-dark-soft">{{ source }} · Incoming call</p>
+      <p class="caption-upper relative text-on-dark-soft">{{ source }}<template v-if="!hidden"> · Incoming call</template></p>
 
       <div class="relative mx-auto mt-9 grid size-28 place-items-center" aria-hidden="true">
         <span class="animate-call-ring absolute inset-0 rounded-full border-2 border-primary/60" />
         <span class="animate-call-ring absolute inset-0 rounded-full border-2 border-primary/60 [animation-delay:1.2s]" />
         <span class="relative grid size-24 place-items-center rounded-full bg-primary/20 font-display text-[38px] text-on-dark">
-          {{ initials(name) }}
+          <Phone v-if="hidden" :size="34" />
+          <template v-else>{{ initials(name) }}</template>
         </span>
       </div>
 
       <p id="call-name" class="relative mt-8 font-display text-[44px] leading-[1.05] break-words text-on-dark" style="letter-spacing: -0.02em">
-        {{ name }}
+        {{ shownName }}
       </p>
       <p id="call-detail" class="relative mt-2 text-[14px] text-on-dark-soft">
-        <template v-if="detail">{{ detail }} · </template>ringing on your iPhone
+        <template v-if="detail && !hidden">{{ detail }} · </template>ringing on your iPhone
         <span class="font-mono text-[12px]">{{ ringingFor }}</span>
       </p>
 

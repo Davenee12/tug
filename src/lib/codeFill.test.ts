@@ -92,6 +92,8 @@ describe("the copied pop-up", () => {
     code: "482193",
     callBack: false,
     clear: true,
+    app: "Messages",
+    kind: "message",
   };
 
   it("says what was copied and from whom", () => {

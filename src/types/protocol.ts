@@ -302,6 +302,8 @@ export interface UiSettings {
   smartReplies: boolean;
   /** The suggestions for texts no rule matches (at most 3; lib/smartReplies `DEFAULT_REPLIES` unless changed). */
   smartReplyDefaults: string[];
+  /** While the screen is shared or presented, pop-ups and the window hide texts and names (on by default; read by the backend, `share_privacy/`). */
+  hidePreviewsWhileSharing: boolean;
 }
 
 /**
@@ -332,6 +334,22 @@ export interface ToastSpec {
    * box). At most 3, each at most 40 characters; the backend fits them in beside the other buttons.
    */
   replies?: string[];
+  /** The app it's from ("Messages"): all the pop-up says while previews are hidden. */
+  app: string;
+  /** What it is, for the wording while previews are hidden ("New message", "Incoming call"). */
+  kind: ToastKind;
+}
+
+/** What a pop-up is about (`ToastKind` in `toast/xml.rs`); `info` is tug's own words, never hidden. */
+export type ToastKind = "notification" | "message" | "call" | "missedCall" | "info";
+
+/** Why previews are hidden (`share_privacy::Reason`). */
+export type ShareReason = "sharing" | "presenting" | "fullScreen";
+
+/** Whether previews are hidden right now because the screen is shared or presented (`screen-share`, `share_privacy/`). */
+export interface ShareState {
+  active: boolean;
+  reason: ShareReason | null;
 }
 
 /** A pop-up's body or button was pressed and carried out (`toast-pressed`, `toast/mod.rs`). */

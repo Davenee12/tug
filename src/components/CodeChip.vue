@@ -32,6 +32,6 @@ async function copy() {
   >
     <component :is="copied ? Check : Copy" :size="12" class="shrink-0" />
     <span v-if="copied">Copied</span>
-    <span v-else class="font-mono tracking-wider">{{ code }}</span>
+    <span v-else class="preview-private font-mono tracking-wider">{{ code }}</span>
   </button>
 </template>

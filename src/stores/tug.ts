@@ -58,6 +58,7 @@ import type {
   PairingRequest,
   PhoneNotification,
   SearchResults,
+  ShareState,
   SpotifyDevice,
   SpotifyPlayer,
   SpotifyPlaylist,
@@ -90,6 +91,7 @@ import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../l
 import { coalesce, nextFrame } from "../lib/coalesce";
 import { isCurrent, NewestRev, SnapshotGuard } from "../lib/ordering";
 import { retryDelay, settleAll, START_FAILED, STILL_LOADING, type StartupRead } from "../lib/startup";
+import { NOT_SHARING, previewsHidden, shareBanner, stillRevealed } from "../lib/sharePrivacy";
 import { useTugboatStore } from "./tugboat";
 import { useDevToolsStore } from "./devtools";
 
@@ -215,6 +217,7 @@ export const useTugStore = defineStore("tug", () => {
     showGames: true,
     smartReplies: true,
     smartReplyDefaults: [...DEFAULT_REPLIES],
+    hidePreviewsWhileSharing: true,
   });
   /** The type-the-code shortcut as the backend registered it (Settings shows "in use" from this). */
   const codeHotkey = ref<CodeHotkeyStatus>({ state: "off", keys: DEFAULT_CODE_HOTKEY });
@@ -426,6 +429,46 @@ export const useTugStore = defineStore("tug", () => {
   const canSee = computed(() =>
     canSeeWindow({ visibility: pageVisible.value ? "visible" : "hidden", focused: windowFocused.value, overlayOpen: overlayOpen.value }),
   );
+
+  // --- Hide previews while sharing or presenting (lib/sharePrivacy; the backend's share_privacy/
+  // decides, and hides pop-up text itself). One source: the backend's answer plus this setting. ---
+  const screenShare = ref<ShareState>(NOT_SHARING);
+  /** "Show anyway" for the share in progress; forgotten when sharing stops. */
+  const shareRevealed = ref(false);
+  const previewsHiddenNow = computed(() =>
+    previewsHidden(settings.value.hidePreviewsWhileSharing, screenShare.value, shareRevealed.value),
+  );
+  const shareBannerText = computed(() =>
+    shareBanner(settings.value.hidePreviewsWhileSharing, screenShare.value, shareRevealed.value),
+  );
+  function setScreenShare(s: ShareState) {
+    screenShare.value = s;
+    shareRevealed.value = stillRevealed(shareRevealed.value, s);
+  }
+  function showPreviewsAnyway() {
+    shareRevealed.value = true;
+  }
+  function hidePreviewsAgain() {
+    shareRevealed.value = false;
+  }
+  /**
+   * The backend looks every 2 s only while the window is on screen (or while hiding is on, until it
+   * clears); hidden in the tray with nothing hidden, it doesn't look at all. Tell it when that changes.
+   */
+  let shareWatching: boolean | null = null;
+  function syncShareWatch() {
+    const on = pageVisible.value && settings.value.hidePreviewsWhileSharing;
+    if (on === shareWatching) return;
+    shareWatching = on;
+    void api
+      .screenShareWatch(on)
+      .then(setScreenShare)
+      .catch(() => undefined);
+  }
+  watch([pageVisible, () => settings.value.hidePreviewsWhileSharing], () => {
+    if (started) syncShareWatch();
+  });
+
   const onWindowBlur = () => {
     windowFocused.value = false;
     leftWindow();
@@ -700,6 +743,8 @@ export const useTugStore = defineStore("tug", () => {
       code: null,
       callBack: false,
       clear: false,
+      app: "",
+      kind: "info",
     };
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
     void api.showToast(spec).catch(() => undefined);
@@ -793,7 +838,7 @@ export const useTugStore = defineStore("tug", () => {
 
   /** A pop-up that only says something; pressing it opens tug (its id matches no notification). */
   function showInfoToast(id: number, title: string, body: string) {
-    const spec: ToastSpec = { id, title, body, name: "", replyTo: null, markRead: false, code: null, callBack: false, clear: false };
+    const spec: ToastSpec = { id, title, body, name: "", replyTo: null, markRead: false, code: null, callBack: false, clear: false, app: "", kind: "info" };
     void api.showToast(spec).catch(() => undefined);
   }
 
@@ -893,6 +938,8 @@ export const useTugStore = defineStore("tug", () => {
       code,
       callBack: false,
       clear: false,
+      app: "Messages",
+      kind: "message",
     };
     const spec = copied && code === found ? copiedToastSpec(plain, code, name) : plain;
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
@@ -1271,6 +1318,7 @@ export const useTugStore = defineStore("tug", () => {
       showGames: raw["ui.showGames"] !== "false",
       smartReplies: raw["ui.smartReplies"] !== "false",
       smartReplyDefaults: parseReplyDefaults(raw["ui.smartReplyDefaults"]),
+      hidePreviewsWhileSharing: raw["ui.hidePreviewsWhileSharing"] !== "false",
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
     batteryAlerted = restoreBatteryAlerted(raw["ui.batteryAlerted"], Date.now());
@@ -1407,6 +1455,7 @@ export const useTugStore = defineStore("tug", () => {
       on("open-settings", () => openSettings()),
       on("toast-pressed", onToastPressed),
       on("code-filled", onCodeFilled),
+      on("screen-share", setScreenShare),
     ]);
     for (const r of listeners) if (r.status === "fulfilled") teardown.push(r.value);
     // Without its listeners the window would never hear about anything again: say so plainly.
@@ -1426,6 +1475,8 @@ export const useTugStore = defineStore("tug", () => {
         if (!document.hidden) clock.value = Date.now();
       }, 60_000);
       await attempt(loadSettings);
+      // Settings are in: start (or skip) the sharing check for the window (lib/sharePrivacy).
+      syncShareWatch();
       // The backend registered the type-the-code shortcut at startup; Settings shows how that went.
       const hotkey = await attempt(api.codeHotkeyStatus);
       if (hotkey) codeHotkey.value = hotkey;
@@ -1551,6 +1602,7 @@ export const useTugStore = defineStore("tug", () => {
     watchRenew = undefined;
     clockTimer = undefined;
     messagesReady = false;
+    shareWatching = null;
     ready = new Promise<void>((resolve) => (markReady = resolve));
     started = false;
   }
@@ -2087,6 +2139,11 @@ export const useTugStore = defineStore("tug", () => {
     respondToCall,
     overlayOpen,
     canSee,
+    screenShare,
+    previewsHidden: previewsHiddenNow,
+    shareBanner: shareBannerText,
+    showPreviewsAnyway,
+    hidePreviewsAgain,
     settingsSection,
     openSettings,
     closeSettings,

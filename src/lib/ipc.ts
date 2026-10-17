@@ -10,6 +10,7 @@ import type {
   CodeHotkeyStatus,
   Contact,
   SearchResults,
+  ShareState,
   SmsMessage,
   DeviceStatus,
   DevToolsConfirm,
@@ -126,6 +127,8 @@ export const api = {
   dial: (number: string | null) => invoke<void>("dial", { number }),
   /** A Windows pop-up with buttons (falls back to a plain one in the backend). */
   showToast: (spec: ToastSpec) => invoke<void>("show_toast", { spec }),
+  /** The window is on screen (or not): while it is, the backend checks for screen sharing every 2 s. Returns the answer now. */
+  screenShareWatch: (on: boolean) => invoke<ShareState>("screen_share_watch", { on }),
   // --- Spotify connector ---
   spotifyStatus: () => invoke<SpotifyStatus>("spotify_status"),
   /** Opens the browser for OAuth; resolves once the loopback redirect comes back. */
@@ -218,6 +221,8 @@ interface EventPayloads {
   "code-filled": CodeFilled;
   /** A taskbar jump-list task was clicked (from Rust, `quick_actions`): take what's waiting. */
   "quick-action": null;
+  /** Previews started or stopped being hidden because the screen is shared or presented (`share_privacy/`). */
+  "screen-share": ShareState;
   "tugboat-status": TugboatStatus;
   "tugboat-text": TugboatTextArrived;
   /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */

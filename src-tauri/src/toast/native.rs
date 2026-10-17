@@ -152,6 +152,7 @@ mod tests {
             call_back: true,
             clear: true,
             replies: vec!["You're welcome 👍".into(), "<5 min & \"ok\"".into()],
+            ..Default::default()
         };
         let suggestions = ToastSpec {
             code: None,

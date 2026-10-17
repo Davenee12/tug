@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Search, Settings2, X } from "lucide-vue-next";
+import { Eye, EyeOff, Search, Settings2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { dayLabel, entryLatest, groupFeed, notificationTime, type FeedEntry } from "../lib/format";
 import { optionalNudge } from "../lib/connectFlow";
@@ -121,7 +121,8 @@ const nudgeDismissed = ref(false);
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col">
+  <!-- While the screen is shared or presented, texts, names and photos marked preview-private blur. -->
+  <div :class="['flex h-full min-h-0 flex-col', tug.previewsHidden && 'previews-hidden']">
     <!-- A container: with the side Connection panel open the Feed is narrower than the window, so the
          title shrinks and search folds to an icon by the Feed's own width, not the viewport's. -->
     <header class="@container flex items-center gap-4 border-b border-hairline px-8 pt-6 pb-4">
@@ -161,6 +162,17 @@ const nudgeDismissed = ref(false);
         <Settings2 :size="16" />
       </button>
     </header>
+
+    <!-- Sharing or presenting: says previews are hidden (or showing, after Show anyway) for as long
+         as it lasts, and goes the moment it stops. -->
+    <div v-if="tug.shareBanner" class="border-b border-hairline bg-surface-card px-8 py-2.5" role="status">
+      <div class="mx-auto flex w-full max-w-3xl items-center gap-3">
+        <component :is="tug.previewsHidden ? EyeOff : Eye" :size="15" class="shrink-0 text-muted" />
+        <p class="min-w-0 flex-1 text-[13px] font-medium text-ink">{{ tug.shareBanner }}</p>
+        <button v-if="tug.previewsHidden" class="btn-secondary btn-sm shrink-0" @click="tug.showPreviewsAnyway()">Show anyway</button>
+        <button v-else class="btn-secondary btn-sm shrink-0" @click="tug.hidePreviewsAgain()">Hide again</button>
+      </div>
+    </div>
 
     <!-- Optional switches still off, once notifications work: a nudge, not a blocker. -->
     <div v-if="tug.view === 'feed' && nudge.length && !nudgeDismissed" class="border-b border-hairline bg-surface-soft px-8 py-3">

@@ -100,6 +100,8 @@ describe("toastSpec", () => {
       callBack: false,
       clear: true,
       replies: [],
+      app: "Messages",
+      kind: "message",
     });
   });
 

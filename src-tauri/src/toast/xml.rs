@@ -68,6 +68,32 @@ pub struct ToastSpec {
     /// buttons.
     #[serde(default)]
     pub replies: Vec<String>,
+    /// The app it's from ("Messages", "WhatsApp"): all a pop-up says while previews are hidden
+    /// (`share_privacy`).
+    #[serde(default)]
+    pub app: String,
+    /// What it is, for the wording while previews are hidden. Missing means a notification, so
+    /// a spec that doesn't say is hidden like one rather than shown.
+    #[serde(default)]
+    pub kind: ToastKind,
+}
+
+/// What a pop-up is about, so it can say "New message" or "Incoming call" and nothing more while
+/// previews are hidden. Mirrored in `src/types/protocol.ts`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToastKind {
+    /// Anything from an app on the phone.
+    #[default]
+    Notification,
+    /// A text or chat message from a person.
+    Message,
+    /// The phone is ringing.
+    Call,
+    /// A call that was missed.
+    MissedCall,
+    /// tug's own words (low battery, "3 more notifications"): nothing from the phone to hide.
+    Info,
 }
 
 /// A press on the toast (its body or a button), as carried in the toast's arguments.

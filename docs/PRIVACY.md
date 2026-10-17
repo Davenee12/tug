@@ -61,6 +61,11 @@ Disconnect any time in Settings › Connectors, which removes the stored sign-in
   with the switches in Settings › Developer tools (verification codes, music control and sending
   texts start off), and a text is only ever sent after you click **Send** in tug. What an AI tool
   does with what it reads is up to that tool and its provider's privacy policy.
+- **Hide previews while sharing or presenting** (Settings › Notifications, on by default) looks at
+  this PC only: whether Windows reports a full-screen app or presentation mode, whether the display
+  is duplicated, and whether a meeting app's or browser's sharing bar is open. To tell those bars
+  apart, tug reads the title of a few known windows (Teams' and the browsers'); it never keeps or
+  logs a window title, and its log names only which kind of signal it saw.
 
 ## Deleting your data
 

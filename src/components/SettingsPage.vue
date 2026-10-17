@@ -112,6 +112,10 @@ const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) =>
 const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
 const showGames = computed({ get: () => tug.settings.showGames, set: (v) => void tug.setSetting("showGames", v) });
 const filterUnknown = computed({ get: () => tug.settings.filterUnknown, set: (v) => void tug.setSetting("filterUnknown", v) });
+const hidePreviews = computed({
+  get: () => tug.settings.hidePreviewsWhileSharing,
+  set: (v) => void tug.setSetting("hidePreviewsWhileSharing", v),
+});
 const advertise = computed({ get: () => tug.advertiseEnabled, set: (v) => void tug.setAdvertising(v) });
 const zoomPct = computed(() => `${Math.round(tug.zoom * 100)}%`);
 
@@ -494,6 +498,12 @@ async function clearHistory() {
               description="Texts from numbers that aren't in your contacts, and that you've never texted, wait in their own list in Messages: no badge, no pop-up. Texts with a code still pop up."
             >
               <SettingsSwitch v-model="filterUnknown" label="Filter unknown senders" />
+            </SettingsRow>
+            <SettingsRow
+              label="Hide previews while sharing or presenting"
+              :description="`While you share your screen, show slides or use an app full screen, pop-ups and calls say only which app it's from, and tug blurs texts and names until you choose Show anyway.${!tug.shareBanner ? '' : tug.previewsHidden ? ' Hiding previews now.' : ' Showing them for this share, as you chose.'}`"
+            >
+              <SettingsSwitch v-model="hidePreviews" label="Hide previews while sharing or presenting" />
             </SettingsRow>
           </div>
 

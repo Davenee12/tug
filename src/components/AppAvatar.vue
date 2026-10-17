@@ -25,7 +25,7 @@ const icon = computed(() => {
     :src="icon"
     :alt="label"
     :title="label"
-    :class="[size === 'sm' ? 'size-8' : 'size-10', 'shrink-0 rounded-lg border border-hairline-soft object-cover']"
+    :class="[size === 'sm' ? 'size-8' : 'size-10', 'shrink-0 rounded-lg border border-hairline-soft object-cover', person && 'preview-private']"
     draggable="false"
     @error="broken = true"
   />
@@ -35,6 +35,7 @@ const icon = computed(() => {
       tone,
       size === 'sm' ? 'size-8 text-[11px]' : 'size-10 text-[13px]',
       'flex shrink-0 items-center justify-center rounded-lg font-semibold tracking-wide',
+      person && 'preview-private',
     ]"
     :title="label"
   >

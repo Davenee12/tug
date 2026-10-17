@@ -81,6 +81,10 @@ windows = { version = "0.62", features = [
   "Web_Http",
   "Web_Http_Headers",
   "Win32_Foundation",
+  # Hide previews while sharing or presenting: whether the display is duplicated (QueryDisplayConfig)
+  # and whether the foreground window really covers its monitor (MonitorFromWindow).
+  "Win32_Devices_Display",
+  "Win32_Graphics_Gdi",
   # The PC's region (GetUserDefaultGeoName): whether a bare 10-digit number is a +1 number.
   "Win32_Globalization",
   # Code fill: clearing an auto-copied code (only if it's still on the clipboard), the

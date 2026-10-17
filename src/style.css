@@ -118,6 +118,15 @@
   @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] font-medium;
 }
 
+/* Hide previews while sharing or presenting (lib/sharePrivacy): inside a `.previews-hidden` area,
+   texts, names and contact photos blur past reading. No transition: hiding must be instant. */
+@utility preview-private {
+  .previews-hidden & {
+    filter: blur(7px);
+    user-select: none;
+  }
+}
+
 /* A screen arriving (setup steps): fades up on its own, never waits on the one leaving. */
 @keyframes step-in {
   from {

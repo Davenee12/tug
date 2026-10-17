@@ -7,6 +7,7 @@ import type { Contact, PhoneNotification, SmsMessage, ToastSpec } from "../types
 import { appLabel, canClear, cleanName, groupConversations, isConversation, threadKey } from "./format";
 import { findCode } from "./codes";
 import { suggestReplies, type ReplyOptions } from "./smartReplies";
+import { toastKind } from "./sharePrivacy";
 
 const MESSAGES_APP = "com.apple.MobileSMS";
 
@@ -89,5 +90,8 @@ export function toastSpec(
     // Only where a typed reply could go: no reply box (a group, a ringing call, an unknown
     // address) means no suggestions either. Short codes and code texts get none (smartReplies).
     replies: reply.to ? suggestReplies(n.message || n.subtitle, { ...replyOptions, sender: reply.to }) : [],
+    // While the screen is shared, the backend shows only these (lib/sharePrivacy).
+    app: appLabel(n),
+    kind: toastKind(n),
   };
 }
