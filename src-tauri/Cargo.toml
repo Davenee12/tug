@@ -56,6 +56,18 @@ tug-bridge = { path = "crates/tug-bridge" }
 # Verification codes for the bridge: a port of src/lib/codes.ts, whose look-arounds the
 # `regex` crate can't express.
 fancy-regex = "0.19"
+# Bring in your full message history (v0.5.18): reading a local iPhone backup. Its Info.plist and
+# Manifest.plist (`plist`, already in the tree through Tauri), and, for an encrypted backup, the
+# keybag's PBKDF2-SHA256 + PBKDF2-SHA1 derivation, the AES key unwrap of the class and file keys
+# and the AES-256-CBC file decryption. Pure-Rust RustCrypto crates on the same digest/cipher
+# generation as the ones above; `zeroize` (already in the tree) wipes keys and the password.
+plist = "1"
+aes = "0.9"
+aes-kw = { version = "0.3", default-features = false }
+cbc = "0.2"
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
+sha1 = "0.11"
+zeroize = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
@@ -85,6 +97,8 @@ windows = { version = "0.62", features = [
   # and whether the foreground window really covers its monitor (MonitorFromWindow).
   "Win32_Devices_Display",
   "Win32_Graphics_Gdi",
+  # Full message history: JPEG previews of an iPhone's photos (HEIC with HEIF Image Extensions).
+  "Win32_Graphics_Imaging",
   # The PC's region (GetUserDefaultGeoName): whether a bare 10-digit number is a +1 number.
   "Win32_Globalization",
   # Code fill: clearing an auto-copied code (only if it's still on the clipboard), the

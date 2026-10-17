@@ -174,6 +174,45 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX messages_in_body ON messages (body, address) WHERE direction = 'in';
     CREATE INDEX notifications_sms_text ON notifications (app_id, message, received_at) WHERE app_id = 'com.apple.MobileSMS';
     "#,
+    // v13: full message history from a local iPhone backup (`backup/`). Imported texts are ordinary
+    // `messages` rows with source 'iphone-backup' (keyed by the backup's message guid, so importing
+    // again adds only what's new), plus:
+    // - `group_id`: the group chat a text belongs to (NULL for one-to-one), named in
+    //   `message_groups`; `backup_group`: the same for a Bluetooth text the import found in a group
+    //   (cleared again by Remove imported history, so the Bluetooth row itself is never changed);
+    // - `edited` / `unsent`: what the backup says happened to the text;
+    // - `message_attachments`: photos and videos copied to this PC (`file`, a content hash under
+    //   the local app-data folder; NULL until copied, or when only the kind is known), for imported
+    //   texts and for Bluetooth texts the import matched. A trigger drops them with their text.
+    // Columns are added with defaults and the tables are new, so an older build can still write.
+    r#"
+    ALTER TABLE messages ADD COLUMN group_id TEXT;
+    ALTER TABLE messages ADD COLUMN backup_group TEXT;
+    ALTER TABLE messages ADD COLUMN edited INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE messages ADD COLUMN unsent INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX messages_group ON messages (group_id, received_at) WHERE group_id IS NOT NULL;
+    CREATE TABLE message_groups (
+        id      TEXT PRIMARY KEY,
+        name    TEXT,
+        members TEXT NOT NULL DEFAULT '[]',
+        source  TEXT NOT NULL
+    );
+    CREATE TABLE message_attachments (
+        id         INTEGER PRIMARY KEY,
+        message_id INTEGER NOT NULL,
+        source     TEXT    NOT NULL,
+        source_key TEXT    NOT NULL,
+        kind       TEXT    NOT NULL,
+        ext        TEXT,
+        file       TEXT,
+        bytes      INTEGER,
+        UNIQUE (message_id, source_key)
+    );
+    CREATE INDEX message_attachments_file ON message_attachments (file) WHERE file IS NOT NULL;
+    CREATE TRIGGER messages_attachments_ad AFTER DELETE ON messages BEGIN
+        DELETE FROM message_attachments WHERE message_id = old.id;
+    END;
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
@@ -587,15 +626,19 @@ impl Store {
     /// just those let the older part of a deleted conversation come back in Feed scroll and
     /// search. Hiding stamps rows stored up to `at` that weren't already hidden; undo clears
     /// exactly the rows stamped `at`, so an earlier delete of the same person stays deleted.
+    /// A group chat (from a backup) is deleted by its id in `groups`; its texts never count as the
+    /// one-to-one conversation of the person who sent them, and the other way round.
     pub fn set_conversation_hidden(
         &self,
         senders: &[(String, String)],
         addresses: &[String],
+        groups: &[String],
         at: i64,
         hidden: bool,
     ) -> Result<()> {
         let senders = serde_json::to_string(senders).expect("senders serialize");
         let addresses = serde_json::to_string(addresses).expect("addresses serialize");
+        let groups = serde_json::to_string(groups).expect("groups serialize");
         let (set, which) = if hidden {
             ("?2", "hidden_at IS NULL AND received_at <= ?2")
         } else {
@@ -616,9 +659,11 @@ impl Store {
         tx.execute(
             &format!(
                 "UPDATE messages SET hidden_at = {set}
-                 WHERE {which} AND address IN (SELECT value FROM json_each(?1))"
+                 WHERE {which} AND (
+                     (COALESCE(group_id, backup_group) IS NULL AND address IN (SELECT value FROM json_each(?1)))
+                     OR COALESCE(group_id, backup_group) IN (SELECT value FROM json_each(?3)))"
             ),
-            params![addresses, at],
+            params![addresses, at, groups],
         )?;
         tx.commit()
     }
@@ -659,11 +704,20 @@ impl Store {
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
             params![NOTIFICATION_ID_FLOOR, floor.to_string()],
         )?;
+        // History brought in from an iPhone backup goes completely (no tombstones: the backup never
+        // re-lists anything, and importing it again should bring it all back), with its photos'
+        // rows; the caller deletes the files (`backup::files::remove_all`).
+        tx.execute(
+            "DELETE FROM messages WHERE source = ?1",
+            params![crate::messages::SOURCE_IPHONE_BACKUP],
+        )?;
+        tx.execute_batch("DELETE FROM message_attachments; DELETE FROM message_groups;")?;
         // Texts stay as blank, hidden rows (tombstones), keyed by the phone's handle: the phone
         // re-lists its recent texts at every sync, and a row that's gone would come straight back.
         // Blanking the body and rebuilding the index means nothing is readable or searchable.
         tx.execute(
-            "UPDATE messages SET body = '', sender_name = NULL, address = '', hidden_at = COALESCE(hidden_at, ?1)",
+            "UPDATE messages SET body = '', sender_name = NULL, address = '', backup_group = NULL,
+                 hidden_at = COALESCE(hidden_at, ?1)",
             params![crate::state::now_ms()],
         )?;
         tx.execute_batch(
@@ -1038,6 +1092,15 @@ mod tests {
 
     /// Back to a real older database: undo the schema later migrations added, so they apply again.
     fn rewind(conn: &Connection, version: i64) {
+        if version < 13 {
+            conn.execute_batch(
+                "DROP TRIGGER messages_attachments_ad; DROP TABLE message_attachments; DROP TABLE message_groups;
+                 DROP INDEX messages_group;
+                 ALTER TABLE messages DROP COLUMN group_id; ALTER TABLE messages DROP COLUMN backup_group;
+                 ALTER TABLE messages DROP COLUMN edited; ALTER TABLE messages DROP COLUMN unsent;",
+            )
+            .unwrap();
+        }
         if version < 12 {
             conn.execute_batch("DROP INDEX messages_in_body; DROP INDEX notifications_sms_text;")
                 .unwrap();
@@ -1051,6 +1114,48 @@ mod tests {
                 .unwrap();
         }
         conn.pragma_update(None, "user_version", version).unwrap();
+    }
+
+    #[test]
+    fn upgrading_from_v12_adds_backup_history_and_keeps_every_text() {
+        let s = Store::in_memory().unwrap();
+        {
+            let conn = s.conn();
+            conn.execute_batch(
+                "INSERT INTO messages (source, handle, direction, address, body, received_at, status)
+                 VALUES ('iphone-map', 'H1', 'in', '+15550100001', 'lunch?', 1000, 'received');",
+            )
+            .unwrap();
+            rewind(&conn, 12);
+        }
+        migrate(&mut s.conn()).unwrap();
+        let conn = s.conn();
+        let v: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        let (group, edited, unsent): (Option<String>, i64, i64) = conn
+            .query_row(
+                "SELECT group_id, edited, unsent FROM messages WHERE handle = 'H1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (group, edited, unsent),
+            (None, 0, 0),
+            "existing texts are one-to-one and unedited"
+        );
+        // A text's attachments go with it.
+        conn.execute_batch(
+            "INSERT INTO message_attachments (message_id, source, source_key, kind) VALUES (1, 'iphone-backup', 'A1', 'photo');
+             DELETE FROM messages WHERE id = 1;",
+        )
+        .unwrap();
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM message_attachments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+        drop(conn);
+        migrate(&mut s.conn()).unwrap();
     }
 
     #[test]

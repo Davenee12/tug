@@ -794,6 +794,10 @@ mod tests {
             status: Status::Accepted,
             msg_type: None,
             gap_before: false,
+            group_id: None,
+            edited: false,
+            unsent: false,
+            attachments: Vec::new(),
         };
         let json: serde_json::Value = serde_json::to_value(ToastPressed {
             kind: PressKind::Replied,
