@@ -400,17 +400,21 @@ impl Actor {
         if self.link.is_none() {
             return;
         }
-        // Every edge counts toward "the phone forgot this PC" (Windows bringing the link up and the
-        // phone dropping it again at once), judged on Windows' own stamps.
-        if connected {
-            self.forgotten.link_up(at);
-        } else {
-            let awaiting_unlock = self.shared.status().awaiting_unlock;
-            let change = self.forgotten.link_down(at, awaiting_unlock);
-            self.note_forgotten(change, "");
+        // Edges on a link with no working session count toward "the phone forgot this PC" (Windows
+        // bringing the link up and the phone dropping it again at once), judged on Windows' own
+        // stamps. While notifications are subscribed the session is working and an edge is a blip:
+        // it proves the bond instead (`ForgottenWatch::edge`). A link-up after an outage is about
+        // to tear the old subscription down, so it isn't live any more.
+        let up = connected.then(|| classify_link_up(self.link_down_at, at));
+        let subscribed = self.link.as_ref().is_some_and(|l| l.ancs.is_some()) && up != Some(LinkUp::AfterOutage);
+        let awaiting_unlock = self.shared.status().awaiting_unlock;
+        let change = self.forgotten.edge(connected, at, subscribed, awaiting_unlock);
+        self.note_forgotten(change, "notifications are still subscribed");
+        if change == Some(forgotten::Change::Left) {
+            self.shared.update_status(|s| s.pairing_stale = false);
         }
-        if connected {
-            let up = classify_link_up(self.link_down_at.take(), at);
+        if let Some(up) = up {
+            self.link_down_at = None;
             // The link was down past the grace even if `tick` hasn't torn it down yet (the up beat
             // the next tick, or the actor was busy): a real outage, so the old ANCS session, rows and
             // meta must go and the reconnect's cleared-while-away sweep must run. Tear down before

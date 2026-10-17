@@ -21,9 +21,11 @@
 //! Never while the phone is locked: a phone that just restarted keeps its link up but withholds
 //! notifications until it's unlocked, and that has its own "unlock your iPhone" state. A wake, the
 //! radio changing, an adapter stall or tug relinking on its own forgets the evidence gathered so far
-//! (the link was messy for another reason). The verdict itself only clears when a session works
-//! again, or the phone is forgotten or replaced. Pure, so the rules are unit-tested; the BLE actor
-//! feeds it.
+//! (the link was messy for another reason). The link coming and going while notifications are
+//! still subscribed is a blip on a working session, never evidence. The verdict itself only clears
+//! when a session works again (a connect, a notification or media update arriving, or an edge on a
+//! subscribed link), or the phone is forgotten or replaced. Pure, so the rules are unit-tested; the
+//! BLE actor feeds it.
 
 use std::time::{Duration, Instant};
 
@@ -97,9 +99,32 @@ impl ForgottenWatch {
 
     /// A connect worked (notifications subscribed): the bond is fine.
     pub fn healthy(&mut self) -> Option<Change> {
+        self.session_alive()
+    }
+
+    /// The session is working right now: notifications are subscribed on the link, or a
+    /// notification or media update just arrived. A phone that forgot this PC can do neither, so
+    /// this is proof the bond is fine: forget the evidence and clear any verdict.
+    pub fn session_alive(&mut self) -> Option<Change> {
         let was = self.forgotten;
         *self = Self::new(true);
         was.then_some(Change::Left)
+    }
+
+    /// A connection edge from Windows (stamped when it said so). `subscribed` is whether
+    /// notifications are still subscribed on this link: then the edge is a blip on a working
+    /// session, not the phone refusing this PC, and it counts as `session_alive` instead. Only a
+    /// link with no working session feeds the flap count.
+    pub fn edge(&mut self, connected: bool, at: Instant, subscribed: bool, awaiting_unlock: bool) -> Option<Change> {
+        if subscribed {
+            return self.session_alive();
+        }
+        if connected {
+            self.link_up(at);
+            None
+        } else {
+            self.link_down(at, awaiting_unlock)
+        }
     }
 
     /// Something other than the bond explains a messy link (the PC woke, the radio changed, the
@@ -306,6 +331,47 @@ mod tests {
         w.interrupted();
         assert!(w.forgotten());
         assert_eq!(flap(&mut w, t, 1, S(2), MS(600)).0, None);
+    }
+
+    #[test]
+    fn blips_on_a_live_subscription_never_say_forgotten() {
+        // Seen in review: a working session whose link blips (down and up inside the grace, the
+        // subscription surviving) fed every edge to the flap count and was called forgotten.
+        let mut w = ForgottenWatch::new(true);
+        let t0 = Instant::now();
+        let mut t = t0;
+        for _ in 0..(FLAPS * 3) {
+            assert_eq!(w.edge(false, t, true, false), None);
+            assert_eq!(w.edge(true, t + MS(300), true, false), None);
+            t += S(2);
+        }
+        assert!(!w.forgotten());
+        // The same edges with no working session are the forgotten phone's flapping.
+        let mut w = ForgottenWatch::new(true);
+        let mut t = t0;
+        let mut change = None;
+        for _ in 0..FLAPS {
+            w.edge(true, t, false, false);
+            change = change.or(w.edge(false, t + MS(600), false, false));
+            t += S(2);
+        }
+        assert!(change.is_some());
+    }
+
+    #[test]
+    fn a_stale_verdict_clears_on_the_next_notification() {
+        let mut w = ForgottenWatch::new(true);
+        let (change, t) = flap(&mut w, Instant::now(), FLAPS, S(2), MS(600));
+        assert!(change.is_some());
+        // A notification or media update arrived: the session works.
+        assert_eq!(w.session_alive(), Some(Change::Left));
+        assert!(!w.forgotten());
+        assert_eq!(w.session_alive(), None, "only a real change is reported");
+        // An edge on a link that's subscribed clears a verdict too.
+        flap(&mut w, t, FLAPS, S(2), MS(600));
+        assert!(w.forgotten());
+        assert_eq!(w.edge(true, t + S(60), true, false), Some(Change::Left));
+        assert!(!w.forgotten());
     }
 
     #[test]

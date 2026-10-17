@@ -563,11 +563,18 @@ impl Actor {
         }
         match ev {
             Event::NotificationSource { gen, data } if event_is_current(gen, current) => {
+                self.session_alive("a notification arrived");
                 self.on_notification_source(&data).await
             }
             Event::DataSource { gen, data } if event_is_current(gen, current) => self.on_data_source(&data).await,
-            Event::MediaEntity { gen, data } if event_is_current(gen, current) => self.on_media_entity(&data).await,
-            Event::MediaCommands { gen, data } if event_is_current(gen, current) => self.on_media_commands(&data),
+            Event::MediaEntity { gen, data } if event_is_current(gen, current) => {
+                self.session_alive("a media update arrived");
+                self.on_media_entity(&data).await
+            }
+            Event::MediaCommands { gen, data } if event_is_current(gen, current) => {
+                self.session_alive("a media update arrived");
+                self.on_media_commands(&data)
+            }
             Event::Battery { gen, data } if event_is_current(gen, current) => {
                 if let Some(&level) = data.first() {
                     self.shared.update_status(|s| s.battery = Some(level.min(100)));
@@ -885,6 +892,15 @@ impl Actor {
             Some(forgotten::Change::Left) => log::info!("no longer asking to pair the iPhone again: {why}"),
             None => {}
         }
+    }
+
+    /// Something only a working session can do just happened (a notification or media update
+    /// arrived on the live subscription): the phone hasn't forgotten this PC. Clears the verdict
+    /// and the status's "pair again" (emitted only if it changed).
+    fn session_alive(&mut self, why: &str) {
+        let change = self.forgotten.session_alive();
+        self.note_forgotten(change, why);
+        self.shared.update_status(|s| s.pairing_stale = false);
     }
 
     /// Recovering from a stalled adapter: requests are paused until the link is rebuilt.
