@@ -29,7 +29,7 @@ export function voiceDescription(keys: string): string {
 
 /** Something stopping voice typing that the person can fix, with where to fix it. */
 export interface VoiceProblem {
-  kind: "micBlocked" | "unavailable" | "inUse";
+  kind: "startFailed" | "micBlocked" | "unavailable" | "inUse";
   title: string;
   body: string;
   /** The Windows Settings page that fixes it, if one does. */
@@ -37,8 +37,18 @@ export interface VoiceProblem {
   button: string | null;
 }
 
-/** What's in the way, if anything. Only while it's switched on: off is off. */
+/** What's in the way, if anything. Only while it's switched on (off is off), except right after
+ * turning it on failed: the switch went back off and this says why. */
 export function voiceProblem(status: VoiceStatus | null): VoiceProblem | null {
+  if (status && !status.enabled && status.startError) {
+    return {
+      kind: "startFailed",
+      title: status.startError,
+      body: "Voice typing is off. Try turning it on again.",
+      page: null,
+      button: null,
+    };
+  }
   if (!status?.enabled) return null;
   if (status.state === "unavailable") {
     return {
@@ -89,6 +99,7 @@ export const VOICE_COMMANDS: ReadonlyArray<{ say: string; types: string }> = [
 
 /** The message after turning it on from Ctrl+K when it couldn't start, or null when it's on. */
 export function voiceStartProblem(status: VoiceStatus): string | null {
+  if (!status.enabled && status.startError) return status.startError;
   if (!status.enabled || status.state === "on") return null;
   if (status.state === "unavailable") return "Voice typing needs a speech language in Windows. See Settings.";
   if (status.state === "inUse") return `${hotkeyLabel(status.keys)} is in use by another app. Pick another shortcut in Settings.`;

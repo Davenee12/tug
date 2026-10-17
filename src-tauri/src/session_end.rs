@@ -109,12 +109,19 @@ unsafe extern "system" fn subclass_proc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::WM_ENDSESSION;
-    if is_session_end(msg, wparam.0) {
-        ENDING.store(true, Ordering::SeqCst);
-    } else if msg == WM_ENDSESSION {
-        // wParam FALSE: another app cancelled the shutdown; tug carries on as normal.
-        ENDING.store(false, Ordering::SeqCst);
-    }
+    // Nothing may unwind into Windows from here (`crate::callback`); the message always goes on.
+    crate::callback::guarded(
+        "session end watch",
+        || {
+            if is_session_end(msg, wparam.0) {
+                ENDING.store(true, Ordering::SeqCst);
+            } else if msg == WM_ENDSESSION {
+                // wParam FALSE: another app cancelled the shutdown; tug carries on as normal.
+                ENDING.store(false, Ordering::SeqCst);
+            }
+        },
+        || (),
+    );
     if removes_subclass(msg) {
         // The window is going away (exit, or the window rebuilt after a WebView2 failure): take
         // the subclass off before it's destroyed, so nothing calls this proc for a dead window.

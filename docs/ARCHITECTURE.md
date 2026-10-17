@@ -389,6 +389,18 @@ was ruled out: its free-dictation grammar is recognized by Microsoft's online se
 package identity, which tug (an unpackaged installer) doesn't have. whisper.cpp (`whisper-rs`)
 would be more accurate but needs CMake and libclang that contributors don't have, plus a model
 download; it can be added later as another `Engine`.
+
+Switching it on can't take tug down. Each start step (listing the speech languages on the COM
+thread, starting the shortcut thread, creating the indicator on it, registering the shortcut) is
+logged at INFO before it's tried, and a step Windows refuses comes back as a `voice::StartError`:
+`voice::settle` puts the switch back off and `VoiceStatus.startError` carries "Voice typing
+couldn't start: …" to Settings and Ctrl+K. Another app holding the shortcut isn't a failure
+(`inUse`). The indicator never hands DrawTextW an empty string: Windows paints the new window
+before anything is shown, and an empty slice from the `windows` crate is a dangling pointer that
+DrawTextW reads anyway (the v0.5.18 crash). Every `extern "system"` callback (the indicator's
+window procedure, the session-end subclass, the share-privacy window walk, the resume
+notification) runs its body through `callback::guarded`, which logs a panic instead of letting it
+unwind into Windows. Release builds abort on panic, so those bodies are also written not to panic.
 ## Where the testable logic lives
 
 Bluetooth can't run in CI, so decisions live in **pure modules** that take plain values and return
@@ -537,6 +549,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
 | `/?sharing` (`&presenting`, `&stop`) | The screen is being shared: blurred texts and names under the `Previews hidden` banner with Show anyway (a slide show / sharing ends after 10 s); add `&call` for the call card |
 | `/?voice` (`&micblocked`, `&nospeech`, `&voicebusy`) | Settings › General › Voice typing on, with the microphone blocked / no speech language / the shortcut taken |
+| `/?voicefail` | Settings › General › Voice typing: turning it on fails, the switch goes back off and says why |
 | `/?backup` (`&none`, `&imported`, `&heif`, `&hevc`) | Settings › Messages › Bring in your full history with made-up backups (the encrypted one's password is `test`) / no backups / history already brought in (the label, photos) / photos Windows can't show without HEIF Image Extensions / with HEIF but without HEVC Video Extensions |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 

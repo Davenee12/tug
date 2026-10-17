@@ -176,6 +176,9 @@ pub enum VoiceOutcome {
     MicBlocked,
     /// No microphone (or it couldn't be opened).
     NoMic,
+    /// There's a microphone but it couldn't be opened right now: another app has it to itself,
+    /// or Windows switched it (a Bluetooth hands-free call starting or ending) as it was opened.
+    MicBusy,
     /// The window changed before typing, so nothing was typed.
     NoTarget,
     /// Ctrl, Alt, Shift or Windows was still held after the wait, so nothing was typed: the
@@ -233,6 +236,7 @@ pub fn pill_problem(outcome: VoiceOutcome) -> Option<&'static str> {
         VoiceOutcome::NothingHeard => "Didn't catch that",
         VoiceOutcome::MicBlocked => "Microphone blocked. Open tug's Settings to fix it",
         VoiceOutcome::NoMic => "No microphone found",
+        VoiceOutcome::MicBusy => "The microphone is busy right now. Try again in a moment",
         VoiceOutcome::NoTarget => "The window changed, so nothing was typed",
         VoiceOutcome::KeysHeld => "Let go of the keys",
         VoiceOutcome::Unavailable => "Voice typing needs a Windows speech language",
@@ -264,6 +268,9 @@ pub struct VoiceStatus {
     pub languages: Vec<VoiceLanguage>,
     /// Windows' privacy settings block the microphone (checked when Settings asks, and on each hold).
     pub mic_blocked: bool,
+    /// The last attempt to turn it on failed, so it was switched back off: what to tell the person
+    /// ("Voice typing couldn't start: …"). `None` otherwise.
+    pub start_error: Option<String>,
 }
 
 /// The state for a request: off unless asked for, unavailable without a recognizer.
@@ -273,6 +280,75 @@ pub fn state_for(enabled: bool, has_language: bool, registered: bool) -> VoiceSt
         (true, false, _) => VoiceState::Unavailable,
         (true, true, true) => VoiceState::On,
         (true, true, false) => VoiceState::InUse,
+    }
+}
+
+/// Something Windows refused while voice typing was starting. Never a crash: the switch goes back
+/// off and Settings says what happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartError {
+    /// The shortcut's thread didn't start, or Windows refused the shortcut for a reason other
+    /// than another app having it (that's `VoiceState::InUse`, which isn't a failure).
+    Shortcut(String),
+    /// The listening indicator's window couldn't be created.
+    Indicator(String),
+    /// Windows' speech recognition didn't answer when asked for its languages.
+    Speech(String),
+}
+
+impl StartError {
+    /// What went wrong, for the person (no codes; the detail goes to the log).
+    pub fn reason(&self) -> &'static str {
+        match self {
+            StartError::Shortcut(_) => "Windows didn't accept the shortcut",
+            StartError::Indicator(_) => "Windows couldn't show the listening indicator",
+            StartError::Speech(_) => "Windows' speech recognition didn't respond",
+        }
+    }
+
+    /// What Windows said, for tug.log.
+    pub fn detail(&self) -> &str {
+        match self {
+            StartError::Shortcut(d) | StartError::Indicator(d) | StartError::Speech(d) => d,
+        }
+    }
+
+    /// The line Settings shows.
+    pub fn message(&self) -> String {
+        format!("Voice typing couldn't start: {}.", self.reason())
+    }
+}
+
+/// Where a request to turn voice typing on or off ends up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Settled {
+    /// What the switch shows (and what's saved): back off when starting failed.
+    pub enabled: bool,
+    pub state: VoiceState,
+    pub start_error: Option<String>,
+}
+
+/// Settle a request. `attempt` is how starting went: `Ok(registered)` (false: another app has the
+/// shortcut, or there's no language to listen in), or what failed. Turning it off can't fail.
+pub fn settle(enabled: bool, has_language: bool, attempt: Result<bool, StartError>) -> Settled {
+    if !enabled {
+        return Settled {
+            enabled: false,
+            state: VoiceState::Off,
+            start_error: None,
+        };
+    }
+    match attempt {
+        Ok(registered) => Settled {
+            enabled: true,
+            state: state_for(true, has_language, registered),
+            start_error: None,
+        },
+        Err(e) => Settled {
+            enabled: false,
+            state: VoiceState::Off,
+            start_error: Some(e.message()),
+        },
     }
 }
 
@@ -287,6 +363,7 @@ fn default_status() -> VoiceStatus {
         language: None,
         languages: Vec::new(),
         mic_blocked: false,
+        start_error: None,
     }
 }
 
@@ -346,33 +423,57 @@ fn note_mic_blocked(blocked: bool) {
     }
 }
 
-/// Turn voice typing on (with this shortcut and language) or off, and say how that went.
+/// Turn voice typing on (with this shortcut and language) or off, and say how that went. Starting
+/// never takes tug down: if Windows refuses a step, it's logged, the switch goes back off and the
+/// status says why (`start_error`). Each step is logged before it's tried, so tug.log shows how
+/// far it got.
 pub fn apply(enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
     let id = known_hotkey(Some(keys));
-    let languages = installed_languages();
-    let language = pick_language(language, &languages, ui_language());
-    let registered = enabled && language.is_some() && set_registration(parse_hotkey(id));
-    if !registered {
-        set_registration(None);
+    log::info!("voice typing: turning {} ({id})", if enabled { "on" } else { "off" });
+    log::info!("voice typing: listing the speech languages");
+    let listed = installed_languages();
+    match &listed {
+        Ok(l) => log::info!("voice typing: {} speech language(s) installed", l.len()),
+        Err(e) => log::warn!("voice typing: couldn't list the speech languages: {}", e.detail()),
     }
-    let state = state_for(enabled, language.is_some(), registered);
-    match state {
+    let languages = listed.clone().unwrap_or_default();
+    let language = pick_language(language, &languages, ui_language());
+    let attempt = match (enabled, listed) {
+        (false, _) => Ok(false),
+        (true, Err(e)) => Err(e),
+        (true, Ok(_)) if language.is_none() => Ok(false),
+        (true, Ok(_)) => set_registration(parse_hotkey(id)),
+    };
+    if let Err(e) = &attempt {
+        log::warn!("voice typing couldn't start: {}", e.detail());
+    }
+    let settled = settle(enabled, language.is_some(), attempt);
+    let on = settled.state == VoiceState::On;
+    if !on {
+        // Nothing to undo if it never got as far as the shortcut thread.
+        if let Err(e) = set_registration(None) {
+            log::warn!("voice typing: couldn't let go of the shortcut: {}", e.detail());
+        }
+    }
+    match settled.state {
         VoiceState::On => log::info!(
             "voice typing on ({id}, language {})",
             language.as_deref().unwrap_or("-")
         ),
         VoiceState::InUse => log::info!("voice typing shortcut {id} is taken by another app"),
         VoiceState::Unavailable => log::info!("voice typing: no Windows speech recognizer installed"),
+        VoiceState::Off if settled.start_error.is_some() => log::info!("voice typing switched back off"),
         VoiceState::Off => log::info!("voice typing off"),
     }
-    set_engine_language(if registered { language.clone() } else { None });
+    set_engine_language(if on { language.clone() } else { None });
     let s = VoiceStatus {
-        enabled,
-        state,
+        enabled: settled.enabled,
+        state: settled.state,
         keys: id.into(),
         language,
         languages,
         mic_blocked: mic_blocked_now(),
+        start_error: settled.start_error,
     };
     publish(s.clone());
     s
@@ -389,17 +490,25 @@ pub fn start(app: &AppHandle, store: &crate::store::Store) {
     }
     let keys = store.setting(SETTING_KEYS).ok().flatten();
     let language = store.setting(SETTING_LANGUAGE).ok().flatten();
-    // Off the setup path: listing recognizers and registering take a moment.
-    std::thread::spawn(move || {
-        apply(true, known_hotkey(keys.as_deref()), language.as_deref());
-    });
+    // Off the setup path: listing recognizers and registering take a moment. If it can't start,
+    // Settings shows it off with the reason; the saved choice stays on, so the next start tries
+    // again (what failed may have been passing).
+    let spawned = std::thread::Builder::new()
+        .name("tug-voice-start".into())
+        .spawn(move || {
+            apply(true, known_hotkey(keys.as_deref()), language.as_deref());
+        });
+    if let Err(e) = spawned {
+        log::warn!("voice typing: couldn't start at launch ({e})");
+    }
 }
 
-/// Save the choice and apply it. Called from the `set_voice_typing` command.
+/// Save the choice and apply it. Called from the `set_voice_typing` command. What's saved is
+/// where it ended up: turning it on and failing saves it as off, matching the switch.
 pub fn set(store: &crate::store::Store, enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
     let s = apply(enabled, keys, language);
     let saves = [
-        (SETTING_ENABLED, if enabled { "true" } else { "false" }.to_string()),
+        (SETTING_ENABLED, if s.enabled { "true" } else { "false" }.to_string()),
         (SETTING_KEYS, s.keys.clone()),
         (SETTING_LANGUAGE, s.language.clone().unwrap_or_default()),
     ];
@@ -416,7 +525,10 @@ pub fn set(store: &crate::store::Store, enabled: bool, keys: &str, language: Opt
 pub fn refresh_languages() -> VoiceStatus {
     let mut s = status();
     if s.languages.is_empty() {
-        s.languages = installed_languages();
+        s.languages = installed_languages().unwrap_or_else(|e| {
+            log::warn!("voice typing: couldn't list the speech languages: {}", e.detail());
+            Vec::new()
+        });
         s.language = pick_language(s.language.as_deref(), &s.languages, ui_language());
         if s.enabled && s.languages.is_empty() {
             s.state = VoiceState::Unavailable;
@@ -427,12 +539,12 @@ pub fn refresh_languages() -> VoiceStatus {
 }
 
 #[cfg(windows)]
-fn installed_languages() -> Vec<VoiceLanguage> {
+fn installed_languages() -> Result<Vec<VoiceLanguage>, StartError> {
     win::languages()
 }
 #[cfg(not(windows))]
-fn installed_languages() -> Vec<VoiceLanguage> {
-    Vec::new()
+fn installed_languages() -> Result<Vec<VoiceLanguage>, StartError> {
+    Ok(Vec::new())
 }
 
 #[cfg(windows)]
@@ -444,13 +556,14 @@ fn ui_language() -> u16 {
     0x409
 }
 
+/// Register the shortcut (`None`: let it go). `Ok(false)`: another app has it.
 #[cfg(windows)]
-fn set_registration(keys: Option<Keys>) -> bool {
+fn set_registration(keys: Option<Keys>) -> Result<bool, StartError> {
     win::register(keys)
 }
 #[cfg(not(windows))]
-fn set_registration(_keys: Option<Keys>) -> bool {
-    false
+fn set_registration(_keys: Option<Keys>) -> Result<bool, StartError> {
+    Ok(false)
 }
 
 #[cfg(windows)]
@@ -642,6 +755,58 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_start_puts_the_switch_back_off_and_says_why() {
+        for (e, reason) in [
+            (
+                StartError::Indicator("CreateWindowExW failed (0x80070578)".into()),
+                "Voice typing couldn't start: Windows couldn't show the listening indicator.",
+            ),
+            (
+                StartError::Shortcut("the shortcut thread didn't answer".into()),
+                "Voice typing couldn't start: Windows didn't accept the shortcut.",
+            ),
+            (
+                StartError::Speech("COM didn't start".into()),
+                "Voice typing couldn't start: Windows' speech recognition didn't respond.",
+            ),
+        ] {
+            let s = settle(true, true, Err(e.clone()));
+            assert!(!s.enabled, "{e:?}: the switch goes back off");
+            assert_eq!(s.state, VoiceState::Off);
+            assert_eq!(s.start_error.as_deref(), Some(reason));
+            // Windows' detail is for the log, never the person.
+            assert!(!reason.contains(e.detail()));
+        }
+    }
+
+    #[test]
+    fn a_working_start_or_turning_it_off_has_no_error() {
+        assert_eq!(
+            settle(true, true, Ok(true)),
+            Settled {
+                enabled: true,
+                state: VoiceState::On,
+                start_error: None
+            }
+        );
+        // Another app having the shortcut, or no language, isn't a failed start: it stays on and
+        // Settings offers the fix.
+        assert_eq!(settle(true, true, Ok(false)).state, VoiceState::InUse);
+        assert!(settle(true, true, Ok(false)).enabled);
+        assert_eq!(settle(true, false, Ok(false)).state, VoiceState::Unavailable);
+        // Off is off, whatever starting would have said.
+        let off = settle(false, true, Err(StartError::Shortcut("x".into())));
+        assert_eq!(
+            off,
+            Settled {
+                enabled: false,
+                state: VoiceState::Off,
+                start_error: None
+            }
+        );
+    }
+
+    #[test]
     fn reaches_the_frontend_in_camel_case() {
         let json = serde_json::to_string(&VoiceTyped {
             outcome: VoiceOutcome::MicBlocked,
@@ -658,11 +823,12 @@ mod tests {
                 name: "English (US)".into(),
             }],
             mic_blocked: false,
+            start_error: None,
         })
         .unwrap();
         assert_eq!(
             json,
-            r#"{"enabled":true,"state":"inUse","keys":"ctrl+alt+space","language":"409","languages":[{"id":"409","name":"English (US)"}],"micBlocked":false}"#
+            r#"{"enabled":true,"state":"inUse","keys":"ctrl+alt+space","language":"409","languages":[{"id":"409","name":"English (US)"}],"micBlocked":false,"startError":null}"#
         );
     }
 }

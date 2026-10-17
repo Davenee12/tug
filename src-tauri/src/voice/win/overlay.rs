@@ -4,12 +4,21 @@
 //!
 //! The window belongs to the voice shortcut thread (which pumps its messages); any thread can
 //! show or hide it by posting a message.
+//!
+//! Windows paints the window once as soon as it's created, while it's still hidden and before
+//! anything has been shown, so the text can be empty at any paint. An empty text is never handed
+//! to DrawTextW or GetTextExtentPoint32W: the `windows` crate passes an empty slice as a dangling
+//! pointer with a length of 0, and DrawTextW reads the first character of a zero-length string
+//! anyway. That read crashed tug the moment voice typing was switched on (v0.5.18: an access
+//! violation in USER32 from inside this window procedure).
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::Mutex;
 
 use windows::core::w;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    GetLastError, COLORREF, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, DrawTextW, Ellipse, EndPaint,
     FillRect, GetDC, GetDeviceCaps, GetMonitorInfoW, GetTextExtentPoint32W, InvalidateRect, MonitorFromWindow,
@@ -38,6 +47,8 @@ pub enum Look {
 const WM_SHOW: u32 = WM_APP + 20;
 const WM_HIDE: u32 = WM_APP + 21;
 const HIDE_TIMER: usize = 1;
+/// The longest text the pill draws, in UTF-16 units (its messages are a few words).
+const MAX_TEXT: usize = 120;
 
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
 static CONTENT: Mutex<(String, Option<Look>)> = Mutex::new((String::new(), None));
@@ -50,16 +61,28 @@ const CORAL: u32 = 0x005c_78cc; // #cc785c
 const AMBER: u32 = 0x005a_a5e8; // #e8a55a
 const ERROR: u32 = 0x0045_45c6; // #c64545
 
-/// Create the (hidden) indicator window. Call on the thread that pumps messages.
-pub fn create() {
-    // SAFETY: registering a class and creating a window on this thread, with static strings.
+/// Create the (hidden) indicator window, once. Call on the thread that pumps its messages: that
+/// thread owns the window for the rest of tug's life (it's never destroyed, so no message can
+/// arrive for a window that's gone).
+pub fn create() -> Result<(), String> {
+    if window().is_some() {
+        return Ok(());
+    }
+    // SAFETY: registering a class and creating a window on this thread. The class name and title
+    // are `w!` literals ('static), so they outlive the class and the window.
     unsafe {
         let class = WNDCLASSW {
             lpfnWndProc: Some(proc),
             lpszClassName: w!("tugVoiceIndicator"),
             ..Default::default()
         };
-        RegisterClassW(&class);
+        if RegisterClassW(&class) == 0 {
+            let err = GetLastError();
+            // Already registered: an earlier attempt, on a shortcut thread that has since gone.
+            if err != ERROR_CLASS_ALREADY_EXISTS {
+                return Err(format!("RegisterClassW failed ({})", err.0));
+            }
+        }
         let hwnd = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
             w!("tugVoiceIndicator"),
@@ -73,20 +96,27 @@ pub fn create() {
             None,
             None,
             None,
-        );
-        match hwnd {
-            Ok(hwnd) => {
-                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 240, LWA_ALPHA);
-                WINDOW.store(hwnd.0 as isize, Ordering::SeqCst);
-            }
-            Err(e) => log::warn!("voice typing indicator unavailable: {e}"),
+        )
+        .map_err(|e| format!("CreateWindowExW failed ({e})"))?;
+        if let Err(e) = SetLayeredWindowAttributes(hwnd, COLORREF(0), 240, LWA_ALPHA) {
+            // Still usable, just not see-through.
+            log::warn!("voice typing indicator: no transparency ({e})");
         }
+        WINDOW.store(hwnd.0 as isize, Ordering::SeqCst);
     }
+    Ok(())
 }
 
 fn window() -> Option<HWND> {
     let h = WINDOW.load(Ordering::SeqCst);
     (h != 0).then_some(HWND(h as *mut _))
+}
+
+/// Whether the indicator is on screen (for the end-to-end test).
+#[cfg(test)]
+pub fn visible() -> bool {
+    // SAFETY: a read-only query on tug's own window.
+    window().is_some_and(|h| unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(h) }.as_bool())
 }
 
 /// Show `text` with a dot; hide by itself after `hide_after_ms` (0: stay until hidden).
@@ -137,9 +167,13 @@ fn font(scale: i32) -> HFONT {
     f
 }
 
+/// The text to draw (empty until something is shown) and its dot.
 fn text_wide() -> (Vec<u16>, Look) {
     let (text, look) = CONTENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    (text.encode_utf16().collect(), look.unwrap_or(Look::Listening))
+    (
+        text.encode_utf16().take(MAX_TEXT).collect(),
+        look.unwrap_or(Look::Listening),
+    )
 }
 
 /// Size the pill to its text and put it at the bottom centre of the screen in front.
@@ -150,8 +184,10 @@ unsafe fn place(hwnd: HWND) {
     let dc = GetDC(Some(hwnd));
     let dpi = GetDeviceCaps(Some(dc), LOGPIXELSY).max(96);
     let old = SelectObject(dc, HGDIOBJ(font(dpi).0));
-    let mut size = Default::default();
-    let _ = GetTextExtentPoint32W(dc, &text, &mut size);
+    let mut size = SIZE::default();
+    if !text.is_empty() {
+        let _ = GetTextExtentPoint32W(dc, &text, &mut size);
+    }
     SelectObject(dc, old);
     ReleaseDC(Some(hwnd), dc);
     let s = |v: i32| v * dpi / 96;
@@ -216,21 +252,36 @@ unsafe fn paint(hwnd: HWND) {
     SelectObject(dc, old_brush);
     let _ = DeleteObject(HGDIOBJ(dot.0));
 
-    let old_font = SelectObject(dc, HGDIOBJ(font(dpi).0));
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, COLORREF(ON_DARK));
-    let mut text_rect = RECT {
-        left: s(38),
-        top: whole.top,
-        right: whole.right - s(16),
-        bottom: whole.bottom,
-    };
-    DrawTextW(dc, &mut text, &mut text_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    SelectObject(dc, old_font);
+    // Nothing shown yet (the paint Windows sends right after creating the window): no text. See
+    // the module docs: an empty slice must never reach DrawTextW.
+    if !text.is_empty() {
+        let old_font = SelectObject(dc, HGDIOBJ(font(dpi).0));
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, COLORREF(ON_DARK));
+        let mut text_rect = RECT {
+            left: s(38),
+            top: whole.top,
+            right: whole.right - s(16),
+            bottom: whole.bottom,
+        };
+        DrawTextW(dc, &mut text, &mut text_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        SelectObject(dc, old_font);
+    }
     let _ = EndPaint(hwnd, &ps);
 }
 
 extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    crate::callback::guarded(
+        "voice typing indicator",
+        // SAFETY: tug's own window, on its thread, with the message Windows gave.
+        || unsafe { handle(hwnd, msg, wparam, lparam) },
+        // SAFETY: as above. Windows' default handling, which also validates a half-done WM_PAINT.
+        || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    )
+}
+
+/// SAFETY: call only from `proc`, with the message it was given.
+unsafe fn handle(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // SAFETY: the window procedure of tug's own window, on its thread.
     unsafe {
         match msg {

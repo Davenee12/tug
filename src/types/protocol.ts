@@ -1055,11 +1055,13 @@ export interface VoiceStatus {
   languages: VoiceLanguage[];
   /** Windows' privacy settings keep desktop apps from the microphone. */
   micBlocked: boolean;
+  /** Turning it on failed, so it was switched back off: "Voice typing couldn't start: …". */
+  startError: string | null;
 }
 
 /** What one hold did (`voice-typed`). The words themselves are never sent. */
 export interface VoiceTyped {
-  outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "noTarget" | "keysHeld" | "unavailable" | "failed";
+  outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "micBusy" | "noTarget" | "keysHeld" | "unavailable" | "failed";
 }
 
 /** Where automatic updates are (`updater::policy::Phase`). */

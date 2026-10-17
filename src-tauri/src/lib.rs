@@ -8,6 +8,7 @@ mod backup;
 mod ble;
 mod bt_inventory;
 mod cache_trim;
+mod callback;
 mod clipboard;
 mod code_fill;
 mod codes;

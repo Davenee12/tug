@@ -24,9 +24,12 @@ function status(over: Partial<VoiceStatus> = {}): VoiceStatus {
       { id: "407", name: "German (Germany)" },
     ],
     micBlocked: false,
+    startError: null,
     ...over,
   };
 }
+
+const START_ERROR = "Voice typing couldn't start: Windows couldn't show the listening indicator.";
 
 describe("voice shortcuts", () => {
   it("reads the list the backend registers from", () => {
@@ -89,6 +92,20 @@ describe("voiceProblem", () => {
   it("no language beats a blocked microphone (there's nothing to listen with)", () => {
     expect(voiceProblem(status({ state: "unavailable", micBlocked: true }))?.kind).toBe("unavailable");
   });
+
+  it("says why it couldn't start, with the switch back off", () => {
+    const p = voiceProblem(status({ enabled: false, state: "off", startError: START_ERROR }));
+    expect(p?.kind).toBe("startFailed");
+    expect(p?.title).toBe(START_ERROR);
+    expect(p?.body).toContain("Try turning it on again");
+    expect(p?.page).toBeNull();
+    expect(p?.button).toBeNull();
+  });
+
+  it("forgets a failed start once it's on, and stays quiet when switched off on purpose", () => {
+    expect(voiceProblem(status({ startError: START_ERROR }))).toBeNull();
+    expect(voiceProblem(status({ enabled: false, state: "off" }))).toBeNull();
+  });
 });
 
 describe("languageName", () => {
@@ -111,5 +128,9 @@ describe("voiceStartProblem", () => {
       "Ctrl+Alt+Space is in use by another app. Pick another shortcut in Settings.",
     );
     expect(voiceStartProblem(status({ state: "unavailable" }))).toContain("speech language");
+  });
+
+  it("says it couldn't start rather than 'Voice typing is off'", () => {
+    expect(voiceStartProblem(status({ enabled: false, state: "off", startError: START_ERROR }))).toBe(START_ERROR);
   });
 });
