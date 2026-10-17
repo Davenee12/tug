@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from "vue";
-import { ChevronRight, Info, Phone, Plus, RotateCcw, ShieldQuestionMark, X } from "lucide-vue-next";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import { ChevronRight, History, Image, Info, Phone, Plus, RotateCcw, ShieldQuestionMark, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { useBackupStore } from "../stores/backup";
+import { backupLabel, HEIF_HINT, HEIF_STORE_URL, isImported } from "../lib/backupImport";
+import { api } from "../lib/ipc";
+import MessageAttachments from "./MessageAttachments.vue";
 import { replyUnavailable } from "../lib/availability";
 import { clockTime, dayLabel, formatAddress, groupConversations, threadKey, type Conversation, type ConversationItem } from "../lib/format";
 import { shouldStickToBottom } from "../lib/scroll";
@@ -19,10 +23,14 @@ import { conversationReplies } from "../lib/smartReplies";
 import type { SmsMessage } from "../types/protocol";
 
 const tug = useTugStore();
+// History brought in from an iPhone backup: group chats, conversations older than the recent page,
+// and each conversation's whole history when it's opened (stores/backup).
+const backup = useBackupStore();
+onMounted(() => void backup.ensureLoaded());
 // Regrouped on every text and notification, but kept stable: a conversation whose contents didn't
 // change keeps its object, so only the rows that changed re-render (lib/stableList).
 const grouped = computed<Conversation[]>((prev) =>
-  reuseUnchanged(prev, groupConversations(tug.notifications, tug.messages, tug.contacts), sameConversation),
+  reuseUnchanged(prev, groupConversations(tug.notifications, tug.messages, tug.contacts, backup.groups), sameConversation),
 );
 const convs = computed(() => {
   const list = grouped.value;
@@ -64,6 +72,14 @@ const selected = computed(
   () => convs.value.find((c) => c.key === tug.selectedThread) ?? sections.value.known[0] ?? null,
 );
 const selectedUnknown = computed(() => !!selected.value && sections.value.unknown.some((c) => c.key === selected.value!.key));
+// Opening a conversation brings its whole history in (the window keeps only recent texts).
+watch(
+  () => selected.value?.key,
+  () => {
+    if (selected.value) void backup.loadHistory(selected.value);
+  },
+  { immediate: true },
+);
 // Collapsed until asked for; opening one from the Feed or search expands it so it's visible.
 const showUnknown = ref(false);
 watch(selectedUnknown, (u) => u && (showUnknown.value = true), { immediate: true });
@@ -222,6 +238,21 @@ const codeIn = (i: ConversationItem) => findCode(i.body);
 // What each bubble shows: words, a photo chip ("Attachment: 1 Photo"), or both (lib/messageType).
 const contents = computed(() => new Map(shownItems.value.map((i) => [i.id, itemContent(i)])));
 const contentOf = (i: ConversationItem): Shown => contents.value.get(i.id) ?? itemContent(i);
+// A backup's real photos and videos, shown in place of a chip.
+const attachmentsOf = (i: ConversationItem) => (i.kind === "message" ? (i.m.attachments ?? []) : []);
+const unsent = (i: ConversationItem) => i.kind === "message" && !!i.m.unsent;
+const edited = (i: ConversationItem) => i.kind === "message" && !!i.m.edited;
+// In a group, who sent each received text.
+function senderOf(i: ConversationItem): string {
+  if (!selected.value?.group || i.kind !== "message" || i.m.direction !== "in") return "";
+  return i.m.contactName ?? formatAddress(i.m.address);
+}
+// "From your iPhone backup, Oct 12": once, above the oldest history the backup brought in.
+const firstImported = computed(() => selected.value?.items.find((i) => i.kind === "message" && isImported(i.m))?.id ?? null);
+const importedLabel = computed(() => backupLabel(backup.imported));
+// Once: why a HEIC photo shows as "Open photo" instead of the picture.
+const showHeifHint = computed(() => backup.needsHeif && !backup.heifHintDismissed);
+const getHeif = () => void api.openUrl(HEIF_STORE_URL).catch(() => undefined);
 const statusLabel = (i: ConversationItem) => {
   if (i.kind !== "message" || i.m.direction !== "out") return "";
   // "accepted" (the iPhone took it) and "sent" (a MAP SendingSuccess event confirmed it, when
@@ -267,6 +298,8 @@ const canReply = computed(
 const replyHint = computed(() => {
   if (!selected.value) return "";
   if (selected.value.appId !== "com.apple.MobileSMS") return `Reply to ${selected.value.appLabel} messages on your phone.`;
+  // iOS gives Bluetooth no way to send to a group.
+  if (selected.value.group) return "Reply to group texts on your iPhone.";
   const unavailable = replyUnavailable(tug.status, tug.switchContext);
   if (unavailable) return unavailable;
   if (!selected.value.addresses.length) return "tug will learn this number when their next text arrives.";
@@ -381,10 +414,25 @@ async function retry(m: SmsMessage) {
         </p>
         <button class="btn-secondary btn-sm shrink-0" @click="tug.moveToConversations(selected)">Move to conversations</button>
       </div>
+      <!-- Once, until dismissed: why an iPhone photo shows as "Open photo". -->
+      <div v-if="showHeifHint" class="flex items-center gap-3 border-b border-hairline bg-surface-soft px-8 py-2.5">
+        <Image :size="15" class="shrink-0 text-muted" />
+        <p class="min-w-0 flex-1 text-[13px] text-muted">{{ HEIF_HINT }}</p>
+        <button class="btn-secondary btn-sm shrink-0" @click="getHeif">Get it</button>
+        <button class="shrink-0 rounded p-1 text-muted hover:bg-surface-card hover:text-ink" aria-label="Dismiss" @click="backup.dismissHeifHint()">
+          <X :size="13" />
+        </button>
+      </div>
 
       <div ref="scroller" class="flex-1 overflow-y-auto px-8 py-6" @scroll.passive="onThreadScroll">
         <template v-for="(item, i) in shownItems" :key="item.id">
           <div v-if="showDay(i)" class="caption-upper my-4 text-center text-muted-soft">{{ dayLabel(item.at) }}</div>
+          <p
+            v-if="item.id === firstImported"
+            class="mx-auto my-3 flex max-w-md items-center justify-center gap-1.5 text-center text-[12px] text-muted-soft"
+          >
+            <History :size="12" class="shrink-0" /> {{ importedLabel }}
+          </p>
           <p
             v-if="item.kind === 'message' && item.m.gapBefore"
             class="mx-auto my-3 flex max-w-md items-center justify-center gap-1.5 text-center text-[12px] text-muted"
@@ -409,16 +457,23 @@ async function retry(m: SmsMessage) {
               <span v-if="item.kind === 'notification' && item.n.subtitle" class="mb-0.5 block text-[12px] font-medium text-muted">
                 {{ item.n.subtitle }}
               </span>
-              <template v-if="contentOf(item).text">{{ contentOf(item).text }}</template>
+              <span v-else-if="senderOf(item)" class="mb-0.5 block text-[12px] font-medium opacity-70">{{ senderOf(item) }}</span>
+              <span v-if="unsent(item)" class="italic opacity-70">{{ contentOf(item).text }}</span>
+              <template v-else-if="contentOf(item).text">{{ contentOf(item).text }}</template>
+              <MessageAttachments
+                v-if="attachmentsOf(item).length"
+                :attachments="attachmentsOf(item)"
+                :class="contentOf(item).text ? 'mt-2' : ''"
+              />
               <MediaChip
-                v-if="contentOf(item).media || contentOf(item).unreadable"
+                v-else-if="contentOf(item).media || contentOf(item).unreadable"
                 :media="contentOf(item).media"
                 :unreadable="contentOf(item).unreadable"
                 :class="contentOf(item).text ? 'mt-2' : ''"
               />
             </div>
             <span class="mx-1 mt-1 flex items-center gap-1.5 font-mono text-[11px] text-muted-soft">
-              {{ clockTime(item.at) }}
+              {{ clockTime(item.at) }}<template v-if="edited(item)"> · Edited</template>
               <template v-if="statusLabel(item)">
                 · <span :class="item.kind === 'message' && item.m.status === 'failed' ? 'text-error' : ''">{{ statusLabel(item) }}</span>
               </template>

@@ -85,12 +85,13 @@ flight.
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
 `pairing-request-closed`, `message`, `contacts`, `calls`, `open-latest-conversation`,
 `open-settings`, `toast-pressed`, `code-filled`, `quick-action` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`,
-`tugboat-clip`, `tugboat-send-clipboard`, `game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`); `screen-share` (`share_privacy/`); `voice-status`, `voice-typed` (`voice/mod.rs`). The typed listener
+`tugboat-clip`, `tugboat-send-clipboard`, `game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`); `screen-share` (`share_privacy/`); `voice-status`, `voice-typed` (`voice/mod.rs`); `backup-import` (`backup/mod.rs`). The typed listener
 map is `EventPayloads` in `src/lib/ipc.ts`.
 
 ## Startup
 
-`src-tauri/src/lib.rs`: claim tug's AppUserModelID (`quick_actions::init`, before any window) →
+`src-tauri/src/lib.rs` (also, before the store opens: sweep any decrypted scratch a backup import
+left in `backup-tmp`): claim tug's AppUserModelID (`quick_actions::init`, before any window) →
 plugins (single-instance first, so a second launch just shows the window or carries out its
 `--action`; log with rotation; notification; dialog) → withdraw the last run's pop-ups and, running
 elevated, move an old all-users Start with Windows entry back to this user if tug lives in that
@@ -160,6 +161,34 @@ What it can't cut into is one OBEX exchange already on the wire, or a message-ac
 progress. Typing a text opens message access if it isn't open (`warm_texts`). The log follows each
 send by id only: `send N: queued`, `pushing after … ms in the queue`, `accepted it in … ms`, and the
 phone's own report `… ms after accepting it`.
+
+**Bringing in history from an iPhone backup** (Settings › Messages)
+
+```
+backup_list ─► discover.rs: %APPDATA%\Apple\MobileSync\Backup\*, %USERPROFILE%\Apple\MobileSync\Backup\*
+  (Info/Manifest/Status plists: name, model, iOS, date, size, encrypted, too old/unfinished)
+  the window names a backup by id only; tug keeps the folder (or Windows' folder picker, from Rust)
+backup_open(id, password?) ─► tug-backup thread (BackupService in backup/mod.rs)
+  encrypted? keybag.rs: PBKDF2-SHA256 (DPIC rounds, progress + Cancel) → PBKDF2-SHA1 → AES unwrap
+             of the class keys (wrong password = failed integrity check) → ManifestKey
+  Manifest.db decrypted into backup-tmp\<session> ─► manifest.rs: HomeDomain Library/SMS/sms.db
+  (+ -wal), MediaDomain Library/SMS/Attachments/* ─► decrypt.rs (per-file key, AES-256-CBC, chunked)
+  ─► smsdb.rs + typedstream.rs ─► SmsData in memory; the decrypted databases deleted at once
+  ─► import::scan ─► "backup-import" { phase: ready, scan }
+backup_import(texts, photos) ─► import.rs: plan (guid already imported? the same text from
+  Bluetooth by direction + match_key + words + time? which address tug already uses?) ─► batches
+  of 500 in transactions ─► photos: decrypt to scratch → SHA-256 → attachments\<hash>.<ext>
+  ─► "backup-import" { phase: done, summary } ─► the session (keys, data, scratch folder) dropped
+window: stores/backup.ts re-reads messages, conversation heads and groups; MessageThreads loads a
+  conversation's whole history when it opens (conversation_messages); photos via attachment_preview
+  (wic.rs: JPEG preview, HEIC needs HEIF Image Extensions) and open_attachment (default app)
+```
+
+Imported rows are ordinary `messages` with source `iphone-backup` (keyed by the backup's message
+guid, so a re-run or a cancelled run adds only what's new), plus `group_id` (a group chat,
+`message_groups`), `edited`/`unsent`, and `message_attachments`. A Bluetooth text the import
+matched is never changed: its photos are attachment rows pointing at it, and its group is
+`backup_group`, both undone by Remove imported history.
 
 **A media command**
 
@@ -337,9 +366,11 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
 | `share_privacy/mod.rs` | Hide previews while sharing or presenting: which signals mean someone may be watching (shell state confirmed by the foreground window covering its monitor, duplicate display, known share and slideshow windows by program + class), which one names the reason, the log line, what a hidden pop-up says, and that no answer means hidden (which looks to join, start or give up on), which pop-ups to take back when hiding starts |
 | `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, keys still held, window changed) and what the pill says; spoken symbols, casing commands, code vs prose style and where "new line" may break a line, by program; keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
+| `backup/discover.rs`, `keybag.rs`, `decrypt.rs`, `manifest.rs`, `smsdb.rs`, `typedstream.rs`, `import.rs`, `files.rs` | Bring in your full history: which backups exist and what they are; iOS backup encryption (keybag TLV, both PBKDF2 steps, RFC 3394 unwrap, AES-256-CBC streaming, against RFC vectors and a generated encrypted backup); Manifest.db and its NSKeyedArchiver file records; Messages' tables across iOS versions, Apple-epoch times, groups, edits, unsends, tapbacks; the text in `attributedBody`; what's new, dedupe against Bluetooth texts, resumable batches, Remove imported; content-addressed photo files, key checks, the scratch folder and its startup sweep. `backup/mod.rs` runs a whole encrypted backup end to end in a test |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
 
-Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attachments`
+Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `backupImport`
+(the full-history wizard's words and steps), `attachments`
 ("Attachment: 1 Photo" → a photo chip), `attention`
 (is the window really visible), `battery`, `callKeys` (no keystroke answers or declines a call), `coalesce` (one render per frame for bursts of
 updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
@@ -373,7 +404,7 @@ handshake over a real named pipe (including a low-integrity impostor). Hardware 
 Everything the backend sends to the UI or takes from it is a serde type in Rust **mirrored by hand**
 in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messages.rs`,
 `map/calls.rs`, `map/health.rs`, `toast/`, `code_fill/`, `spotify/`, `tugboat/`, `bt_inventory/`, `devtools/`, `voice/`,
-`pc_audio/policy.rs` and `share_privacy/`.
+`pc_audio/policy.rs`, `share_privacy/` and `backup/`.
 
 - App-facing types use `#[serde(rename_all = "camelCase")]` (fields and enum variants), so
   `contacts_off` in Rust is `contactsOff` in TypeScript.
@@ -390,6 +421,8 @@ in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messag
 | App icons, Spotify art, contact photos | `%APPDATA%\<app id>\` (`icons/` 50 MB cap, `spotify_art/` 100 MB cap, `contacts/`) |
 | Logs (2 MB × 5, rotated) | `%LOCALAPPDATA%\<app id>\logs` |
 | Bridge token, half-received Tugboat files | `%LOCALAPPDATA%\<app id>\` |
+| Photos and videos brought in from an iPhone backup (`<sha-256>.<ext>`) and their JPEG previews | `%LOCALAPPDATA%\<app id>\attachments\` (`thumbs\`) |
+| Decrypted scratch while a backup is read (deleted after, swept at every start) | `%LOCALAPPDATA%\<app id>\backup-tmp\` |
 | Files received with Tugboat | `Pictures\Tugboat` (`Downloads\Tugboat` while Controlled folder access refuses Pictures) |
 | Spotify refresh token | Windows Credential Manager |
 
@@ -434,6 +467,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
 | `/?sharing` (`&presenting`, `&stop`) | The screen is being shared: blurred texts and names under the `Previews hidden` banner with Show anyway (a slide show / sharing ends after 10 s); add `&call` for the call card |
 | `/?voice` (`&micblocked`, `&nospeech`, `&voicebusy`) | Settings › General › Voice typing on, with the microphone blocked / no speech language / the shortcut taken |
+| `/?backup` (`&none`, `&imported`, `&heif`) | Settings › Messages › Bring in your full history with made-up backups (the encrypted one's password is `test`) / no backups / history already brought in (the label, photos, a group chat) / photos Windows can't show without HEIF Image Extensions |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then

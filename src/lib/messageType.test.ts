@@ -51,6 +51,26 @@ describe("messageContent", () => {
   it("can show a body other than the stored one (filled from the notification)", () => {
     expect(messageContent({ body: "�", msgType: "SMS_GSM", direction: "in" }, "on my way").text).toBe("on my way");
   });
+
+  it("uses a backup's real attachments instead of Bluetooth's photo line", () => {
+    const att = (id: number, kind: "photo" | "video") => ({ id, kind, stored: true, bytes: 10 });
+    // A photo-only text from the backup: no words, two photos.
+    expect(messageContent({ body: "", msgType: "IM", direction: "in", attachments: [att(1, "photo"), att(2, "photo")] })).toEqual({
+      text: "",
+      media: { kind: "photo", count: 2 },
+      unreadable: false,
+    });
+    // A Bluetooth text the import matched: the caption stays, the "Attachment" line goes.
+    expect(messageContent({ body: "Look!\nAttachment: 1 Photo", msgType: "SMS_GSM", attachments: [att(1, "photo")] }).text).toBe("Look!");
+    // A photo and a video together are attachments, and a sent one keeps its words.
+    expect(messageText({ body: "", msgType: "IM", attachments: [att(1, "photo"), att(2, "video")] })).toMatch(/2/);
+    expect(messageContent({ body: "here", msgType: "IM", direction: "out", attachments: [att(1, "video")] }).text).toBe("here");
+  });
+
+  it("says when a text was unsent", () => {
+    expect(messageText({ body: "", msgType: "IM", unsent: true })).toBe("This message was unsent.");
+    expect(messageContent({ body: "", msgType: "IM", direction: "out", unsent: true }).text).toBe("This message was unsent.");
+  });
 });
 
 describe("itemContent", () => {

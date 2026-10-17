@@ -1,4 +1,4 @@
-import type { CallRecord, Contact, PhoneNotification, SmsMessage } from "../types/protocol";
+import type { CallRecord, Contact, MessageGroup, PhoneNotification, SmsMessage } from "../types/protocol";
 import { isAddressLike, normalizeAddress } from "./address";
 import { isUnreadable } from "./attachments";
 
@@ -283,6 +283,48 @@ export interface Conversation {
   latest: ConversationItem;
   /** The notification items, for new-message counts. */
   notifications: PhoneNotification[];
+  /**
+   * A group chat from an iPhone backup (its `MessageGroup` id). Read-only in tug: iOS gives
+   * Bluetooth no way to send to a group. Its texts never join a member's one-to-one conversation.
+   */
+  group?: string;
+}
+
+/** The key of a backup's group chat (never a sender's `threadKey`). */
+export function groupKey(id: string): string {
+  return `${MESSAGES_APP}\u0000group:${id}`;
+}
+
+/** The last 10 digits of a number (how tug matches one number across formats), or null. */
+function numberTail(address: string): string | null {
+  if (address.includes("@")) return null;
+  const digits = address.replace(/\D/g, "");
+  return digits.length >= 10 ? digits.slice(-10) : null;
+}
+
+/**
+ * What a group chat is called: its own name, or its people ("Sam & Alex", "Sam, Alex & Jo",
+ * "Sam, Alex & 3 others"), each by their contact name when tug has one.
+ */
+export function groupTitle(group: Pick<MessageGroup, "name" | "members"> | undefined, contacts: Contact[]): string {
+  const own = group?.name?.trim();
+  if (own) return own;
+  const members = group?.members ?? [];
+  if (!members.length) return "Group";
+  const exact = new Map(contacts.map((c) => [c.address, c.name]));
+  const byTail = new Map<string, string>();
+  for (const c of contacts) {
+    const t = numberTail(c.address);
+    if (t) byTail.set(t, c.name);
+  }
+  const names = members.map((a) => {
+    const tail = numberTail(a);
+    const name = exact.get(a) ?? (tail ? byTail.get(tail) : undefined);
+    return name ? cleanName(name).split(" ")[0] : formatAddress(a);
+  });
+  if (names.length <= 2) return names.join(" & ");
+  if (names.length === 3) return `${names[0]}, ${names[1]} & ${names[2]}`;
+  return `${names[0]}, ${names[1]} & ${names.length - 2} others`;
 }
 
 /**
@@ -327,7 +369,9 @@ export function groupConversations(
   notifications: PhoneNotification[],
   messages: SmsMessage[],
   contacts: Contact[],
+  groups: MessageGroup[] = [],
 ): Conversation[] {
+  const groupsById = new Map(groups.map((g) => [g.id, g]));
   const nameFor = new Map(contacts.map((c) => [c.address, c.name]));
   // One name can have several numbers (one person with two phones, or two people
   // with the same name), so keep them all.
@@ -361,6 +405,30 @@ export function groupConversations(
   };
 
   for (const m of messages) {
+    if (m.groupId) {
+      // A backup's group chat: its own conversation, never a member's one-to-one one.
+      const key = groupKey(m.groupId);
+      let g = convs.get(key);
+      if (!g) {
+        // Replaced by the newest item once every text is in (below), as `get` does for the others.
+        const placeholder = { kind: "message", id: "", at: new Date(0), body: "" } as unknown as ConversationItem;
+        g = {
+          key,
+          appId: MESSAGES_APP,
+          appLabel: "Messages",
+          contact: groupTitle(groupsById.get(m.groupId), contacts),
+          address: null,
+          addresses: [],
+          items: [],
+          latest: placeholder,
+          notifications: [],
+          group: m.groupId,
+        };
+        convs.set(key, g);
+      }
+      g.items.push({ kind: "message", id: `m${m.id}`, at: messageTime(m), body: m.body, m });
+      continue;
+    }
     // A "name" that is just their number (learned from an unknown sender's notification) is
     // shown as the number, so it keys the same as `senderName` does for their notifications.
     const known = m.contactName ?? nameFor.get(m.address);
@@ -407,7 +475,7 @@ export function groupConversations(
   for (const c of out) {
     c.items.sort(itemOrder);
     c.latest = c.items[c.items.length - 1];
-    if (c.appId === MESSAGES_APP) {
+    if (c.appId === MESSAGES_APP && !c.group) {
       const fromContacts = numbersFor.get(nameKey(c.contact)) ?? [];
       resolveNumbers(c, [...fromContacts, ...(titleNumbers.get(c.key) ?? [])]);
     }

@@ -27,9 +27,14 @@ pub struct AppState {
     pub tugboat: TugboatService,
     pub devtools: Arc<crate::devtools::DevTools>,
     pub pc_audio: Arc<PcAudio>,
+    pub backup: crate::backup::BackupService,
 }
 
 type Result<T> = std::result::Result<T, String>;
+
+/// Clear history and Remove imported history while a backup is being read or brought in.
+const BACKUP_BUSY: &str =
+    "tug is still bringing in your iPhone backup. Wait for it to finish, or cancel it, then try again.";
 
 #[tauri::command]
 pub fn get_status(state: State<'_, AppState>) -> DeviceStatus {
@@ -93,7 +98,13 @@ pub fn search_all(state: State<'_, AppState>, query: String, limit: u32) -> Resu
 
 #[tauri::command]
 pub fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
+    // An import still writing would put texts and photos back after the clear.
+    if state.backup.busy() {
+        return Err(BACKUP_BUSY.into());
+    }
     let cleared_up_to = state.shared.store.clear_history().map_err(|e| e.to_string())?;
+    // Photos and videos brought in from an iPhone backup go with their texts.
+    crate::backup::files::remove_all(state.backup.local_dir());
     // Pop-ups and the Bluetooth actor name notifications by row id, and those rows are gone: take
     // the pop-ups back (their buttons would act on nothing tug still shows) and have the actor drop
     // its map from the phone's notification ids to the cleared rows.
@@ -217,6 +228,152 @@ pub fn list_messages(state: State<'_, AppState>, limit: u32) -> Result<Vec<Store
         .store
         .recent_messages(limit.min(5000))
         .map_err(|e| e.to_string())
+}
+
+/// The newest text of every conversation, so ones older than the recent page still list.
+#[tauri::command]
+pub async fn conversation_heads(state: State<'_, AppState>, limit: u32) -> Result<Vec<StoredMessage>> {
+    // A pass over the whole history (years of it, after an import): off the main thread.
+    let store = state.shared.store.clone();
+    tauri::async_runtime::spawn_blocking(move || store.conversation_heads(limit.min(5000)))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// One conversation's whole history (one-to-one by its numbers, or a group by id), for opening it.
+#[tauri::command]
+pub async fn conversation_messages(
+    state: State<'_, AppState>,
+    addresses: Vec<String>,
+    group: Option<String>,
+) -> Result<Vec<StoredMessage>> {
+    let store = state.shared.store.clone();
+    tauri::async_runtime::spawn_blocking(move || store.conversation_messages(&addresses, group.as_deref(), 50_000))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Group chats brought in from an iPhone backup.
+#[tauri::command]
+pub fn list_message_groups(state: State<'_, AppState>) -> Result<Vec<crate::messages::MessageGroup>> {
+    state.shared.store.message_groups().map_err(|e| e.to_string())
+}
+
+/// A stored photo's preview for its bubble (a JPEG data URI), or why there's none (a HEIC photo
+/// without HEIF Image Extensions). By attachment id: the window never names a file.
+#[tauri::command]
+pub async fn attachment_preview(state: State<'_, AppState>, id: i64) -> Result<crate::backup::files::Preview> {
+    let store = state.shared.store.clone();
+    let dir = state.backup.local_dir().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some((key, _)) = crate::backup::import::attachment_file(&store, id).map_err(|e| e.to_string())? else {
+            return Ok(crate::backup::files::Preview::default());
+        };
+        Ok(crate::backup::files::preview(&dir, &key))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Open a stored photo or video in its default app (usually Photos).
+#[tauri::command]
+pub async fn open_attachment(state: State<'_, AppState>, id: i64) -> Result<()> {
+    let store = state.shared.store.clone();
+    let dir = state.backup.local_dir().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (key, _) = crate::backup::import::attachment_file(&store, id)
+            .map_err(|e| e.to_string())?
+            .ok_or("That photo isn't on this PC.")?;
+        crate::backup::files::open(&dir, &key)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The iPhone backups on this PC (Apple Devices app or iTunes), newest first.
+#[tauri::command]
+pub async fn backup_list(state: State<'_, AppState>) -> Result<Vec<crate::backup::discover::BackupInfo>> {
+    let backup = state.backup.clone();
+    tauri::async_runtime::spawn_blocking(move || backup.list())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Windows' folder picker, for a backup kept somewhere else. `None` if nothing was picked; an
+/// error if the folder isn't a backup.
+#[tauri::command]
+pub async fn backup_pick_folder(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<crate::backup::discover::BackupInfo>> {
+    use tauri_plugin_dialog::DialogExt;
+    let backup = state.backup.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(folder) = app
+            .dialog()
+            .file()
+            .blocking_pick_folder()
+            .and_then(|p| p.into_path().ok())
+        else {
+            return Ok(None);
+        };
+        backup.picked(&folder).map(Some).ok_or_else(|| {
+            "That folder isn't an iPhone backup. Choose the folder named with a long string of letters and numbers."
+                .to_string()
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn backup_status(state: State<'_, AppState>) -> crate::backup::BackupStatus {
+    state.backup.status()
+}
+
+/// Unlock (an encrypted backup's `password` is used once, in memory, and never kept) and read a
+/// backup. The outcome arrives as `backup-import` events.
+#[tauri::command]
+pub fn backup_open(state: State<'_, AppState>, id: String, password: Option<String>) -> Result<()> {
+    state.backup.open(&id, password)
+}
+
+#[tauri::command]
+pub fn backup_import(state: State<'_, AppState>, texts: bool, photos: bool) -> Result<()> {
+    state.backup.import(texts, photos)
+}
+
+/// Cancel reading or importing, or close a backup that was read.
+#[tauri::command]
+pub fn backup_cancel(state: State<'_, AppState>) {
+    state.backup.cancel();
+}
+
+/// What's in tug from a backup now (for Settings and the "From your iPhone backup" label).
+#[tauri::command]
+pub fn backup_imported(state: State<'_, AppState>) -> Result<crate::backup::import::Imported> {
+    crate::backup::import::imported(&state.shared.store).map_err(|e| e.to_string())
+}
+
+/// Remove imported history: every text the import added and every photo it copied.
+#[tauri::command]
+pub async fn backup_remove_imported(state: State<'_, AppState>) -> Result<u64> {
+    if state.backup.busy() {
+        return Err(BACKUP_BUSY.into());
+    }
+    let store = state.shared.store.clone();
+    let dir = state.backup.local_dir().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let n = crate::backup::import::remove_imported(&store).map_err(|e| e.to_string())?;
+        let keep = crate::backup::import::file_keys(&store).map_err(|e| e.to_string())?;
+        let files = crate::backup::files::remove_unreferenced(&dir, &keep);
+        log::info!("backup: removed imported history ({n} texts, {files} files)");
+        Ok(n)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -378,6 +535,7 @@ pub fn set_conversation_hidden(
     state: State<'_, AppState>,
     senders: Vec<(String, String)>,
     addresses: Vec<String>,
+    groups: Option<Vec<String>>,
     undo_at: Option<i64>,
 ) -> Result<i64> {
     let (at, hidden) = match undo_at {
@@ -393,7 +551,7 @@ pub fn set_conversation_hidden(
     state
         .shared
         .store
-        .set_conversation_hidden(&senders, &addresses, at, hidden)
+        .set_conversation_hidden(&senders, &addresses, &groups.unwrap_or_default(), at, hidden)
         .map_err(|e| e.to_string())?;
     Ok(at)
 }

@@ -117,7 +117,18 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - A text whose words didn't come through from the iPhone takes them from its notification, or
   says "This text didn't come through".
 - Texts you send from tug show in the conversation; texts you send on your iPhone stay on your
-  iPhone (a one-time tip under the conversation says so).
+  iPhone (a one-time tip under the conversation says so), unless you bring in your full history.
+- **Bring in your full history** (Settings › Messages): from a backup of your iPhone on this PC
+  (Apple Devices app or iTunes, encrypted or not), tug brings in every text, the ones you sent from
+  the phone included, group chats, and your photos and videos, once, as a snapshot. Pick a backup
+  (or a folder), enter its password if it's encrypted, see how many texts and photos (and how much
+  space) before choosing, then watch it come in with Cancel. Texts tug already had aren't added
+  twice, people are matched to your contacts, and running it again (or after a cancel) adds only
+  what's new. Old history carries a quiet "From your iPhone backup, Oct 12" label; photos show in
+  the conversation and open in Photos; group chats are their own read-only conversations; edited
+  and unsent texts say so; reactions are left out. **Remove imported history** takes it all out
+  again. iPhone photos (HEIC) need the free HEIF Image Extensions from the Microsoft Store to show
+  in tug; without it they open in Photos and tug says why, once.
 - When the iPhone may not have shared every text from while tug was away, the conversation says so.
 - Messages from other chat apps (WhatsApp and so on) show as read-only conversations: reply on your
   phone.
@@ -344,6 +355,7 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
   language), and the keyboard shortcuts.
 - **iPhone:** connection health, Copy diagnostics, Open logs folder, help for the texts pairing,
   Visible to iPhone, Call from tug, and your iPhone's Connect panel.
+- **Messages:** Bring in your full history from an iPhone backup, and Remove imported history.
 - **Notifications:** Filter unknown senders, Suggested replies (on or off, and your own three for
   texts no rule fits; 👍 / OK / Talk soon to start), Hide previews while sharing or presenting,
   Quiet hours, Mute calls, Always let through, and muted apps.
@@ -386,7 +398,11 @@ of them one day (see [COMPANION-PLAN.md](COMPANION-PLAN.md)).
 - **Texts:** iOS shares only about the **10 newest incoming texts** when tug catches up (on a fresh
   install or after time away); everything after that is kept in tug's history.
 - **Texts you send from the iPhone itself** never reach tug, and photos and attachments aren't
-  shared (tug shows a "Photo" chip with "Open it on your iPhone").
+  shared (tug shows a "Photo" chip with "Open it on your iPhone"). A backup of the iPhone on the PC
+  has them: Bring in your full history copies them in as a one-time snapshot, so anything after the
+  backup's date still follows these limits until you bring in a newer backup.
+- **Messages in iCloud:** when it's on, the iPhone keeps messages in iCloud instead of its backup,
+  so a backup may have few or none to bring in.
 - **iMessage vs SMS:** iOS usually reports every message as a text, so tug can't tell them apart.
 - **Group texts:** a group's messages arrive per sender, so a reply from tug goes to that one
   person, and group pop-ups have no reply box.

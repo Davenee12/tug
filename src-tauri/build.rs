@@ -6,7 +6,24 @@ fn main() {
     println!("cargo:rerun-if-changed=icons/icon.ico");
     embed_tugboat_page();
     ensure_cli();
+    delay_load_common_controls_in_debug();
     tauri_build::build()
+}
+
+/// The unit-test exe (`cargo test`, so `npm run check` and CI) links the whole app but, unlike
+/// tug.exe, gets no application manifest: tauri-build embeds it for binaries only. Whether it then
+/// imports `TaskDialogIndirect` (a function only ComCtl32 v6 has, used by Tauri's dialog and menu
+/// crates) depends on which of their code units the linker happens to pull in, and when it does,
+/// Windows refuses to start the tests at all (STATUS_ENTRYPOINT_NOT_FOUND) before a single one
+/// runs. Delay-loading ComCtl32 resolves it on first use instead, which a test never makes. Only
+/// debug builds (tests, `tauri dev`); the release exe links exactly as before, and a debug tug.exe
+/// still gets v6 through its own manifest when it does open a dialog.
+fn delay_load_common_controls_in_debug() {
+    let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if msvc && std::env::var("PROFILE").as_deref() == Ok("debug") {
+        println!("cargo:rustc-link-arg=/DELAYLOAD:comctl32.dll");
+        println!("cargo:rustc-link-lib=delayimp");
+    }
 }
 
 /// The `tug` command (`crates/tug-cli`, built by `npm run build:cli`) ships inside tug's install

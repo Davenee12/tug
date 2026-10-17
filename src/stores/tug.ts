@@ -122,7 +122,16 @@ const SPOTIFY_WAIT_MS = 60_000;
 /** How long Spotify takes to report a transfer before tug re-reads where it is playing. */
 const SPOTIFY_TRANSFER_SETTLE_MS = 1_500;
 
-export type SettingsSection = "general" | "iphone" | "notifications" | "connectors" | "weather" | "developer" | "privacy" | "about";
+export type SettingsSection =
+  | "general"
+  | "iphone"
+  | "notifications"
+  | "messages"
+  | "connectors"
+  | "weather"
+  | "developer"
+  | "privacy"
+  | "about";
 const SEEN_KEEP = 300;
 /** How many cleared-code message ids to remember (they expire from the Feed in minutes anyway). */
 const CLEARED_CODES_KEEP = 200;
@@ -268,7 +277,7 @@ export const useTugStore = defineStore("tug", () => {
   /** Who counts as a known sender (contacts, numbers you've texted, ones you moved), for Filter unknown senders. */
   const senders = computed(() => senderIndex(contacts.value, outgoingAddresses(messages.value), settings.value.knownSenders));
   /** With the filter off, everyone is treated as known, exactly as before it existed. */
-  function isKnown(c: Pick<Conversation, "appId" | "contact" | "addresses">): boolean {
+  function isKnown(c: Pick<Conversation, "appId" | "contact" | "addresses" | "group">): boolean {
     return !settings.value.filterUnknown || isKnownConversation(c, senders.value);
   }
   const countsTowardUnread = (t: Thread) => !settings.value.filterUnknown || threadCounts(t, senders.value);
@@ -1076,16 +1085,20 @@ export const useTugStore = defineStore("tug", () => {
    * Messages, search) but nothing changes on the phone. Undo is offered for a few seconds;
    * a new text from them starts the conversation again.
    */
-  async function deleteConversation(c: { key: string; contact: string; addresses: string[]; notifications: PhoneNotification[] }) {
+  async function deleteConversation(c: { key: string; contact: string; addresses: string[]; notifications: PhoneNotification[]; group?: string }) {
     // The backend hides the whole conversation by sender and address, not just the rows loaded
-    // here (the newest pages), so its older part can't come back in Feed scroll or search.
+    // here (the newest pages), so its older part can't come back in Feed scroll or search. A
+    // backup's group chat goes by its id; its texts never belong to a member's own conversation.
     const senders = [...new Map(c.notifications.map((n) => [`${n.appId}\u0000${n.title}`, [n.appId, n.title] as [string, string]])).values()];
     const keys = new Set(c.notifications.map(threadKey));
+    const groups = c.group ? [c.group] : [];
     const removedNotifications = notifications.value.filter((n) => keys.has(threadKey(n)));
-    const removedMessages = messages.value.filter((m) => c.addresses.includes(m.address));
+    const removedMessages = messages.value.filter((m) =>
+      m.groupId ? groups.includes(m.groupId) : c.addresses.includes(m.address),
+    );
     let at: number;
     try {
-      at = await api.setConversationHidden(senders, c.addresses, null);
+      at = await api.setConversationHidden(senders, c.addresses, null, groups);
     } catch (e) {
       notify("error", errorMessage(e));
       return;
@@ -1102,7 +1115,7 @@ export const useTugStore = defineStore("tug", () => {
       run: () => {
         flash.value = null;
         void attempt(async () => {
-          await api.setConversationHidden(senders, c.addresses, at);
+          await api.setConversationHidden(senders, c.addresses, at, groups);
           for (const n of removedNotifications) {
             rowGuard.touched(n.id);
             upsert(notifications.value, n);

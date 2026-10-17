@@ -6,6 +6,7 @@ import { useTugboatStore } from "../stores/tugboat";
 import { useGameStore } from "../stores/game";
 import { useVoiceStore } from "../stores/voice";
 import { useFocusTrap } from "../lib/focusTrap";
+import { byArrival } from "../lib/messageSync";
 import { afterPaletteSend, parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
 import {
   appLabel,
@@ -15,6 +16,7 @@ import {
   dayLabel,
   formatAddress,
   groupConversations,
+  groupKey,
   highlight,
   isConversation,
   notificationTime,
@@ -267,7 +269,11 @@ function pick(o: Option | undefined) {
   if (o.kind === "person") {
     openConversation(o.c.address, cleanName(o.c.name));
   } else if (o.kind === "message") {
-    openConversation(o.m.address, messageName(o.m));
+    // An old text (brought in from a backup) may be older than what the window has loaded: add it,
+    // so the conversation has it to scroll to while the rest of its history loads.
+    if (!tug.messages.some((m) => m.id === o.m.id)) tug.messages = [...tug.messages, o.m].sort(byArrival);
+    if (o.m.groupId) tug.openThread(groupKey(o.m.groupId));
+    else openConversation(o.m.address, messageName(o.m));
     tug.focusItem = `m${o.m.id}`;
   } else if (isConversation(o.n)) {
     tug.openThread(threadKey(o.n));
