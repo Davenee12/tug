@@ -40,6 +40,9 @@
 //   http://localhost:1420/?tugboatwait   the Tugboat panel showing its QR code, no phone yet ("Can't
 //                                     connect?" help appears after 30 s)
 //   http://localhost:1420/?tugboatnonet  the Tugboat panel with no network a phone could use
+//   http://localhost:1420/?tugboatclip   "Send clipboard to iPhone" with no phone yet: the code with its
+//                                     clipboard hint, a phone scanning it 4 s later and taking the clipboard
+//                                     (with ?tugboat, Ctrl+K "send clipboard" arrives in about a second)
 //   http://localhost:1420/?game       Tugboat Run open, ready to start
 //   http://localhost:1420/?gamephone  Tugboat Run with a phone controller: the code, a phone scanning
 //                                     it, then the phone starting the run and steering
@@ -641,6 +644,7 @@ const dropFolder = "C:\\Users\\Dave\\Pictures\\Tugboat";
 const dropOn = params.has("tugboat") || params.has("drop");
 const dropWait = params.has("tugboatwait") || params.has("dropwait");
 const dropNoNet = params.has("tugboatnonet") || params.has("dropnonet");
+const dropClip = params.has("tugboatclip");
 const dropState: TugboatStatus = {
   phase: "off",
   url: null,
@@ -656,6 +660,7 @@ const dropState: TugboatStatus = {
   sending: false,
   receiving: false,
   ended: null,
+  clip: null,
 };
 const sendDrop = () => void emit("tugboat-status", structuredClone(dropState));
 function startDrop() {
@@ -695,6 +700,39 @@ function startDrop() {
     }
     sendDrop();
   }, 1000);
+}
+/** "Send clipboard to iPhone": waits for the phone (one scans the code after 4 s if none is there),
+ * which takes it a second later. Only then does it say the phone has it, like the real one. */
+let clipTimers: number[] = [];
+function sendClipboardMock() {
+  startDrop();
+  clipTimers.forEach((t) => window.clearTimeout(t));
+  clipTimers = [];
+  const id = (dropState.clip?.id ?? 0) + 1;
+  dropState.clip = { id, kind: "text", state: "waiting", expiresAt: Date.now() + 120_000 };
+  const deliver = () => {
+    if (dropState.clip?.id !== id || dropState.phase === "off") return;
+    dropState.clip = { ...dropState.clip, state: "delivered" };
+    sendDrop();
+    void emit("tugboat-clip", { kind: "text", state: "delivered" });
+  };
+  if (dropState.phase === "connected" && dropState.phoneActive) clipTimers.push(window.setTimeout(deliver, 1200));
+  else {
+    clipTimers.push(
+      window.setTimeout(() => {
+        if (dropState.phase === "off") return;
+        Object.assign(dropState, { phase: "connected", phone: "iPhone", phoneActive: true });
+        sendDrop();
+      }, 4000),
+      window.setTimeout(deliver, 5000),
+    );
+  }
+}
+if (dropClip) {
+  setTimeout(async () => {
+    const { useTugboatStore } = await import("../stores/tugboat");
+    void useTugboatStore().sendClipboard();
+  }, 400);
 }
 if (dropOn || dropWait || dropNoNet) {
   setTimeout(async () => {
@@ -960,7 +998,7 @@ mockIPC(
       case "tugboat_status":
         return structuredClone(dropState);
       case "tugboat_stop":
-        Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null });
+        Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null, clip: null });
         return null;
       case "tugboat_pick_files": {
         startDrop();
@@ -980,6 +1018,11 @@ mockIPC(
         dropState.sentText = String(a.text ?? "") || null;
         sendDrop();
         return null;
+      case "tugboat_send_clipboard":
+        // The real one reads the Windows clipboard in Rust; the preview pretends it held some text.
+        sendClipboardMock();
+        sendDrop();
+        return structuredClone(dropState);
       case "tugboat_open_folder":
         console.log("[devMock] open Tugboat folder", a.path ?? dropFolder);
         return null;

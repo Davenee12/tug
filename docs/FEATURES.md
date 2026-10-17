@@ -169,8 +169,17 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   Show and Open folder.
 - **PC → phone:** drag files onto tug's window, or Choose files (up to 1 GB each); the phone taps
   Get to save them.
-- Text pasted on the phone lands on the PC's clipboard, and text from the PC shows on the phone
-  page with a Copy button.
+- **Send clipboard to iPhone** (the tray menu, Ctrl+K "send clipboard", or the Tugboat panel)
+  sends the text or picture on the PC's clipboard to the phone's Tugboat page: text with a big
+  **Copy** button, a picture to press and hold (Copy or Save to Photos). With no phone on the page,
+  Tugboat's code shows "Scan to receive your clipboard on your iPhone"; the clipboard waits at most
+  2 minutes, then it's dropped. tug says it's on your iPhone only once the phone has it.
+- Tugboat's page is plain HTTP on your Wi-Fi, so phone browsers don't give it their modern
+  clipboard API. Copy uses the older way Safari and Chrome still allow during a tap; if the browser
+  refuses, the text is selected and the page says to press and hold it, then tap Copy.
+- **Paste to PC:** paste into the box on the phone page and tap Send. It goes on the PC's clipboard
+  ("Copied from your iPhone"), kept out of Windows' clipboard history and cloud sync.
+- Text typed in the Tugboat panel shows on the phone page with a Copy button too.
 - Everything is encrypted with a key from the QR code, and only the phone that scanned it can join.
 - Files from the phone carry Windows' "downloaded from the internet" mark, so a disguised program
   gets the usual warning.
@@ -219,6 +228,7 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   - `call sam` to call back a missed call (or call, if Call from tug is on);
   - `play <song or playlist>` and `queue <song>` with Spotify connected;
   - `copy code`, `clear all`, `mark all read`, `dnd on` / `dnd off`;
+  - `send clipboard` (or `clipboard`, `paste to phone`) to send the PC's clipboard to your iPhone;
   - an app's name to show its notifications;
   - `new message`, `settings`, `spotify`, `tugboat` to open them, and `game` for Tugboat Run.
 - If a name matches several people, tug lists them and waits for you to pick.
@@ -301,8 +311,8 @@ of them one day (see [COMPANION-PLAN.md](COMPANION-PLAN.md)).
 - **Message text** only comes through if the lock screen shows previews (Settings › Notifications ›
   Show Previews › Always).
 - **Battery:** the level only; iOS doesn't share whether the phone is charging.
-- **Clipboard sync** isn't possible without an app on the phone; Tugboat's paste box is the
-  one-tap alternative.
+- **Automatic clipboard sync** isn't possible without an app on the phone; Tugboat's Send
+  clipboard and Paste to PC are the one-tap alternative.
 - **After the iPhone restarts**, nothing connects until it's unlocked once.
 - **Calling anyone** from the PC needs Windows' calling connection, which Windows usually keeps for
   itself (Call from tug is experimental).

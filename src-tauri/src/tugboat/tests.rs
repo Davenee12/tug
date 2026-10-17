@@ -14,16 +14,18 @@ use serde_json::{json, Value};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::auth;
+use super::clip::{ClipEvent, ClipKind, ClipState, Prepared};
 use super::crypto::{self, ad, Keys};
 use super::pad::{PadEvent, PadReply, BURST};
 use super::server;
-use super::session::{self, FinishReply, Session, Sink, StateReply, UploadReply, OFFER_CHUNK};
+use super::session::{self, FinishReply, PageClip, Session, Sink, StateReply, UploadReply, OFFER_CHUNK};
 use super::upload::MIN_CHUNK;
 
 #[derive(Default)]
 struct TestSink {
     texts: Mutex<Vec<String>>,
     pads: Mutex<Vec<PadEvent>>,
+    clips: Mutex<Vec<ClipEvent>>,
 }
 
 impl Sink for TestSink {
@@ -33,6 +35,9 @@ impl Sink for TestSink {
     }
     fn pad(&self, event: PadEvent) {
         self.pads.lock().unwrap().push(event);
+    }
+    fn clip(&self, event: ClipEvent) {
+        self.clips.lock().unwrap().push(event);
     }
 }
 
@@ -173,7 +178,8 @@ async fn phone_session_over_a_socket() {
         StateReply {
             offers: vec![],
             text: None,
-            game: false
+            game: false,
+            clip: None
         }
     );
     assert_eq!(session.snapshot().phone.as_deref(), Some("iPhone"));
@@ -641,6 +647,176 @@ fn closing_the_controller_tells_the_game_the_phone_is_gone() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// The shared clipboard, over a real socket: the PC's clipboard reaches only the bound phone, is
+/// "delivered" only once the phone says so (and, for a picture, really fetched it), and the PC lets
+/// go of it then.
+#[tokio::test]
+async fn shared_clipboard_reaches_the_phone_and_is_let_go() {
+    let root = temp_dir();
+    let secret = crypto::new_secret();
+    let sink = Arc::new(TestSink::default());
+    let session = Arc::new(Session::new(
+        &secret,
+        root.join("Tugboat"),
+        root.join("incoming"),
+        sink.clone(),
+    ));
+    let (addr, stop, server) = start_server(session.clone(), server::Limits::default()).await;
+    let mut phone = Phone::new(addr, &secret, "phoneAAAAAAAAAAAAAAAAA");
+    let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
+    assert!(state.unwrap().clip.is_none());
+
+    // --- Text: waiting until the phone says it has it ---
+    let id = session.send_clip(Prepared::Text("from the PC's clipboard".into()));
+    let st = session.snapshot().clip.unwrap();
+    assert_eq!((st.id, st.kind, st.state), (id, ClipKind::Text, ClipState::Waiting));
+    let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
+    assert_eq!(
+        state.unwrap().clip,
+        Some(PageClip {
+            id,
+            text: Some("from the PC's clipboard".into()),
+            image: None
+        })
+    );
+    assert!(sink.clips.lock().unwrap().is_empty(), "handed over isn't delivered");
+    assert_eq!(session.snapshot().clip.unwrap().state, ClipState::Waiting);
+
+    // Another device can't acknowledge it; nor can a made-up id, or a body with anything else in it.
+    let mut second = Phone::new(addr, &secret, "secondBBBBBBBBBBBBBBBB");
+    assert_eq!(
+        second
+            .call::<Value>("POST", "/api/clip", Some(json!({ "id": id })))
+            .await
+            .0,
+        403
+    );
+    assert_eq!(
+        phone
+            .call::<Value>("POST", "/api/clip", Some(json!({ "id": id + 50 })))
+            .await
+            .0,
+        404
+    );
+    assert_eq!(
+        phone
+            .call::<Value>("POST", "/api/clip", Some(json!({ "id": id, "text": "x" })))
+            .await
+            .0,
+        400
+    );
+    assert_eq!(phone.raw("POST", "/api/clip", Vec::new()).await.status, 400);
+    assert!(sink.clips.lock().unwrap().is_empty());
+
+    // The phone has it: delivered, and the PC no longer hands it out.
+    let (status, _) = phone
+        .call::<Value>("POST", "/api/clip", Some(json!({ "id": id })))
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        *sink.clips.lock().unwrap(),
+        vec![ClipEvent {
+            kind: ClipKind::Text,
+            state: ClipState::Delivered
+        }]
+    );
+    assert_eq!(session.snapshot().clip.unwrap().state, ClipState::Delivered);
+    let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
+    assert!(state.unwrap().clip.is_none());
+    // A retry (the reply was lost) is fine and says nothing twice.
+    assert_eq!(
+        phone
+            .call::<Value>("POST", "/api/clip", Some(json!({ "id": id })))
+            .await
+            .0,
+        200
+    );
+    assert_eq!(sink.clips.lock().unwrap().len(), 1);
+
+    // --- A newer press replaces one still waiting ---
+    let old = session.send_clip(Prepared::Text("first".into()));
+    let newer = session.send_clip(Prepared::Text("second".into()));
+    let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
+    assert_eq!(state.unwrap().clip.unwrap().text.as_deref(), Some("second"));
+    assert_eq!(
+        phone
+            .call::<Value>("POST", "/api/clip", Some(json!({ "id": old })))
+            .await
+            .0,
+        404
+    );
+    assert_eq!(
+        phone
+            .call::<Value>("POST", "/api/clip", Some(json!({ "id": newer })))
+            .await
+            .0,
+        200
+    );
+
+    // --- A picture: fetched sealed, like a file on offer, but not listed with the files ---
+    let picture = pattern(OFFER_CHUNK as usize + 4321, 9);
+    let id = session.send_clip(Prepared::Image(picture.clone()));
+    assert!(session.snapshot().outgoing.is_empty(), "not in the panel's file list");
+    let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
+    let state = state.unwrap();
+    assert!(state.offers.is_empty(), "not in the page's file list");
+    let clip = state.clip.unwrap();
+    assert_eq!((clip.id, clip.text), (id, None));
+    let image = clip.image.unwrap();
+    assert_eq!(
+        (image.name.as_str(), image.mime.as_str(), image.size, image.chunks),
+        ("Clipboard picture.png", "image/png", picture.len() as u64, 2)
+    );
+    // The phone's word isn't enough until it really fetched the picture.
+    assert_eq!(
+        phone
+            .call::<Value>("POST", "/api/clip", Some(json!({ "id": id })))
+            .await
+            .0,
+        409
+    );
+    let mut got = Vec::new();
+    for i in 0..image.chunks {
+        let r = phone
+            .raw("GET", &format!("/api/down/{}/{i}", image.id), Vec::new())
+            .await;
+        assert_eq!(r.status, 200);
+        got.extend(phone.keys.open(&ad::down(&image.id, i), &r.body).expect("chunk opens"));
+    }
+    assert_eq!(got, picture);
+    assert_eq!(
+        phone
+            .call::<Value>("POST", "/api/clip", Some(json!({ "id": id })))
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        sink.clips.lock().unwrap().last().copied(),
+        Some(ClipEvent {
+            kind: ClipKind::Image,
+            state: ClipState::Delivered
+        })
+    );
+    // Delivered: the PC let go of the picture.
+    assert_eq!(
+        phone
+            .raw("GET", &format!("/api/down/{}/0", image.id), Vec::new())
+            .await
+            .status,
+        404
+    );
+
+    // Nothing the clipboard did reached the phone's paste box (the PC clipboard) or the files.
+    assert!(sink.texts.lock().unwrap().is_empty());
+    let snap = session.snapshot();
+    assert!(snap.texts.is_empty() && snap.incoming.is_empty() && snap.outgoing.is_empty());
+
+    let _ = stop.send(());
+    server.await.unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// Start a server on 127.0.0.1 with the given limits; returns its address, a stop switch and the task.
 async fn start_server(
     session: Arc<Session>,
@@ -669,6 +845,9 @@ async fn start_server(
 ///   cargo test --manifest-path src-tauri/Cargo.toml manual_page -- --ignored --nocapture
 /// Received files land in a temp folder (printed); one file is on offer; TUGBOAT_SECS sets how long.
 /// TUGBOAT_GAME=1 also opens the game controller channel, and prints each controller event.
+/// TUGBOAT_CLIP=1 sends a made-up clipboard text (and prints when the page acknowledges it).
+/// TUGBOAT_HOST=<this PC's LAN address> serves there instead, so the page runs the way a phone
+/// sees it (not a secure context: no `navigator.clipboard`).
 #[tokio::test]
 #[ignore]
 async fn manual_page() {
@@ -708,7 +887,27 @@ async fn manual_page() {
             }
         });
     }
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    if std::env::var("TUGBOAT_CLIP").is_ok() {
+        session.send_clip(Prepared::Text(
+            "Your clipboard from the PC: 221B Example Street, a link https://example.com/x".into(),
+        ));
+        let watched = session.clone();
+        let clips = sink.clone();
+        tokio::spawn(async move {
+            let mut shown = 0;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                watched.clip_tick();
+                let events = clips.clips.lock().unwrap().clone();
+                for e in &events[shown..] {
+                    println!("clipboard: {e:?}");
+                }
+                shown = events.len();
+            }
+        });
+    }
+    let host = std::env::var("TUGBOAT_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let listener = TcpListener::bind((host.as_str(), 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
     println!("Tugboat page: http://{addr}/#{}", crypto::b64(&secret));
     println!("received files: {}", folder.display());

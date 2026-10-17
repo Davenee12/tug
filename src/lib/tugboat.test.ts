@@ -1,6 +1,74 @@
 import { describe, expect, it } from "vitest";
-import { TUGBOAT_OFF, HELP_AFTER_MS, capitalised, closeWarning, percent, showConnectHelp, skippedMessage, transferring } from "./tugboat";
-import type { TugboatOffer, TugboatStatus } from "../types/protocol";
+import {
+  TUGBOAT_OFF,
+  HELP_AFTER_MS,
+  capitalised,
+  clipEventMessage,
+  clipLine,
+  clipNeedsPanel,
+  clipPhone,
+  closeWarning,
+  codeCaption,
+  percent,
+  phoneTextMessage,
+  showConnectHelp,
+  skippedMessage,
+  timeLeft,
+  transferring,
+} from "./tugboat";
+import type { TugboatClip, TugboatOffer, TugboatStatus } from "../types/protocol";
+
+describe("the shared clipboard", () => {
+  const clip = (state: TugboatClip["state"], kind: TugboatClip["kind"] = "text"): TugboatClip => ({ id: 1, kind, state, expiresAt: 200_000 });
+
+  it("opens the panel unless the phone's page is open right now", () => {
+    expect(clipNeedsPanel({ phase: "connected", phoneActive: true })).toBe(false);
+    expect(clipNeedsPanel({ phase: "connected", phoneActive: false })).toBe(true);
+    expect(clipNeedsPanel({ phase: "waiting", phoneActive: false })).toBe(true);
+    expect(clipNeedsPanel({ phase: "noNetwork", phoneActive: false })).toBe(true);
+  });
+
+  it("names the phone, or says iPhone before one has connected", () => {
+    expect(clipPhone(null)).toBe("iPhone");
+    expect(clipPhone("Android phone")).toBe("Android phone");
+  });
+
+  it("only says the clipboard is on the phone once the phone said so", () => {
+    expect(clipEventMessage({ kind: "text", state: "delivered" }, "iPhone")).toEqual({ kind: "info", text: "Your clipboard is on your iPhone" });
+    expect(clipEventMessage({ kind: "image", state: "delivered" }, null)?.text).toBe("The picture from your clipboard is on your iPhone");
+    expect(clipEventMessage({ kind: "text", state: "expired" }, "iPhone")).toEqual({
+      kind: "error",
+      text: "Your clipboard wasn't sent: Tugboat wasn't opened on your iPhone within 2 minutes.",
+    });
+    expect(clipEventMessage({ kind: "text", state: "waiting" }, "iPhone")).toBeNull();
+  });
+
+  it("describes the last clipboard in the panel, with the time left while it waits", () => {
+    const idle = { phone: "iPhone", phoneActive: false };
+    expect(clipLine(null, idle, 0)).toBeNull();
+    expect(clipLine(clip("waiting"), idle, 200_000 - 102_000)).toBe("Your clipboard is waiting for Tugboat to open on your iPhone · 1:42 left");
+    expect(clipLine(clip("waiting"), { phone: "iPhone", phoneActive: true }, 0)).toBe("Sending your clipboard to your iPhone…");
+    expect(clipLine(clip("delivered", "image"), idle, 0)).toBe("The picture from your clipboard is on your iPhone.");
+    expect(clipLine(clip("expired"), { phone: null, phoneActive: false }, 0)).toBe("Not sent: Tugboat wasn't opened on your iPhone within 2 minutes.");
+  });
+
+  it("counts down without going below zero", () => {
+    expect(timeLeft(120_000, 0)).toBe("2:00");
+    expect(timeLeft(120_000, 119_001)).toBe("0:01");
+    expect(timeLeft(120_000, 130_000)).toBe("0:00");
+  });
+
+  it("asks for a scan to receive a waiting clipboard", () => {
+    expect(codeCaption(clip("waiting"))).toBe("Scan to receive your clipboard on your iPhone.");
+    expect(codeCaption(clip("delivered"))).toMatch(/^Scan with your phone's camera/);
+    expect(codeCaption(null)).toMatch(/^Scan with your phone's camera/);
+  });
+
+  it("confirms text from the phone quietly, and only once it's on the clipboard", () => {
+    expect(phoneTextMessage(true, "iPhone")).toEqual({ kind: "info", text: "Copied from your iPhone" });
+    expect(phoneTextMessage(false, null)).toEqual({ kind: "error", text: "Text from your phone arrived, but couldn't go on the clipboard" });
+  });
+});
 
 describe("Tugboat panel decisions", () => {
   it("offers connection help only after 30 s with no phone", () => {

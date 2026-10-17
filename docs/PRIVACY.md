@@ -51,7 +51,10 @@ Disconnect any time in Settings › Connectors, which removes the stored sign-in
 - **Tugboat** (phone ↔ PC transfers) runs a small server on your local network only while the
   Tugboat panel is open. Everything is encrypted with a key from the QR code, only the phone that
   scanned it can join, and nothing goes over the internet. It stops when you close it or after 10
-  idle minutes. tug never changes your Windows Firewall.
+  idle minutes. tug never changes your Windows Firewall. Your clipboard is read only when you press
+  **Send clipboard to iPhone**, held in memory (never saved) for at most 2 minutes until your phone
+  has it, and never written to tug's logs. Text you paste on the phone is kept out of Windows'
+  clipboard history and cloud clipboard sync.
 - **Developer tools** are **off by default**. When you turn them on, AI tools and the `tug` command
   on your PC can connect through a local channel (a Windows named pipe) that only your Windows
   account can open; there's no network port. AI tools you connect can read only what you allow

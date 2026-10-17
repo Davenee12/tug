@@ -1,5 +1,5 @@
-//! Tugboat: move photos, files and text between the phone and this PC over the local Wi-Fi,
-//! with nothing installed on the phone. Tugboat's panel shows a QR code for
+//! Tugboat: move photos, files, text and the clipboard between the phone and this PC over the local
+//! Wi-Fi, with nothing installed on the phone. Tugboat's panel shows a QR code for
 //! `http://<LAN address>:<port>/#<secret>`; the phone's camera opens tug's small page in Safari,
 //! which seals everything with keys derived from the secret (see `crypto.rs`).
 //!
@@ -16,7 +16,9 @@
 //! unit-tested in their modules; `tests.rs` runs a whole session over a real socket.
 
 pub mod auth;
+pub mod clip;
 pub mod crypto;
+mod dib;
 mod names;
 pub mod net;
 pub mod pad;
@@ -48,6 +50,10 @@ pub const EVENT: &str = "tugboat-status";
 pub const TEXT_EVENT: &str = "tugboat-text";
 /// Files were dropped onto tug's window and offered: the ones skipped, so the panel can say why.
 pub const DROPPED_EVENT: &str = "tugboat-dropped";
+/// The PC's clipboard reached the phone, or no phone took it in time: `clip::ClipEvent`.
+pub const CLIP_EVENT: &str = "tugboat-clip";
+/// The tray's "Send clipboard to iPhone": the window sends it the same way Ctrl+K does.
+pub const SEND_CLIPBOARD_EVENT: &str = "tugboat-send-clipboard";
 /// Tugboat turns itself off after this long without a request from the phone (or a panel action).
 pub const IDLE_LIMIT: Duration = Duration::from_secs(10 * 60);
 const TICK: Duration = Duration::from_secs(2);
@@ -151,6 +157,9 @@ pub struct TugboatStatus {
     /// given up on it).
     pub receiving: bool,
     pub ended: Option<Ended>,
+    /// The last clipboard sent to the phone: its kind and whether the phone has it, never its
+    /// contents.
+    pub clip: Option<clip::ClipStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -240,9 +249,10 @@ impl Sink for PanelSink {
         let text = text.to_string();
         let app = inner.app.clone();
         // The WinRT clipboard needs the main (STA) thread. The panel says what happened only once
-        // it really did.
+        // it really did. Kept out of Windows' clipboard history and cloud sync, like an auto-copied
+        // code: what's pasted on the phone can be a password or an address.
         let _ = inner.app.run_on_main_thread(move || {
-            let ok = match crate::clipboard::set_text(&text) {
+            let ok = match crate::clipboard::set_text_private(&text) {
                 Ok(()) => true,
                 Err(e) => {
                     log::warn!("tugboat: couldn't put the phone's text on the clipboard: {e}");
@@ -257,6 +267,13 @@ impl Sink for PanelSink {
         let Some(inner) = self.0.upgrade() else { return };
         if let Err(e) = inner.app.emit(PAD_EVENT, event) {
             log::warn!("emit {PAD_EVENT} failed: {e}");
+        }
+    }
+
+    fn clip(&self, event: clip::ClipEvent) {
+        let Some(inner) = self.0.upgrade() else { return };
+        if let Err(e) = inner.app.emit(CLIP_EVENT, event) {
+            log::warn!("emit {CLIP_EVENT} failed: {e}");
         }
     }
 }
@@ -374,6 +391,7 @@ impl TugboatService {
                 sending: false,
                 receiving: false,
                 ended,
+                clip: None,
             };
         };
         let snap = session.snapshot();
@@ -401,6 +419,7 @@ impl TugboatService {
             sending: snap.sending,
             receiving: snap.receiving,
             ended: None,
+            clip: snap.clip,
         }
     }
 
@@ -530,6 +549,8 @@ impl TugboatService {
                 self.stop(Some(Ended::Hidden)).await;
                 return;
             }
+            // A clipboard no phone took within two minutes is dropped, never kept waiting.
+            session.clip_tick();
             let active = session.phone_active();
             let sending = session.sending();
             let receiving = session.receiving();
@@ -661,6 +682,27 @@ impl TugboatService {
 
     pub fn send_text(&self, text: &str) -> Result<(), String> {
         self.session().ok_or("Tugboat isn't open.")?.set_pc_text(text)
+    }
+
+    /// "Send clipboard to iPhone" (tray, Ctrl+K, the panel): read the clipboard as it is now, open
+    /// Tugboat if it's off (so its code can be scanned), and hold the clipboard for the phone for up
+    /// to two minutes. The clipboard is read first, so an empty one doesn't open Tugboat for
+    /// nothing. Nothing says "sent" until the phone has it (`CLIP_EVENT`).
+    pub async fn send_clipboard(&self) -> Result<TugboatStatus, String> {
+        // Off the main thread: if tug itself owns what's on the clipboard, Windows asks tug's main
+        // thread to hand it over while this waits.
+        let prepared = tokio::task::spawn_blocking(|| {
+            let reading = crate::clipboard::read_for_sharing(session::MAX_TEXT)?;
+            clip::prepare(reading, session::MAX_TEXT).map_err(|why| clip::refuse(why).to_string())
+        })
+        .await
+        .map_err(|_| "Couldn't read your clipboard.".to_string())??;
+        if self.session().is_none() {
+            self.start().await?;
+        }
+        let session = self.session().ok_or("Tugboat isn't open.")?;
+        session.send_clip(prepared);
+        Ok(self.status())
     }
 
     /// Tugboat Run wants the phone as a controller: open Tugboat if it's off (same session, same

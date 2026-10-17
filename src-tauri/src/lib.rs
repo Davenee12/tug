@@ -304,6 +304,7 @@ pub fn run() {
             commands::tugboat_pick_files,
             commands::tugboat_remove_offer,
             commands::tugboat_send_text,
+            commands::tugboat_send_clipboard,
             commands::tugboat_open_folder,
             commands::game_pad_open,
             commands::game_pad_close,

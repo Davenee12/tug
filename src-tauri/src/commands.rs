@@ -986,6 +986,14 @@ pub fn tugboat_send_text(state: State<'_, AppState>, text: String) -> Result<()>
     state.tugboat.send_text(&text)
 }
 
+/// "Send clipboard to iPhone" (Ctrl+K, the tray, the Tugboat panel): the clipboard as it is now,
+/// held for the phone for up to two minutes, opening Tugboat if it's off. The status says whether
+/// the phone has it yet; a "tugboat-clip" event says when it gets it (or doesn't in time).
+#[tauri::command]
+pub async fn tugboat_send_clipboard(state: State<'_, AppState>) -> Result<TugboatStatus> {
+    state.tugboat.send_clipboard().await
+}
+
 /// Open the Tugboat folder, or select one file Tugboat saved this session.
 #[tauri::command]
 pub fn tugboat_open_folder(state: State<'_, AppState>, path: Option<String>) -> Result<()> {

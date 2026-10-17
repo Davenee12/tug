@@ -4613,6 +4613,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "log",
+ "png 0.18.1",
  "qrcode",
  "rusqlite",
  "serde",

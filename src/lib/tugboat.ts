@@ -1,6 +1,6 @@
 // Tugboat on the desktop side: the small decisions the Tugboat panel makes, kept pure for tests.
 
-import type { TugboatSkipped, TugboatStatus } from "../types/protocol";
+import type { TugboatClip, TugboatClipEvent, TugboatSkipped, TugboatStatus } from "../types/protocol";
 
 export { formatSize } from "../tugboat-page/chunks";
 
@@ -23,6 +23,7 @@ export const TUGBOAT_OFF: TugboatStatus = {
   sending: false,
   receiving: false,
   ended: null,
+  clip: null,
 };
 
 /** No phone has turned up ~30 s after the code appeared: time for "Can't connect?" help. */
@@ -82,4 +83,69 @@ export function skippedMessage(skipped: TugboatSkipped[]): string | null {
 /** Percent of a file received, for its progress bar. */
 export function percent(received: number, size: number): number {
   return size > 0 ? Math.min(100, Math.round((received / size) * 100)) : 100;
+}
+
+// --- The shared clipboard ("Send clipboard to iPhone"; src-tauri/src/tugboat/clip.rs) ---
+
+type Say = { kind: "info" | "error"; text: string };
+
+/** The phone in clipboard wording: the one that connected, else "iPhone" (the phone tug is for). */
+export function clipPhone(phone: string | null): string {
+  return phone ?? "iPhone";
+}
+
+/**
+ * After "Send clipboard": with Tugboat's page open on the phone it arrives in a moment, so a quiet
+ * note is enough. Otherwise the panel opens, with the code to scan or a nudge to open the page.
+ */
+export function clipNeedsPanel(s: Pick<TugboatStatus, "phase" | "phoneActive">): boolean {
+  return !(s.phase === "connected" && s.phoneActive);
+}
+
+/** "1:42": what's left of a waiting clipboard's 2 minutes. */
+export function timeLeft(expiresAt: number, now: number): string {
+  const secs = Math.max(0, Math.ceil((expiresAt - now) / 1000));
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+}
+
+/** The note when the clipboard reached the phone or was dropped. Only ever after the phone said so. */
+export function clipEventMessage(e: TugboatClipEvent, phone: string | null): Say | null {
+  const p = clipPhone(phone);
+  if (e.state === "delivered") {
+    return { kind: "info", text: e.kind === "image" ? `The picture from your clipboard is on your ${p}` : `Your clipboard is on your ${p}` };
+  }
+  if (e.state === "expired") {
+    return { kind: "error", text: `Your clipboard wasn't sent: Tugboat wasn't opened on your ${p} within 2 minutes.` };
+  }
+  return null;
+}
+
+/** The Tugboat panel's line about the last clipboard sent, or null if none was. */
+export function clipLine(clip: TugboatClip | null, s: Pick<TugboatStatus, "phone" | "phoneActive">, now: number): string | null {
+  if (!clip) return null;
+  const p = clipPhone(s.phone);
+  const what = clip.kind === "image" ? "The picture from your clipboard" : "Your clipboard";
+  switch (clip.state) {
+    case "waiting":
+      return s.phoneActive
+        ? `Sending your clipboard to your ${p}…`
+        : `Your clipboard is waiting for Tugboat to open on your ${p} · ${timeLeft(clip.expiresAt, now)} left`;
+    case "delivered":
+      return `${what} is on your ${p}.`;
+    case "expired":
+      return `Not sent: Tugboat wasn't opened on your ${p} within 2 minutes.`;
+  }
+}
+
+/** Under the QR code: with a clipboard waiting, scanning is how it gets to the phone. */
+export function codeCaption(clip: TugboatClip | null): string {
+  return clip?.state === "waiting"
+    ? "Scan to receive your clipboard on your iPhone."
+    : "Scan with your phone's camera to send photos, files and text.";
+}
+
+/** The quiet note once text pasted on the phone is on this PC's clipboard (or couldn't go there). */
+export function phoneTextMessage(ok: boolean, phone: string | null): Say {
+  const p = phone ?? "phone";
+  return ok ? { kind: "info", text: `Copied from your ${p}` } : { kind: "error", text: `Text from your ${p} arrived, but couldn't go on the clipboard` };
 }

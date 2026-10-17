@@ -77,7 +77,7 @@ oneshot replies. `Shared` (`state.rs`) is the one `Arc` everything holds; `updat
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
 `pairing-request-closed`, `message`, `contacts`, `calls`, `open-latest-conversation`,
 `open-settings`, `toast-pressed`, `code-filled` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`,
-`game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`). The typed listener
+`tugboat-clip`, `tugboat-send-clipboard`, `game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`). The typed listener
 map is `EventPayloads` in `src/lib/ipc.ts`.
 
 ## Startup
@@ -160,6 +160,28 @@ phone page ─POST /api/up─► PUT chunks (XChaCha20-Poly1305, keys from HKDF 
   ─► emit "tugboat-status"
 ```
 
+**The shared clipboard (Tugboat)**
+
+```
+PC → phone: tray "Send clipboard to iPhone" (emits tugboat-send-clipboard) / Ctrl+K / the panel
+  ─► stores/tugboat.ts sendClipboard (one press, one send) ─► invoke tugboat_send_clipboard
+  ─► clipboard::read_for_sharing (Win32, off the main thread) ─► clip::prepare
+     (text ≤ 256 KB; a CF_DIB picture ─► dib.rs ─► PNG ≤ 64 MB / 40 MP, held in memory as a hidden offer)
+  ─► Tugboat starts if it's off ─► Session::send_clip ─► clip::Outbox (waiting, 2-minute window)
+  no phone on the page? the panel opens: the code says "Scan to receive your clipboard on your iPhone"
+phone page polls GET /api/state ─► { clip: { id, text | image } } ─► big Copy card
+  (a picture is fetched chunk by chunk like any offer) ─► POST /api/clip { id } (signed, sealed)
+  ─► Outbox: delivered, contents let go ─► emit "tugboat-clip" ─► "Your clipboard is on your iPhone"
+  2 minutes with no acknowledgement ─► dropped ─► "tugboat-clip" expired ─► "wasn't sent"
+phone → PC: "Paste to PC" ─► POST /api/text ─► clipboard::set_text_private (no history, no cloud
+  sync) ─► emit "tugboat-text" ─► "Copied from your iPhone"
+```
+
+The page is plain HTTP, so it isn't a secure context: browsers give it no `navigator.clipboard`.
+Copy uses `execCommand("copy")` inside the tap (`tugboat-page/clip.ts` `copyWith`), and if the browser
+refuses, the page selects the text and says to press and hold it. Pictures can't be put on the
+clipboard from such a page, so the page shows the picture to press and hold.
+
 **A game controller input (Tugboat Run)**
 
 ```
@@ -212,6 +234,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
 | `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone |
+| `tugboat/clip.rs`, `tugboat/dib.rs` | The shared clipboard: one waiting clipboard at a time, delivered only on the phone's word, dropped after 2 minutes, what can be sent; a clipboard bitmap to PNG |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
@@ -229,8 +252,9 @@ titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `send
 they re-render), `threadWindow` (long conversations render their newest texts first),
 `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: seeded spawning, collisions,
 scoring, the speed curve, inertia, merging the controls), `vips`, `weather`, `weblinks`, `whatsNew`.
-The phone page has its own: `tugboat-page/chunks`, `crypto` and `pad` (the controller's wire format,
-pacing and errors). Components and
+The phone page has its own: `tugboat-page/chunks`, `crypto`, `clip` (the PC's clipboard: when to
+acknowledge it, copying without a secure context) and `pad` (the controller's wire format, pacing
+and errors). Components and
 stores should call these rather than grow logic of their own.
 
 Integration tests: `tugboat/tests.rs` plays the phone over a real socket; `tug-bridge` tests run the
@@ -291,6 +315,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?speaker`, `/?spotifyoff` | Spotify on a Connect speaker / Spotify not connected |
 | `/?novolume` | A player that doesn't report its volume: no volume bar |
 | `/?tugboat` (`&android`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring / waiting for a phone / no usable network |
+| `/?tugboatclip` | Send clipboard to iPhone with no phone yet: the code with its clipboard hint, then a phone scanning it and taking the clipboard |
 | `/?game` | Tugboat Run, ready to start |
 | `/?gamephone` | Tugboat Run with the phone controller: Tugboat's code, a phone scanning it, then the phone starting the run and steering |
 | `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
@@ -300,9 +325,11 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then
-`http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`, `&game` for the controller). To drive the
-real page against a real server (real signing and sealing), see `manual_page` in `tugboat/tests.rs`
-(`TUGBOAT_GAME=1` opens the controller channel and prints each input).
+`http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`, `&game` for the controller, `&clip` /
+`&clipimage` for the PC's clipboard). To drive the real page against a real server (real signing and
+sealing), see `manual_page` in `tugboat/tests.rs` (`TUGBOAT_GAME=1` opens the controller channel and
+prints each input; `TUGBOAT_CLIP=1` sends a made-up clipboard; `TUGBOAT_HOST=<LAN address>` serves
+it where it isn't a secure context, as on a phone).
 
 ## Adding a feature safely
 

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use super::auth::{Auth, Authorized, Rejected};
+use super::clip::{self, Ack, ClipEvent, ClipState, ClipStatus, Outbox, Payload, Prepared};
 use super::crypto::{self, ad, Keys};
 use super::names;
 use super::pad::{self, Pad, PadEvent, PadReply};
@@ -47,6 +48,8 @@ pub trait Sink: Send + Sync {
     /// The game controller changed (steering, boost, the phone arriving or going). Only the game
     /// listens; nothing else acts on it.
     fn pad(&self, event: PadEvent);
+    /// The PC's clipboard reached the phone, or no phone took it in time and it was dropped.
+    fn clip(&self, event: ClipEvent);
 }
 
 /// Why an API request failed. Mapped to an HTTP status and a short code (never content).
@@ -154,6 +157,21 @@ pub struct TextRequest {
     pub text: String,
 }
 
+/// The phone has the PC's clipboard `id` (`POST /api/clip`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipAckRequest {
+    pub id: u32,
+}
+
+/// The PC's clipboard, as the page gets it: text, or a picture to fetch like a file on offer.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageClip {
+    pub id: u32,
+    pub text: Option<String>,
+    pub image: Option<PageOffer>,
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PageOffer {
@@ -178,6 +196,8 @@ pub struct StateReply {
     pub text: Option<PageText>,
     /// tug's game wants this phone as its controller: the page offers the controller.
     pub game: bool,
+    /// The PC's clipboard, sent with "Send clipboard to iPhone", until the phone says it has it.
+    pub clip: Option<PageClip>,
 }
 
 // --- What the Tugboat panel shows (mirrored in src/types/protocol.ts) ---
@@ -227,6 +247,8 @@ pub struct Snapshot {
     /// Chunks of a file from the phone arrived just now. An upload the phone abandoned (Safari
     /// closed mid-file) stays unfinished in `incoming`, so "unfinished" isn't "moving".
     pub receiving: bool,
+    /// The last clipboard sent to the phone (its kind and state, never its contents).
+    pub clip: Option<ClipStatus>,
 }
 
 /// A file offered to the phone that couldn't be added, and why (for the panel's message).
@@ -261,13 +283,30 @@ struct Upload {
     at: i64,
 }
 
+/// Where an offered file's bytes come from.
+enum Source {
+    /// A file on the PC (dragged onto tug or picked), read chunk by chunk.
+    File(PathBuf),
+    /// A picture from the clipboard, held in memory only while it's on its way (never on disk).
+    Memory(Arc<Vec<u8>>),
+}
+
 struct Offer {
     id: String,
     name: String,
-    path: PathBuf,
+    source: Source,
     size: u64,
     mime: &'static str,
     downloads: u32,
+    /// Part of a clipboard on its way to the phone: fetched through the clipboard card, not listed
+    /// with the files (on the page or in the panel), and withdrawn once delivered or dropped.
+    clip: bool,
+}
+
+impl Offer {
+    fn is_file(&self, path: &Path) -> bool {
+        matches!(&self.source, Source::File(p) if p == path)
+    }
 }
 
 struct State {
@@ -286,6 +325,9 @@ struct State {
     next_text_id: u32,
     /// The game controller channel, while tug's game asks for one.
     pad: Option<Pad>,
+    /// The PC's clipboard on its way to the phone (see clip.rs).
+    clip: Outbox,
+    next_clip_id: u32,
 }
 
 pub struct Session {
@@ -328,6 +370,8 @@ impl Session {
                 pc_text: None,
                 next_text_id: 1,
                 pad: None,
+                clip: Outbox::new(),
+                next_clip_id: 1,
             }),
             closed: AtomicBool::new(false),
             sink,
@@ -455,28 +499,121 @@ impl Session {
         self.keys.seal(&ad::response(&req.client, req.seq), &json)
     }
 
-    /// What the page polls for: files on offer and the latest text from the PC.
+    /// What the page polls for: files on offer, the latest text from the PC, and the PC's clipboard
+    /// while it's on its way.
     pub fn page_state(&self) -> StateReply {
-        let st = self.state();
+        let mut st = self.state();
+        let clip = match st.clip.for_page(Instant::now()) {
+            Some((id, Payload::Text(t))) => Some((id, Some(t.clone()), None)),
+            Some((id, Payload::Image { offer })) => Some((id, None, Some(offer.clone()))),
+            None => None,
+        };
+        let clip = clip.map(|(id, text, offer)| PageClip {
+            id,
+            text,
+            image: offer.and_then(|o| st.offers.iter().find(|x| x.id == o).map(page_offer)),
+        });
         StateReply {
-            offers: st
-                .offers
-                .iter()
-                .map(|o| PageOffer {
-                    id: o.id.clone(),
-                    name: o.name.clone(),
-                    size: o.size,
-                    chunk_size: OFFER_CHUNK,
-                    chunks: offer_plan(o.size).chunks(),
-                    mime: o.mime.to_string(),
-                })
-                .collect(),
+            offers: st.offers.iter().filter(|o| !o.clip).map(page_offer).collect(),
             text: st.pc_text.as_ref().map(|t| PageText {
                 id: t.id,
                 text: t.text.clone(),
             }),
             game: st.pad.is_some(),
+            clip,
         }
+    }
+
+    // --- The shared clipboard (see clip.rs) ---
+
+    /// Send the PC's clipboard to the phone (one press, one clipboard). A picture becomes an offer
+    /// held in memory, fetched like any file; a newer press replaces one the phone hasn't taken.
+    /// Returns the clipboard's id.
+    pub fn send_clip(&self, prepared: Prepared) -> u32 {
+        let (payload, offer, kind, size) = match prepared {
+            Prepared::Text(t) => {
+                let chars = t.chars().count();
+                (Payload::Text(t), None, "text", chars)
+            }
+            Prepared::Image(png) => {
+                let size = png.len();
+                let offer = Offer {
+                    id: crypto::new_id(),
+                    name: clip::IMAGE_NAME.to_string(),
+                    size: size as u64,
+                    source: Source::Memory(Arc::new(png)),
+                    mime: "image/png",
+                    downloads: 0,
+                    clip: true,
+                };
+                (
+                    Payload::Image {
+                        offer: offer.id.clone(),
+                    },
+                    Some(offer),
+                    "picture",
+                    size,
+                )
+            }
+        };
+        let mut st = self.state();
+        st.last_activity = Instant::now();
+        st.offers.extend(offer);
+        let id = st.next_clip_id;
+        st.next_clip_id += 1;
+        if let Some(old) = st.clip.send(id, payload, Instant::now(), now_ms()) {
+            withdraw(&mut st, &old);
+        }
+        drop(st);
+        // Lengths only, never the contents.
+        let unit = if kind == "text" { "chars" } else { "bytes" };
+        log::info!("tugboat: clipboard sent to the phone ({kind}, {size} {unit})");
+        self.sink.changed(true);
+        id
+    }
+
+    /// The phone says it has clipboard `id`. A picture counts only once the phone really fetched
+    /// all of it. The PC lets go of the contents straight away.
+    pub fn clip_ack(&self, id: u32) -> Result<(), ApiError> {
+        let mut st = self.state();
+        if let Some((waiting, offer)) = st.clip.waiting_offer() {
+            if waiting == id && st.offers.iter().any(|o| o.id == offer && o.downloads == 0) {
+                return Err(ApiError::Incomplete);
+            }
+        }
+        match st.clip.ack(id, Instant::now()) {
+            Ack::Delivered { kind, freed } => {
+                if let Some(offer) = freed {
+                    st.offers.retain(|o| o.id != offer);
+                }
+                drop(st);
+                log::info!("tugboat: the phone has the clipboard");
+                self.sink.clip(ClipEvent {
+                    kind,
+                    state: ClipState::Delivered,
+                });
+                self.sink.changed(true);
+                Ok(())
+            }
+            Ack::Already => Ok(()),
+            Ack::Unknown => Err(ApiError::NotFound),
+        }
+    }
+
+    /// Drop a clipboard no phone took within two minutes (called every couple of seconds).
+    pub fn clip_tick(&self) {
+        let mut st = self.state();
+        let Some(dropped) = st.clip.tick(Instant::now()) else {
+            return;
+        };
+        withdraw(&mut st, &dropped);
+        drop(st);
+        log::info!("tugboat: no phone took the clipboard in time, dropped it");
+        self.sink.clip(ClipEvent {
+            kind: dropped.kind(),
+            state: ClipState::Expired,
+        });
+        self.sink.changed(true);
     }
 
     // --- The game controller (see pad.rs) ---
@@ -806,21 +943,40 @@ impl Session {
 
     /// One sealed chunk of a file on offer.
     pub fn read_offer_chunk(&self, id: &str, index: u32) -> Result<Vec<u8>, ApiError> {
-        let (path, size) = {
+        enum Src {
+            File(PathBuf),
+            Memory(Arc<Vec<u8>>),
+        }
+        let (from, size) = {
             let st = self.state();
             let o = st.offers.iter().find(|o| o.id == id).ok_or(ApiError::NotFound)?;
-            (o.path.clone(), o.size)
+            let from = match &o.source {
+                Source::File(p) => Src::File(p.clone()),
+                Source::Memory(b) => Src::Memory(b.clone()),
+            };
+            (from, o.size)
         };
         let plan = offer_plan(size);
         let len = plan.expected_len(index).ok_or(ApiError::BadRequest)?;
-        let mut f = File::open(&path).map_err(|_| ApiError::Changed)?;
-        if f.metadata().map(|m| m.len()).ok() != Some(size) {
-            return Err(ApiError::Changed);
-        }
-        let mut buf = vec![0u8; len];
-        f.seek(SeekFrom::Start(plan.offset(index)))
-            .and_then(|_| f.read_exact(&mut buf))
-            .map_err(|_| ApiError::Changed)?;
+        let start = plan.offset(index);
+        let buf = match from {
+            Src::Memory(bytes) => usize::try_from(start)
+                .ok()
+                .and_then(|s| bytes.get(s..s + len))
+                .ok_or(ApiError::BadRequest)?
+                .to_vec(),
+            Src::File(path) => {
+                let mut f = File::open(&path).map_err(|_| ApiError::Changed)?;
+                if f.metadata().map(|m| m.len()).ok() != Some(size) {
+                    return Err(ApiError::Changed);
+                }
+                let mut buf = vec![0u8; len];
+                f.seek(SeekFrom::Start(start))
+                    .and_then(|_| f.read_exact(&mut buf))
+                    .map_err(|_| ApiError::Changed)?;
+                buf
+            }
+        };
         let sealed = self.keys.seal(&ad::down(id, index), &buf);
         let mut st = self.state();
         let urgent = if index + 1 == plan.chunks() {
@@ -905,22 +1061,26 @@ impl Session {
                 });
                 continue;
             }
-            added.push(Offer {
-                id: crypto::new_id(),
-                mime: mime_for(&name),
-                name,
-                path: path.clone(),
-                size: meta.len(),
-                downloads: 0,
-            });
+            added.push((
+                path,
+                Offer {
+                    id: crypto::new_id(),
+                    mime: mime_for(&name),
+                    name,
+                    source: Source::File(path.clone()),
+                    size: meta.len(),
+                    downloads: 0,
+                    clip: false,
+                },
+            ));
         }
         let mut st = self.state();
         st.last_activity = Instant::now();
-        for o in added {
-            if st.offers.iter().any(|x| x.path == o.path) {
+        for (path, o) in added {
+            if st.offers.iter().any(|x| x.is_file(path)) {
                 continue;
             }
-            if st.offers.len() >= MAX_OFFERS {
+            if st.offers.iter().filter(|x| !x.clip).count() >= MAX_OFFERS {
                 skipped.push(Skipped {
                     name: o.name,
                     reason: SkipReason::TooMany,
@@ -1000,6 +1160,7 @@ impl Session {
             outgoing: st
                 .offers
                 .iter()
+                .filter(|o| !o.clip)
                 .map(|o| TugboatOffer {
                     id: o.id.clone(),
                     name: o.name.clone(),
@@ -1011,6 +1172,7 @@ impl Session {
             sent_text: st.pc_text.as_ref().map(|t| t.text.clone()),
             sending: st.downloading.values().any(|t| t.elapsed() < MOVING),
             receiving: st.last_upload.is_some_and(|t| t.elapsed() < MOVING),
+            clip: st.clip.status(),
         }
     }
 
@@ -1022,6 +1184,26 @@ impl Session {
             .iter()
             .filter(|u| matches!(u.phase, Phase::Sending))
             .count()
+    }
+}
+
+fn page_offer(o: &Offer) -> PageOffer {
+    PageOffer {
+        id: o.id.clone(),
+        name: o.name.clone(),
+        size: o.size,
+        chunk_size: OFFER_CHUNK,
+        chunks: offer_plan(o.size).chunks(),
+        mime: o.mime.to_string(),
+    }
+}
+
+/// A clipboard is done with (delivered, dropped or replaced): withdraw its picture, if it had one,
+/// so its bytes go too.
+fn withdraw(st: &mut State, payload: &Payload) {
+    if let Some(offer) = payload.offer() {
+        st.offers.retain(|o| o.id != offer);
+        st.downloading.remove(offer);
     }
 }
 

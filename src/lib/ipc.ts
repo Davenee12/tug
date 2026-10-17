@@ -14,6 +14,7 @@ import type {
   DeviceStatus,
   DevToolsConfirm,
   DevToolsStatus,
+  TugboatClipEvent,
   TugboatSkipped,
   TugboatStatus,
   TugboatTextArrived,
@@ -166,6 +167,8 @@ export const api = {
   tugboatRemoveOffer: (id: string) => invoke<void>("tugboat_remove_offer", { id }),
   /** Text for the phone to copy (empty clears it). */
   tugboatSendText: (text: string) => invoke<void>("tugboat_send_text", { text }),
+  /** "Send clipboard to iPhone": the clipboard as it is now, held for the phone for up to 2 minutes. */
+  tugboatSendClipboard: () => invoke<TugboatStatus>("tugboat_send_clipboard"),
   /** Open the Tugboat folder, or select a file Tugboat saved. */
   tugboatOpenFolder: (path: string | null) => invoke<void>("tugboat_open_folder", { path }),
   // --- Tugboat Run's phone controller ---
@@ -209,6 +212,10 @@ interface EventPayloads {
   "tugboat-text": TugboatTextArrived;
   /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */
   "tugboat-dropped": TugboatSkipped[];
+  /** The PC's clipboard reached the phone, or no phone took it within 2 minutes. */
+  "tugboat-clip": TugboatClipEvent;
+  /** The tray's "Send clipboard to iPhone" (the window sends it, like Ctrl+K). */
+  "tugboat-send-clipboard": null;
   /** The phone controller changed (Tugboat Run only). */
   "game-pad": GamePad;
   "devtools-status": DevToolsStatus;

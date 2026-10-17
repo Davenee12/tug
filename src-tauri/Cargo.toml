@@ -48,6 +48,9 @@ hkdf = "0.12"
 hmac = "0.12"
 sha2 = "0.10"
 qrcode = { version = "0.14", default-features = false }
+# Tugboat's shared clipboard: a picture on the clipboard goes to the phone as a PNG. Already in the
+# tree through Tauri's icon handling, so this adds no new crate.
+png = "0.18"
 tauri-plugin-dialog = "2"
 # Developer tools (v0.5.12): the local bridge the `tug` command and MCP server talk to.
 tug-bridge = { path = "crates/tug-bridge" }
