@@ -301,8 +301,11 @@ Play Tugboat Run is left out while Show games is off.
   case, "capitalize", "all caps", and "literal" to type a command word as a word). In code editors
   and terminals (VS Code, Cursor, Visual Studio, JetBrains IDEs, Windows Terminal, PowerShell…)
   there are no sentence capitals; elsewhere the first word is capitalised.
-- A spoken new line is typed as **Shift+Enter**, so it never sends a chat message; in a terminal
-  it's left out, so dictation never runs a command by itself.
+- A spoken **new line** starts a new line only in Notepad, WordPad, Word, Outlook, OneNote and the
+  Teams, Slack and Discord message boxes (typed as Shift+Enter, which never sends there).
+  Everywhere else, including VS Code and other code editors, JetBrains IDEs, terminals, PuTTY and
+  browsers, it's typed as a plain space, never Enter or Shift+Enter, so dictation never sends a
+  message, accepts a suggestion or runs a command by itself.
 - A small **Listening…** pill shows at the bottom of the screen while you hold the keys, then
   **Typing…**; if something's wrong it says so there ("Microphone blocked", "Didn't catch that").
   One hold types once; letting go early or switching windows never leaves anything stuck.

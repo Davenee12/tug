@@ -8,9 +8,12 @@
 //! - **Casing commands**: "camel case user id" → `userId`, also snake, pascal, kebab and constant
 //!   case, "capitalize" and "all caps" for one word, and "literal" to type a command word as a word.
 //! - **Where it's going**: in a code editor or terminal (by the foreground program's name) the
-//!   recognizer's sentence capitals are undone; elsewhere the first word is capitalised. In a
-//!   terminal "new line" is left out, so dictation can never run a command by itself; elsewhere a
-//!   new line is typed as Shift+Enter (a line break in editors and chat boxes, never Send).
+//!   recognizer's sentence capitals are undone; elsewhere the first word is capitalised. "New
+//!   line" types a line break (Shift+Enter) only in a program known to take it as one and never as
+//!   Send: Notepad, WordPad, Word, Outlook, OneNote, Teams, Slack, Discord
+//!   ([`line_breaks_for_process`]). Everywhere else (code editors, IDEs, terminals, PuTTY,
+//!   browsers, anything unknown) it's a plain space, so dictation never presses Enter or
+//!   Shift+Enter where that could send, accept a suggestion or run a command.
 //!
 //! Nothing here is logged: the text is the person's.
 
@@ -78,16 +81,64 @@ const TERMINALS: &[&str] = &[
     "tabby.exe",
     "warp.exe",
     "kitty.exe",
+    "putty.exe",
 ];
 
-/// The style for a foreground program, from its path or file name ("C:\…\Code.exe" or "Code.exe").
-pub fn style_for_process(exe: &str) -> Style {
-    let name = exe
-        .rsplit(['\\', '/'])
+/// Prose and chat programs where Shift+Enter is a line break and never Send, by executable name
+/// (lowercase): the only places a spoken "new line" types one.
+const LINE_BREAK_APPS: &[&str] = &[
+    "notepad.exe",
+    "wordpad.exe",
+    "winword.exe",
+    // Classic Outlook and the new one.
+    "outlook.exe",
+    "olk.exe",
+    "onenote.exe",
+    "onenoteim.exe",
+    // New Teams and classic Teams.
+    "ms-teams.exe",
+    "teams.exe",
+    "slack.exe",
+    "discord.exe",
+    "discordptb.exe",
+    "discordcanary.exe",
+];
+
+/// Where the words are going: how to shape them, and whether "new line" may type a line break.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Target {
+    pub style: Style,
+    /// "New line" types Shift+Enter here; otherwise it's a plain space.
+    pub line_breaks: bool,
+}
+
+/// The file name, lowercase, from a path or a file name ("C:\…\Code.exe" or "Code.exe").
+fn exe_name(exe: &str) -> String {
+    exe.rsplit(['\\', '/'])
         .next()
         .unwrap_or(exe)
         .trim()
-        .to_ascii_lowercase();
+        .to_ascii_lowercase()
+}
+
+/// Whether a spoken "new line" types a line break in this program: only in [`LINE_BREAK_APPS`].
+/// Anywhere else Shift+Enter could send, accept a suggestion or run something.
+pub fn line_breaks_for_process(exe: &str) -> bool {
+    LINE_BREAK_APPS.contains(&exe_name(exe).as_str())
+}
+
+/// Everything about where the words are going, from the foreground program.
+pub fn target_for_process(exe: &str) -> Target {
+    let style = style_for_process(exe);
+    Target {
+        style,
+        line_breaks: style != Style::Terminal && line_breaks_for_process(exe),
+    }
+}
+
+/// The style for a foreground program, from its path or file name ("C:\…\Code.exe" or "Code.exe").
+pub fn style_for_process(exe: &str) -> Style {
+    let name = exe_name(exe);
     if TERMINALS.contains(&name.as_str()) {
         Style::Terminal
     } else if EDITORS.contains(&name.as_str()) {
@@ -554,11 +605,13 @@ fn set_first(w: &str, upper: bool) -> String {
 }
 
 /// Turn what the recognizer heard into the text to type, for where it's going.
-pub fn format(raw: &str, style: Style) -> String {
+pub fn format(raw: &str, target: Target) -> String {
+    let style = target.style;
     let toks = tokens(raw);
     let mut items = items(&toks, style);
-    if style == Style::Terminal {
-        // Enter runs the command: in a terminal, a spoken new line is left out.
+    if !target.line_breaks || style == Style::Terminal {
+        // Not a known prose or chat box: a spoken (or recognized) new line becomes the space
+        // between its neighbours, never a keystroke that could send or run something.
         items.retain(|i| !matches!(i, Item::NewLine(_)));
     }
     settle_quotes(&mut items);
@@ -634,10 +687,11 @@ mod tests {
     use super::*;
 
     fn code(s: &str) -> String {
-        format(s, Style::Editor)
+        format(s, target_for_process("code.exe"))
     }
     fn prose(s: &str) -> String {
-        format(s, Style::Prose)
+        // A prose box that takes line breaks (Notepad, Outlook, a chat app).
+        format(s, target_for_process("notepad.exe"))
     }
 
     #[test]
@@ -714,7 +768,8 @@ mod tests {
         assert_eq!(code("print (quote hello quote)"), r#"print("hello")"#);
         assert_eq!(code("const cattle case user ID equals five;"), "const userId = five;");
         assert_eq!(prose("hello, how are you?\nThanks."), "Hello, how are you?\nThanks.");
-        assert_eq!(code("hello, how are you?\nThanks."), "hello, how are you?\nthanks.");
+        // In a code editor the recognizer's line break is a space (no Shift+Enter there).
+        assert_eq!(code("hello, how are you?\nThanks."), "hello, how are you? thanks.");
     }
 
     #[test]
@@ -754,13 +809,80 @@ mod tests {
     }
 
     #[test]
+    fn new_line_breaks_the_line_only_in_known_prose_and_chat_apps() {
+        // Prose and chat boxes where Shift+Enter is a line break, never Send.
+        for exe in [
+            r"C:\Windows\System32\notepad.exe",
+            r"C:\Program Files\WindowsApps\Microsoft.WindowsNotepad_11.0_x64\Notepad\Notepad.exe",
+            "wordpad.exe",
+            "WINWORD.EXE",
+            "OUTLOOK.EXE",
+            "olk.exe",
+            "ONENOTE.EXE",
+            "ms-teams.exe",
+            "Teams.exe",
+            "slack.exe",
+            "Discord.exe",
+        ] {
+            assert!(line_breaks_for_process(exe), "{exe}");
+            assert_eq!(
+                format("on my way new line see you soon", target_for_process(exe)),
+                "On my way\nSee you soon",
+                "{exe}"
+            );
+        }
+        // Everywhere else a plain space: code editors, JetBrains IDEs, terminals, PuTTY,
+        // browsers, and anything tug doesn't know.
+        for exe in [
+            r"C:\Users\x\AppData\Local\Programs\Microsoft VS Code\Code.exe",
+            "cursor.exe",
+            "devenv.exe",
+            "idea64.exe",
+            "pycharm64.exe",
+            "rider64.exe",
+            "WindowsTerminal.exe",
+            "cmd.exe",
+            "pwsh.exe",
+            "putty.exe",
+            "chrome.exe",
+            "msedge.exe",
+            "firefox.exe",
+            "someapp.exe",
+            "",
+        ] {
+            assert!(!line_breaks_for_process(exe), "{exe}");
+            let typed = format("first new line second new paragraph third", target_for_process(exe));
+            assert!(!typed.contains('\n'), "{exe}: {typed:?}");
+            assert!(
+                !strokes(&typed).contains(&Stroke::NewLine),
+                "{exe}: never Enter or Shift+Enter"
+            );
+            assert_eq!(typed.to_lowercase(), "first second third", "{exe}");
+        }
+        // A line break the recognizer wrote itself is a space too.
+        assert_eq!(format("hello\nworld", target_for_process("chrome.exe")), "Hello world");
+        assert_eq!(format("x = 1\ny", target_for_process("code.exe")), "x = 1 y");
+        // A sentence still starts with a capital after the space.
+        assert_eq!(
+            format("this is great period new line thanks", target_for_process("chrome.exe")),
+            "This is great. Thanks"
+        );
+    }
+
+    #[test]
+    fn putty_is_a_terminal() {
+        assert_eq!(style_for_process(r"C:\Program Files\PuTTY\putty.exe"), Style::Terminal);
+        assert_eq!(format("Git status", target_for_process("putty.exe")), "git status");
+    }
+
+    #[test]
     fn terminals_never_get_a_new_line() {
         assert_eq!(
-            format("git status new line rm -rf", Style::Terminal),
+            format("git status new line rm -rf", target_for_process("pwsh.exe")),
             "git status rm -rf"
         );
-        assert_eq!(format("ls\nrm", Style::Terminal), "ls rm");
-        assert_eq!(format("Git status", Style::Terminal), "git status");
+        assert_eq!(format("ls\nrm", target_for_process("pwsh.exe")), "ls rm");
+        assert_eq!(format("Git status", target_for_process("pwsh.exe")), "git status");
     }
 
     #[test]

@@ -281,7 +281,7 @@ hold the shortcut ─WM_HOTKEY─► tug-voice-key: note the window in front ─
   wave-in (16 kHz mono, memory only) while GetAsyncKeyState says the key is down, + 200 ms
   ─► too short / silent? stop ─► SAPI in-process recognizer, dictation, from a memory stream
   ─► voice::text::format (spoken symbols, casing, style from the program's .exe name)
-  ─► keys let go, same window still in front? ─► SendInput (Unicode; new line = Shift+Enter)
+  ─► keys let go, same window still in front? ─► SendInput (Unicode; new line = Shift+Enter in known prose and chat apps, a space elsewhere)
   ─► emit "voice-typed" (the outcome only) ─► indicator hides or says what went wrong
 ```
 
@@ -324,7 +324,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
 | `share_privacy/mod.rs` | Hide previews while sharing or presenting: which signals mean someone may be watching (shell state confirmed by the foreground window covering its monitor, duplicate display, known share and slideshow windows by program + class), which one names the reason, the log line, what a hidden pop-up says, and that no answer means hidden (which looks to join, start or give up on), which pop-ups to take back when hiding starts |
-| `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, window changed); spoken symbols, casing commands, code vs prose style by program, keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
+| `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, window changed); spoken symbols, casing commands, code vs prose style and where "new line" may break a line, by program; keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
 
 Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attachments`

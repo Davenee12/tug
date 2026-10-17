@@ -379,7 +379,7 @@ fn hold(press: &Press, engine: &mut Option<sapi::Sapi>, language: Option<&str>) 
         }
     };
     let recognized_ms = t0.elapsed().as_millis();
-    let typed = text::format(&heard, text::style_for_process(&target.exe));
+    let typed = text::format(&heard, text::target_for_process(&target.exe));
 
     // Held Ctrl or Alt would turn the characters into shortcuts.
     crate::code_fill::wait_for_release();

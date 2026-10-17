@@ -105,8 +105,9 @@ GetAsyncKeyState; no keyboard hook, so tug never sees other keys). Audio stays i
 one hold and goes to Windows' offline SAPI recognizer, never to the network or a file; tug adds no
 network access, download or CSP change for it. The text is typed only into the window that was in
 front when the shortcut was pressed, after the shortcut's keys are let go; a spoken new line is
-Shift+Enter (which doesn't send in chat boxes) and is dropped entirely in terminals, so dictation
-can't run a command by itself. Logs record lengths and durations, never the words. Anyone who can
+Shift+Enter only in a short list of prose and chat apps where that never sends (Notepad, WordPad,
+Word, Outlook, OneNote, Teams, Slack, Discord) and a plain space everywhere else (code editors,
+terminals, browsers), so dictation can't send, accept a suggestion or run a command by itself. Logs record lengths and durations, never the words. Anyone who can
 speak near the PC while the person holds the shortcut can put words into the focused window, like
 anyone at the keyboard.
 

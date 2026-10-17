@@ -77,8 +77,9 @@ onMounted(() => void voice.refresh());
         </p>
       </div>
       <p class="mt-2 text-[12px] text-muted-soft">
-        Also pascal, kebab and constant case. In code editors and terminals, tug leaves out sentence capitals, and in a terminal
-        “new line” is skipped so nothing runs by itself. Spoken commands work in English.
+        Also pascal, kebab and constant case. In code editors and terminals, tug leaves out sentence capitals. “New line” starts a
+        new line only in Notepad, WordPad, Word, Outlook, OneNote, Teams, Slack and Discord; everywhere else, including code
+        editors, terminals and browsers, it types a space, so nothing is sent or run by itself. Spoken commands work in English.
       </p>
     </div>
   </div>

@@ -318,8 +318,8 @@ mod tests {
             assert!(!heard.trim().is_empty());
             println!(
                 "   as code: {:?}   as prose: {:?}",
-                crate::voice::text::format(&heard, crate::voice::text::Style::Editor),
-                crate::voice::text::format(&heard, crate::voice::text::Style::Prose)
+                crate::voice::text::format(&heard, crate::voice::text::target_for_process("code.exe")),
+                crate::voice::text::format(&heard, crate::voice::text::target_for_process("notepad.exe"))
             );
         }
         // Silence: nothing, not an error.
