@@ -233,12 +233,6 @@ const knob = computed(() => `${6 + (steer.value + 1) * 44}%`);</script>
     <header class="flex items-center gap-2.5">
       <TugMark :size="26" class="text-ink" />
       <h1 class="headline text-[24px] leading-none">Tugboat Run</h1>
-      <span
-        v-if="player"
-        :class="['inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[13px] font-medium text-on-primary', teal ? 'bg-accent-teal' : 'bg-primary']"
-      >
-        Player {{ player }}
-      </span>
       <span class="ml-auto inline-flex items-center gap-1.5 rounded-full bg-card px-3 py-1 text-[13px] font-medium text-body" role="status">
         <span
           :class="[
@@ -252,6 +246,14 @@ const knob = computed(() => `${6 + (steer.value + 1) * 44}%`);</script>
         <X :size="20" />
       </button>
     </header>
+
+    <!-- In a race: which player this phone is, in its boat's colour. -->
+    <p
+      v-if="player"
+      :class="['mt-3 rounded-xl px-3 py-1.5 text-center text-[15px] font-medium text-on-primary', teal ? 'bg-accent-teal' : 'bg-primary']"
+    >
+      You're Player {{ player }}
+    </p>
 
     <div class="mt-3 flex min-h-0 flex-1 flex-col gap-3 landscape:flex-row">
       <!-- Steering: touch and slide; further from the middle turns harder. -->
