@@ -1,7 +1,8 @@
 // Settings › Developer tools: copy for each switch, the copy-paste setup for each AI tool, and
 // small time helpers. Pure, so it's all unit-tested.
 
-import type { DevToolsPermissionKey } from "../types/protocol";
+import type { DevToolsConfirmFile, DevToolsPermissionKey } from "../types/protocol";
+import { formatSize } from "../tugboat-page/chunks";
 
 /** What each switch lets AI tools (and the `tug` command) do, in plain words. */
 export const PERMISSION_HELP: Record<DevToolsPermissionKey, string> = {
@@ -12,7 +13,8 @@ export const PERMISSION_HELP: Record<DevToolsPermissionKey, string> = {
   phone_status: "See whether your phone is connected, its battery, and what's playing.",
   media: "Play, pause and skip music on your phone.",
   send_text: "Ask to text someone. You always see the message first, and it's sent only if you click Send.",
-  tugboat_send: "Send files from this PC to your phone with Tugboat (tug boat).",
+  tugboat_send:
+    "Ask to send files from this PC to your iPhone with Tugboat (tug boat). You always see which files first, and they're sent only if you click Send.",
 };
 
 export interface SetupSnippet {
@@ -98,4 +100,16 @@ export function sendArmed(shownAt: number, now: number, windowFocused: boolean):
 export function askerName(tool: string): string {
   const t = tool.trim();
   return t.length ? t : "An AI tool";
+}
+
+/** The file card's question: "Send report.pdf (2.1 MB) to your iPhone?" or "Send 3 files (4.2 MB) to your iPhone?" */
+export function filesQuestion(files: DevToolsConfirmFile[]): string {
+  const total = files.reduce((sum, f) => sum + f.size, 0);
+  const what = files.length === 1 ? files[0].name : `${files.length} files`;
+  return `Send ${what} (${formatSize(total)}) to your iPhone?`;
+}
+
+/** Where a file on the card comes from: its folder, or what was piped into the command. */
+export function fileFrom(file: DevToolsConfirmFile): string {
+  return file.folder ?? "Piped into the tug command";
 }

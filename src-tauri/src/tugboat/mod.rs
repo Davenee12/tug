@@ -6,7 +6,7 @@
 //! Lifetime: the server runs only while Tugboat is open, on the one address the phone can reach
 //! (`net.rs`). It stops when the panel closes, when tug quits, when tug's window hides to the tray
 //! (once any transfer in progress finishes), or after 10 minutes without a request; the secret is
-//! useless after that. Unfinished uploads are removed on start and stop. Tugboat Run can also start
+//! useless after that. Unfinished uploads are removed on start and stop. tug's games can also start
 //! it, to use the phone as a game controller (`pad.rs`); the same rules then apply. A two-player
 //! game also shows a Player 2 code, `http://<address>:<port>/#g.<guest secret>`: a key derived from
 //! the secret that only steers (see `crypto::guest_secret` and `auth.rs`).
@@ -21,7 +21,8 @@ pub mod auth;
 pub mod clip;
 pub mod crypto;
 mod dib;
-mod names;
+pub mod held;
+pub mod names;
 pub mod net;
 pub mod pad;
 mod page;
@@ -65,7 +66,7 @@ const TICK: Duration = Duration::from_secs(2);
 const NET_EVERY: u32 = 3;
 /// Progress events are coalesced to at most one per this long.
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
-/// The game controller changed: `pad::PadEvent`. Only Tugboat Run listens.
+/// The game controller changed: `pad::PadEvent`. Only the open game listens.
 pub const PAD_EVENT: &str = "game-pad";
 /// How often an open controller channel looks for a phone that went quiet. The watch exists only
 /// while the game has the channel open.
@@ -174,6 +175,8 @@ pub struct TugboatStatus {
     /// The last clipboard sent to the phone: its kind and whether the phone has it, never its
     /// contents.
     pub clip: Option<clip::ClipStatus>,
+    /// Files `tug boat` (or an AI tool) is holding for the phone: names and when the hold ends.
+    pub held: Option<held::HeldStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -447,6 +450,7 @@ impl TugboatService {
                 receiving: false,
                 ended,
                 clip: None,
+                held: None,
             };
         };
         let snap = session.snapshot();
@@ -486,6 +490,7 @@ impl TugboatService {
             receiving: snap.receiving,
             ended: None,
             clip: snap.clip,
+            held: snap.held,
         }
     }
 
@@ -624,6 +629,8 @@ impl TugboatService {
             }
             // A clipboard no phone took within two minutes is dropped, never kept waiting.
             session.clip_tick();
+            // Files held for the phone whose time is up are withdrawn, even if nobody's waiting.
+            session.held_tick();
             let active = session.phone_active();
             let sending = session.sending();
             let receiving = session.receiving();
@@ -705,6 +712,11 @@ impl TugboatService {
         tauri::async_runtime::spawn(async move { svc.stop(Some(Ended::Hidden)).await });
     }
 
+    /// Files are moving to or from the phone right now (an update restart waits for them).
+    pub fn transferring(&self) -> bool {
+        self.session().is_some_and(|s| s.transferring())
+    }
+
     /// The window is back: a transfer that outlived the hide can keep Tugboat open after all.
     pub fn window_shown(&self) {
         if let Some(r) = lock(&self.inner.running).as_mut() {
@@ -753,6 +765,34 @@ impl TugboatService {
         }
     }
 
+    /// `tug boat` / `send_file_to_phone`, after the person clicked Send: open Tugboat if it's off
+    /// (so its code can be scanned) and hold the files for the phone for `window`. Returns the
+    /// session and the hold, to ask after it (`Session::held`).
+    pub async fn hold(&self, files: Vec<session::Outgoing>, window: Duration) -> Result<(Arc<Session>, u32), String> {
+        if self.session().is_none() {
+            self.start().await?;
+        }
+        let session = self.session().ok_or("Tugboat isn't open.")?;
+        let id = session
+            .hold(files, window)
+            .ok_or("Tugboat already has as many files on offer as it can show. Remove some in tug and try again.")?;
+        Ok((session, id))
+    }
+
+    /// Show the Tugboat panel (its code, with nothing waiting on the phone's page yet). Uses the
+    /// same event as files dropped onto the window, with nothing skipped.
+    /// Withdraw every file still held for the phone (see `Session::cancel_all_holds`), if Tugboat
+    /// is open.
+    pub fn cancel_all_holds(&self) {
+        if let Some(session) = self.session() {
+            session.cancel_all_holds();
+        }
+    }
+
+    pub fn show_panel(&self) {
+        let _ = self.inner.app.emit(DROPPED_EVENT, Vec::<Skipped>::new());
+    }
+
     pub fn send_text(&self, text: &str) -> Result<(), String> {
         self.session().ok_or("Tugboat isn't open.")?.set_pc_text(text)
     }
@@ -778,16 +818,17 @@ impl TugboatService {
         Ok(self.status())
     }
 
-    /// Tugboat Run wants the phone as a controller (or two phones, for two players): open Tugboat if
-    /// it's off (same session, same code, same rules), open the controller channel, and watch it for
-    /// a phone that goes quiet. Asking again changes how many phones.
-    pub async fn pad_open(&self, players: u8) -> Result<TugboatStatus, String> {
+    /// One of tug's games (`game`) wants the phone as a controller (or two phones, for two players):
+    /// open Tugboat if it's off (same session, same code, same rules), open the controller channel,
+    /// and watch it for a phone that goes quiet. Asking again changes how many phones (or which
+    /// game).
+    pub async fn pad_open(&self, players: u8, game: pad::GameId) -> Result<TugboatStatus, String> {
         if self.session().is_none() {
             self.start().await?;
         }
         let session = self.session().ok_or("Tugboat isn't open.")?;
         let wanted_guest = session.wants_guest();
-        if session.pad_open(players) {
+        if session.pad_open(players, game) {
             let watched = session.clone();
             tauri::async_runtime::spawn(async move {
                 loop {

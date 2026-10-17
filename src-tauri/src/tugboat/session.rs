@@ -15,8 +15,9 @@ use serde::{Deserialize, Serialize};
 use super::auth::{Auth, Authorized, GuestPolicy, Rejected};
 use super::clip::{self, Ack, ClipEvent, ClipState, ClipStatus, Outbox, Payload, Prepared};
 use super::crypto::{self, ad, Keys};
+use super::held::{self, HeldStatus, Holds, Verdict};
 use super::names;
-use super::pad::{self, Pad, PadEvent, PadReply, SeatNo, FIRST, SECOND};
+use super::pad::{self, GameId, Pad, PadEvent, PadReply, SeatNo, FIRST, SECOND};
 use super::upload::{Plan, PlanError, Received};
 
 /// Largest file the PC offers to the phone: the page assembles it in memory before saving.
@@ -272,6 +273,9 @@ pub struct StateReply {
     pub text: Option<PageText>,
     /// tug's game wants this phone as its controller: the page offers the controller.
     pub game: bool,
+    /// Which game, while `game` is true, so the page shows that game's buttons.
+    #[serde(rename = "gameId", default, skip_serializing_if = "Option::is_none")]
+    pub game_id: Option<GameId>,
     /// The PC's clipboard, sent with "Send clipboard to iPhone", until the phone says it has it.
     pub clip: Option<PageClip>,
     /// This phone is the second controller of a two-player game: it only ever steers (no files, no
@@ -329,6 +333,16 @@ pub struct Snapshot {
     pub receiving: bool,
     /// The last clipboard sent to the phone (its kind and state, never its contents).
     pub clip: Option<ClipStatus>,
+    /// Files `tug boat` (or an AI tool) is holding for the phone, by name.
+    pub held: Option<HeldStatus>,
+}
+
+/// A file for `Session::hold`, already checked (`devtools/outgoing.rs`).
+pub enum Outgoing {
+    /// A file on the PC, read chunk by chunk when the phone fetches it.
+    File { path: PathBuf, name: String, size: u64 },
+    /// What `tug boat -` read from stdin, held in memory (never written to disk by tug).
+    Memory { name: String, bytes: Arc<Vec<u8>> },
 }
 
 /// A file offered to the phone that couldn't be added, and why (for the panel's message).
@@ -416,6 +430,8 @@ struct State {
     next_clip_id: u32,
     /// When the second phone of a two-player game was last heard from.
     guest_seen: Option<Instant>,
+    /// Files held for the phone by `tug boat` and AI tools (see held.rs).
+    holds: Holds,
 }
 
 pub struct Session {
@@ -474,6 +490,7 @@ impl Session {
                 clip: Outbox::new(),
                 next_clip_id: 1,
                 guest_seen: None,
+                holds: Holds::default(),
             }),
             closed: AtomicBool::new(false),
             sink,
@@ -739,10 +756,12 @@ impl Session {
     pub fn page_state(&self, req: &Authorized) -> StateReply {
         let mut st = self.state();
         if req.guest {
+            let race = st.pad.as_ref().filter(|p| p.open_for(SECOND));
             return StateReply {
                 offers: Vec::new(),
                 text: None,
-                game: st.pad.as_ref().is_some_and(|p| p.open_for(SECOND)),
+                game: race.is_some(),
+                game_id: race.map(Pad::game),
                 clip: None,
                 guest: true,
             };
@@ -764,6 +783,7 @@ impl Session {
                 text: t.text.clone(),
             }),
             game: st.pad.is_some(),
+            game_id: st.pad.as_ref().map(Pad::game),
             clip,
             guest: false,
         }
@@ -869,14 +889,18 @@ impl Session {
 
     // --- The game controller (see pad.rs) ---
 
-    /// tug's game wants a controller (`players` 1), or two (a two-player game, 2): the phone pages
-    /// offer it at their next check-in. Asking again changes how many; going back to one lets the
-    /// second phone go (the game hears it's gone). Returns whether the channel was newly opened
-    /// (the caller starts watching it).
-    pub fn pad_open(&self, players: u8) -> bool {
+    /// tug's game (`game`) wants a controller (`players` 1), or two (a two-player game, 2): the
+    /// phone pages offer it at their next check-in, with that game's buttons. Asking again changes
+    /// how many (or which game); going back to one lets the second phone go (the game hears it's
+    /// gone). Returns whether the channel was newly opened (the caller starts watching it).
+    pub fn pad_open(&self, players: u8, game: GameId) -> bool {
         let mut st = self.state();
         st.last_activity = Instant::now();
         if let Some(p) = st.pad.as_mut() {
+            if p.game() != game {
+                log::info!("tugboat: game controller now for {game:?}");
+                p.set_game(game);
+            }
             let was = p.players();
             let gone = p.set_players(players, Instant::now());
             let now = p.players();
@@ -889,9 +913,12 @@ impl Session {
             }
             return false;
         }
-        st.pad = Some(Pad::new(Instant::now(), players));
+        st.pad = Some(Pad::new(Instant::now(), players, game));
         drop(st);
-        log::info!("tugboat: game controller on ({} player(s))", players.clamp(1, 2));
+        log::info!(
+            "tugboat: game controller on ({game:?}, {} player(s))",
+            players.clamp(1, 2)
+        );
         true
     }
 
@@ -942,11 +969,17 @@ impl Session {
         let seat = seat_of(req);
         let mut st = self.state();
         let pad = st.pad.as_mut().filter(|p| p.open_for(seat)).ok_or(ApiError::NoGame)?;
+        let arrived = !pad.connected(seat);
         let event = pad.input(seat, req.seq, decoded, Instant::now());
+        let arrived = arrived && pad.connected(seat);
         let reply = pad.reply(seat);
         // A guest's steering is someone playing (its check-ins aren't: see `authorize`).
         st.last_activity = Instant::now();
         drop(st);
+        if arrived {
+            // Once per arrival (its going quiet is logged too), never per input.
+            log::info!("tugboat: game controller {seat} sending");
+        }
         if let Some(e) = event {
             self.sink.pad(e);
         }
@@ -959,8 +992,13 @@ impl Session {
         let Some(pad) = st.pad.as_mut() else {
             return false;
         };
-        let events = pad.tick(Instant::now());
+        let now = Instant::now();
+        let events = pad.tick(now);
+        let summary = pad.summary(now);
         drop(st);
+        for line in summary {
+            log::debug!("tugboat: {line}");
+        }
         for e in events {
             log::info!("tugboat: game controller {} went quiet", e.seat);
             self.sink.pad(e);
@@ -1385,6 +1423,119 @@ impl Session {
         self.sink.changed(true);
     }
 
+    // --- Files held for the phone (`tug boat`, `send_file_to_phone`; see held.rs) ---
+
+    /// Offer files the person said Send to on tug's card, and hold them for the phone for
+    /// `window`. Names go through `names::sanitize` (the card already showed them that way). `None`
+    /// if that would be more files than Tugboat offers at once (nothing is added then).
+    pub fn hold(&self, files: Vec<Outgoing>, window: Duration) -> Option<u32> {
+        let mut st = self.state();
+        if st.offers.iter().filter(|o| !o.clip).count() + files.len() > MAX_OFFERS {
+            return None;
+        }
+        let count = files.len();
+        let mut bytes = 0u64;
+        let mut ids = Vec::with_capacity(count);
+        let mut shown = Vec::with_capacity(count);
+        for f in files {
+            let (name, source, size) = match f {
+                Outgoing::File { path, name, size } => (names::sanitize(&name), Source::File(path), size),
+                Outgoing::Memory { name, bytes } => {
+                    let size = bytes.len() as u64;
+                    (names::sanitize(&name), Source::Memory(bytes), size)
+                }
+            };
+            bytes += size;
+            let id = crypto::new_id();
+            st.offers.push(Offer {
+                id: id.clone(),
+                mime: mime_for(&name),
+                name: name.clone(),
+                source,
+                size,
+                downloads: 0,
+                clip: false,
+            });
+            ids.push(id);
+            shown.push(name);
+        }
+        st.last_activity = Instant::now();
+        let hold = st.holds.add(ids, shown, window, Instant::now(), now_ms());
+        drop(st);
+        // Counts and sizes only, never names or paths.
+        log::info!("tugboat: holding {count} files for the phone ({bytes} bytes)");
+        self.sink.changed(true);
+        Some(hold)
+    }
+
+    /// What's become of hold `id`: still waiting, or how it ended. Ending withdraws what the phone
+    /// didn't fetch, so "timed out" stays true; delivered files stay on offer for the page's Save.
+    pub fn held(&self, id: u32) -> Verdict {
+        let mut st = self.state();
+        let (verdict, ended_now) = match settle(&mut st, id) {
+            Some(v) => (v, !matches!(v, Verdict::Waiting { .. })),
+            None => (st.holds.outcome(id).unwrap_or(Verdict::Withdrawn), false),
+        };
+        drop(st);
+        if ended_now {
+            log::info!("tugboat: files held for the phone: {}", verdict.word());
+            self.sink.changed(true);
+        }
+        verdict
+    }
+
+    /// Settle holds whose time is up even if nobody's asking any more (the command was stopped):
+    /// called every couple of seconds while Tugboat is open.
+    pub fn held_tick(&self) {
+        let mut st = self.state();
+        let ended: Vec<Verdict> = st
+            .holds
+            .ids()
+            .into_iter()
+            .filter_map(|id| settle(&mut st, id))
+            .filter(|v| !matches!(v, Verdict::Waiting { .. }))
+            .collect();
+        drop(st);
+        for v in &ended {
+            log::info!("tugboat: files held for the phone: {}", v.word());
+        }
+        if !ended.is_empty() {
+            self.sink.changed(true);
+        }
+    }
+
+    /// Stop holding `id` (sending files was switched off, or the caller gave up): what the phone
+    /// hasn't fetched is withdrawn.
+    pub fn cancel_hold(&self, id: u32) {
+        let mut st = self.state();
+        let Some(hold) = st.holds.finish(id, Verdict::Withdrawn) else {
+            return;
+        };
+        withdraw_unfetched(&mut st, &hold.offers);
+        drop(st);
+        log::info!("tugboat: files held for the phone: cancelled");
+        self.sink.changed(true);
+    }
+
+    /// Stop every hold still waiting (sending files was switched off, the master switch went off,
+    /// or access was revoked), including ones whose caller already went (`tug boat --no-wait`):
+    /// what the phone hasn't fetched is withdrawn. Returns how many holds that ended.
+    pub fn cancel_all_holds(&self) -> usize {
+        let mut st = self.state();
+        let ids = st.holds.ids();
+        for id in &ids {
+            if let Some(hold) = st.holds.finish(*id, Verdict::Withdrawn) {
+                withdraw_unfetched(&mut st, &hold.offers);
+            }
+        }
+        drop(st);
+        if !ids.is_empty() {
+            log::info!("tugboat: files held for the phone: {} cancelled", ids.len());
+            self.sink.changed(true);
+        }
+        ids.len()
+    }
+
     /// Text for the phone to copy (replaces the previous one; empty clears it).
     pub fn set_pc_text(&self, text: &str) -> Result<(), String> {
         if text.len() > MAX_TEXT {
@@ -1456,6 +1607,7 @@ impl Session {
             sending: st.downloading.values().any(|t| t.elapsed() < MOVING),
             receiving: st.last_upload.is_some_and(|t| t.elapsed() < MOVING),
             clip: st.clip.status(),
+            held: st.holds.status(),
         }
     }
 
@@ -1478,6 +1630,40 @@ fn page_offer(o: &Offer) -> PageOffer {
         chunk_size: OFFER_CHUNK,
         chunks: offer_plan(o.size).chunks(),
         mime: o.mime.to_string(),
+    }
+}
+
+/// Assess hold `id` and, if it's over, finish it (withdrawing what wasn't fetched unless it was
+/// delivered). `None` if it isn't waiting.
+fn settle(st: &mut State, id: u32) -> Option<Verdict> {
+    let hold = st.holds.get(id)?;
+    let (offers, age, window) = (hold.offers.clone(), hold.since.elapsed(), hold.window);
+    let downloads: Vec<Option<u32>> = offers
+        .iter()
+        .map(|o| st.offers.iter().find(|x| &x.id == o).map(|x| x.downloads))
+        .collect();
+    let moving = offers
+        .iter()
+        .any(|o| st.downloading.get(o).is_some_and(|t| t.elapsed() < MOVING));
+    let verdict = held::assess(&downloads, age, window, moving);
+    if matches!(verdict, Verdict::Waiting { .. }) {
+        return Some(verdict);
+    }
+    st.holds.finish(id, verdict);
+    if verdict != Verdict::Delivered {
+        withdraw_unfetched(st, &offers);
+    }
+    Some(verdict)
+}
+
+/// Take these offers off, except any the phone already fetched whole (it may still want to Save).
+fn withdraw_unfetched(st: &mut State, offers: &[String]) {
+    for id in offers {
+        let fetched = st.offers.iter().any(|o| &o.id == id && o.downloads > 0);
+        if !fetched {
+            st.offers.retain(|o| &o.id != id);
+            st.downloading.remove(id);
+        }
     }
 }
 
@@ -1793,7 +1979,7 @@ mod tests {
             seq += 1;
             (header(keys, who, seq, method, path), seq)
         };
-        s.pad_open(2);
+        s.pad_open(2, GameId::TugboatRun);
         // Small enough that the clock (time since boot) can always go back this far.
         let quiet = Duration::from_secs(30);
         s.age_activity(quiet);

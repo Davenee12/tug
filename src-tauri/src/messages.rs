@@ -8,6 +8,9 @@ use serde::Serialize;
 use crate::store::{fts_query, like_pattern, Result, Store};
 
 pub const SOURCE_IPHONE_MAP: &str = "iphone-map";
+/// History brought in from a local iPhone backup (`backup/`): every text the phone kept, sent
+/// ones included, keyed by the backup's message guid.
+pub const SOURCE_IPHONE_BACKUP: &str = "iphone-backup";
 
 /// Notifications from this app carry the same text as MAP messages, which is how
 /// tug learns which contact name belongs to which number.
@@ -148,6 +151,24 @@ pub struct StoredMessage {
     /// phone listed was new, so the phone's short list (iOS lists about 10) may have cut off older
     /// ones from while tug was away. The UI says so above it.
     pub gap_before: bool,
+    /// Edited on the phone after it was sent (from a backup).
+    pub edited: bool,
+    /// Unsent on the phone: the words are gone, and the conversation says so (from a backup).
+    pub unsent: bool,
+    /// Photos, videos and other attachments the backup had for it.
+    pub attachments: Vec<StoredAttachment>,
+}
+
+/// One attachment of a text, from a backup.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredAttachment {
+    pub id: i64,
+    /// photo, gif, sticker, video, audio, contact, location, file.
+    pub kind: String,
+    /// The file is on this PC (photos and videos); otherwise only its kind is known.
+    pub stored: bool,
+    pub bytes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -179,12 +200,17 @@ const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address,
                 SELECT CASE WHEN COUNT(DISTINCT k.name) = 1 THEN MIN(k.name) END
                 FROM contacts k WHERE k.match_key = match_key(m.address)
             ), m.sender_name),
-            m.body, m.sent_at, m.received_at, m.status, m.msg_type, m.gap_before
+            m.body, m.sent_at, m.received_at, m.status, m.msg_type, m.gap_before,
+            m.edited, m.unsent,
+            (SELECT json_group_array(json_object('id', a.id, 'kind', a.kind,
+                        'stored', json(CASE WHEN a.file IS NULL THEN 'false' ELSE 'true' END), 'bytes', a.bytes))
+             FROM message_attachments a WHERE a.message_id = m.id)
      FROM messages m LEFT JOIN contacts c ON c.address = m.address";
 
 fn map_row(r: &Row) -> Result<StoredMessage> {
     let direction: String = r.get(2)?;
     let status: String = r.get(8)?;
+    let attachments: Option<String> = r.get(13)?;
     Ok(StoredMessage {
         id: r.get(0)?,
         source: r.get(1)?,
@@ -201,6 +227,12 @@ fn map_row(r: &Row) -> Result<StoredMessage> {
         status: Status::parse(&status),
         msg_type: r.get(9)?,
         gap_before: r.get(10)?,
+        edited: r.get(11)?,
+        unsent: r.get(12)?,
+        // Built by SQLite above, so it always parses; an empty list if it somehow didn't.
+        attachments: attachments
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -248,9 +280,25 @@ impl Store {
         if duplicate {
             return Ok(None);
         }
+        // History brought in from a backup already has it (a text that reached the phone while tug
+        // couldn't list it, listed now): kept, but hidden behind the backup's row (`dup_of`), so
+        // it shows once, the phone's re-listings find it, and Remove imported history brings it
+        // back. Nothing new to show or announce.
+        let dup_of = if m.source == SOURCE_IPHONE_BACKUP {
+            None
+        } else {
+            crate::backup::import::backup_has(
+                &conn,
+                self.local_zone().resolver(),
+                m.address,
+                m.body,
+                m.sent_at,
+                m.received_at,
+            )?
+        };
         let inserted = conn.execute(
-            "INSERT OR IGNORE INTO messages (source, handle, direction, address, sender_name, body, sent_at, received_at, status, unread_on_phone, msg_type)
-             VALUES (?1, ?2, 'in', ?3, ?4, ?5, ?6, ?7, 'received', ?8, ?9)",
+            "INSERT OR IGNORE INTO messages (source, handle, direction, address, sender_name, body, sent_at, received_at, status, unread_on_phone, msg_type, dup_of, hidden_at)
+             VALUES (?1, ?2, 'in', ?3, ?4, ?5, ?6, ?7, 'received', ?8, ?9, ?10, CASE WHEN ?10 IS NULL THEN NULL ELSE ?11 END)",
             params![
                 m.source,
                 m.handle,
@@ -260,10 +308,12 @@ impl Store {
                 m.sent_at,
                 m.received_at,
                 m.unread_on_phone,
-                m.msg_type
+                m.msg_type,
+                dup_of,
+                crate::state::now_ms(),
             ],
         )?;
-        if inserted == 0 {
+        if inserted == 0 || dup_of.is_some() {
             return Ok(None);
         }
         let id = conn.last_insert_rowid();
@@ -407,6 +457,42 @@ impl Store {
              ORDER BY received_at, id"
         ))?;
         let rows = stmt.query_map([limit], map_row)?;
+        rows.collect()
+    }
+
+    /// The newest visible text of every conversation (by address), so the window lists
+    /// conversations whose texts are all older than the recent page it loads (history brought in
+    /// from a backup goes back years). Newest first.
+    pub fn conversation_heads(&self, limit: u32) -> Result<Vec<StoredMessage>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "WITH ranked AS (
+                 SELECT id, ROW_NUMBER() OVER (
+                     PARTITION BY address ORDER BY received_at DESC, id DESC
+                 ) AS rn, received_at
+                 FROM messages
+                 WHERE hidden_at IS NULL AND address <> ''
+             )
+             {SELECT} WHERE m.id IN (SELECT id FROM ranked WHERE rn = 1 ORDER BY received_at DESC LIMIT ?1)
+             ORDER BY m.received_at DESC, m.id DESC"
+        ))?;
+        let rows = stmt.query_map([limit], map_row)?;
+        rows.collect()
+    }
+
+    /// Every visible text of one conversation, oldest first: the texts with any of `addresses`.
+    /// Opening a conversation loads its whole history this way.
+    pub fn conversation_messages(&self, addresses: &[String], limit: u32) -> Result<Vec<StoredMessage>> {
+        let addresses = serde_json::to_string(addresses).expect("addresses serialize");
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT * FROM (
+                 {SELECT}
+                 WHERE m.hidden_at IS NULL AND m.address IN (SELECT value FROM json_each(?1))
+                 ORDER BY m.received_at DESC, m.id DESC LIMIT ?2
+             ) ORDER BY received_at, id"
+        ))?;
+        let rows = stmt.query_map(params![addresses, limit], map_row)?;
         rows.collect()
     }
 

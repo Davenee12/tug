@@ -43,8 +43,8 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 ## Notifications & pop-ups
 
-- The **Feed** shows live notifications from every app on your iPhone; chat apps are grouped one
-  row per person, other apps stack.
+- The **Feed** shows live notifications from every app on your iPhone; texts are grouped one row
+  per person, and every other app stacks, chat apps such as WhatsApp and Teams included.
 - The Feed shows what's still waiting on your phone; cleared notifications leave the Feed but stay
   in search, and older history loads as you scroll.
 - Act on a notification with the phone's own buttons (answer, decline and so on), or **Call back**
@@ -117,10 +117,24 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - A text whose words didn't come through from the iPhone takes them from its notification, or
   says "This text didn't come through".
 - Texts you send from tug show in the conversation; texts you send on your iPhone stay on your
-  iPhone (a one-time tip under the conversation says so).
+  iPhone (a one-time tip under the conversation says so), unless you bring in your full history.
+- **Bring in your full history** (Settings › Messages): from a backup of your iPhone on this PC
+  (Apple Devices app or iTunes, encrypted or not), tug brings in every text, the ones you sent from
+  the phone included, and your photos and videos, once, as a snapshot. Pick a backup
+  (or a folder), enter its password if it's encrypted, see how many texts and photos (and how much
+  space) before choosing, then watch it come in with Cancel. Texts tug already had aren't added
+  twice, people are matched to your contacts, and running it again (or after a cancel) adds only
+  what's new. Old history carries a quiet "From your iPhone backup, Oct 12" label; photos show in
+  the conversation and open in Photos; edited and unsent texts say so; reactions are left out.
+  Group chats stay on your iPhone (the wizard says how many texts): Messages in tug holds only
+  conversations you can reply to, and iOS gives Bluetooth no way to send to a group. **Remove
+  imported history** takes it all out again. iPhone photos (HEIC) need two free extensions from the
+  Microsoft Store to show in tug, HEIF Image Extensions and HEVC Video Extensions from Device
+  Manufacturer; without them they open in Photos and tug says which one is missing, once.
 - When the iPhone may not have shared every text from while tug was away, the conversation says so.
-- Messages from other chat apps (WhatsApp and so on) show as read-only conversations: reply on your
-  phone.
+- Messages holds only texts tug can send and receive. Other chat apps (WhatsApp, Teams, Slack and
+  so on) stay in the Feed, with no reply box or suggested replies (reply on your phone), and never
+  join a text conversation, even from someone with the same name.
 - **Verification codes** in texts and notifications get a **Copy code** button, a code text with no
   notification gets its own Feed row, and **Ctrl+Shift+C** copies the latest code.
 - Copying a code clears its notification on the phone.
@@ -160,6 +174,11 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 - **Now Playing** shows the song, artist, album and progress from your iPhone, with Previous,
   Play/Pause, Next and Restart song.
+- **Album art** on Now Playing: Spotify's cover when Spotify is connected and playing, otherwise
+  looked up in Apple's public music catalog by artist and album (Show album art, Settings ›
+  General, on by default; switch it off and only Spotify's art shows). The card takes a soft tint
+  from the cover and the bars its accent colour, always keeping the text easy to read; the colours
+  ease in with each new song (or switch at once with Windows' reduce-motion setting).
 - **Volume bar** showing your iPhone's volume: click or drag it to a level, scroll over it or use
   the arrow keys, and the buttons either side repeat when you press and hold. It shows whenever
   the player reports its volume (including a Spotify Connect speaker, when the phone passes it on);
@@ -228,9 +247,11 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - **Your phone as a controller:** "Use your phone as a controller" shows Tugboat's code (the same
   code, encryption and rules as Tugboat). The phone's Tugboat page turns into a pad: a slider the
   boat follows closely (it goes where the knob is), Boost to hop the moment you press it, and it buzzes on a hit where the browser can (iPhone's Safari can't). The
-  keyboard always works too and takes over the moment the phone drops. Tilt steering isn't
-  offered: phone browsers only allow it on a secure (HTTPS) page, and Tugboat's page is plain HTTP
-  on your Wi-Fi.
+  keyboard always works too and takes over the moment the phone drops. Hold the phone sideways like
+  a gamepad: the slider under your left thumb, Boost under your right, and both can be held at
+  once. Upright, the page asks you to turn it ("Play in portrait anyway" keeps the upright layout).
+  Tilt steering isn't offered: phone browsers only allow it on a secure (HTTPS) page, and Tugboat's
+  page is plain HTTP on your Wi-Fi (the controller offers it only where it would really work).
 - **Daily challenge** (the start screen's Daily tab): one course a day, the same for everyone that
   day (the course comes from the date), sailed in **your real weather** from the weather card: rain
   brings waves that rock the boat, wind a gentle sideways drift, snow slower water and icy
@@ -252,8 +273,31 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   separate best race score for two players. Nothing runs while the game is closed or paused.
 - With Windows' reduce-motion setting on, the lighthouse beam holds still, rain and snow drift with
   the water instead of falling across it, there are no wind streaks and no screen shake.
-- Open it from the **Play** button beside tug's name, Ctrl+K "game" / "tugboat run", or **Play
-  Tugboat Run** in tug's taskbar menu. Turn **Show games** off in Settings › General to hide them.
+- **Harbor Stack**, a stacking game: a crane swings a cargo container back and forth over a boat;
+  drop it onto the stack. Whatever overhangs is sliced off and falls into the harbor, so the next
+  container is narrower. A drop within a whisker of the one below is **perfect**: no width lost, a
+  combo, and every fourth in a row wins some width back. A container that misses the stack costs
+  one of three. Score is containers stacked; containers come in colours, with a gold one and a
+  little celebration at 10, 25, 50 and 100.
+  - It gets harder as it grows: the crane speeds up, the boat sways more (a taller stack catches
+    more wind), and from 12 up gusts lean on the stack, with the windsock lifting a moment before.
+    The crane lets go by itself after 12 seconds, with a ring counting down the last few.
+  - **Controls:** Space, Enter, ↓ or a click drops; ← → slow the crane down or speed it up a
+    little. On the phone (held sideways): a big **Drop** under your right thumb, and a slider under
+    your left that nudges the crane slower or faster while you hold it.
+  - **Daily stack**: the same containers, swell and gusts for everyone that day, in your real
+    weather (wind leans on the stack and adds to the sway, rain adds chop, snow slows the crane,
+    night brings a dark harbor and a lighthouse); "Calm seas today" with the weather card off. A
+    streak and a best for each day, like Tugboat Run's.
+  - **Free play** (a new stack every time) and **Stack-off** for two: side by side on the same
+    seed, the taller stack wins. Player 1 drops with ↓ or Enter, Player 2 with S, or each with a
+    phone (Tugboat's code and the Player 2 code, as in Tugboat Run's race).
+  - Reduce motion: no shake, the boat doesn't rock or bob (the stack still leans exactly as much as
+    the game says, since that's what you aim at), still water and lighthouse, and bunting without
+    confetti. Scores stay on this PC.
+- Open them from the **Play** button beside tug's name (the games picker), Ctrl+K "game" (both
+  games), "tugboat run", "harbor stack" or "stack", or **Play a game** in tug's taskbar menu. Turn
+  **Show games** off in Settings › General to hide them all.
 
 ## Weather, battery & the phone card
 
@@ -277,17 +321,18 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   - `copy code`, `clear all`, `mark all read`, `dnd on` / `dnd off`, `voice typing on` / `off`;
   - `send clipboard` (or `clipboard`, `paste to phone`) to send the PC's clipboard to your iPhone;
   - an app's name to show its notifications;
-  - `new message`, `settings`, `spotify`, `tugboat` to open them, and `game` for Tugboat Run.
+  - `new message`, `settings`, `spotify`, `tugboat` to open them, and `game` for the games
+    (`tugboat run`, `harbor stack` or `stack` for one).
 - If a name matches several people, tug lists them and waits for you to pick.
 
 **Other shortcuts:** Ctrl+N new message · Ctrl+Shift+C copy the latest code · Ctrl+, Settings ·
 Ctrl+plus / Ctrl+minus / Ctrl+0 zoom · Esc closes dialogs and Settings.
 
 **Quick actions in the taskbar:** right-click tug's taskbar button (or tug in Start) for **New
-message**, **Tugboat**, **Copy latest code**, **Play Tugboat Run** and **Settings**. They bring tug
+message**, **Tugboat**, **Copy latest code**, **Play a game** and **Settings**. They bring tug
 forward and do the same as their Ctrl+K and keyboard versions, and work whether tug is running
 or not (it starts first). Copy latest code says so when there's no code from the last 10 minutes.
-Play Tugboat Run is left out while Show games is off.
+Play a game (the games picker) is left out while Show games is off.
 
 ## Voice typing (voice to code)
 
@@ -326,10 +371,18 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
   server, with copy-paste setup for each.
 - Once on, AI tools can: get the newest verification code, search your texts and notifications,
   read developer notifications (GitHub, Slack, Linear, Jira, Sentry, PagerDuty, Vercel, Netlify),
-  list and view files sent with Tugboat, see phone status, control music, and ask to send a text.
-- Each has its own switch; **verification codes, music controls and sending texts start off**.
-- A text from an AI tool is sent only after you click **Send** on tug's card within 2 minutes.
-- The **`tug` command**: `tug code [--copy]`, `tug boat <file>`, `tug text <name> "<message>"`,
+  list and view files sent with Tugboat, see phone status, control music, ask to send a text, and
+  ask to send files to your iPhone.
+- Each has its own switch; **verification codes, music controls, sending texts and sending files
+  start off**.
+- A text or a file from an AI tool is sent only after you click **Send** on tug's card within 2
+  minutes. The file card shows each file's name, size and folder.
+- **`tug boat report.pdf`** (or an AI tool's `send_file_to_phone`) sends files to your iPhone: after
+  Send, Tugboat opens with its code if your phone's page isn't open ("Scan the code in tug to
+  receive report.pdf on your iPhone…"), and the command waits up to 2 minutes for the phone to
+  download them (`--wait <secs>`, `--no-wait`). `tug boat - --name notes.txt` sends what's piped in.
+  Regular files only; files the phone didn't download in time are taken off offer.
+- The **`tug` command**: `tug code [--copy]`, `tug boat <file>` (or `-` for stdin), `tug text <name> "<message>"`,
   `tug status`, `tug mcp`.
 - **Add tug to PATH** puts the command in new terminals for your account only; **Remove from PATH**
   undoes it.
@@ -340,10 +393,11 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
 ## Settings
 
 - **General:** Windows pop-ups, Pop-up sound, Do not disturb, Low phone battery, Keep running when
-  closed, Start with Windows (starts in the tray), Zoom, Show games, Voice typing (shortcut and
+  closed, Start with Windows (starts in the tray), Zoom, Show games, Show album art, Voice typing (shortcut and
   language), and the keyboard shortcuts.
 - **iPhone:** connection health, Copy diagnostics, Open logs folder, help for the texts pairing,
   Visible to iPhone, Call from tug, and your iPhone's Connect panel.
+- **Messages:** Bring in your full history from an iPhone backup, and Remove imported history.
 - **Notifications:** Filter unknown senders, Suggested replies (on or off, and your own three for
   texts no rule fits; 👍 / OK / Talk soon to start), Hide previews while sharing or presenting,
   Quiet hours, Mute calls, Always let through, and muted apps.
@@ -352,23 +406,34 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
 - **Developer tools:** see above.
 - **Data & privacy:** what stays on your PC and what goes online, the App icons switch, and Clear
   history.
-- **About:** version, What's new, credits, Copy diagnostics.
+- **About:** version, updates (Check for updates, Download updates automatically, release notes),
+  What's new, credits, Copy diagnostics.
+- **Automatic updates:** once a release build is set up for them, tug downloads a new version
+  quietly and an **Update** button appears beside its name: click it, confirm, and tug restarts on the
+  same screen. It never restarts by itself, waits while a call rings, Tugboat is moving files or voice
+  typing is busy, and quitting from the tray installs a downloaded update (the menu says Quit and
+  update tug). The portable exe can't update itself; its button opens the download page.
 - A **What's new** card appears once after each update (and any time from About).
 
 ## Privacy & data
 
 The full policy, including how to delete everything, is in [PRIVACY.md](PRIVACY.md).
 
-- **No tug servers, no account, no analytics, no telemetry, no update checker.**
+- **No tug servers, no account, no analytics, no telemetry.**
 - Your history (notifications, texts, contacts, settings) lives in a database on your PC:
-  `%APPDATA%\dev.davejames.tug\tug.db`. Cached app icons, Spotify art and contact photos sit in
+  `%APPDATA%\dev.davejames.tug\tug.db`. Cached app icons, album art, Spotify art and contact photos sit in
   the same folder; logs are in `%LOCALAPPDATA%\dev.davejames.tug\logs`.
 - The Spotify sign-in is kept in Windows Credential Manager, not in a file.
 - **What goes online, and only then:**
   - Weather, if you set it up: Open-Meteo, with your place rounded to about 1 km (or the city you
     type); "Use my location" names the place through BigDataCloud.
   - App icons, if App icons is on: Apple's App Store lookup, sending only the app's identifier.
+  - Album art, if Show album art is on: Apple's music catalog, sending only the artist and album
+    name, for albums tug has no cover for yet.
   - Spotify, only if you connect it.
+  - Updates, in builds set up for them: GitHub, to see whether there's a new version and download
+    it (every 6 hours; with Download updates automatically off, only when you press Check for
+    updates).
   - Opening a notification's web page opens your browser.
 - Tugboat stays on your local network; the developer bridge is local to your Windows account.
 - **Copy diagnostics** removes phone numbers, email addresses, names, Bluetooth addresses and your
@@ -386,7 +451,11 @@ of them one day (see [COMPANION-PLAN.md](COMPANION-PLAN.md)).
 - **Texts:** iOS shares only about the **10 newest incoming texts** when tug catches up (on a fresh
   install or after time away); everything after that is kept in tug's history.
 - **Texts you send from the iPhone itself** never reach tug, and photos and attachments aren't
-  shared (tug shows a "Photo" chip with "Open it on your iPhone").
+  shared (tug shows a "Photo" chip with "Open it on your iPhone"). A backup of the iPhone on the PC
+  has them: Bring in your full history copies them in as a one-time snapshot, so anything after the
+  backup's date still follows these limits until you bring in a newer backup.
+- **Messages in iCloud:** when it's on, the iPhone keeps messages in iCloud instead of its backup,
+  so a backup may have few or none to bring in.
 - **iMessage vs SMS:** iOS usually reports every message as a text, so tug can't tell them apart.
 - **Group texts:** a group's messages arrive per sender, so a reply from tug goes to that one
   person, and group pop-ups have no reply box.

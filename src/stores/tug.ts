@@ -20,6 +20,7 @@ import {
 } from "../lib/format";
 import { replyAddress, replyReadsConversation, sendOutcome, toastSpec } from "../lib/toastSpec";
 import { clearHistory as clearHistoryNow } from "../lib/clearHistory";
+import { foldChatAppSeen } from "../lib/seen";
 import { DEFAULT_REPLIES, parseReplyDefaults } from "../lib/smartReplies";
 import { shouldPopUp, type PopupEvent } from "../lib/popup";
 import { isVip, vipIndex } from "../lib/vips";
@@ -122,7 +123,16 @@ const SPOTIFY_WAIT_MS = 60_000;
 /** How long Spotify takes to report a transfer before tug re-reads where it is playing. */
 const SPOTIFY_TRANSFER_SETTLE_MS = 1_500;
 
-export type SettingsSection = "general" | "iphone" | "notifications" | "connectors" | "weather" | "developer" | "privacy" | "about";
+export type SettingsSection =
+  | "general"
+  | "iphone"
+  | "notifications"
+  | "messages"
+  | "connectors"
+  | "weather"
+  | "developer"
+  | "privacy"
+  | "about";
 const SEEN_KEEP = 300;
 /** How many cleared-code message ids to remember (they expire from the Feed in minutes anyway). */
 const CLEARED_CODES_KEEP = 200;
@@ -218,6 +228,7 @@ export const useTugStore = defineStore("tug", () => {
     muteCalls: false,
     closeToTray: true,
     appIcons: true,
+    albumArt: true,
     lowBattery: true,
     popupSound: true,
     dialing: false,
@@ -1332,7 +1343,12 @@ export const useTugStore = defineStore("tug", () => {
     const raw = await api.getSettings();
     zoom.value = Number(raw["ui.zoom"]) || 1;
     applyZoom(zoom.value);
-    seen.value = raw["ui.seen"] ? (JSON.parse(raw["ui.seen"]) as Record<string, number>) : {};
+    const storedSeen = raw["ui.seen"] ? (JSON.parse(raw["ui.seen"]) as Record<string, number>) : {};
+    // Once, after the upgrade that moved other chat apps out of Messages: their per-person times
+    // become their Feed stack's, so those stacks don't all show as new (lib/seen).
+    const foldedSeen = foldChatAppSeen(storedSeen);
+    seen.value = foldedSeen ?? storedSeen;
+    if (foldedSeen) void attempt(() => api.setSetting("ui.seen", JSON.stringify(foldedSeen)));
     if (raw["ui.seenSince"]) {
       seenSince.value = Number(raw["ui.seenSince"]);
     } else {
@@ -1354,6 +1370,7 @@ export const useTugStore = defineStore("tug", () => {
       lowBattery: raw["ui.lowBattery"] !== "false",
       popupSound: raw["ui.popupSound"] !== "false",
       appIcons: raw["ui.appIcons"] !== "false",
+      albumArt: raw["ui.albumArt"] !== "false",
       dialing: raw["ui.dialing"] === "true",
       filterUnknown: raw["ui.filterUnknown"] !== "false",
       knownSenders: raw["ui.knownSenders"] ? (JSON.parse(raw["ui.knownSenders"]) as string[]) : [],
@@ -2123,6 +2140,8 @@ export const useTugStore = defineStore("tug", () => {
     switchContext,
     checkSwitches,
     nowPlaying,
+    /** tug's page is on screen (not hidden in the tray or minimised). */
+    pageVisible,
     // Spotify connector
     spotify,
     spotifyPlayer,

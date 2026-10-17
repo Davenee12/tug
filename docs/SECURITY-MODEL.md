@@ -43,29 +43,35 @@ kinds only, never contents. The honest limit is Tugboat's: an active attacker wh
 first page load could read what was sent to the phone or put text on the PC's clipboard (as could
 anyone already able to read Tugboat's page).
 
-**The game controller channel (Tugboat Run).** When the game asks for the phone as a controller,
+**The game controller channel (Tugboat Run, Harbor Stack).** When a game asks for the phone as a controller,
 the bound phone may `POST /api/pad`, under exactly Tugboat's rules: the same secret, a MAC on every
 request, the first phone binds, replays refused, the body sealed to its request. On top of that:
 inputs are refused unless the game has the channel open (and again the moment it closes); they're
 rate limited (90 a second sustained, a burst of 30; a phone sends at most ~60); the body is read
-only up to 104 bytes; and the plaintext must be exactly `{"steer": -100..=100, "boost": bool}`, plus
-an optional latency probe (`"age"` and `"rtt"`, whole milliseconds 0–10000, only ever summarised
-once per session in a debug log line), with any other field, type or range refused. An input that
-lands after a newer one is ignored (the phone may have two in flight). The only
-thing an input can change is the steering and boost the game reads (`tugboat/pad.rs`): it never
-reaches files, the clipboard, the panel or anything else, and an integration test checks that. A
-quiet phone (700 ms without an input) is treated as gone and the boat goes back to the keyboard,
-which always works and always wins. The same honest limit applies: an active attacker who
-tampered with the first page load could steer the boat.
+only up to 120 bytes; and the plaintext must be exactly `{"steer": -100..=100, "boost": bool}`, plus
+an optional `"drop": bool` (Harbor Stack's Drop) and an optional latency probe (`"age"` and
+`"rtt"`, whole milliseconds 0–10000, only ever summarised once per session in a debug log line),
+with any other field, type or range refused. The only other controller logging is a count of
+inputs and presses per phone at debug level, at most once a second when it pressed and otherwise
+every 30 s (counts only, never the steering). Which game is open is the PC's to say (chosen when
+the game opens the channel, and named in `/api/state` and every reply so the page shows that game's
+buttons); an action that isn't the open game's is dropped before the game sees it, so Tugboat Run
+never sees a drop and Harbor Stack never a boost. An input that lands after a newer one is ignored
+(the phone may have two in flight). The only thing an input can change is the steering, boost or
+drop the game reads (`tugboat/pad.rs`): it never reaches files, the clipboard, the panel or
+anything else, and an integration test checks that. A quiet phone (700 ms without an input) is
+treated as gone and the game goes back to the keyboard, which always works and always wins. The
+same honest limit applies: an active attacker who tampered with the first page load could steer
+the boat or drop a container.
 
-**The guest seat (Tugboat Run, two players).** A friend's phone in a two-player race never gets the
+**The guest seat (Tugboat Run's race, Harbor Stack's stack-off).** A friend's phone in a two-player game never gets the
 session secret. The race shows a separate **Player 2 code** whose `#` fragment carries `g.` and a
 guest secret derived from the session secret with HKDF-SHA256 (salt `tugboat/1`, info
 `tugboat guest v1`, 16 bytes): one-way, so it can't be turned back into the session secret, and it
 gives the guest phone keys of its own for signing and sealing. Tugboat checks every request against
 the session's keys and then the guest's. Guest keys can sign exactly two requests, `GET /api/state`
-(which tells the guest only whether there's a race: never files, text or the clipboard) and
-`POST /api/pad` (steering seat 2, under the controller rules above); anything else is refused. A
+(which tells the guest only whether there's a game to join, and which: never files, text or the clipboard) and
+`POST /api/pad` (playing seat 2, under the controller rules above); anything else is refused. A
 guest key can never bind the session, even if it's the first to connect, so it can't become the
 owner; it joins only while a two-player game asks for a second phone, one phone at a time (a third
 is turned away), and the Player 2 code is shown only for as long as the game asks. A guest page
@@ -79,16 +85,40 @@ reach tug over a named pipe that only the current user can open; low-integrity p
 remote machines are refused. Each connection proves it holds the bridge token (an HMAC
 challenge over fresh nonces) before any call. Developer tools are off by default, each tool has
 its own switch (`status` needs only the master switch, so it leaves the phone out unless Phone
-status is on), calls are rate limited, and sending a text always needs the person to click
-**Send** on tug's own card.
+status is on), calls are rate limited, and sending a text or sending files to the phone always
+needs the person to click **Send** on tug's own card.
+
+**Files sent to the phone (`tug boat`, `send_file_to_phone`).** Pushing a PC file to the phone
+moves it off the PC, so it's guarded like a text. Its switch (**Send files to your iPhone**) is off
+by default and enforced in Rust in the bridge's permission map; requests are rate limited (10 a
+minute). Every request stops at tug's card, which shows each file's name as the phone will get it,
+its size and the folder it's in, with focus on **Don't send** and **Send** enabled only while tug
+is in front; nothing is offered before Send. tug re-checks every path itself whatever the caller
+says: regular readable files only (no folders, devices or pipes, which the bridge also refuses by
+name), links followed to their target, Tugboat's size limits, names through `tugboat/names.rs`.
+Nothing on another computer: a `\\server\share` path (in any spelling), a mapped network drive,
+or a link that leads to one is refused by its spelling before anything opens it, by the bridge
+and by tug, because opening it would make Windows sign in to that server with the person's
+account. The MCP server only makes an AI tool's paths full by their spelling; tug touches them
+only after the switch for sending files says yes.
+The files then travel only over Tugboat's existing channel (same port, secret, MACs, binding and
+sealing), held for the phone for the wait (2 minutes unless asked otherwise) and withdrawn if it
+hasn't downloaded them by then, so "timed out" is true. Turning the switch off, turning Developer
+tools off or **Revoke access** withdraws every file still held, including ones a `tug boat
+--no-wait` already left on offer. What's piped into `tug boat -` (up to
+64 MB) is held in memory, never written to disk by tug. An AI tool's paths are used exactly as
+given, never looked up by name across the PC. Logs record counts and sizes, never names or paths.
+Tugboat's honest limit applies: an active attacker who tampered with the first page load could
+read files the person chose to send.
 
 **Malicious content in notifications and texts.** Message and notification text comes from other
 people. The window renders it as text (Vue escapes it; there's no `v-html`), and the webview is
 locked down so injected markup couldn't do much anyway:
 
 - A strict Content Security Policy (`src-tauri/tauri.conf.json`): scripts only from tug itself, no
-  `eval`, no plugins, no framing, no form posts, images only from tug or `data:` URIs (remote art
-  and app icons are fetched and checked by Rust and handed over as `data:`), and network access
+  `eval`, no plugins, no framing, no form posts, images only from tug or `data:` URIs (remote art,
+  album art and app icons are fetched and checked by Rust and handed over as `data:`; album art
+  only from Apple's image servers over `https`), and network access
   only to the weather service. Inline `style` attributes are allowed (Vue writes static style
   attributes as markup); `<style>` elements are not.
 - `Object.prototype` is frozen before tug's scripts run (`freezePrototype`), which blunts
@@ -99,8 +129,9 @@ locked down so injected markup couldn't do much anyway:
   from Rust.
 - tug's own commands validate what the webview passes in: `open_url` opens only `http(s)` links,
   Settings pages are an allowlist, Tugboat can only reveal files it saved this session, app-icon
-  IDs are checked before they touch a path, and UI settings can't write Bluetooth or developer-tool
-  keys.
+  IDs are checked before they touch a path, album art is cached under a hash of the artist and
+  album (the names never reach a path, and over-long ones aren't looked up), and UI settings can't
+  write Bluetooth or developer-tool keys.
 - Developer tools (the WebView2 inspector) are compiled out of release builds.
 
 **Code fill.** Auto-copy and the type-the-code shortcut only ever handle a code `findCode` found
@@ -127,14 +158,81 @@ terminals, browsers), so dictation can't send, accept a suggestion or run a comm
 speak near the PC while the person holds the shortcut can put words into the focused window, like
 anyone at the keyboard.
 
+**Your iPhone backup (Bring in your full history).** A backup holds everything on the phone, so
+tug treats reading one as the most sensitive thing it does:
+
+- Nothing goes online: reading, decrypting and importing are all local, with no new network access,
+  dependency on a service, or CSP change.
+- The window never names a folder or a file. It picks a backup by an id tug handed it (from the
+  list of backups tug found, or Windows' folder picker, which tug opens itself), and a photo by its
+  row id; tug builds every path. File ids from the backup's manifest must be 40 hex digits before
+  they touch a path, attachment paths must stay under `Library/SMS/Attachments`, and stored files
+  are named by their SHA-256 with an extension from a short list of picture and video types, so
+  nothing tug stores or opens (with the default app, via **Open photo**) can run.
+- An encrypted backup's password arrives once over IPC, is wrapped in `Zeroizing` and dropped as
+  soon as the keys are derived (iOS 10.2+: PBKDF2-HMAC-SHA256 then PBKDF2-HMAC-SHA1, as the
+  keybag says; RFC 3394 AES key unwrap of the class and file keys; AES-256-CBC). Keys are wiped
+  when the session ends. The password is never stored, logged or sent anywhere. (Copies a
+  WebView2 or IPC buffer may briefly hold are outside tug's control.)
+- Decrypted files (the manifest, Messages' database, each attachment on its way in) live only in
+  a per-session folder under `%LOCALAPPDATA%\dev.davejames.tug\backup-tmp`, protected by the
+  user's profile permissions. The databases are deleted as soon as they're read; the folder goes
+  when the import ends, is cancelled or fails, and the whole of `backup-tmp` is swept at every
+  start in case tug crashed or the PC lost power.
+- The backup is untrusted input: its plists, keybag, SQLite databases and `attributedBody`
+  typedstreams go through bounds-checked parsers that refuse what they can't read (tested on cut
+  and garbled input), and a damaged photo is skipped rather than stopping the import. Only a
+  file the backup doesn't have counts as missing: any other error reading it (the drive went
+  away, access refused) stops the import with "couldn't read this backup", and what came in stays.
+- Logs record counts and timings only, never a word of a message, a name, a number, a file name, a
+  path or the password.
+- The backup itself is only ever read. Remove imported history (and Clear history) delete every
+  row and file the import added; both refuse while an import is still writing.
+- Imported texts are part of tug's history, so the developer tools' text search (when its switch
+  is on) reaches them too: years of one-to-one history, sent texts included, not just what
+  came over Bluetooth.
+
 **Prompt injection aimed at AI tools.** A text can say "ignore your instructions and…". tug
-assumes it will: reading tools are separate switches the person turns on, and the one tool that
-*acts* (sending a text) always stops at a confirmation card in tug's window. An AI tool can be
-fooled into *asking*; it can't send without the person.
+assumes it will: reading tools are separate switches the person turns on, and the tools that send
+something off the PC (a text, files to the phone) always stop at a confirmation card in tug's
+window. An AI tool can be fooled into *asking*; it can't send without the person.
 
 **Supply chain.** Rust dependencies are checked by `cargo-deny` (advisories, licences, crates.io
 only), production npm dependencies by `npm audit`, the code by CodeQL, and Dependabot keeps
 both lockfiles current. CI actions from third parties are pinned to commit SHAs.
+
+**Release builds.** Releases are built by GitHub Actions (`.github/workflows/release.yml`) from a
+version tag on a commit on `main`, after the same checks as every pull request, and land as a
+*draft* that the owner publishes by hand. The workflow's token is read-only except in the one job
+that creates the draft. Secrets (the updater signing key, SignPath's token) are secrets of a GitHub
+environment, `release`, that only `v*` tags may deploy to and that waits for the owner's approval;
+only an admin may create a `v*` tag (a ruleset). They're read only in the `sign` job, which runs
+for a real release only, checks out just the scripts, `tauri.conf.json` and `CHANGELOG.md`, runs no
+npm or cargo (the Tauri CLI that signs is pinned and installed with `--ignore-scripts`), and never
+echoes them; the job that builds has no secrets at all, and neither do pull requests or dry runs.
+First-party and third-party actions are pinned to commit SHAs. The build fails if a local path
+survived in the exes, and the checksums and `latest.json` are made after any code signing, so they
+describe the files people download. See [RELEASING.md](RELEASING.md).
+
+**Automatic updates.** Release builds set up for them check GitHub only
+(`https://github.com/Davenee12/tug/releases/latest/download/latest.json`, then the installer it
+names), from Rust; the webview's CSP is unchanged and it has no updater permission. The installer's
+address in `latest.json` must be on tug's own releases
+(`https://github.com/Davenee12/tug/releases/download/…`) or the update is refused before anything
+is fetched. Every download
+is verified by `tauri-plugin-updater` against the minisign public key compiled into tug
+(`tauri.conf.json`) before it can run, and the signature must name the same version the manifest
+announces (`requireSignedVersion`), so a tampered `latest.json` can't pair a new version number with
+an older signed installer. Only strictly newer versions are accepted: downgrades are refused, in
+the plugin's comparator and again before installing. A failed check, download or signature leaves
+tug running as it was (logged, retried later). tug never restarts on its own: the person clicks
+**Update** and **Restart now**, which waits while a call rings, Tugboat moves files or voice typing
+is busy, or quits from the tray (whose item then says **Quit and update tug**). Without a real
+public key in the build, nothing checks at all. The signing key's private half lives only in the
+owner's offline backup and the repository's Actions secrets; anyone holding it could sign an update
+every installed tug would accept, which is why it is never committed and never used outside a
+release run. Losing it means installed copies can't update automatically any more (they'd need a
+manual reinstall of a build with a new key).
 
 ## What tug doesn't protect against
 
@@ -147,10 +245,13 @@ both lockfiles current. CI actions from third parties are pinned to commit SHAs.
 
 ## Data at rest
 
-History (`tug.db`), settings, logs and caches live unencrypted under your Windows profile
+History (`tug.db`, including any history brought in from an iPhone backup), settings, logs,
+caches and imported photos live unencrypted under your Windows profile
 (`%APPDATA%` and `%LOCALAPPDATA%`, see [ARCHITECTURE.md](ARCHITECTURE.md#storage)), protected by
 Windows' per-user file permissions, not by tug. Use BitLocker or device encryption to protect
-them from someone with the disk. The Spotify refresh token is the exception: it's kept in Windows
+them from someone with the disk. That includes history brought in from an *encrypted* iPhone
+backup: once imported, those texts and photos are stored like the rest of tug's history, no longer
+behind the backup's password (the wizard's privacy note and PRIVACY.md say so). The Spotify refresh token is the exception: it's kept in Windows
 Credential Manager. Logs never record message contents, contact or device names, numbers or
 tokens (devices are logged by a short tag). **Copy diagnostics** also masks phone numbers, emails,
 Bluetooth addresses, the phone's name, and your Windows account name and profile folder.
@@ -163,4 +264,7 @@ you the next time it runs as administrator.)
 ## Unsigned builds
 
 The installer isn't code-signed yet, so Windows SmartScreen warns about it and there's no
-publisher signature to check. Download tug only from the project's GitHub Releases page.
+publisher signature to check. Download tug only from the project's GitHub Releases page, and
+compare its SHA-256 with the checksums in the release notes. The release workflow is ready for
+SignPath's free open-source signing and turns it on once SignPath approves the project. Automatic
+updates don't depend on code signing: they're verified with tug's own update key.

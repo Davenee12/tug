@@ -41,7 +41,7 @@ Inside `tug.exe`:
                     └───────────▲ Tauri events (device-status, notification, message, …)  │ invoke ─┘
                                 │                                                         ▼
   ┌──────────────┐  Shared (Arc: status, now playing, calls, store, MapHandle) ┌──────────────────────┐
-  │ tug-ble      │◄────────────── commands.rs (105 Tauri commands) ───────────►│ tug-map              │
+  │ tug-ble      │◄────────────── commands.rs (125 Tauri commands) ───────────►│ tug-map              │
   │ BLE actor    │  BleHandle (mpsc + oneshot replies)    MapHandle (mpsc)     │ MAP worker           │
   │ 1 s tick     │                                                             │ MAP/MNS/PBAP/HFP     │
   └──┬───────┬───┘                                                             └──┬───────────────────┘
@@ -69,6 +69,7 @@ Inside `tug.exe`:
 | `tug-voice-key`, `tug-voice` | `voice/win/` (logic in `voice/mod.rs`, `voice/text.rs`) | Only once voice typing is switched on. `tug-voice-key` owns the hold-to-talk shortcut (RegisterHotKey) and the GDI listening indicator; `tug-voice` is a COM thread that runs each hold (microphone while the key is down, Windows' offline SAPI recognizer, the text rules, SendInput) and keeps the recognizer between holds. |
 | Toasts, tray | `toast/`, `tray.rs` | Toast activations arrive on a pool thread and are handed to the async runtime; the tray runs on the main thread. |
 | `tug-jump-list` | `quick_actions/win.rs` (logic in `quick_actions/mod.rs`) | A short-lived COM thread that hands the taskbar jump list's Tasks to Windows, at startup and when Show games changes; nothing waits for it. |
+| Automatic updates | `updater/mod.rs` (logic in `updater/policy.rs`) | Only in release builds with a real public key in `tauri.conf.json`. An async task that looks at the clock every minute: the first check 90 s after startup, then every 6 hours (an hour after a failure), while Download updates automatically is on. `tauri-plugin-updater` fetches `latest.json` from GitHub Releases, downloads the NSIS installer and verifies its minisign signature; the verified bytes wait in memory until the person clicks Update (`update_apply`, refused during a ringing call, a Tugboat transfer or voice typing) or quits from the tray. Applying runs the exit tidy-up (`tidy_before_exit`), starts the installer in update mode and exits; the installer restarts tug, which reopens the saved screen. |
 | Spotify, location | `commands.rs`, `spotify/`, `location.rs` | No background task: each command runs on `spawn_blocking`. The UI reads Spotify's player when the song changes. |
 | PC audio | `pc_audio/` | No thread of its own: AudioPlaybackConnection is agile, so `PcAudio` keeps the open connection behind a mutex and each Windows call runs on a time-limited helper (`off_thread`). Follows the connection through a status hook on `Shared` (stop on a phone switch; the opt-in automatic switch). Closed on Stop, Forget and exit. |
 
@@ -85,12 +86,13 @@ flight.
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
 `pairing-request-closed`, `message`, `contacts`, `calls`, `open-latest-conversation`,
 `open-settings`, `toast-pressed`, `code-filled`, `quick-action` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`,
-`tugboat-clip`, `tugboat-send-clipboard`, `game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`); `screen-share` (`share_privacy/`); `voice-status`, `voice-typed` (`voice/mod.rs`). The typed listener
+`tugboat-clip`, `tugboat-send-clipboard`, `game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`); `screen-share` (`share_privacy/`); `voice-status`, `voice-typed` (`voice/mod.rs`); `update-status` (`updater/mod.rs`); `backup-import` (`backup/mod.rs`). The typed listener
 map is `EventPayloads` in `src/lib/ipc.ts`.
 
 ## Startup
 
-`src-tauri/src/lib.rs`: claim tug's AppUserModelID (`quick_actions::init`, before any window) →
+`src-tauri/src/lib.rs` (also, before the store opens: sweep any decrypted scratch a backup import
+left in `backup-tmp`): claim tug's AppUserModelID (`quick_actions::init`, before any window) →
 plugins (single-instance first, so a second launch just shows the window or carries out its
 `--action`; log with rotation; notification; dialog) → withdraw the last run's pop-ups and, running
 elevated, move an old all-users Start with Windows entry back to this user if tug lives in that
@@ -99,8 +101,8 @@ withdrawal, at most 3 s, so it can't take them back;
 `autostart.rs` owns the HKCU Run entry, quoted, with `--minimized`) → create the data folder →
 open the SQLite store and migrate → queue this launch's `--action`, if any, and build the taskbar
 jump list (off-thread) → `Shared` → start the BLE actor → start the MAP worker → media
-keys → Spotify → Tugboat service (cleans partial uploads) → developer bridge → register state → a
-one-off cache trim → tray → WebView2 watch (reloads the page if its process dies or hangs; rebuilds the
+keys → Spotify → Tugboat service (cleans partial uploads) → developer bridge → register state →
+automatic updates (`updater`: does nothing without a public key) → a one-off cache trim → tray → WebView2 watch (reloads the page if its process dies or hangs; rebuilds the
 window if WebView2's browser process exits, except during a Windows shutdown) → show the window unless
 started minimized.
 Closing the window hides it to the tray (unless the user turned that off); on exit tug withdraws its
@@ -161,6 +163,39 @@ progress. Typing a text opens message access if it isn't open (`warm_texts`). Th
 send by id only: `send N: queued`, `pushing after … ms in the queue`, `accepted it in … ms`, and the
 phone's own report `… ms after accepting it`.
 
+**Bringing in history from an iPhone backup** (Settings › Messages)
+
+```
+backup_list ─► discover.rs: %APPDATA%\Apple\MobileSync\Backup\*, %USERPROFILE%\Apple\MobileSync\Backup\*
+  (Info/Manifest/Status plists: name, model, iOS, date, size, encrypted, too old/unfinished)
+  the window names a backup by id only; tug keeps the folder (or Windows' folder picker, from Rust)
+backup_open(id, password?) ─► tug-backup thread (BackupService in backup/mod.rs)
+  encrypted? keybag.rs: PBKDF2-SHA256 (DPIC rounds, progress + Cancel) → PBKDF2-SHA1 → AES unwrap
+             of the class keys (wrong password = failed integrity check) → ManifestKey
+  Manifest.db decrypted into backup-tmp\<session> ─► manifest.rs: HomeDomain Library/SMS/sms.db
+  (+ -wal), MediaDomain Library/SMS/Attachments/* ─► decrypt.rs (per-file key, AES-256-CBC, chunked)
+  ─► smsdb.rs + typedstream.rs ─► SmsData in memory; the decrypted databases deleted at once
+  ─► import::scan ─► "backup-import" { phase: ready, scan }
+backup_import(texts, photos) ─► import.rs: plan (a group chat? left out; guid already imported?
+  the same text from Bluetooth by direction + match_key + words + time? which address tug already
+  uses?) ─► batches
+  of 500 in transactions ─► photos: decrypt to scratch → SHA-256 → attachments\<hash>.<ext>
+  ─► "backup-import" { phase: done, summary } ─► the session (keys, data, scratch folder) dropped
+window: stores/backup.ts re-reads messages and conversation heads; MessageThreads loads a
+  conversation's whole history when it opens (conversation_messages); photos via attachment_preview
+  (wic.rs: JPEG preview; HEIC needs HEIF Image Extensions, then HEVC Video Extensions, and the hint names which) and open_attachment (default app)
+```
+
+Imported rows are ordinary `messages` with source `iphone-backup` (keyed by the backup's message
+guid, so a re-run or a cancelled run adds only what's new), plus `edited`/`unsent` and
+`message_attachments`. Only one-to-one conversations come in: group chats (more than one other
+person, or marked as a group by iOS) stay on the iPhone, because Messages in tug holds only
+conversations it can reply to and Bluetooth can't send to a group. A Bluetooth text the import
+matched is never changed: its photos are attachment rows pointing at it, undone by Remove imported
+history. The other way round, a Bluetooth text listed after the import that the backup already has
+is kept but hidden behind the imported row (`dup_of`, v14), and Remove imported history shows it
+again (hidden only if its conversation was deleted).
+
 **A media command**
 
 ```
@@ -168,6 +203,21 @@ Now Playing / Ctrl+K / Windows media keys / MCP media_control
   ─► Command::Media ─► BLE actor ─► ams::CommandGate (drop a duplicate queued behind a stall)
   ─► AMS Remote Command write
 Spotify-specific (seek, like, shuffle, repeat, search, Play on) ─► Spotify Web API (spotify/)
+```
+
+**Album art on Now Playing**
+
+```
+song changes ─► stores/albumArt: lib/albumArt artChoice
+  Spotify is the player? wait until it reports this song ─► its cover (no lookup)
+  else, Show album art on, artist + album known, tug on screen ─► invoke album_art(artist, album)
+    ─► album_art.rs: <data>/album_art/<sha256(artist, album)>.img? ─► data: URI (no network)
+       a miss in the last day (.none)? ─► nothing
+       Gate: wait 600 ms (a newer song gives up this one), ≤ 1 lookup / 2 s
+       ─► iTunes Search (artist + album only) ─► pick: artist and album, normalised ─► 600 px cover
+       ─► cache (50 MB, least recently used trimmed) ─► data: URI
+  cover ─► lib/artCanvas: one 24 px canvas pass ─► extractPalette ─► cardTint (WCAG AA or none)
+  ─► NowPlayingCard: --art-from/--art-to/--art-accent (eased, swapped with reduced motion)
 ```
 
 **An MCP tool call**
@@ -180,6 +230,26 @@ send_text: recipient::resolve ─► confirm.rs opens a card ─► emit "devtoo
   ─► ToolConfirmCard.vue (Send armed after 1.5 s, window focused) ─► devtools_confirm
   ─► Approved? map::service::send_text (same path as above) ─► result back over the pipe
 ```
+
+**Files to the phone (`tug boat`, `send_file_to_phone`)**
+
+```
+tug boat report.pdf ─► tug-cli: resolve against its folder, outgoing::check (regular file, links
+  followed) ─► Call::OfferFiles { paths, stdin?, wait_secs, progress: true }
+  ─► DevTools::handle: "Send files to your iPhone" on? rate limit ─► devtools/outgoing.rs checks
+     again (size, names::sanitize) ─► Progress::Confirming ─► confirm.rs card (Ask::Files)
+  ─► Send? TugboatService::hold (starts Tugboat) ─► Session::hold: offers + held.rs Hold (window)
+     no phone page open? the panel opens, "Scan to receive report.pdf on your iPhone"
+  ─► every 500 ms Session::held: Progress::Waiting ─► phone fetches every chunk ─► Delivered
+     window over (+ up to 60 s for a file still coming) ─► withdrawn, TimedOut
+  ─► OfferResult ─► "Delivered: your iPhone downloaded report.pdf." (exit 0) / exit 1
+```
+
+Progress lines (`{"type":"progress",...}`) go only to a call that asked for them, after the
+handshake. The supervisor's 2 s tick also settles holds (`held_tick`), so a command stopped with
+Ctrl+C never leaves files on offer past their window, and switching sending files off (its switch,
+the master switch, Revoke access) withdraws every hold at once (`Session::cancel_all_holds`), even
+one whose `--no-wait` caller has gone.
 
 **A Tugboat upload**
 
@@ -219,7 +289,7 @@ clipboard from such a page, so the page shows the picture to press and hold.
 
 ```
 right-click tug on the taskbar / in Start ─► Tasks: New message · Tugboat · Copy latest code ·
-  Play Tugboat Run (only while Show games is on) · Settings
+  Play a game (only while Show games is on; opens the games picker) · Settings
   each task is a shell link: tug.exe --action <id>   (the exe path made plain by shell_path: tauri's
   current_exe is a \\?\ verbatim path, which IShellLinkW::SetPath rejects; registered by quick_actions/win.rs under the
   AppUserModelID the process claims: the bundle identifier, which the installer stamps on the
@@ -235,20 +305,26 @@ UI (App.vue), only after tug.init() has loaded history and settings, and on ever
 A nudge carries nothing, so one lost to a page that's still loading loses nothing: the action
 waits in the queue until the next take.
 
-**A game controller input (Tugboat Run)**
+**A game controller input (Tugboat Run, Harbor Stack)**
 
 ```
-game: "Use your phone as a controller" ─► invoke game_pad_open ─► Tugboat starts if off; Session::pad_open
-phone page polls GET /api/state ─► { game: true } ─► Controller.vue (slider pad + Boost)
-  POST /api/pad the moment the input changes (touch, slide, Boost down/up), coalesced to one per
+game: "Use your phone as a controller" ─► invoke game_pad_open(players, game) ─► Tugboat starts if
+  off; Session::pad_open(players, GameId)    (lib/useGameController.ts, shared by both games)
+phone page polls GET /api/state ─► { game: true, gameId } ─► Controller.vue with that game's buttons,
+  held sideways: left thumb the slider (Tugboat Run steers; Harbor Stack nudges the crane and
+  springs back), right thumb the button (Boost / Drop); upright, "Turn your phone sideways to play"
+  POST /api/pad the moment the input changes (touch, slide, button down/up), coalesced to one per
   16 ms (~60/s), up to two in flight, newest wins; a heartbeat every 200 ms while nothing changes
   signed like every request (same secret, MAC, replay window, first phone binds); body sealed to it
-  ─► authorize ─► ≤ 104-byte body ─► channel open? (else 409 no-game) ─► rate limit (else 429 busy)
-  ─► pad::decode: exactly {"steer": -100..=100, "boost": bool} (+ optional "age"/"rtt" probe)
+  ─► authorize ─► ≤ 120-byte body ─► channel open? (else 409 no-game) ─► rate limit (else 429 busy)
+  ─► pad::decode: exactly {"steer": -100..=100, "boost": bool} (+ optional "drop": bool, + optional
+     "age"/"rtt" probe) ─► GameId::allow: Tugboat Run never sees a drop, Harbor Stack never a boost
   ─► older sequence numbers ignored
-  ─► Pad state changed? emit "game-pad" ─► TugboatRun.vue applies it on the next frame: the slider
-     position is the boat's target (critically damped follow, τ 50 ms); the keyboard keeps inertia
-  reply (sealed): { paused, hits } from game_pad_feedback, so the phone shows Paused and buzzes
+  ─► Pad state changed? emit "game-pad" ─► the open game applies it on the next frame. Tugboat Run:
+     the slider position is the boat's target (critically damped follow, τ 50 ms); the keyboard
+     keeps inertia. Harbor Stack: a fresh Drop drops, the slider speeds or slows the crane ±35%
+  reply (sealed): { paused, hits, player?, game } (game_pad_feedback + the channel's GameId), so the
+     phone shows Paused, buzzes, and switches buttons if another game took the channel over
 150 ms watch: no input for 700 ms ─► emit "game-pad" { connected: false } (the keyboard has it)
 game closes ─► game_pad_close ─► inputs get 409 ─► the page goes back to Tugboat
 ```
@@ -262,7 +338,7 @@ code** beside Tugboat's own (Player 1 scans Tugboat's usual code). The Player 2 
 (`secret.ts`), derives keys from the guest secret the usual way and signs and seals with them, and
 shows only the race. `auth.rs` checks a request against the session's keys first (the owner,
 bound by the first such request as always) and then the guest's: a guest-key request may only be
-`GET /api/state` (which tells it only whether there's a race) or `POST /api/pad`, anything else is
+`GET /api/state` (which tells it only whether there's a game to join, and which) or `POST /api/pad`, anything else is
 403 `in-use`; it can never bind the session, even as the first request; and it joins as the guest
 only while seat 2 is open (else 403 `no-race`), one at a time with its own replay window (a guest
 quiet for 8 s gives way to the next, otherwise 403 `full`). A second phone with Tugboat's own code
@@ -283,7 +359,17 @@ timeout (10 s) doubles as the idle limit for a kept-alive connection; it restart
 request, so an active controller never meets it, and only connections left idle are closed. The
 phone's probe (`age` = how long the newest touch waited before going out, `rtt` = its last round
 trip) gives a touch-to-PC estimate of `age + rtt/2`, logged as one summary line at debug level
-when the controller closes.
+when the controller closes. While the channel is open, the 150 ms watch also logs a debug line of
+counts per phone (`controller 1: inputs 58, late 0, presses 2 in 1.0 s`): within a second of a
+press or a late input, otherwise at most every 30 s for a phone that only steers or keeps its
+heartbeat, and an info line when a phone starts sending (`game controller 1
+sending`), so "the button does nothing" can be told apart from "nothing arrives".
+
+A quick tap on the phone can't be lost between sends: the press stays in every input until a reply
+to one that carried it comes back, and only then does the release go (`PressLatch` in
+`tugboat-page/pad.ts`); the game latches a fresh press until its next frame. `padBody` builds the
+sealed body, and `padVector.json` pins the page's bodies against the Rust decoder (vitest and
+cargo test both read it).
 
 **Voice typing (hold to talk)**
 
@@ -323,23 +409,29 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `map/command_queue.rs` | The message worker's priority order: sends before refreshes, mark-read last |
 | `map/obex.rs`, `bmessage.rs`, `listing.rs`, `vcard.rs`, `mns_event.rs`, `mns.rs`, `pick.rs` | OBEX framing, MAP/PBAP parsers, MNS event handling, which paired device is the iPhone |
 | `map/charset.rs`, `sms_pdu.rs` | A text's bytes to words without U+FFFD: UTF-8, then UTF-16, CESU-8, a cut-off last character, Windows-1252; native SMS PDUs |
-| `devtools/confirm.rs`, `rate_limit.rs`, `recipient.rs`, `settings.rs` | The send-confirmation state machine, per-tool limits, name → contact, switch defaults |
+| `devtools/confirm.rs`, `rate_limit.rs`, `recipient.rs`, `settings.rs` | The send-confirmation state machine (texts and files), per-tool limits, name → contact, switch defaults |
 | `crates/tug-bridge` (`auth`, `protocol`, `framing`, `paths`, `time`) | Bridge protocol and handshake; the whole exchange is also tested over a real pipe |
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
-| `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone, two seats for a two-player game |
+| `tugboat/pad.rs` | The game controller channel: which game has it (`GameId`) and the one action each game may see, what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone, two seats for a two-player game |
 | `tugboat/net.rs`, `tugboat/tally.rs`, `tugboat/session.rs` (`choose_folder`) | Which adapter the phone can reach (including a Hyper-V external switch); logging strangers' refused requests once a minute with a count; Pictures or the Downloads fallback |
 | `autostart.rs`, `session_end.rs` | Start with Windows over a `Registry` trait (tested with a fake: HKCU only, moving an old HKLM entry only for a tug in the process user's own Local AppData); what exit skips when Windows is ending the session |
+| `tugboat/held.rs`, `devtools/outgoing.rs`, `crates/tug-bridge` `outgoing` | Files sent to the phone with `tug boat`: when a hold is delivered, timed out (with grace for a file still coming) or withdrawn; which paths may be sent at all (regular files, links followed, no devices or pipes) |
 | `tugboat/clip.rs`, `tugboat/dib.rs` | The shared clipboard: one waiting clipboard at a time, delivered only on the phone's word, dropped after 2 minutes, what can be sent; a clipboard bitmap to PNG |
 | `quick_actions/mod.rs` | Taskbar quick actions: reading `--action` from a launch, the jump list's tasks (the game only with Show games on), the AppUserModelID for installed, portable and cargo builds, the take-once queue |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
+| `album_art.rs` | Album art from Apple's catalog: names normalised (editions like Remastered/Deluxe and featured artists set aside), the best match by artist and album, the cache key, the day-long miss memory, the debounce and rate limit (`Gate`); the cache and setting tested with a fake network |
 | `share_privacy/mod.rs` | Hide previews while sharing or presenting: which signals mean someone may be watching (shell state confirmed by the foreground window covering its monitor, duplicate display, known share and slideshow windows by program + class), which one names the reason, the log line, what a hidden pop-up says, and that no answer means hidden (which looks to join, start or give up on), which pop-ups to take back when hiding starts |
 | `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, keys still held, window changed) and what the pill says; spoken symbols, casing commands, code vs prose style and where "new line" may break a line, by program; keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
+| `backup/discover.rs`, `keybag.rs`, `decrypt.rs`, `manifest.rs`, `smsdb.rs`, `typedstream.rs`, `import.rs`, `clock.rs`, `files.rs` | Bring in your full history: which backups exist and what they are; iOS backup encryption (keybag TLV, both PBKDF2 steps, RFC 3394 unwrap, AES-256-CBC streaming, against RFC vectors and a generated encrypted backup); Manifest.db and its NSKeyedArchiver file records; Messages' tables across iOS versions, Apple-epoch times, which chats are groups (left out), edits, unsends, tapbacks; the text in `attributedBody`; what's new, dedupe against Bluetooth texts (the phone's zoneless times read in UTC with an offset tug knows, never guessed; nothing after the backup's date), resumable batches, Remove imported; content-addressed photo files, key checks, the scratch folder and its startup sweep. `backup/mod.rs` runs a whole encrypted backup end to end in a test |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
+| `updater/policy.rs` | Automatic updates: whether the build is set up (a real minisign public key, not a debug build), installed vs portable, newer-only version comparison (no downgrades), the check schedule, what a check leads to, what holds a restart (a ringing call, a Tugboat transfer, voice typing), applying on quit, the release-notes headline |
 
-Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attachments`
+Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `albumArt`
+(which art Now Playing shows, its palette, and a tint that keeps WCAG AA contrast), `backupImport`
+(the full-history wizard's words and steps), `attachments`
 ("Attachment: 1 Photo" → a photo chip), `attention`
 (is the window really visible), `battery`, `callKeys` (no keystroke answers or declines a call), `coalesce` (one render per frame for bursts of
 updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
@@ -350,18 +442,24 @@ answers never land), `layout` (sidebar density and "wide", from sizes that follo
 `locating`, `media` (which controls show, skip routing, seek keys), `messageSync`, `messageType`,
 `ordering` (newest state wins over late events and reads), `pairings`,
 `pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
-titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
+titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `seen` (when each Feed entry was last looked at, with other chat apps' old per-person
+times folded onto their stack once), `senders`
 (unknown-sender filter), `sharePrivacy` (hiding previews while sharing: the banner, Show anyway, a pop-up's kind), `singleFlight` (one press, one action), `smartReplies` (suggested replies: the rules, and when there are none), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `startup` (startup reads that fail are retried, never block), `threadWindow` (long conversations render their newest texts first),
 `quickActions` (routing a taskbar task, one take at a time), `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
 scoring, the speed curve, inertia, the weather's handling, merging the controls), `tugboatDaily` (the
 daily challenge: the date's seed, weather → water, the start screen's line, the streak), `tugboatRace`
-(two players: who steers what, the result, when a dropped phone pauses the race), `useCitySearch` (the
+(two players: who steers what, the result, when a dropped phone pauses the race; Harbor Stack's
+stack-off uses it too), `harborStack` (Harbor Stack's rules: slicing the overhang, perfect drops, the
+combo and width back, the crane's speed curve, the seeded sway and gusts, the daily's weather, the
+controls), `useGameController` (the phone controller's channel, shared by both games), `update` (the Update
+button, its Restart confirm and the About row; reopening the same screen after the restart), `useCitySearch` (the
 weather card's city box), `vips`, `voice` (voice typing's Settings words and problems), `weather`, `weblinks`, `whatsNew`. Thin DOM composables such as
 `useElementSize` (an element's size in zoomed CSS pixels) and `useCallButtonGate` (a ringing call's Feed buttons) feed these rules.
 The phone page has its own: `tugboat-page/chunks`, `crypto`, `clip` (the PC's clipboard: when to
-acknowledge it, copying without a secure context) and `pad` (the controller's wire format, pacing
-and errors). Components and
+acknowledge it, copying without a secure context) and `pad` (the controller's wire format, each
+game's buttons, pacing, errors, sideways or upright, and tilt only where it's really available).
+Components and
 stores should call these rather than grow logic of their own.
 
 Integration tests: `tugboat/tests.rs` plays the phone over a real socket; `tug-bridge` tests run the
@@ -373,7 +471,7 @@ handshake over a real named pipe (including a low-integrity impostor). Hardware 
 Everything the backend sends to the UI or takes from it is a serde type in Rust **mirrored by hand**
 in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messages.rs`,
 `map/calls.rs`, `map/health.rs`, `toast/`, `code_fill/`, `spotify/`, `tugboat/`, `bt_inventory/`, `devtools/`, `voice/`,
-`pc_audio/policy.rs` and `share_privacy/`.
+`pc_audio/policy.rs`, `share_privacy/` and `backup/`.
 
 - App-facing types use `#[serde(rename_all = "camelCase")]` (fields and enum variants), so
   `contacts_off` in Rust is `contactsOff` in TypeScript.
@@ -387,9 +485,11 @@ in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messag
 | What | Where |
 |---|---|
 | History and settings (SQLite, FTS5) | `%APPDATA%\<app id>\tug.db` |
-| App icons, Spotify art, contact photos | `%APPDATA%\<app id>\` (`icons/` 50 MB cap, `spotify_art/` 100 MB cap, `contacts/`) |
+| App icons, album art, Spotify art, contact photos | `%APPDATA%\<app id>\` (`icons/` 50 MB cap, `album_art/` 50 MB cap, `spotify_art/` 100 MB cap, `contacts/`) |
 | Logs (2 MB × 5, rotated) | `%LOCALAPPDATA%\<app id>\logs` |
 | Bridge token, half-received Tugboat files | `%LOCALAPPDATA%\<app id>\` |
+| Photos and videos brought in from an iPhone backup (`<sha-256>.<ext>`) and their JPEG previews | `%LOCALAPPDATA%\<app id>\attachments\` (`thumbs\`) |
+| Decrypted scratch while a backup is read (deleted after, swept at every start) | `%LOCALAPPDATA%\<app id>\backup-tmp\` |
 | Files received with Tugboat | `Pictures\Tugboat` (`Downloads\Tugboat` while Controlled folder access refuses Pictures) |
 | Spotify refresh token | Windows Credential Manager |
 
@@ -419,6 +519,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?popupreply` (`&missed`) | A text answered from the Windows pop-up (with its events dropped) |
 | `/?nodial` | Settings › iPhone › Calls check fails |
 | `/?applemusic`, `/?norepeat`, `/?repeatignored` | Apple Music controls and repeat edge cases |
+| `/?albumart` | Album art from the (mocked) catalog lookup: Next and Previous step through a light, a dark, a vivid and a grey cover, then an album with none |
 | `/?speaker`, `/?spotifyoff` | Spotify on a Connect speaker / Spotify not connected |
 | `/?novolume` | A player that doesn't report its volume: no volume bar |
 | `/?tugboat` (`&android`, `&cfa`), `/?tugboatwait`, `/?tugboatnonet` | Tugboat transferring (Controlled folder access refusing Pictures) / waiting for a phone / no usable network |
@@ -427,20 +528,24 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?gamephone` | Tugboat Run with the phone controller: Tugboat's code, a phone scanning it, then the phone starting the run and steering |
 | `/?game2p` (`&p2drop`) | Tugboat Run for two players with two phones (Player 2's phone drops mid-race: the waiting card and Continue solo) |
 | `/?game&weather=rain` | The daily challenge in made-up weather for the preview: `rain`, `storm`, `snow`, `night`, `windy` or `off` |
-| `/?devtools`, `/?devconfirm` | Settings › Developer tools / the send-text confirmation card |
+| `/?games` | The games picker (the Play button, Ctrl+K "game", the taskbar's Play a game) |
+| `/?stack`, `/?stackphone`, `/?stack2p` (`&p2drop`) | Harbor Stack: ready to start / with the phone controller (it drops every 1.6 s) / a stack-off with two phones; `&weather=` works here too |
+| `/?devtools`, `/?devconfirm`, `/?devconfirmfiles` | Settings › Developer tools / the send-text confirmation card / the send-files card (Send opens Tugboat with the files waiting) |
 | `/?pcaudio`, `/?pcaudiofail`, `/?pcaudiodrop`, `/?pcaudioold` | iPhone audio playing on this PC / Play on this PC times out / it drops after 6 s (Reconnect) / Windows too old for it |
 | `/?whatsnew` | The What's new card for the newest release |
 | `/?quickaction=new-message` (`tugboat`, `copy-code`, `game`, `settings`; `&again`) | tug started from that taskbar task (and, with `&again`, the task clicked again 4 s later while running) |
 | `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
 | `/?sharing` (`&presenting`, `&stop`) | The screen is being shared: blurred texts and names under the `Previews hidden` banner with Show anyway (a slide show / sharing ends after 10 s); add `&call` for the call card |
 | `/?voice` (`&micblocked`, `&nospeech`, `&voicebusy`) | Settings › General › Voice typing on, with the microphone blocked / no speech language / the shortcut taken |
+| `/?backup` (`&none`, `&imported`, `&heif`, `&hevc`) | Settings › Messages › Bring in your full history with made-up backups (the encrypted one's password is `test`) / no backups / history already brought in (the label, photos) / photos Windows can't show without HEIF Image Extensions / with HEIF but without HEVC Video Extensions |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then
-`http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`, `&game` for the controller, `&clip` /
+`http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`, `&game` for the controller with
+`&stack` for Harbor Stack's or `&switch` for a game change mid-way, `&clip` /
 `&clipimage` for the PC's clipboard). To drive the real page against a real server (real signing and
 sealing), see `manual_page` in `tugboat/tests.rs` (`TUGBOAT_GAME=1` opens the controller channel and
-prints each input; `TUGBOAT_CLIP=1` sends a made-up clipboard; `TUGBOAT_HOST=<LAN address>` serves
+prints each input, `TUGBOAT_GAME=stack` for Harbor Stack; `TUGBOAT_CLIP=1` sends a made-up clipboard; `TUGBOAT_HOST=<LAN address>` serves
 it where it isn't a secure context, as on a phone).
 
 ## Adding a feature safely

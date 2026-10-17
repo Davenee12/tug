@@ -138,6 +138,12 @@ describe("newestCode", () => {
     expect(latest?.from).toHaveLength(1);
   });
 
+  it("a code from WhatsApp (in the Feed, not Messages) still counts, for Copy code and Ctrl+Shift+C", () => {
+    const wa = note("Acme", "Your WhatsApp code: 384-221", -1, { appId: "net.whatsapp.WhatsApp", appName: "WhatsApp" });
+    const latest = newestCode([wa], [sms("98626", "code 222222", -3)], { now: NOW });
+    expect(latest).toEqual({ code: "384221", from: [wa] });
+  });
+
   it("ignores codes older than the window and returns null when none", () => {
     expect(newestCode([note("Bank", "code 111111", -30)], [], { now: NOW })).toBeNull();
     expect(newestCode([], [sms("98626", "omw", -1)], { now: NOW })).toBeNull();

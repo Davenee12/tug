@@ -12,6 +12,8 @@ import {
   groupFeed,
   highlight,
   initials,
+  isChatMessage,
+  isConversation,
   LIVE_TEXT_SKEW_MS,
   actionLabels,
   messageTime,
@@ -249,6 +251,68 @@ describe("groupFeed", () => {
     ]);
     expect(entries.map((e) => e.kind)).toEqual(["thread", "stack"]);
     expect(entries[0].kind === "thread" && entries[0].thread.items.map((n) => n.message)).toEqual(["a", "b"]);
+  });
+
+  it("keeps other chat apps as app stacks in the Feed, never per-person conversation rows", () => {
+    const entries = groupFeed([
+      note("Jane Doe", "texted", 0),
+      note("Jane Doe", "on WhatsApp", 1, { appId: WHATSAPP, appName: "WhatsApp" }),
+      note("Sam", "also WhatsApp", 2, { appId: WHATSAPP, appName: "WhatsApp" }),
+      note("Jane Doe", "on Teams", 3, { appId: TEAMS, appName: "Teams" }),
+    ]);
+    expect(entries.map((e) => [e.kind, e.kind === "thread" ? e.thread.appId : e.stack.appId])).toEqual([
+      ["stack", TEAMS],
+      ["stack", WHATSAPP],
+      ["thread", "com.apple.MobileSMS"],
+    ]);
+    const wa = entries.find((e) => e.kind === "stack" && e.stack.appId === WHATSAPP);
+    expect(wa?.kind === "stack" && wa.stack.items.map((n) => n.message)).toEqual(["also WhatsApp", "on WhatsApp"]);
+  });
+});
+
+const WHATSAPP = "net.whatsapp.WhatsApp";
+const TEAMS = "com.microsoft.skype.teams";
+
+describe("Messages holds only texts tug can answer", () => {
+  const contacts: Contact[] = [{ address: "+13025550142", name: "Jane Doe" }];
+  const others = (title: string, message: string, atMin: number) => [
+    note(title, message, atMin, { appId: WHATSAPP, appName: "WhatsApp" }),
+    note(title, message, atMin, { appId: TEAMS, appName: "Teams" }),
+    note(title, message, atMin, { appId: "com.tinyspeck.chatlyio", appName: "Slack" }),
+    note(title, message, atMin, { appId: "com.burbn.instagram", appName: "Instagram" }),
+    // A chat app tug has never heard of: the rule is an allow-list, so it can't leak in either.
+    note(title, message, atMin, { appId: "com.example.newchat", appName: "NewChat" }),
+  ];
+
+  it("only Messages notifications form or join conversations, even under the same sender name", () => {
+    const notes = [note("Jane Doe", "see you at 5", 1), ...others("Jane Doe", "see you at 5", 1), ...others("Sam", "hey", 2)];
+    const convs = groupConversations(notes, [sms("+13025550142", "running late", 0)], contacts);
+    expect(convs.map((c) => [c.appId, c.contact])).toEqual([["com.apple.MobileSMS", "Jane Doe"]]);
+    const [jane] = convs;
+    // Her texts and her Messages notification only; the WhatsApp/Teams copies of "see you at 5" stay out.
+    expect(jane.items.map((i) => i.body)).toEqual(["running late", "see you at 5"]);
+    expect(jane.notifications.every((n) => n.appId === "com.apple.MobileSMS")).toBe(true);
+    expect(jane.addresses).toEqual(["+13025550142"]);
+  });
+
+  it("other apps alone make no conversations at all (and no thread to count unread in)", () => {
+    expect(groupConversations(others("Sam", "hey", 0), [], contacts)).toEqual([]);
+    expect(newestUnreadThread(others("Sam", "hey", 0), () => 1)).toBeNull();
+  });
+
+  it("an unknown sender's text still makes a Messages conversation", () => {
+    const [c] = groupConversations([note("+1 (555) 013-2244", "who's this?", 0)], [], contacts);
+    expect(c.appId).toBe("com.apple.MobileSMS");
+    expect(c.address).toBe("+15550132244");
+  });
+
+  it("a Messages notification is a conversation; other chat apps aren't, but still read as messages", () => {
+    expect(isConversation({ appId: "com.apple.MobileSMS", title: "Zoe" })).toBe(true);
+    expect(isConversation({ appId: "com.apple.MobileSMS", title: "" })).toBe(false);
+    for (const appId of [WHATSAPP, TEAMS, "com.example.newchat"]) expect(isConversation({ appId, title: "Zoe" })).toBe(false);
+    // Pop-up wording while previews are hidden ("New message") keeps the chat apps tug knows.
+    expect(isChatMessage({ appId: WHATSAPP, title: "Zoe" })).toBe(true);
+    expect(isChatMessage({ appId: "com.apple.mobilecal", title: "Standup" })).toBe(false);
   });
 });
 

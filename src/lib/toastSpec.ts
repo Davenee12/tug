@@ -1,15 +1,15 @@
 // What a Windows pop-up offers for one phone notification: a reply box for a text from a
-// person tug can answer, Mark read for conversations, Copy code, Call back for a missed
-// call, Clear for anything clearable. Whether it pops up at all is decided by the store
-// (settings, mute, do-not-disturb, rate limit); the backend builds and handles the toast.
+// person tug can answer, Mark read for Messages conversations, Copy code, Call back for a missed
+// call, Clear for anything clearable. Other chat apps (WhatsApp, Teams…) get no reply box, no
+// suggestions and no Mark read: tug can't send to them, and they aren't Messages conversations.
+// Whether it pops up at all is decided by the store (settings, mute, do-not-disturb, rate
+// limit); the backend builds and handles the toast.
 
 import type { Contact, PhoneNotification, SmsMessage, ToastSpec } from "../types/protocol";
 import { appLabel, canClear, cleanName, groupConversations, isConversation, threadKey } from "./format";
 import { findCode } from "./codes";
 import { suggestReplies, type ReplyOptions } from "./smartReplies";
 import { toastKind } from "./sharePrivacy";
-
-const MESSAGES_APP = "com.apple.MobileSMS";
 
 /** iOS names a sender it has no contact for by their number or email. */
 function addressInTitle(title: string): string | null {
@@ -52,7 +52,8 @@ export function replyTarget(
   messages: SmsMessage[],
   contacts: Contact[],
 ): { to: string | null; ambiguous: boolean } {
-  if (n.appId !== MESSAGES_APP || !isConversation(n)) return { to: null, ambiguous: false };
+  // Only the Messages app: WhatsApp, Teams and every other app can't be answered from tug.
+  if (!isConversation(n)) return { to: null, ambiguous: false };
   const key = threadKey(n);
   const conversation = groupConversations([n], messages, contacts).find((c) => c.key === key);
   if (conversation && conversation.addresses.length > 1) return { to: null, ambiguous: true };

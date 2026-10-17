@@ -9,6 +9,14 @@ use std::time::{Duration, SystemTime};
 const MISS_RETRY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// Shown at 32-40 px; 128 keeps it sharp on high-DPI screens and small on disk.
 const ICON_PX: u32 = 128;
+/// The most an app icon or album cover may weigh. A real one is tens or hundreds of KB; anything
+/// bigger is refused before it's written to disk or turned into a `data:` URI for the window.
+pub const MAX_IMAGE_BYTES: usize = 2 * 1024 * 1024;
+
+/// An image download small enough to keep (`MAX_IMAGE_BYTES`).
+pub fn within_limit(bytes: &[u8]) -> bool {
+    bytes.len() <= MAX_IMAGE_BYTES
+}
 
 /// Bundle ids are reverse-DNS: letters, digits, dots, dashes, underscores. Anything else never
 /// reaches a URL or a file name.
@@ -21,14 +29,35 @@ pub fn valid_app_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
-/// The icon URL from an App Store lookup answer, resized to `ICON_PX`.
+/// Whether `url` is an `https` address on Apple's image servers (`mzstatic.com` or a subdomain),
+/// judged by its real host. The host runs to the first `/`, `?`, `#` or `\`, and one with user info
+/// (`@`) or a port (`:`) is refused, so `https://evil.example?.mzstatic.com/`, `…#.mzstatic.com`,
+/// `…\.mzstatic.com` and `https://a1.mzstatic.com@evil.example/` never pass for Apple's.
+pub fn is_apple_image_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    if url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '\\') {
+        return false;
+    }
+    let host = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        // Also refuses `@` (user info), `:` (a port) and `%` (an encoded host).
+        return false;
+    }
+    let host = host.to_ascii_lowercase();
+    host == "mzstatic.com" || host.ends_with(".mzstatic.com")
+}
+
+/// The icon URL from an App Store lookup answer, resized to `ICON_PX`. Only on Apple's image
+/// servers (`is_apple_image_url`).
 pub fn artwork_url(lookup_json: &str) -> Option<String> {
     let j: serde_json::Value = serde_json::from_str(lookup_json).ok()?;
     let app = j.get("results")?.as_array()?.first()?;
     let url = ["artworkUrl100", "artworkUrl512", "artworkUrl60"]
         .iter()
         .find_map(|k| app.get(*k)?.as_str())?;
-    if !url.starts_with("https://") {
+    if !is_apple_image_url(url) {
         return None;
     }
     // ".../100x100bb.jpg" → ".../128x128bb.png" (the CDN renders any size and format).
@@ -134,11 +163,11 @@ pub fn icon(dir: &Path, app_id: &str) -> Result<Option<String>, String> {
     }
     let lookup = http::get_string(&format!("https://itunes.apple.com/lookup?bundleId={app_id}"))?;
     let bytes = match artwork_url(&lookup) {
-        Some(url) => http::get_bytes(&url)?,
+        Some(url) => http::get_image(&url)?,
         None => Vec::new(),
     };
     let _ = std::fs::create_dir_all(img.parent().expect("icons dir"));
-    match data_uri(&bytes) {
+    match data_uri(&bytes).filter(|_| within_limit(&bytes)) {
         Some(uri) => {
             std::fs::write(&img, &bytes).map_err(|e| e.to_string())?;
             let _ = std::fs::remove_file(&miss);
@@ -156,12 +185,15 @@ pub fn icon(dir: &Path, app_id: &str) -> Result<Option<String>, String> {
     }
 }
 
+/// Windows' HTTP client, time-limited; also used by the album art lookup (`album_art`).
 #[cfg(windows)]
-mod http {
+pub(crate) mod http {
     use std::time::Duration;
     use windows::core::HSTRING;
     use windows::Foundation::Uri;
-    use windows::Web::Http::HttpClient;
+    use windows::Storage::Streams::{Buffer, InputStreamOptions};
+    use windows::Web::Http::Filters::HttpBaseProtocolFilter;
+    use windows::Web::Http::{HttpClient, HttpCompletionOption};
 
     const TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -183,31 +215,80 @@ mod http {
             let uri = Uri::CreateUri(&HSTRING::from(url)).map_err(err)?;
             let body = tokio::time::timeout(TIMEOUT, client.GetStringAsync(&uri).map_err(err)?)
                 .await
-                .map_err(|_| "App Store lookup timed out".to_string())?
+                .map_err(|_| "Lookup timed out".to_string())?
                 .map_err(err)?;
             Ok(body.to_string())
         })
     }
 
-    pub fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    /// Read size while streaming an image.
+    const CHUNK: u32 = 64 * 1024;
+
+    /// An image from Apple's image servers (an app icon or an album cover), at most
+    /// `MAX_IMAGE_BYTES`. The address is checked first (`is_apple_image_url`), and redirects aren't
+    /// followed: a redirect could lead anywhere, so an image comes from the server tug checked or
+    /// not at all. The body is streamed and refused as soon as it's too big (or its declared length
+    /// is), never held whole first.
+    pub fn get_image(url: &str) -> Result<Vec<u8>, String> {
+        if !super::is_apple_image_url(url) {
+            return Err("Not an Apple image address".into());
+        }
+        let max = super::MAX_IMAGE_BYTES;
+        let too_big = || "Image too large".to_string();
         run(async {
-            let client = HttpClient::new().map_err(err)?;
-            let uri = Uri::CreateUri(&HSTRING::from(url)).map_err(err)?;
-            let buf = tokio::time::timeout(TIMEOUT, client.GetBufferAsync(&uri).map_err(err)?)
-                .await
-                .map_err(|_| "Icon download timed out".to_string())?
-                .map_err(err)?;
-            crate::ble::winrt::from_buffer(&buf).map_err(err)
+            tokio::time::timeout(TIMEOUT, async {
+                let filter = HttpBaseProtocolFilter::new().map_err(err)?;
+                filter.SetAllowAutoRedirect(false).map_err(err)?;
+                let client = HttpClient::Create(&filter).map_err(err)?;
+                let uri = Uri::CreateUri(&HSTRING::from(url)).map_err(err)?;
+                let response = client
+                    .GetWithOptionAsync(&uri, HttpCompletionOption::ResponseHeadersRead)
+                    .map_err(err)?
+                    .await
+                    .map_err(err)?;
+                if !response.IsSuccessStatusCode().map_err(err)? {
+                    return Err(format!("HTTP {}", response.StatusCode().map_err(err)?.0));
+                }
+                let content = response.Content().map_err(err)?;
+                let declared = content
+                    .Headers()
+                    .ok()
+                    .and_then(|h| h.ContentLength().ok())
+                    .and_then(|n| n.Value().ok());
+                if declared.is_some_and(|n| n > max as u64) {
+                    return Err(too_big());
+                }
+                let stream = content.ReadAsInputStreamAsync().map_err(err)?.await.map_err(err)?;
+                let mut out = Vec::new();
+                loop {
+                    let buffer = Buffer::Create(CHUNK).map_err(err)?;
+                    let read = stream
+                        .ReadAsync(&buffer, CHUNK, InputStreamOptions::Partial)
+                        .map_err(err)?
+                        .await
+                        .map_err(err)?;
+                    let bytes = crate::ble::winrt::from_buffer(&read).map_err(err)?;
+                    if bytes.is_empty() {
+                        return Ok(out);
+                    }
+                    if out.len() + bytes.len() > max {
+                        return Err(too_big());
+                    }
+                    out.extend_from_slice(&bytes);
+                }
+            })
+            .await
+            .map_err(|_| "Download timed out".to_string())?
         })
     }
 }
 
 #[cfg(not(windows))]
-mod http {
+pub(crate) mod http {
     pub fn get_string(_url: &str) -> Result<String, String> {
         Err("App icons are only fetched on Windows".into())
     }
-    pub fn get_bytes(_url: &str) -> Result<Vec<u8>, String> {
+    pub fn get_image(_url: &str) -> Result<Vec<u8>, String> {
         Err("App icons are only fetched on Windows".into())
     }
 }
@@ -224,6 +305,55 @@ mod tests {
         assert!(!valid_app_id("com.evil/../../x"));
         assert!(!valid_app_id("com.a&b=c"));
         assert!(!valid_app_id(""));
+    }
+
+    #[test]
+    fn images_over_two_mib_are_refused() {
+        assert!(within_limit(&vec![0u8; MAX_IMAGE_BYTES]));
+        assert!(!within_limit(&vec![0u8; MAX_IMAGE_BYTES + 1]));
+        assert_eq!(MAX_IMAGE_BYTES, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn only_apples_image_servers_pass_the_host_check() {
+        for ok in [
+            "https://is1-ssl.mzstatic.com/image/thumb/Music/a/100x100bb.jpg",
+            "https://a1.mzstatic.com/x.jpg",
+            "https://mzstatic.com/x.jpg",
+            "https://IS1-SSL.MZSTATIC.COM/x.jpg",
+            "https://a1.mzstatic.com",
+            "https://a1.mzstatic.com?size=600",
+        ] {
+            assert!(is_apple_image_url(ok), "{ok}");
+        }
+        for bad in [
+            // The host ends at `?`, `#` or `\`, whatever follows.
+            "https://evil.example?.mzstatic.com/x.jpg",
+            "https://evil.example#.mzstatic.com/x.jpg",
+            "https://evil.example\\.mzstatic.com/x.jpg",
+            "https://a1.mzstatic.com\\@evil.example/x.jpg",
+            // User info or a port in the host.
+            "https://a1.mzstatic.com@evil.example/x.jpg",
+            "https://user@a1.mzstatic.com/x.jpg",
+            "https://a1.mzstatic.com:8443/x.jpg",
+            // Look-alikes.
+            "https://evil.example/.mzstatic.com/x.jpg",
+            "https://mzstatic.com.evil.example/x.jpg",
+            "https://evilmzstatic.com/x.jpg",
+            "https://evil.example%2emzstatic.com/x.jpg",
+            // Not https, or nothing at all.
+            "http://a1.mzstatic.com/x.jpg",
+            "https:///x.jpg",
+            "https://a1.mzstatic.com/x y.jpg",
+            "",
+        ] {
+            assert!(!is_apple_image_url(bad), "{bad}");
+        }
+        // The App Store lookup's artwork goes through the same check.
+        let j = r#"{"results":[{"artworkUrl100":"https://evil.example?.mzstatic.com/100x100bb.jpg"}]}"#;
+        assert_eq!(artwork_url(j), None);
+        let j = r#"{"results":[{"artworkUrl100":"https://a1.mzstatic.com@evil.example/100x100bb.jpg"}]}"#;
+        assert_eq!(artwork_url(j), None);
     }
 
     #[test]

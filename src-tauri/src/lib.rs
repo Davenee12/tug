@@ -1,8 +1,10 @@
+mod album_art;
 mod ams;
 mod ancs;
 mod ancs_queue;
 mod app_icons;
 mod autostart;
+mod backup;
 mod ble;
 mod bt_inventory;
 mod cache_trim;
@@ -38,6 +40,7 @@ mod text;
 pub mod toast;
 mod tray;
 mod tugboat;
+mod updater;
 mod voice;
 mod wake;
 mod webview_watch;
@@ -158,6 +161,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         // Tugboat's "Choose files" picker (opened from Rust; the page never sees it).
         .plugin(tauri_plugin_dialog::init())
+        // Automatic updates (updater/): the check, download and signature check run in Rust. It
+        // does nothing until tauri.conf.json carries a real public key (docs/RELEASING.md).
+        .plugin(updater::plugin())
         .setup(move |app| {
             // Pop-ups left by the last run can't be answered (nothing hears a press while tug is
             // closed). A normal Quit withdraws them; when Windows shut down it was left to now.
@@ -170,13 +176,25 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let store = Arc::new(open_store(&dir, setup_log_dir.as_deref()));
+            // Coming back from an update restart: show the window (even from a `--minimized`
+            // start) so the person sees tug back on the screen they left.
+            let resuming = updater::resume_pending(&store);
             // Taskbar quick actions: a task clicked while tug wasn't running started this launch;
-            // the UI carries it out once it has loaded. Then (re)build the jump list itself.
-            if let Some(action) = quick_actions::parse_args(launch_args()) {
+            // the UI carries it out once it has loaded (never again after an update restart,
+            // which relaunches with the old arguments). Then (re)build the jump list itself.
+            if let Some(action) = quick_actions::launch_action(launch_args(), resuming) {
                 quick_actions::queue(action);
             }
             let show_games = store.setting(quick_actions::SHOW_GAMES_SETTING).ok().flatten();
             quick_actions::install(quick_actions::show_games(show_games.as_deref()));
+            // Bring in your full history: decrypted scratch files an import didn't get to delete
+            // (tug crashed, or the PC lost power mid-import) go now, before an import could start.
+            // Deleting a handful of files: quick, and done before the window can ask for one.
+            let local_dir = app.path().app_local_data_dir()?;
+            if backup::files::sweep_temp(&local_dir) {
+                log::info!("backup: removed scratch files a previous import left behind");
+            }
+            let backup = backup::BackupService::new(app.handle().clone(), store.clone(), local_dir);
             let shared = Arc::new(Shared::new(app.handle().clone(), store.clone()));
             let ble = ble::start(shared.clone());
             let _ = shared.map.set(map::service::start(shared.clone()));
@@ -209,16 +227,25 @@ pub fn run() {
                 tugboat,
                 devtools,
                 pc_audio,
+                backup,
             });
+            // Automatic updates: a first check shortly after startup, then every 6 hours, only
+            // when set up (a public key in tauri.conf.json) and switched on.
+            let updates = updater::Updater::new(app.handle().clone());
+            app.manage(updates.clone());
+            updates.start();
             // Keep the purely-cached image folders (album art/covers, app icons) from growing without
             // limit: drop the least-recently-used beyond the cap. Off the main thread so a big folder
             // scan never delays the window. Contact photos aren't capped here — they can't be
             // re-fetched, and are pruned by reference instead.
             let icons_dir = dir.join("icons");
             let art_dir = dir.join("spotify_art");
+            let album_dir = dir.join(album_art::DIR);
             std::thread::spawn(move || {
                 cache_trim::APP_ICONS_TRIM.trim_now(&icons_dir, cache_trim::APP_ICONS_CAP);
                 cache_trim::SPOTIFY_ART_TRIM.trim_now(&art_dir, cache_trim::SPOTIFY_ART_CAP);
+                cache_trim::ALBUM_ART_TRIM.trim_now(&album_dir, cache_trim::ALBUM_ART_CAP);
+                album_art::sweep_misses(&album_dir, std::time::SystemTime::now());
             });
             // Nice to have, never a reason not to start.
             if let Err(e) = tray::install(app.handle()) {
@@ -240,7 +267,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 startup::fit_window(&window);
             }
-            if !(launched_minimized() && tray::installed()) {
+            if resuming || !(launched_minimized() && tray::installed()) {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
@@ -338,6 +365,7 @@ pub fn run() {
             commands::place_lookup,
             commands::app_icon,
             commands::app_website,
+            commands::album_art,
             commands::contact_photo,
             commands::mark_read,
             commands::set_watching,
@@ -396,6 +424,25 @@ pub fn run() {
             commands::devtools_revoke,
             commands::devtools_confirm,
             commands::devtools_set_on_path,
+            updater::update_status,
+            updater::update_check,
+            updater::update_download,
+            updater::update_set_auto,
+            updater::update_apply,
+            updater::update_open_release_page,
+            updater::update_take_resume,
+            commands::conversation_heads,
+            commands::conversation_messages,
+            commands::attachment_preview,
+            commands::open_attachment,
+            commands::backup_list,
+            commands::backup_pick_folder,
+            commands::backup_status,
+            commands::backup_open,
+            commands::backup_import,
+            commands::backup_cancel,
+            commands::backup_imported,
+            commands::backup_remove_imported,
         ])
         .build(context);
     // A setup or WebView failure: say what failed and where the log is, instead of exiting
@@ -419,29 +466,43 @@ pub fn run() {
             }
         }
         if let tauri::RunEvent::Exit = event {
-            // Windows signing out or shutting down runs this from WM_ENDSESSION and waits for it:
-            // then only what can't wait is done, and the rest is left to the next start.
-            let started = std::time::Instant::now();
             let ending = session_end::ending();
-            let plan = session_end::ExitPlan::for_exit(ending);
-            // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
-            if plan.withdraw_toasts {
-                toast::withdraw_all(app);
+            tidy_before_exit(app, ending);
+            // Quit with an update downloaded: install it now, without starting tug again (the
+            // tray's item said "Quit and update tug"). Never while Windows is ending the session.
+            if let Some(updates) = app.try_state::<updater::Updater>() {
+                updates.apply_on_quit(ending);
             }
-            // Tugboat never outlives tug: stop listening (and remove unfinished uploads).
-            if let Some(state) = app.try_state::<AppState>() {
-                state.tugboat.shutdown_now(plan.clean_tugboat);
-                // Hand the phone's audio back to the phone rather than leave it routed to a PC
-                // that stopped listening.
-                state.pc_audio.shutdown_now(plan.audio_wait);
-            }
-            log::info!(
-                "exit: tidied up in {} ms{}",
-                started.elapsed().as_millis(),
-                if ending { " (Windows is ending the session)" } else { "" }
-            );
         }
     });
+}
+
+/// What tug does on its way out, once, however it leaves: Quit, Windows ending the session, or an
+/// update's installer about to start (`updater`, from the plugin's `on_before_exit`).
+/// Windows signing out or shutting down runs this from WM_ENDSESSION and waits for it: then only
+/// what can't wait is done, and the rest is left to the next start.
+pub(crate) fn tidy_before_exit(app: &tauri::AppHandle, ending: bool) {
+    if !updater::first_tidy() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let plan = session_end::ExitPlan::for_exit(ending);
+    // Pop-up buttons only work while tug runs: don't leave dead ones in Action Center.
+    if plan.withdraw_toasts {
+        toast::withdraw_all(app);
+    }
+    // Tugboat never outlives tug: stop listening (and remove unfinished uploads).
+    if let Some(state) = app.try_state::<AppState>() {
+        state.tugboat.shutdown_now(plan.clean_tugboat);
+        // Hand the phone's audio back to the phone rather than leave it routed to a PC
+        // that stopped listening.
+        state.pc_audio.shutdown_now(plan.audio_wait);
+    }
+    log::info!(
+        "exit: tidied up in {} ms{}",
+        started.elapsed().as_millis(),
+        if ending { " (Windows is ending the session)" } else { "" }
+    );
 }
 
 #[cfg(test)]

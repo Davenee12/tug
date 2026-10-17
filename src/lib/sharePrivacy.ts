@@ -4,7 +4,7 @@
 // Show anyway) and the pop-up kind the backend words a hidden pop-up by.
 
 import type { PhoneNotification, ShareReason, ShareState, ToastKind } from "../types/protocol";
-import { isConversation } from "./format";
+import { isChatMessage } from "./format";
 
 export const NOT_SHARING: ShareState = { active: false, reason: null };
 /** What the window assumes when the backend couldn't be asked: hidden, saying tug couldn't check. */
@@ -75,7 +75,7 @@ export function shareBanner(enabled: boolean, share: ShareState, revealed: boole
 export function toastKind(n: PhoneNotification): ToastKind {
   if (n.category === "incomingCall") return "call";
   if (n.category === "missedCall") return "missedCall";
-  return isConversation(n) ? "message" : "notification";
+  return isChatMessage(n) ? "message" : "notification";
 }
 
 /** The incoming-call card's caller line: their name, or nothing personal while previews are hidden. */

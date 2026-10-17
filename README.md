@@ -18,7 +18,7 @@ your PC.
 > Screenshots are coming. Until then, `npm run dev` shows the whole UI with sample data (see
 > [Build from source](#build-from-source)).
 
-**Current release: v0.5.17** · [What's changed](CHANGELOG.md) · [Everything tug can do](docs/FEATURES.md) · [Roadmap](ROADMAP.md)
+**Current release: v0.5.18** · [What's changed](CHANGELOG.md) · [Everything tug can do](docs/FEATURES.md) · [Roadmap](ROADMAP.md)
 
 ## Download
 
@@ -110,6 +110,8 @@ What goes online, and only when you use it:
   "Use my location" names the place through BigDataCloud.
 - **App icons** (on by default, switchable): Apple's App Store lookup, sending only the app's
   identifier.
+- **Album art** (on by default, switchable): Apple's music catalog, sending only the artist and
+  album name.
 - **Spotify**, only if you connect it.
 
 Tugboat stays on your local network, and the developer bridge only accepts programs on your PC

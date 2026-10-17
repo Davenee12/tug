@@ -2,7 +2,7 @@
 
 tug can hand your iPhone to the tools you code in: the newest 2FA code, a search of your texts
 and notifications, CI and deploy notifications, a phone screenshot sent with Tugboat, what's
-playing, and (only with a click from you) a text. It works through **`tug mcp`**, an MCP server
+playing, and (only with a click from you) a text or files sent to the phone. It works through **`tug mcp`**, an MCP server
 for AI tools, and the **`tug`** command for your terminal. Both are one small program that comes
 with tug: `<tug's install folder>\bin\tug.exe`.
 
@@ -78,7 +78,7 @@ in Settings › Developer tools › What AI tools can do. The same switches appl
 | `phone_status` | Connected or not, model, battery, now playing | Phone status (on) |
 | `media_control` | `play`, `pause`, `toggle`, `next`, `previous` | Music controls (**off**) |
 | `send_text` | Asks to text `to` (contact name or number) `message`: tug shows a card, and it's sent only if you click **Send** within 2 minutes. Returns `sent`, `declined`, `timed_out`, `cancelled` or `failed` | Send texts (**off**) |
-| *(`tug boat` only)* | Offer files from this PC to your phone through Tugboat | Send files to your phone (on) |
+| `send_file_to_phone` | Asks to send `paths` (full, or relative to the AI tool's folder) to the iPhone with Tugboat: tug shows a card, and on **Send** waits up to 2 minutes for the phone to download them. Returns `Delivered`, `Declined`, `Not confirmed`, `Waiting for the phone timed out` or `Cancelled` | Send files to your iPhone (**off**; also `tug boat`) |
 
 `since` takes `30m`, `2h`, `1d`, `1 week` or an ISO time/date (UTC unless it has an offset).
 Times come back as UTC ISO 8601. The developer-app list lives in one place:
@@ -86,9 +86,13 @@ Times come back as UTC ISO 8601. The developer-app list lives in one place:
 
 ## The confirmation card
 
-A text from an AI tool or `tug text` is only ever sent from tug's own card:
+A text from an AI tool or `tug text`, and files from `send_file_to_phone` or `tug boat`, are only
+ever sent from tug's own card:
 
-- It says "*<tool>* wants to text *<name>*", with the number and the exact message.
+- For a text it says "*<tool>* wants to text *<name>*", with the number and the exact message.
+- For files it asks "Send report.pdf (2.1 MB) to your iPhone?" (or "Send 3 files (…)"), lists each
+  file with its size and the folder it's in (so you can see it's *that* `notes.txt`, or that it's
+  in `.ssh`), and says who's asking. Names are shown the way the phone will get them.
 - Nothing is sent unless you click **Send** within **2 minutes**. After that the card closes and
   the tool is told `timed_out`; a click after the 2 minutes never sends.
 - Focus starts on **Don't send**, and **Esc** means Don't send, so a stray Enter can't send.
@@ -96,14 +100,16 @@ A text from an AI tool or `tug text` is only ever sent from tug's own card:
   front, so a click or key press meant for something else can't land on it.
 - One card at a time, and an answer only counts for the card it was given on.
 - A message longer than the box says so, so you can scroll through all of it before you send.
-- The **Send texts** switch must be on; with it off the tool is told so and no card appears.
-- At most 5 texts per 10 minutes.
+- The **Send texts** (or **Send files to your iPhone**) switch must be on; with it off the tool is
+  told so and no card appears. Turning a switch off closes its card as not sent.
+- At most 5 texts per 10 minutes, and 10 file requests a minute.
 
 ## The `tug` command
 
 ```text
 tug code [--copy]          the newest code on stdout (--copy: also on the clipboard, kept out of history)
-tug boat <file>...         send files to your phone with Tugboat (opens it in tug)
+tug boat <file>...         send files to your iPhone with Tugboat: tug asks you first
+tug boat - --name <name>   send what's piped in (up to 64 MB) as a file called <name>
 tug text <name> "<msg>"    text someone: tug asks you first, nothing sends by itself
 tug status                 is tug running, the phone (with Phone status on), what's switched on
 tug mcp                    the MCP server (your AI tool starts this)
@@ -112,7 +118,39 @@ tug mcp                    the MCP server (your AI tool starts this)
 Exit codes: `0` worked · `1` didn't (no code, not sent, a switch is off, phone not connected,
 rate limited) · `2` typed wrong · `3` couldn't reach tug (not running, AI tools off).
 
-**Naming files for `tug boat`.** A full or relative path is used exactly as given. A bare name
+**`tug boat` step by step.**
+
+```text
+tug boat report.pdf                  wait up to 2 minutes for the phone (the default)
+tug boat a.png b.png --wait 300      wait up to 5 minutes (1–600 seconds)
+tug boat report.pdf --no-wait        done once it's on offer (tug still holds it 2 minutes)
+git diff | tug boat - --name changes.diff
+```
+
+1. The command checks every file first: regular, readable files only. A folder ("src is a
+   folder"), a device or pipe (`NUL`, `\\.\pipe\…`) or a missing file stops it with exit `2`
+   before tug is asked. Paths resolve against the current folder; a symbolic link counts as the
+   file it points to, and that file's name is what's shown and sent.
+2. tug checks them again (same rules, Tugboat's 1 GB limit, 64 MB for stdin) and shows its card.
+   The terminal says `Check tug: Send or Don't send…`.
+3. **Don't send**, or no answer in 2 minutes: nothing is offered, exit `1`.
+4. **Send**: tug opens Tugboat if it's off and holds the files for the phone. With no Tugboat page
+   open on the phone, the panel comes up with its code and the terminal says `Scan the code in
+   tug to receive report.pdf on your iPhone…`; with the page open, `tap Get next to report.pdf`.
+5. Once the phone has downloaded every file: `Delivered: your iPhone downloaded report.pdf.`,
+   exit `0`. If the wait runs out first, tug stops offering the files (a file the phone is still
+   fetching gets up to a minute more), and it's `Waiting for your iPhone timed out…`, exit `1`.
+   Closing Tugboat, removing a file from it, or turning the switch off also ends it, exit `1`.
+
+Progress goes to stderr and the outcome to stdout. What's piped in is saved to a file of the
+command's own in your temp folder, read into tug's memory when you click Send, and deleted when
+the command ends; tug never writes it to disk.
+
+`send_file_to_phone` works the same way (always waiting 2 minutes) except that paths are used
+exactly as given: an AI tool's bare name is never looked up across the PC.
+
+**Naming files for `tug boat`.** A full or relative path is used exactly as given. In the
+terminal (never for an AI tool), a bare name
 that isn't a file in the current folder (`tug boat img_6060`) is looked up: same name in any
 case, and with any extension when you didn't type one. tug looks in the current folder first,
 then asks Windows Search's index for files with exactly that name under your user folder
@@ -138,8 +176,9 @@ ones already open don't. Or call it by its full path. The `bin` folder keeps the
 | **"tug isn't running. Open tug and try again."** | The tug app isn't open (or was quit from the tray). Open tug; it can stay hidden in the tray. |
 | **"AI tools are turned off in tug…"** | **Let AI tools use tug** is off. Turn it on in Settings › Developer tools. |
 | **"tug's Developer tools aren't set up yet…"** | Developer tools have never been switched on on this PC, so there's no token yet. Turn on Let AI tools use tug. |
-| **"*Switch name*" is switched off in tug › Settings › Developer tools.** | That tool's switch is off (codes, music and texts start off). Turn it on if you want the tool to have it. |
+| **"*Switch name*" is switched off in tug › Settings › Developer tools.** | That tool's switch is off (codes, music, texts and sending files start off). Turn it on if you want the tool to have it. |
 | **"tug's access for AI tools was reset with Revoke access…"** | You pressed Revoke access. Restart the AI tool (or run the command again) to reconnect. |
+| **"tug is already asking you about something else…"** | Another card (a text or files) is waiting for Send or Don't send. Answer it, then try again. |
 | **"Too many … calls. Try again in N s."** | A per-tool rate limit (for example 60 reads a minute, 5 texts per 10 minutes). Wait and retry. |
 | **"Something other than tug answered…"** | The pipe was answered by a program that couldn't prove it was tug. Quit and reopen tug. If it keeps happening, report it (see SECURITY.md). |
 | **"AI tools can't reach tug right now"** in Settings | The bridge didn't start. Quit tug from the tray and open it again. |
@@ -168,14 +207,17 @@ ones already open don't. Or call it by its full path. The `bin` folder keeps the
   others. The MCP server's instructions and tool descriptions say so, and results that carry them
   come wrapped as `{"note": "Untrusted content…", "results": [...]}`, so a message saying
   "ignore your instructions" is reported, not obeyed. Reading tools that return such content are
-  marked open-world; `send_text` is marked destructive. The `tug` command strips escape
+  marked open-world; `send_text` and `send_file_to_phone` are marked destructive. The `tug` command strips escape
   sequences and invisible characters from other people's words before printing them.
 - **Revoke access** writes a new token: AI tools already running get "access was reset" until
   they're restarted, and the Connected tools list starts over.
-- **Texts are always confirmed** (see [The confirmation card](#the-confirmation-card)).
+- **Texts and files are always confirmed** (see [The confirmation card](#the-confirmation-card)).
+  A prompt-injected agent can be fooled into *asking* to push a file to your phone; it can't send
+  one without your click, and the card shows the folder each file comes from.
 - **Rate limits** per tool: 60 calls a minute by default, 30 for search and music, 20 for
   Tugboat files, 10 for `tug boat`, 5 texts per 10 minutes.
-- **Logged without content:** tug.log gets the tool name, who asked, outcome and a count.
+- **Logged without content:** tug.log gets the tool name, who asked, outcome and a count; for files,
+  how many and their total size, never names or paths.
 - **Off means off:** while the switch is off the pipe only waits and answers "off": no polling, no
   logging, nothing at startup beyond creating it.
 

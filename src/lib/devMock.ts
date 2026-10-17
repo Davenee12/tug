@@ -16,6 +16,9 @@
 //   http://localhost:1420/?forgotten  the iPhone forgot this PC while Windows still holds the bond:
 //                                     "iPhone forgot this PC" in the sidebar and "Your iPhone forgot
 //                                     this PC" with Pair again (back to the find step)
+//   http://localhost:1420/?backup     Settings › Messages › Bring in your full history with made-up
+//                                     backups (the encrypted one's password is "test"); &none, &imported,
+//                                     &heif (see devMockBackup.ts)
 //   http://localhost:1420/?nudge      connected, notifications on, but texts/contacts off: the Feed's
 //                                     dismissible "Get more from tug" nudge
 //   http://localhost:1420/?whatsnew   the "What's new" card on launch, previewing the newest entry in
@@ -50,6 +53,9 @@
 //   http://localhost:1420/?game2p     Tugboat Run, two players with two phones (add &p2drop: Player 2's
 //                                     phone goes quiet mid-race). Any game URL takes &weather=rain,
 //                                     snow, night, windy, storm or off for the daily challenge
+//   http://localhost:1420/?games      the games picker
+//   http://localhost:1420/?stack      Harbor Stack open (?stackphone with a phone that drops every 1.6 s,
+//                                     ?stack2p a stack-off with two phones, &p2drop, &weather= as above)
 //   http://localhost:1420/?devtools   Settings › Developer tools, switched on, with two connected tools
 //   http://localhost:1420/?devconfirm the "wants to text" confirmation card an AI tool's send_text shows
 //   http://localhost:1420/?codefill   code fill: a bank's code arrives 1.5 s after load (as a notification and
@@ -67,11 +73,18 @@
 //   http://localhost:1420/?sharing    the screen is being shared: the Feed and Messages blur texts and names under
 //                                     the "Previews hidden" banner (Show anyway). &presenting for a slide show,
 //                                     &stop to have sharing end after 10 s (the banner clears), &call for a call
+//   http://localhost:1420/?update     a new version has downloaded: the Update button beside tug's name and its
+//                                     "Restart tug to update?" confirm (&updatebusy: held, as during a call)
+//   http://localhost:1420/?updatecheck   updates set up, nothing found yet: Settings › About › Check for updates
+//                                     finds a version and downloads it
+//   http://localhost:1420/?updateportable   the portable exe with a new version out: "Update available — Download"
+//   (no flag)                         updates aren't set up for this build: Settings › About says so
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { RELEASE_NOTES } from "./whatsNew";
-import type { CallRecord, CodeHotkeyStatus, VoiceStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
+import { backupMock, seedImported } from "./devMockBackup";
+import type { CallRecord, CodeHotkeyStatus, VoiceStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack, UpdateStatus } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -138,6 +151,12 @@ const history: PhoneNotification[] = noPhone
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Also bring the charger 🙏", 14),
       n("com.apple.mobilecal", "Calendar", "Design review", "In 15 minutes · Room 4", 18, { category: "schedule" }),
       n("com.hammerandchisel.discord", "Discord", "#release", "ci passed on main, tagging v0.4 now", 41),
+      // Other chat apps stay in the Feed (tug can't reply to them), even from a name that also
+      // texts you: Teams' Jane Doe never joins her Messages conversation. A WhatsApp code still
+      // gets its Copy code chip.
+      n("com.microsoft.skype.teams", "Teams", "Jane Doe", "Can you share the deck before standup?", 5),
+      n("com.tinyspeck.chatlyio", "Slack", "#design", "Priya: new mocks are up in the channel", 11),
+      n("net.whatsapp.WhatsApp", "WhatsApp", "Acme", "Your WhatsApp code: 384-221. Don't share this code with others.", 13),
       n("com.apple.mobilemail", "Mail", "Netlify", "Deploy succeeded for example-site", 66, { category: "email", removedAt: now - 30 * min, live: false }),
       n("net.whatsapp.WhatsApp", "WhatsApp", "Sam Okafor", "Running 5 late", 180, { live: false }),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Booked for Thursday", 60 * 26, { live: false }),
@@ -274,7 +293,9 @@ if (status.device && !forgotten) {
 
 // ?applemusic swaps Spotify for Apple Music, which lists skip ±15 s and Like/Dislike over AMS
 // (and no working repeat), so those controls can be reviewed in the browser.
-const appleMusic = params.has("applemusic");
+// ?albumart plays Apple Music too, so the card's art comes from the catalog lookup (mocked below).
+const albumArtTour = params.has("albumart");
+const appleMusic = params.has("applemusic") || albumArtTour;
 // ?speaker: Spotify on the phone is playing on a Spotify Connect speaker. The phone then reports the
 // title as "Song • Artist" and the artist as "Listening on <speaker>" (seen on a real iPhone).
 const onSpeaker = params.has("speaker") && !appleMusic;
@@ -310,6 +331,35 @@ const nowPlaying: NowPlaying = noPhone || forgotten
         ...(noRepeat ? [] : (["advanceRepeatMode"] as const)),
       ],
     };
+
+// ?albumart: Next and Previous step through made-up albums whose covers (from the mocked catalog
+// lookup below) are light, dark, vivid and grey, then one the catalog doesn't know (the placeholder).
+const tourTracks = [
+  { title: "Morning Paper", artist: "The Lanterns", album: "Paper Lanterns" },
+  { title: "Undertow", artist: "Harbour Lights", album: "Night Swim" },
+  { title: "Wildfire", artist: "Coral Avenue", album: "Ember (Deluxe Edition)" },
+  { title: "Static", artist: "Grey Room", album: "Concrete" },
+  { title: "Lost Song", artist: "Nobody Known", album: "Unreleased Demos" },
+];
+let tourAt = 0;
+if (albumArtTour && nowPlaying.title) Object.assign(nowPlaying, tourTracks[0]);
+function stepTour(by: number) {
+  tourAt = (tourAt + by + tourTracks.length) % tourTracks.length;
+  Object.assign(nowPlaying, tourTracks[tourAt], { elapsed: 0, elapsedAt: Date.now() });
+}
+/** A made-up 600 px cover: a diagonal gradient with a disc, as an SVG data URI. */
+function mockCover(from: string, to: string, disc: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/></linearGradient></defs><rect width="600" height="600" fill="url(#g)"/><circle cx="380" cy="360" r="150" fill="${disc}"/><circle cx="380" cy="360" r="28" fill="${from}"/></svg>`;
+  return `data:image/svg+xml;base64,${btoa(svg)}`;
+}
+const mockCovers: Record<string, string | null> = {
+  "paper lanterns": mockCover("#f6efd9", "#efe2bb", "#e0a83a"),
+  "night swim": mockCover("#0d1b2e", "#13284a", "#2fb5a8"),
+  "ember (deluxe edition)": mockCover("#c0261b", "#ef6a1f", "#ffd23f"),
+  concrete: mockCover("#8a8a8a", "#5e5e5e", "#d0d0d0"),
+  mezzanine: mockCover("#1c1426", "#3b2350", "#b04a7a"),
+  "unreleased demos": null,
+};
 
 // A connected keyboard listed first: the Connect panel must still offer only iPhones. In ?setup the
 // iPhone arrives nameless (shown as "iPhone" right away, named in place a moment later), alongside an
@@ -391,6 +441,9 @@ const messages: SmsMessage[] = noPhone
       // in the Feed with Copy code, even though the short code is an unknown sender.
       sms("in", "480579 is your Amazon OTP. Do not share it with anyone.", 2, "98626", null, "SMS_GSM"),
     ];
+// Full message history from an iPhone backup (devMockBackup.ts: ?backup, &imported, &none, &heif).
+const backupCtx = { messages, nextId: () => nextMsg++, zoe: ZOE };
+seedImported(backupCtx);
 
 // Recents (PBAP call history): phone-local times, newest first, as the iPhone sends them.
 const localIso = (agoMin: number) => {
@@ -681,6 +734,7 @@ const dropState: TugboatStatus = {
   receiving: false,
   ended: null,
   clip: null,
+  held: null,
 };
 const sendDrop = () => void emit("tugboat-status", structuredClone(dropState));
 function startDrop() {
@@ -770,11 +824,22 @@ if (dropOn || dropWait || dropNoNet) {
 // quiet 10 s into the race ("Player 2 disconnected — waiting…").
 // The daily challenge's weather: &weather=rain, snow, night, windy, storm or off (a made-up forecast
 // for the preview only, so the start screen and the water can be checked without real weather).
+// Harbor Stack has the same scenarios: ?stack, ?stackphone (the phone presses Drop every 1.6 s,
+// which starts the game and then stacks; a nudge now and then), ?stack2p (&p2drop) for a
+// stack-off. ?games opens the games picker.
 let padOpen = false;
 let padPlayers = 1;
+/** The game that opened the controller (each game hears only its own button, like the PC). */
+let padGame = "tugboat-run";
 const padScripts: number[] = [];
 const padTimers: number[] = [];
-const twoPhones = params.has("game2p");
+const stackGame = params.has("stack") || params.has("stackphone") || params.has("stack2p");
+const twoPhones = params.has("game2p") || params.has("stack2p");
+const phoneParam = params.has("gamephone") || params.has("stackphone");
+function padEvent(seat: 1 | 2, connected: boolean, steer: number, pressed: boolean) {
+  const stack = padGame === "harbor-stack";
+  return { seat, connected, steer: connected ? steer : 0, boost: connected && !stack && pressed, drop: connected && stack && pressed };
+}
 function phoneScript(seat: 1 | 2, phase: number, boosts: boolean) {
   const t0 = performance.now();
   let tick = 0;
@@ -782,9 +847,16 @@ function phoneScript(seat: 1 | 2, phase: number, boosts: boolean) {
     window.setInterval(() => {
       const t = (performance.now() - t0) / 1000;
       tick++;
+      if (padGame === "harbor-stack") {
+        // Drop every 1.6 s (the first one starts the game), and nudge the crane now and then.
+        const drop = (tick + phase * 4) % 16 < 2;
+        const nudge = Math.sin(t * 0.7 + phase) > 0.8 ? -0.6 : 0;
+        void emit("game-pad", padEvent(seat, true, nudge, drop));
+        return;
+      }
       // Boost for a moment at the start (starts the run) and every few seconds after.
       const boost = boosts ? tick % 30 < 3 : tick % 40 === 20;
-      void emit("game-pad", { seat, connected: true, steer: Math.round(Math.sin(t * 1.3 + phase) * 80) / 100, boost });
+      void emit("game-pad", padEvent(seat, true, Math.round(Math.sin(t * 1.3 + phase) * 80) / 100, boost));
     }, 100),
   );
 }
@@ -796,8 +868,9 @@ function showGuestCode(on: boolean) {
     guestQr: live ? mockQr(29) : null,
   });
 }
-function gamePadOpen(players: number) {
+function gamePadOpen(players: number, game: string) {
   padPlayers = players;
+  padGame = game;
   if (padOpen) {
     showGuestCode(players === 2);
     sendDrop();
@@ -807,7 +880,7 @@ function gamePadOpen(players: number) {
   startDrop();
   showGuestCode(players === 2);
   sendDrop();
-  if (!params.has("gamephone") && !twoPhones) return;
+  if (!phoneParam && !twoPhones) return;
   padTimers.push(
     window.setTimeout(() => {
       Object.assign(dropState, { phase: "connected", phone: "iPhone", phoneActive: true });
@@ -821,13 +894,13 @@ function gamePadOpen(players: number) {
       if (padPlayers === 2) phoneScript(2, 2, false);
     }, 3000),
     // The first phone starts the race once both are in.
-    window.setTimeout(() => void emit("game-pad", { seat: 1, connected: true, steer: 0, boost: true }), 4200),
+    window.setTimeout(() => void emit("game-pad", padEvent(1, true, 0, true)), 4200),
   );
   if (params.has("p2drop")) {
     padTimers.push(
       window.setTimeout(() => {
         window.clearInterval(padScripts.pop());
-        void emit("game-pad", { seat: 2, connected: false, steer: 0, boost: false });
+        void emit("game-pad", padEvent(2, false, 0, false));
       }, 14_000),
     );
   }
@@ -838,8 +911,8 @@ function gamePadClose() {
   sendDrop();
   for (const t of padTimers.splice(0)) window.clearTimeout(t);
   for (const s of padScripts.splice(0)) window.clearInterval(s);
-  void emit("game-pad", { seat: 1, connected: false, steer: 0, boost: false });
-  void emit("game-pad", { seat: 2, connected: false, steer: 0, boost: false });
+  void emit("game-pad", padEvent(1, false, 0, false));
+  void emit("game-pad", padEvent(2, false, 0, false));
 }
 const mockWeather = params.get("weather");
 if (mockWeather && mockWeather !== "off") {
@@ -865,14 +938,14 @@ if (mockWeather && mockWeather !== "off") {
 } else if (mockWeather === "off") {
   settings["ui.weather"] = "off";
 }
-if (params.has("game") || params.has("gamephone") || twoPhones) {
+if (params.has("game") || params.has("gamephone") || twoPhones || stackGame || params.has("games")) {
   setTimeout(async () => {
     const { useGameStore } = await import("../stores/game");
-    await useGameStore().show();
-    if (!params.has("gamephone") && !twoPhones) return;
+    await useGameStore().show(params.has("games") ? "picker" : stackGame ? "harbor-stack" : "tugboat-run");
+    if (!phoneParam && !twoPhones) return;
     const click = (text: string) => Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes(text))?.click();
     setTimeout(() => {
-      if (twoPhones) click("Two players");
+      if (twoPhones) click(stackGame ? "Stack-off" : "Two players");
       setTimeout(() => click(twoPhones ? "Use phones as controllers" : "Use your phone as a controller"), 100);
     }, 300);
   }, 400);
@@ -887,10 +960,10 @@ const DEV_LABELS: Array<[DevToolsStatus["permissions"][number]["key"], string, b
   ["phone_status", "Phone status", true],
   ["media", "Music controls", false],
   ["send_text", "Send texts", false],
-  ["tugboat_send", "Send files to your phone", true],
+  ["tugboat_send", "Send files to your iPhone", params.has("devconfirmfiles")],
 ];
 const devState: DevToolsStatus = {
-  enabled: params.has("devtools") || params.has("devconfirm"),
+  enabled: params.has("devtools") || params.has("devconfirm") || params.has("devconfirmfiles"),
   permissions: DEV_LABELS.map(([key, label, on]) => ({ key, label, on })),
   clients: params.has("devtools")
     ? [
@@ -919,6 +992,7 @@ if (params.has("devconfirm")) {
   setTimeout(() => {
     devState.pending = {
       id: 1,
+      kind: "text",
       tool: "Claude Code",
       toName: "Zoe",
       toAddress: ZOE,
@@ -927,6 +1001,35 @@ if (params.has("devconfirm")) {
     };
     void emit("devtools-confirm", structuredClone(devState.pending));
   }, 900);
+}
+
+// `tug boat report.pdf notes.txt` from an AI tool (?devconfirmfiles): the file card, and on Send,
+// Tugboat's code with the files waiting for the phone.
+if (params.has("devconfirmfiles")) {
+  setTimeout(() => {
+    devState.pending = {
+      id: 2,
+      kind: "files",
+      tool: "Claude Code",
+      files: [
+        { name: "report.pdf", size: 2_202_010, folder: "C:\\Users\\Jordan\\Projects\\harbor\\docs" },
+        { name: "notes.txt", size: 1_804, folder: null },
+      ],
+      expiresAt: Date.now() + 120_000,
+    };
+    void emit("devtools-confirm", structuredClone(devState.pending));
+  }, 900);
+}
+function holdFilesMock() {
+  startDrop();
+  Object.assign(dropState, { phase: "waiting", phone: null, phoneActive: false });
+  dropState.outgoing.push(
+    { id: "held1", name: "report.pdf", size: 2_202_010, downloads: 0 },
+    { id: "held2", name: "notes.txt", size: 1_804, downloads: 0 },
+  );
+  dropState.held = { names: ["report.pdf", "notes.txt"], expiresAt: Date.now() + 120_000 };
+  sendDrop();
+  void emit("tugboat-dropped", []);
 }
 
 // Play iPhone audio on this PC (?pcaudio, ?pcaudiofail, ?pcaudiodrop, ?pcaudioold).
@@ -992,10 +1095,67 @@ const voice: VoiceStatus = {
   micBlocked: params.has("micblocked"),
 };
 
+// Automatic updates (updater/ in Rust). Without a flag the build isn't set up for updates, like a
+// real build before the owner adds the key. ?update: a new version has downloaded (the Update
+// button beside tug's name). &updatebusy: Restart now is held as if a call were ringing.
+// ?updatecheck: set up, nothing found yet; Check for updates finds one and downloads it.
+// ?updateportable: the portable exe, a new version out (the button opens the release page).
+const updateNext = appVersion.replace(/(\d+)$/, (n) => String(Number(n) + 1));
+const update: UpdateStatus = {
+  rev: 1,
+  phase: params.has("update") ? "ready" : params.has("updatecheck") ? "upToDate" : params.has("updateportable") ? "available" : "notConfigured",
+  current: appVersion,
+  version: params.has("update") || params.has("updateportable") ? updateNext : null,
+  headline: params.has("update") ? "Automatic updates with an Update button, and a calmer tray." : null,
+  progress: null,
+  failure: null,
+  portable: params.has("updateportable"),
+  auto: true,
+  checkedAt: null,
+};
+function sendUpdate(patch: Partial<UpdateStatus> = {}) {
+  Object.assign(update, patch, { rev: (update.rev ?? 0) + 1 });
+  void emit("update-status", { ...update });
+  return { ...update };
+}
+function mockUpdateCheck() {
+  const answer = sendUpdate({ phase: "checking", failure: null });
+  setTimeout(() => {
+    if (!params.has("updatecheck")) return void sendUpdate({ phase: "upToDate", checkedAt: Date.now() });
+    sendUpdate({ phase: "downloading", version: updateNext, headline: "Automatic updates with an Update button.", progress: 0 });
+    let p = 0;
+    const tick = setInterval(() => {
+      p += 20;
+      if (p < 100) return void sendUpdate({ progress: p });
+      clearInterval(tick);
+      sendUpdate({ phase: "ready", progress: null, checkedAt: Date.now() });
+    }, 400);
+  }, 1200);
+  return answer;
+}
+
 mockIPC(
   (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (cmd) {
+      case "update_status":
+        return { ...update };
+      case "update_check":
+        return update.phase === "notConfigured" ? { ...update } : mockUpdateCheck();
+      case "update_download":
+        return sendUpdate({ phase: "ready" });
+      case "update_set_auto":
+        return sendUpdate({ auto: a.on === true });
+      case "update_apply":
+        if (params.has("updatebusy")) return { blocked: "call", status: { ...update } };
+        sendUpdate({ phase: "applying" });
+        console.info("[dev mock] the installer would run now; tug restarts on", a.resume);
+        return { blocked: null, status: { ...update } };
+      case "update_open_release_page":
+        console.info("[dev mock] open the release page");
+        return null;
+      case "update_take_resume":
+        return null;
       case "pc_audio_status":
         return { ...pcAudio };
       case "pc_audio_set":
@@ -1112,7 +1272,7 @@ mockIPC(
       case "tugboat_status":
         return structuredClone(dropState);
       case "tugboat_stop":
-        Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, guestUrl: null, guestQr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null, clip: null });
+        Object.assign(dropState, { phase: "off", url: null, address: null, qr: null, guestUrl: null, guestQr: null, phone: null, phoneActive: false, incoming: [], outgoing: [], texts: [], sentText: null, clip: null, held: null });
         return null;
       case "tugboat_pick_files": {
         startDrop();
@@ -1141,7 +1301,7 @@ mockIPC(
         console.log("[devMock] open Tugboat folder", a.path ?? dropFolder);
         return null;
       case "game_pad_open":
-        gamePadOpen(Number(a.players ?? 1));
+        gamePadOpen(Number(a.players ?? 1), String(a.game ?? "tugboat-run"));
         return structuredClone(dropState);
       case "game_pad_close":
         gamePadClose();
@@ -1166,6 +1326,7 @@ mockIPC(
         return sendDev();
       case "devtools_confirm":
         console.log("[devMock] confirmation answered:", a.send ? "Send" : "Don't send");
+        if (a.send && devState.pending?.kind === "files") holdFilesMock();
         devState.pending = null;
         void emit("devtools-confirm", null);
         return null;
@@ -1192,7 +1353,10 @@ mockIPC(
           nowPlaying.repeat = nowPlaying.repeat === "off" ? "all" : nowPlaying.repeat === "all" ? "one" : "off";
           void emit("now-playing", { ...nowPlaying });
         }
-        if (a.command === "previousTrack") {
+        if (albumArtTour && (a.command === "nextTrack" || a.command === "previousTrack")) {
+          stepTour(a.command === "nextTrack" ? 1 : -1);
+          void emit("now-playing", { ...nowPlaying });
+        } else if (a.command === "previousTrack") {
           Object.assign(nowPlaying, { elapsed: 0, elapsedAt: Date.now() });
           void emit("now-playing", { ...nowPlaying });
         }
@@ -1216,6 +1380,20 @@ mockIPC(
         return null;
       case "app_website":
         return "https://www.example.com/";
+      case "album_art": {
+        // Stand-in covers (the real ones come from Apple's catalog, looked up in Rust): the made-up
+        // albums of ?albumart, Mezzanine for ?applemusic, and a tinted tile for anything else. Off
+        // in Settings: nothing, as the backend would answer.
+        if (settings["ui.albumArt"] === "false") return null;
+        const key = String(a.album ?? "").toLowerCase();
+        const hue = [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+        const cover =
+          key in mockCovers
+            ? mockCovers[key]
+            : mockCover(`hsl(${hue} 45% 30%)`, `hsl(${(hue + 40) % 360} 50% 18%)`, `hsl(${(hue + 180) % 360} 70% 60%)`);
+        // A lookup takes a moment.
+        return new Promise((resolve) => setTimeout(() => resolve(cover), 250));
+      }
       case "contact_photo": {
         // Stand-in contact photos so the avatar path is visible without a phone: a couple of mock
         // people have one, the rest fall back to initials (as iOS contacts without a photo would).
@@ -1447,7 +1625,7 @@ mockIPC(
         console.log("[devMock] spotify add to playlist", a.playlistId, a.trackUri);
         return null;
       default:
-        return null;
+        return backupMock(cmd, a, backupCtx) ?? null;
     }
   },
   { shouldMockEvents: true },

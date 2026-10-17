@@ -7,11 +7,14 @@ import { useDevToolsStore } from "./stores/devtools";
 import { usePcAudioStore } from "./stores/pcAudio";
 import { useVoiceStore } from "./stores/voice";
 import { useGameStore } from "./stores/game";
+import { useUpdateStore } from "./stores/update";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import ConnectPanel from "./components/ConnectPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
 import TugboatPanel from "./components/TugboatPanel.vue";
 import TugboatRun from "./components/TugboatRun.vue";
+import HarborStack from "./components/HarborStack.vue";
+import GamePicker from "./components/GamePicker.vue";
 import FeedPanel from "./components/FeedPanel.vue";
 import IncomingCall from "./components/IncomingCall.vue";
 import NewConversation from "./components/NewConversation.vue";
@@ -21,6 +24,7 @@ import SpotifyPanel from "./components/SpotifyPanel.vue";
 import WhatsNew from "./components/WhatsNew.vue";
 import PairingDialog from "./components/PairingDialog.vue";
 import ToolConfirmCard from "./components/ToolConfirmCard.vue";
+import UpdateConfirm from "./components/UpdateConfirm.vue";
 import { nextDownSince, RECONNECT_GRACE_MS, showConnectionPanel } from "./lib/connectionPanel";
 import { showsReconnecting } from "./lib/connectionStatus";
 import { phoneTextMessage, skippedMessage } from "./lib/tugboat";
@@ -36,6 +40,7 @@ const devtools = useDevToolsStore();
 const pcAudio = usePcAudioStore();
 const voice = useVoiceStore();
 const game = useGameStore();
+const update = useUpdateStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
 // show the Connection panel beside the feed; everything else (and narrow windows) uses
@@ -94,7 +99,7 @@ function onShortcut(e: KeyboardEvent) {
     return;
   }
   // A ringing call has the keyboard (Enter answers, Esc declines) until it's dealt with, and
-  // Tugboat Run has it while it's open.
+  // a game (or the games picker) has it while it's open.
   if (tug.ringing || game.open) return;
   const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable]") !== null;
   if (key === "k") {
@@ -178,6 +183,9 @@ onMounted(async () => {
     console.error("tug init failed", e);
     tug.notify("error", START_FAILED);
   }
+  // Automatic updates: the Update button and Settings › About; after an update restart, this also
+  // reopens the screen the person left (so it runs once tug's own state has loaded).
+  void update.init();
   // Only now, with history and settings loaded (so Copy latest code can find the code): a task
   // clicked before tug was ready has been waiting in the backend and runs here, once.
   try {
@@ -200,6 +208,7 @@ onUnmounted(() => {
   devtools.dispose();
   pcAudio.dispose();
   voice.dispose();
+  update.dispose();
 });
 </script>
 
@@ -223,11 +232,16 @@ onUnmounted(() => {
     <SearchPalette v-if="tug.searchOpen" />
     <SpotifyPanel v-if="tug.spotifyPanelOpen" />
     <WhatsNew v-if="tug.whatsNewOpen" />
-    <!-- The game covers the window; a call, a confirmation card or a pairing PIN still come up over it (and pause it). -->
-    <TugboatRun v-if="game.open" />
+    <!-- The games (and their picker) cover the window; a call, a confirmation card or a pairing PIN
+         still come up over them (and pause a game). -->
+    <GamePicker v-if="game.screen === 'picker'" />
+    <TugboatRun v-else-if="game.screen === 'tugboat-run'" />
+    <HarborStack v-else-if="game.screen === 'harbor-stack'" />
     <TugboatPanel v-if="tugboat.open" />
     <!-- A text an AI tool (or `tug text`) wants to send: nothing goes without Send here. -->
     <ToolConfirmCard v-if="devtools.confirm" :key="devtools.confirm.id" :request="devtools.confirm" />
+    <!-- "Restart tug to update?" from the Update button: nothing restarts without Restart now. -->
+    <UpdateConfirm v-if="update.confirm.open" />
     <!-- Files dragged over tug: they'll go to the phone through Tugboat. The panel's own drop zone
          lights up instead while it's open. -->
     <div

@@ -4,6 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppName,
+  AttachmentPreview,
+  BackupImported,
+  BackupInfo,
+  BackupStatus,
   BtInventory,
   CallRecord,
   CodeFilled,
@@ -21,6 +25,7 @@ import type {
   TugboatTextArrived,
   DiscoveredDevice,
   GamePad,
+  GameId,
   MediaCommand,
   NowPlaying,
   PairingRequest,
@@ -41,6 +46,8 @@ import type {
   SpotifyTrack,
   ToastPressed,
   ToastSpec,
+  UpdateApplyAnswer,
+  UpdateStatus,
   VoiceStatus,
   VoiceTyped,
 } from "../types/protocol";
@@ -113,7 +120,10 @@ export const api = {
   openWindowsSettings: (page: "bluetooth" | "location" | "notifications" | "microphone" | "language") => invoke<void>("open_windows_settings", { page }),
   /** Open an http(s) link (a notification's "Open in browser") in the default browser. */
   openUrl: (url: string) => invoke<void>("open_url", { url }),
-  /** Delete a conversation (all of it, by sender and address); returns the delete's stamp, which undoes it as `undoAt`. */
+  /**
+   * Delete a conversation (all of it, by sender and address);
+   * returns the delete's stamp, which undoes it as `undoAt`.
+   */
   setConversationHidden: (senders: [string, string][], addresses: string[], undoAt: number | null) =>
     invoke<number>("set_conversation_hidden", { senders, addresses, undoAt }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),
@@ -123,6 +133,8 @@ export const api = {
   setSwitchesVisible: (on: boolean) => invoke<void>("set_switches_visible", { on }),
   appIcon: (appId: string) => invoke<string | null>("app_icon", { appId }),
   appWebsite: (appId: string) => invoke<string | null>("app_website", { appId }),
+  /** The album's cover (data URI) from the cache or Apple's catalog; null when there's none or Show album art is off. */
+  albumArt: (artist: string, album: string) => invoke<string | null>("album_art", { artist, album }),
   contactPhoto: (key: string) => invoke<string | null>("contact_photo", { key }),
   placeLookup: (latitude: number, longitude: number) => invoke<string>("place_lookup", { latitude, longitude }),
   markRead: (messageIds: number[]) => invoke<void>("mark_read", { messageIds }),
@@ -186,10 +198,10 @@ export const api = {
   tugboatSendClipboard: () => invoke<TugboatStatus>("tugboat_send_clipboard"),
   /** Open the Tugboat folder, or select a file Tugboat saved. */
   tugboatOpenFolder: (path: string | null) => invoke<void>("tugboat_open_folder", { path }),
-  // --- Tugboat Run's phone controller ---
-  /** Open Tugboat if needed and the controller channel for one phone, or two (a two-player race);
-   * asking again changes how many. Tugboat's status carries the QR code. */
-  gamePadOpen: (players: 1 | 2 = 1) => invoke<TugboatStatus>("game_pad_open", { players }),
+  // --- The games' phone controller ---
+  /** Open Tugboat if needed and the controller channel for `game`, for one phone or two (a
+   * two-player game); asking again changes how many. Tugboat's status carries the QR code. */
+  gamePadOpen: (players: 1 | 2 = 1, game: GameId = "tugboat-run") => invoke<TugboatStatus>("game_pad_open", { players, game }),
   /** The game closed: the phone's inputs are refused again. */
   gamePadClose: () => invoke<void>("game_pad_close"),
   /** What a phone's controller shows: paused, hits this run (it buzzes on a new one), and in a race
@@ -207,6 +219,40 @@ export const api = {
   devtoolsConfirm: (id: number, send: boolean) => invoke<void>("devtools_confirm", { id, send }),
   /** Add tug's command folder to (or remove it from) the user's PATH. */
   devtoolsSetOnPath: (on: boolean) => invoke<DevToolsStatus>("devtools_set_on_path", { on }),
+  // --- Automatic updates (src-tauri/src/updater) ---
+  updateStatus: () => invoke<UpdateStatus>("update_status"),
+  /** Check for updates now; answers Checking, the outcome comes as `update-status`. */
+  updateCheck: () => invoke<UpdateStatus>("update_check"),
+  /** Download the release a check found (automatic downloads off). */
+  updateDownload: () => invoke<UpdateStatus>("update_download"),
+  /** "Download updates automatically". */
+  updateSetAuto: (on: boolean) => invoke<UpdateStatus>("update_set_auto", { on }),
+  /** Restart now: installs and restarts (this never answers then), or says what has to finish first. */
+  updateApply: (resume: string | null) => invoke<UpdateApplyAnswer>("update_apply", { resume }),
+  /** The new release's page on GitHub (its notes; the portable download). */
+  updateOpenReleasePage: () => invoke<void>("update_open_release_page"),
+  /** The screen to come back to after an update restart, once. */
+  updateTakeResume: () => invoke<string | null>("update_take_resume"),
+  // --- Full message history (an iPhone backup) ---
+  /** The newest text of every conversation, so ones older than the recent page still list. */
+  conversationHeads: (limit: number) => invoke<SmsMessage[]>("conversation_heads", { limit }),
+  /** One conversation's whole history, by its numbers. */
+  conversationMessages: (addresses: string[]) => invoke<SmsMessage[]>("conversation_messages", { addresses }),
+  attachmentPreview: (id: number) => invoke<AttachmentPreview>("attachment_preview", { id }),
+  /** Open a stored photo or video in its default app (usually Photos). */
+  openAttachment: (id: number) => invoke<void>("open_attachment", { id }),
+  backupList: () => invoke<BackupInfo[]>("backup_list"),
+  /** Windows' folder picker; null when nothing was picked. */
+  backupPickFolder: () => invoke<BackupInfo | null>("backup_pick_folder"),
+  backupStatus: () => invoke<BackupStatus>("backup_status"),
+  /** Unlock (with the password for an encrypted backup, used once and never kept) and read it. */
+  backupOpen: (id: string, password: string | null) => invoke<void>("backup_open", { id, password }),
+  backupImport: (texts: boolean, photos: boolean) => invoke<void>("backup_import", { texts, photos }),
+  /** Cancel reading or importing, or close a backup that was read. */
+  backupCancel: () => invoke<void>("backup_cancel"),
+  backupImported: () => invoke<BackupImported>("backup_imported"),
+  /** Remove every text the import added and every photo it copied; resolves with how many texts. */
+  backupRemoveImported: () => invoke<number>("backup_remove_imported"),
 };
 
 interface EventPayloads {
@@ -244,8 +290,12 @@ interface EventPayloads {
   "pc-audio": PcAudioStatus;
   "voice-status": VoiceStatus;
   "voice-typed": VoiceTyped;
+  /** Automatic updates changed (`updater/`). */
+  "update-status": UpdateStatus;
   /** A text an AI tool (or `tug text`) wants to send; null once it's answered or gone. */
   "devtools-confirm": DevToolsConfirm | null;
+  /** Bringing in history from an iPhone backup: progress, the scan, the outcome (`backup/`). */
+  "backup-import": BackupStatus;
 }
 
 export function on<E extends keyof EventPayloads>(

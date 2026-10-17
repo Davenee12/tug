@@ -5,6 +5,7 @@ import { connectionBusy, connectionLabel as connectionLabelFor, FORGOT_ACTION } 
 import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
 import { useGameStore } from "../stores/game";
+import { useUpdateStore } from "../stores/update";
 import { phoneModel } from "../lib/phoneModel";
 import { canWiggle, shouldTug } from "../lib/logoTricks";
 import { logoSpins } from "../lib/logoSpin";
@@ -14,10 +15,12 @@ import NowPlayingCard from "./NowPlayingCard.vue";
 import PhoneArt from "./PhoneArt.vue";
 import ToggleRow from "./ToggleRow.vue";
 import TugMark from "./TugMark.vue";
+import UpdatePill from "./UpdatePill.vue";
 
 const tug = useTugStore();
 const tugboat = useTugboatStore();
 const game = useGameStore();
+const update = useUpdateStore();
 const s = computed(() => tug.status);
 
 // The sidebar never scrolls. On a short window, tighten the section gaps, drop the Quick toggles'
@@ -116,16 +119,24 @@ const dnd = computed({
         <TugMark :size="30" class="text-on-dark" />
       </span>
       <span class="font-display text-[30px] leading-none text-on-dark" style="letter-spacing: -0.03em">tug</span>
-      <!-- Tugboat Run. Beside the name, so the sidebar (which never scrolls) doesn't grow. -->
-      <button
-        v-if="tug.settings.showGames"
-        class="ml-auto inline-flex items-center gap-1.5 rounded-full border border-on-dark-soft/30 px-2.5 py-0.5 text-[12px] font-medium text-on-dark transition-colors active:bg-surface-dark-elevated"
-        title="Tugboat Run: a little boat game"
-        @click="game.show()"
-      >
-        <Gamepad2 :size="13" class="text-primary" />
-        Play
-      </button>
+      <div class="ml-auto flex items-center gap-1">
+        <!-- The Update button, once a new version has downloaded (like Teams'). -->
+        <UpdatePill action="confirm" />
+        <!-- The games picker. Beside the name, so the sidebar (which never scrolls) doesn't grow. -->
+        <button
+          v-if="tug.settings.showGames"
+          class="inline-flex items-center gap-1.5 rounded-full border border-on-dark-soft/30 px-2.5 py-0.5 text-[12px] font-medium text-on-dark transition-colors active:bg-surface-dark-elevated"
+          title="Play a game: Tugboat Run or Harbor Stack"
+          @click="game.show()"
+        >
+          <Gamepad2 :size="13" class="text-primary" />
+          Play
+        </button>
+      </div>
+    </div>
+    <!-- The portable exe can't update itself: its longer "Update available — Download" gets a line. -->
+    <div v-if="update.pill?.action === 'download'" class="mt-2 px-2">
+      <UpdatePill action="download" />
     </div>
 
     <!-- Phone card, like a device card: the phone pictured on the left; its name, model, connection

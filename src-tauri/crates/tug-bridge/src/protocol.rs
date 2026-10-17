@@ -9,10 +9,15 @@
 //! server → {"type":"result","ok":{...}}  or  {"type":"error","code":"...","message":"..."}
 //! ```
 //!
+//! A call that asks for it (`offer_files` with `"progress": true`) may also get any number of
+//! `{"type":"progress","progress":{...}}` lines before its result: only after the handshake, so
+//! they come from tug, and never to a call that didn't ask (older clients don't know them).
+//!
 //! The token never crosses the pipe, and both sides prove they hold it (see `auth.rs`), so a
 //! process squatting the pipe name while tug is closed learns nothing. Pure: no I/O here.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +36,28 @@ pub const MAX_QUERY_CHARS: usize = 200;
 pub const MAX_NAME_CHARS: usize = 100;
 pub const MAX_TEXT_CHARS: usize = 1000;
 pub const MAX_OFFER_FILES: usize = 20;
+/// `tug boat`: how long tug holds files for the phone, and the command waits, unless told
+/// otherwise (`--wait`).
+pub const DEFAULT_WAIT_SECS: u32 = 120;
+/// The longest `--wait`: Tugboat turns itself off after 10 idle minutes anyway.
+pub const MAX_WAIT_SECS: u32 = 600;
+/// The person's time to answer tug's confirmation card (`devtools/confirm.rs` uses the same).
+pub const CONFIRM_SECS: u64 = 120;
+/// A file the phone is still fetching when the wait runs out gets this much longer to finish
+/// (`tugboat/held.rs` uses the same).
+pub const FINISH_GRACE_SECS: u64 = 60;
+/// Largest input `tug boat -` takes: it's held in memory until the phone has it, like a picture
+/// from the clipboard (Tugboat's limit for those).
+pub const MAX_STDIN_BYTES: u64 = 64 * 1024 * 1024;
+/// What the `tug` command's copy of piped input is called: `tug-boat-<pid>-<n>.tmp`, right in
+/// the user's temp folder. tug reads piped input from nothing else.
+pub const STDIN_PREFIX: &str = "tug-boat-";
+
+/// The file name of a stdin copy the `tug` command made (`STDIN_PREFIX` … `.tmp`), by spelling.
+pub fn is_stdin_copy_name(path: &str) -> bool {
+    let name = path.rsplit(['\\', '/']).next().unwrap_or("");
+    name.len() > STDIN_PREFIX.len() + 4 && name.starts_with(STDIN_PREFIX) && name.ends_with(".tmp")
+}
 /// Developer notifications look back this far when no `since` is given.
 pub const DEFAULT_DEV_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -152,9 +179,37 @@ pub enum ClientMsg {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
-    Challenge { v: u32, nonce: String, proof: String },
-    Result { ok: serde_json::Value },
+    Challenge {
+        v: u32,
+        nonce: String,
+        proof: String,
+    },
+    /// How a long call is getting on, only to a call that asked for it.
+    Progress {
+        progress: Progress,
+    },
+    Result {
+        ok: serde_json::Value,
+    },
     Error(BridgeError),
+}
+
+/// How an `offer_files` call is getting on, for the `tug` command to say on stderr.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+pub enum Progress {
+    /// tug is showing its card: Send or Don't send.
+    Confirming,
+    /// Sent with Send: on offer in Tugboat, waiting for the phone to download it.
+    Waiting {
+        /// What the phone sees the files called.
+        names: Vec<String>,
+        /// Tugboat's page is open on the phone right now (otherwise its code needs scanning).
+        phone_open: bool,
+        /// Files the phone has downloaded so far.
+        fetched: usize,
+        total: usize,
+    },
 }
 
 /// Why a call didn't work. `message` is written for people: the CLI prints it and AI tools
@@ -246,9 +301,23 @@ pub enum Call {
         to: String,
         message: String,
     },
-    /// `tug boat <file...>`: offer files to the phone through Tugboat.
+    /// `tug boat <file...>` and the MCP tool `send_file_to_phone`: ask to send files to the phone
+    /// through Tugboat. tug shows its card first; once the person clicks Send the files are held
+    /// for the phone for `wait_secs` and the call answers when the phone has them (or not).
     OfferFiles {
+        /// Full paths: the caller resolves relative ones against its own folder.
         paths: Vec<String>,
+        /// `tug boat - --name <name>`: what came in on stdin, saved by the command to a file of
+        /// its own that tug reads once the person clicks Send (the command deletes it after).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stdin: Option<StdinFile>,
+        /// How long to hold the files for the phone and wait (`None`: the default 2 minutes).
+        /// `Some(0)`: hold them for the default time but answer as soon as they're on offer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wait_secs: Option<u32>,
+        /// Send `Progress` lines before the result.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        progress: bool,
     },
     /// `tug status`: is tug running, what's on, and the phone.
     Status,
@@ -281,10 +350,14 @@ impl Permission {
     ];
 
     /// On once the master switch is on, unless the user turned it off. Reading is on; anything
-    /// that acts on the phone (music, texts) starts off, and so do verification codes: a code is
-    /// a key to an account, so handing it to an AI tool is something to choose, not a default.
+    /// that acts on the phone (music, texts, sending it files) starts off, and so do verification
+    /// codes: a code is a key to an account, so handing it to an AI tool is something to choose,
+    /// not a default. Sending files moves this PC's files off it, so it's a choice too.
     pub fn default_on(self) -> bool {
-        !matches!(self, Permission::Media | Permission::SendText | Permission::Codes)
+        !matches!(
+            self,
+            Permission::Media | Permission::SendText | Permission::Codes | Permission::TugboatSend
+        )
     }
 
     pub fn key(self) -> &'static str {
@@ -314,7 +387,7 @@ impl Permission {
             Permission::PhoneStatus => "Phone status",
             Permission::Media => "Music controls",
             Permission::SendText => "Send texts",
-            Permission::TugboatSend => "Send files to your phone",
+            Permission::TugboatSend => "Send files to your iPhone",
         }
     }
 }
@@ -380,11 +453,29 @@ pub enum Request {
     },
     OfferFiles {
         paths: Vec<String>,
+        stdin: Option<StdinFile>,
+        /// Seconds to hold the files for the phone (never 0).
+        hold_secs: u32,
+        /// Answer once the files are on offer instead of when the phone has them.
+        no_wait: bool,
+        progress: bool,
     },
     Status,
 }
 
+/// What `tug boat -` read from stdin: the file the command saved it to, and the name for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StdinFile {
+    pub path: String,
+    pub name: String,
+}
+
 impl Request {
+    /// Whether the caller asked for `Progress` lines before its answer.
+    pub fn wants_progress(&self) -> bool {
+        matches!(self, Request::OfferFiles { progress: true, .. })
+    }
+
     /// The tool name, for logs and rate limits.
     pub fn tool(&self) -> &'static str {
         match self {
@@ -503,21 +594,62 @@ impl Call {
                 to: text("to", to, MAX_NAME_CHARS, false)?,
                 message: text("message", message, MAX_TEXT_CHARS, true)?,
             },
-            Call::OfferFiles { paths } => {
-                if paths.is_empty() {
+            Call::OfferFiles {
+                paths,
+                stdin,
+                wait_secs,
+                progress,
+            } => {
+                let count = paths.len() + usize::from(stdin.is_some());
+                if count == 0 {
                     return Err(BridgeError::invalid("Name at least one file to send."));
                 }
-                if paths.len() > MAX_OFFER_FILES {
+                if count > MAX_OFFER_FILES {
                     return Err(BridgeError::invalid(format!(
                         "Send at most {MAX_OFFER_FILES} files at a time."
                     )));
                 }
-                for p in paths {
-                    if p.is_empty() || p.contains('\0') || !is_absolute_windows_path(p) {
+                let full = |p: &str| !p.is_empty() && !p.contains('\0') && is_absolute_windows_path(p);
+                for p in paths.iter().chain(stdin.as_ref().map(|s| &s.path)) {
+                    // Before anything else looks at it: opening a network path signs in to it.
+                    if crate::outgoing::is_network_path(p) {
+                        return Err(BridgeError::invalid(crate::outgoing::Refusal::Network.sentence(p)));
+                    }
+                    if !full(p) {
                         return Err(BridgeError::invalid("Files must be given as full paths."));
                     }
+                    if crate::outgoing::is_device_path(p) || crate::outgoing::names_a_stream(p) {
+                        return Err(BridgeError::invalid(format!(
+                            "{} isn't a regular file, so it can't be sent.",
+                            printable(p)
+                        )));
+                    }
                 }
-                Request::OfferFiles { paths: paths.clone() }
+                if stdin.as_ref().is_some_and(|s| !is_stdin_copy_name(&s.path)) {
+                    return Err(BridgeError::invalid("Piped input must come from the tug command."));
+                }
+                let stdin = match stdin {
+                    Some(s) => Some(StdinFile {
+                        path: s.path.clone(),
+                        name: text("name", &s.name, MAX_NAME_CHARS, false)?,
+                    }),
+                    None => None,
+                };
+                let (hold_secs, no_wait) = match *wait_secs {
+                    None => (DEFAULT_WAIT_SECS, false),
+                    Some(0) => (DEFAULT_WAIT_SECS, true),
+                    Some(s) if s > MAX_WAIT_SECS => {
+                        return Err(BridgeError::invalid(format!("Wait at most {MAX_WAIT_SECS} seconds.")))
+                    }
+                    Some(s) => (s, false),
+                };
+                Request::OfferFiles {
+                    paths: paths.clone(),
+                    stdin,
+                    hold_secs,
+                    no_wait,
+                    progress: *progress,
+                }
             }
             Call::Status => Request::Status,
         })
@@ -530,6 +662,13 @@ pub fn is_absolute_windows_path(p: &str) -> bool {
     let b = p.as_bytes();
     (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
         || p.starts_with("\\\\")
+}
+
+/// The longest an `offer_files` call can take inside tug: the card, then holding the files for the
+/// phone, then the grace for a file it's still fetching. The bridge and the command each allow a
+/// little more, so tug always gets to answer.
+pub fn offer_span(hold_secs: u32) -> Duration {
+    Duration::from_secs(CONFIRM_SECS + u64::from(hold_secs) + FINISH_GRACE_SECS)
 }
 
 // ---- Results. The app serializes these; the CLI and MCP server read them back. ----
@@ -664,16 +803,33 @@ pub struct SendResult {
     pub detail: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SkippedFile {
-    pub name: String,
-    pub reason: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OfferOutcome {
+    /// The phone downloaded every file.
+    Delivered,
+    /// Approved and on offer (the caller asked not to wait): tug holds them for `hold_secs`.
+    Offered,
+    /// Approved, but the phone didn't download them in time: they were withdrawn.
+    TimedOut,
+    /// The person clicked "Don't send".
+    Declined,
+    /// Nobody answered tug's card within 2 minutes.
+    NotConfirmed,
+    /// Turned off, Tugboat closed, or a file removed in tug while it waited: `detail` says which.
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OfferResult {
-    pub offered: usize,
-    pub skipped: Vec<SkippedFile>,
+    pub outcome: OfferOutcome,
+    /// What the phone sees the files called, in the order given.
+    pub names: Vec<String>,
+    pub total_bytes: u64,
+    /// How long tug holds them for the phone.
+    pub hold_secs: u32,
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[cfg(test)]
@@ -869,20 +1025,179 @@ mod tests {
         assert!(m("volume_up").is_err());
     }
 
+    fn offer(paths: &[&str]) -> Call {
+        Call::OfferFiles {
+            paths: paths.iter().map(|s| s.to_string()).collect(),
+            stdin: None,
+            wait_secs: None,
+            progress: false,
+        }
+    }
+
     #[test]
     fn offered_files_must_be_full_paths() {
-        let o = |p: &[&str]| {
-            Call::OfferFiles {
-                paths: p.iter().map(|s| s.to_string()).collect(),
-            }
-            .validate(NOW)
-        };
-        assert!(o(&["C:\\Users\\me\\shot.png", "\\\\nas\\share\\a.txt"]).is_ok());
+        let o = |p: &[&str]| offer(p).validate(NOW);
+        assert!(o(&["C:\\Users\\me\\shot.png", "D:\\a.txt"]).is_ok());
         assert!(o(&[]).is_err());
+        // Another computer's files never reach the app: opening one would sign in to it.
+        for net in [r"\\nas\share\a.txt", r"\\?\UNC\nas\share\a.txt", "//nas/share/a.txt"] {
+            let e = o(&["C:\\ok.txt", net]).unwrap_err();
+            assert_eq!(e.code, ErrorCode::Invalid, "{net}");
+            assert!(e.message.contains("another computer"), "{e}");
+        }
         assert!(o(&["shot.png"]).is_err());
         assert!(o(&["..\\shot.png"]).is_err());
         let many: Vec<String> = (0..21).map(|i| format!("C:\\f{i}")).collect();
-        assert!(Call::OfferFiles { paths: many }.validate(NOW).is_err());
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert!(o(&many).is_err());
+        // Devices and pipes never reach the app, whatever they're called.
+        for device in [
+            r"\\.\pipe\tug-bridge-x",
+            r"C:\Users\me\NUL",
+            r"\\.\PhysicalDrive0",
+            // An alternate data stream: hidden from Explorer, so not the file on the card.
+            r"C:\Users\me\report.pdf:secret",
+        ] {
+            let e = o(&[device]).unwrap_err();
+            assert_eq!(e.code, ErrorCode::Invalid, "{device}");
+            assert!(e.message.contains("isn't a regular file"), "{e}");
+        }
+    }
+
+    #[test]
+    fn offers_default_to_a_two_minute_wait_and_cap_it() {
+        let with = |wait_secs: Option<u32>| {
+            Call::OfferFiles {
+                paths: vec![r"C:\report.pdf".into()],
+                stdin: None,
+                wait_secs,
+                progress: true,
+            }
+            .validate(NOW)
+        };
+        let pick = |r: Result<Request, BridgeError>| match r.unwrap() {
+            Request::OfferFiles { hold_secs, no_wait, .. } => (hold_secs, no_wait),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(pick(with(None)), (DEFAULT_WAIT_SECS, false));
+        assert_eq!(pick(with(Some(30))), (30, false));
+        // --no-wait: held for the usual time, answered once offered.
+        assert_eq!(pick(with(Some(0))), (DEFAULT_WAIT_SECS, true));
+        assert_eq!(pick(with(Some(MAX_WAIT_SECS))), (MAX_WAIT_SECS, false));
+        assert_eq!(with(Some(MAX_WAIT_SECS + 1)).unwrap_err().code, ErrorCode::Invalid);
+        assert!(with(None).unwrap().wants_progress());
+        assert!(!offer(&[r"C:\a"]).validate(NOW).unwrap().wants_progress());
+        // The span covers the card, the hold and the grace for a file still being fetched.
+        assert_eq!(offer_span(120), Duration::from_secs(120 + 120 + 60));
+    }
+
+    #[test]
+    fn stdin_counts_as_a_file_and_needs_a_name() {
+        let call = |name: &str| Call::OfferFiles {
+            paths: vec![],
+            stdin: Some(StdinFile {
+                path: r"C:\Users\me\AppData\Local\Temp\tug-boat-1.tmp".into(),
+                name: name.into(),
+            }),
+            wait_secs: None,
+            progress: false,
+        };
+        match call("  notes.txt ").validate(NOW).unwrap() {
+            Request::OfferFiles { stdin: Some(s), .. } => assert_eq!(s.name, "notes.txt"),
+            other => panic!("{other:?}"),
+        }
+        assert!(call("").validate(NOW).is_err());
+        assert!(call("a\nb").validate(NOW).is_err());
+        let relative = Call::OfferFiles {
+            paths: vec![],
+            stdin: Some(StdinFile {
+                path: "tug-boat-1.tmp".into(),
+                name: "x".into(),
+            }),
+            wait_secs: None,
+            progress: false,
+        };
+        assert!(relative.validate(NOW).is_err());
+    }
+
+    #[test]
+    fn piped_input_must_be_the_commands_own_copy() {
+        let piped = |path: &str| Call::OfferFiles {
+            paths: Vec::new(),
+            stdin: Some(StdinFile {
+                path: path.into(),
+                name: "notes.txt".into(),
+            }),
+            wait_secs: None,
+            progress: false,
+        };
+        assert!(piped(r"C:\Users\me\AppData\Local\Temp\tug-boat-41-7.tmp")
+            .validate(NOW)
+            .is_ok());
+        for other in [
+            r"C:\Users\me\.ssh\id_rsa",
+            r"C:\Users\me\AppData\Local\Temp\in.tmp",
+            r"C:\Users\me\AppData\Local\Temp\tug-boat-.tmp",
+            r"C:\Users\me\tug-boat-1.txt",
+        ] {
+            let e = piped(other).validate(NOW).unwrap_err();
+            assert!(e.message.contains("tug command"), "{other}: {e}");
+        }
+        assert!(is_stdin_copy_name("tug-boat-1-2.tmp"));
+        assert!(!is_stdin_copy_name("tug-boat-.tmp"));
+    }
+
+    #[test]
+    fn an_offer_and_its_progress_round_trip_on_the_wire() {
+        let call = Call::OfferFiles {
+            paths: vec![r"C:\Users\me\report.pdf".into()],
+            stdin: Some(StdinFile {
+                path: r"C:\Temp\in.tmp".into(),
+                name: "notes.txt".into(),
+            }),
+            wait_secs: Some(30),
+            progress: true,
+        };
+        let wire = serde_json::to_string(&ClientMsg::Call {
+            proof: "p".into(),
+            call: call.clone(),
+        })
+        .unwrap();
+        assert!(wire.contains(r#""tool":"offer_files""#), "{wire}");
+        assert_eq!(
+            serde_json::from_str::<ClientMsg>(&wire).unwrap(),
+            ClientMsg::Call {
+                proof: "p".into(),
+                call
+            }
+        );
+        // An older command's call (paths only) still reads, with the defaults.
+        assert_eq!(
+            parse(r#"{"tool":"offer_files","paths":["C:\\a.txt"]}"#),
+            offer(&[r"C:\a.txt"])
+        );
+        let progress = ServerMsg::Progress {
+            progress: Progress::Waiting {
+                names: vec!["report.pdf".into()],
+                phone_open: false,
+                fetched: 0,
+                total: 1,
+            },
+        };
+        let v = serde_json::to_value(&progress).unwrap();
+        assert_eq!(v["type"], "progress");
+        assert_eq!(v["progress"]["stage"], "waiting");
+        assert_eq!(serde_json::from_value::<ServerMsg>(v).unwrap(), progress);
+        let result = OfferResult {
+            outcome: OfferOutcome::NotConfirmed,
+            names: vec!["report.pdf".into()],
+            total_bytes: 2_100_000,
+            hold_secs: 120,
+            detail: None,
+        };
+        let v = serde_json::to_value(&result).unwrap();
+        assert_eq!(v["outcome"], "not_confirmed");
+        assert_eq!(serde_json::from_value::<OfferResult>(v).unwrap(), result);
     }
 
     #[test]
@@ -890,6 +1205,9 @@ mod tests {
         let eff = effective_permissions(&BTreeMap::new());
         assert!(eff[&Permission::Search] && eff[&Permission::PhoneStatus] && eff[&Permission::TugboatFiles]);
         assert!(!eff[&Permission::Media] && !eff[&Permission::SendText] && !eff[&Permission::Codes]);
+        // Sending this PC's files to the phone is a choice, not a default.
+        assert!(!eff[&Permission::TugboatSend]);
+        assert_eq!(Permission::TugboatSend.label(), "Send files to your iPhone");
         let saved = BTreeMap::from([("media".to_string(), true), ("search".to_string(), false)]);
         let eff = effective_permissions(&saved);
         assert!(eff[&Permission::Media] && !eff[&Permission::Search]);
@@ -912,6 +1230,10 @@ mod tests {
             }
             .permission(),
             Some(Permission::SendText)
+        );
+        assert_eq!(
+            offer(&[r"C:\report.pdf"]).validate(NOW).unwrap().permission(),
+            Some(Permission::TugboatSend)
         );
     }
 

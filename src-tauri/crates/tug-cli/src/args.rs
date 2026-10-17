@@ -6,9 +6,12 @@ pub enum Command {
     Code {
         copy: bool,
     },
-    /// `tug boat <file...>`
+    /// `tug boat <file...>`, `tug boat - --name <name>`, with `--wait <secs>` or `--no-wait`.
     Boat {
         files: Vec<String>,
+        /// `-` was given: send stdin, under this name.
+        stdin_name: Option<String>,
+        wait: Wait,
     },
     /// `tug text <name> "<message>"`
     Text {
@@ -23,11 +26,35 @@ pub enum Command {
     Version,
 }
 
+/// How long `tug boat` waits for the phone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wait {
+    /// Two minutes.
+    Default,
+    /// `--wait <secs>`.
+    Secs(u32),
+    /// `--no-wait`: done once the files are on offer (tug still holds them for two minutes).
+    No,
+}
+
+impl Wait {
+    /// As the bridge takes it (`Call::OfferFiles::wait_secs`).
+    pub fn wire(self) -> Option<u32> {
+        match self {
+            Wait::Default => None,
+            Wait::Secs(s) => Some(s),
+            Wait::No => Some(0),
+        }
+    }
+}
+
 pub const USAGE: &str = "\
 tug: your iPhone, from the terminal (tug must be running)
 
   tug code [--copy]          print the newest verification code (--copy: also put it on the clipboard)
-  tug boat <file>...         send files to your phone with Tugboat
+  tug boat <file>...         send files to your iPhone with Tugboat; tug asks you to confirm first
+                             --wait <secs> (default 120, at most 600) or --no-wait
+  tug boat - --name <name>   send what's piped in, as a file called <name>
   tug text <name> \"<msg>\"    text someone; tug asks you to confirm first
   tug status                 is tug running, and how's the phone
   tug mcp                    the MCP server for AI tools (they start it; see Settings › Developer tools)
@@ -60,14 +87,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                 "`tug code` doesn't take {other:?}. Did you mean `tug code --copy`?"
             )),
         },
-        "boat" => {
-            if rest.is_empty() {
-                return Err("Name the files to send: `tug boat photo.png notes.pdf`.".into());
-            }
-            Ok(Command::Boat {
-                files: rest.iter().map(|s| s.to_string()).collect(),
-            })
-        }
+        "boat" => parse_boat(&rest),
         "text" => match rest.as_slice() {
             [] | [_] => Err("Say who and what: `tug text Sam \"On my way\"`.".into()),
             [to, message @ ..] => {
@@ -83,6 +103,72 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         },
         other => Err(format!("tug doesn't know {other:?}.")),
     }
+}
+
+const WAIT_HELP: &str = "`--wait` takes seconds from 1 to 600, e.g. `--wait 300`.";
+
+/// `tug boat`'s files and options, in any order. `--` ends the options (for a file whose name
+/// starts with `-`).
+fn parse_boat(rest: &[&str]) -> Result<Command, String> {
+    use tug_bridge::protocol::{MAX_OFFER_FILES, MAX_WAIT_SECS};
+    let mut files = Vec::new();
+    let mut stdin = false;
+    let mut name: Option<String> = None;
+    let mut wait: Option<u32> = None;
+    let mut no_wait = false;
+    let mut options = true;
+    let mut it = rest.iter().copied();
+    let seconds = |v: Option<&str>| -> Result<u32, String> {
+        v.and_then(|v| v.trim().parse::<u32>().ok())
+            .filter(|s| (1..=MAX_WAIT_SECS).contains(s))
+            .ok_or_else(|| WAIT_HELP.to_string())
+    };
+    while let Some(a) = it.next() {
+        if !options {
+            files.push(a.to_string());
+            continue;
+        }
+        match a {
+            "--" => options = false,
+            "-" if stdin => return Err("Give `-` (stdin) only once.".into()),
+            "-" => stdin = true,
+            "--name" => name = Some(it.next().unwrap_or_default().to_string()),
+            "--wait" => wait = Some(seconds(it.next())?),
+            "--no-wait" => no_wait = true,
+            _ if a.starts_with("--name=") => name = Some(a["--name=".len()..].to_string()),
+            _ if a.starts_with("--wait=") => wait = Some(seconds(Some(&a["--wait=".len()..]))?),
+            _ if a.starts_with('-') => {
+                return Err(format!(
+                    "`tug boat` doesn't know {a:?}. For a file whose name starts with -, put -- before it."
+                ))
+            }
+            _ => files.push(a.to_string()),
+        }
+    }
+    let name = name.map(|n| n.trim().to_string());
+    match (stdin, &name) {
+        (true, None) => return Err("Name what you pipe in: `tug boat - --name notes.txt`.".into()),
+        (true, Some(n)) if n.is_empty() => return Err("Name what you pipe in: `tug boat - --name notes.txt`.".into()),
+        (false, Some(_)) => return Err("`--name` names what you pipe in: `tug boat - --name notes.txt`.".into()),
+        _ => {}
+    }
+    if files.is_empty() && !stdin {
+        return Err("Name the files to send: `tug boat photo.png notes.pdf`.".into());
+    }
+    if files.len() + usize::from(stdin) > MAX_OFFER_FILES {
+        return Err(format!("Send at most {MAX_OFFER_FILES} files at a time."));
+    }
+    let wait = match (wait, no_wait) {
+        (Some(_), true) => return Err("Use `--wait` or `--no-wait`, not both.".into()),
+        (Some(s), false) => Wait::Secs(s),
+        (None, true) => Wait::No,
+        (None, false) => Wait::Default,
+    };
+    Ok(Command::Boat {
+        files,
+        stdin_name: name.filter(|_| stdin),
+        wait,
+    })
 }
 
 #[cfg(test)]
@@ -105,9 +191,80 @@ mod tests {
         assert_eq!(
             p(&["boat", "a.png", "b c.pdf"]),
             Ok(Command::Boat {
-                files: vec!["a.png".into(), "b c.pdf".into()]
+                files: vec!["a.png".into(), "b c.pdf".into()],
+                stdin_name: None,
+                wait: Wait::Default,
             })
         );
+    }
+
+    fn boat(args: &[&str]) -> Result<(Vec<String>, Option<String>, Wait), String> {
+        let mut all = vec!["boat"];
+        all.extend_from_slice(args);
+        match p(&all)? {
+            Command::Boat {
+                files,
+                stdin_name,
+                wait,
+            } => Ok((files, stdin_name, wait)),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn boat_takes_waits_in_any_order() {
+        assert_eq!(
+            boat(&["report.pdf", "--wait", "300"]),
+            Ok((vec!["report.pdf".into()], None, Wait::Secs(300)))
+        );
+        assert_eq!(
+            boat(&["--wait=45", "a.png", "b.png"]),
+            Ok((vec!["a.png".into(), "b.png".into()], None, Wait::Secs(45)))
+        );
+        assert_eq!(boat(&["--no-wait", "a.png"]).unwrap().2, Wait::No);
+        assert_eq!(Wait::Default.wire(), None);
+        assert_eq!(Wait::Secs(30).wire(), Some(30));
+        assert_eq!(Wait::No.wire(), Some(0));
+        for bad in [
+            &["a.png", "--wait"][..],
+            &["a.png", "--wait", "0"],
+            &["a.png", "--wait", "601"],
+            &["a.png", "--wait", "soon"],
+            &["a.png", "--wait=-5"],
+        ] {
+            assert!(boat(bad).unwrap_err().contains("--wait"), "{bad:?}");
+        }
+        assert!(boat(&["a.png", "--wait", "5", "--no-wait"])
+            .unwrap_err()
+            .contains("not both"));
+    }
+
+    #[test]
+    fn boat_sends_stdin_under_a_name() {
+        assert_eq!(
+            boat(&["-", "--name", "notes.txt"]),
+            Ok((vec![], Some("notes.txt".into()), Wait::Default))
+        );
+        assert_eq!(
+            boat(&["--name=log.txt", "-", "a.png"]),
+            Ok((vec!["a.png".into()], Some("log.txt".into()), Wait::Default))
+        );
+        assert!(boat(&["-"]).unwrap_err().contains("--name"));
+        assert!(boat(&["-", "--name", "  "]).unwrap_err().contains("--name"));
+        assert!(boat(&["a.png", "--name", "x.png"]).unwrap_err().contains("pipe"));
+        assert!(boat(&["-", "-", "--name", "x"]).is_err());
+    }
+
+    #[test]
+    fn boat_mistakes_get_a_sentence() {
+        assert!(boat(&[]).unwrap_err().contains("Name the files"));
+        assert!(boat(&["--no-wait"]).unwrap_err().contains("Name the files"));
+        assert!(boat(&["--force", "a.png"]).unwrap_err().contains("--"));
+        // A file whose name starts with a dash, after `--`.
+        assert_eq!(boat(&["--", "--wait"]).unwrap().0, vec!["--wait".to_string()]);
+        let many: Vec<String> = (0..21).map(|i| format!("f{i}.txt")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert!(boat(&many).unwrap_err().contains("at most 20"));
     }
 
     #[test]

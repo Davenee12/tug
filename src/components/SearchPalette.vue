@@ -6,7 +6,8 @@ import { useTugboatStore } from "../stores/tugboat";
 import { useGameStore } from "../stores/game";
 import { useVoiceStore } from "../stores/voice";
 import { useFocusTrap } from "../lib/focusTrap";
-import { afterPaletteSend, parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
+import { byArrival } from "../lib/messageSync";
+import { afterPaletteSend, notificationPick, parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
 import {
   appLabel,
   canClear,
@@ -16,7 +17,6 @@ import {
   formatAddress,
   groupConversations,
   highlight,
-  isConversation,
   notificationTime,
   snippet,
   threadKey,
@@ -174,7 +174,7 @@ function actionIcon(a: Action) {
   if (a.kind === "send-clipboard") return ClipboardCopy;
   if (a.target === "spotify") return Music2;
   if (a.target === "tugboat") return QrCode;
-  if (a.target === "game") return Gamepad2;
+  if (a.target === "tugboat-run" || a.target === "harbor-stack") return Gamepad2;
   return a.target === "settings" ? Settings2 : Plus;
 }
 /** Several people match a "text …": Enter waits until one is picked on purpose. */
@@ -249,8 +249,8 @@ async function run(a: Action) {
     tug.pickerOpen = true;
   } else if (a.target === "tugboat") {
     void tugboat.show();
-  } else if (a.target === "game") {
-    void game.show();
+  } else if (a.target === "tugboat-run" || a.target === "harbor-stack") {
+    void game.show(a.target);
   } else if (a.target === "spotify") {
     tug.openSpotifyPanel("search");
   } else {
@@ -267,18 +267,24 @@ function pick(o: Option | undefined) {
   if (o.kind === "person") {
     openConversation(o.c.address, cleanName(o.c.name));
   } else if (o.kind === "message") {
+    // An old text (brought in from a backup) may be older than what the window has loaded: add it,
+    // so the conversation has it to scroll to while the rest of its history loads.
+    if (!tug.messages.some((m) => m.id === o.m.id)) tug.messages = [...tug.messages, o.m].sort(byArrival);
     openConversation(o.m.address, messageName(o.m));
     tug.focusItem = `m${o.m.id}`;
-  } else if (isConversation(o.n)) {
-    tug.openThread(threadKey(o.n));
-    tug.focusItem = `n${o.n.id}`;
-  } else if (o.n.removedAt == null) {
-    tug.view = "feed";
-    tug.focusItem = `n${o.n.id}`;
   } else {
-    // Cleared app notifications aren't in the feed any more: show them in full here.
-    expanded.value = expanded.value === o.n.id ? null : o.n.id;
-    return;
+    // A text's notification opens its conversation; any other app's (WhatsApp, Teams…) its Feed row.
+    const target = notificationPick(o.n);
+    if (target.open === "messages") {
+      tug.openThread(target.thread);
+    } else if (target.open === "feed") {
+      tug.view = "feed";
+    } else {
+      // Cleared app notifications aren't in the feed any more: show them in full here.
+      expanded.value = expanded.value === o.n.id ? null : o.n.id;
+      return;
+    }
+    tug.focusItem = `n${o.n.id}`;
   }
   close();
 }

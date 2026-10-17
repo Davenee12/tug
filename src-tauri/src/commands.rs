@@ -27,9 +27,14 @@ pub struct AppState {
     pub tugboat: TugboatService,
     pub devtools: Arc<crate::devtools::DevTools>,
     pub pc_audio: Arc<PcAudio>,
+    pub backup: crate::backup::BackupService,
 }
 
 type Result<T> = std::result::Result<T, String>;
+
+/// Clear history and Remove imported history while a backup is being read or brought in.
+const BACKUP_BUSY: &str =
+    "tug is still bringing in your iPhone backup. Wait for it to finish, or cancel it, then try again.";
 
 #[tauri::command]
 pub fn get_status(state: State<'_, AppState>) -> DeviceStatus {
@@ -91,9 +96,29 @@ pub fn search_all(state: State<'_, AppState>, query: String, limit: u32) -> Resu
     })
 }
 
+/// Clear history's slow part: the database (one transaction over every notification and text,
+/// years of them after an import) and the photos and videos brought in from an iPhone backup,
+/// which go with their texts. Returns the notification-id floor (`Store::clear_history`).
+fn clear_stored_history(store: &crate::store::Store, local_dir: &std::path::Path) -> rusqlite::Result<i64> {
+    let floor = store.clear_history()?;
+    crate::backup::files::remove_all(local_dir);
+    Ok(floor)
+}
+
+/// Settings › Data & privacy › Clear history. Async, with the database and file work on a blocking
+/// thread: a big history (or thousands of imported photos) must never freeze the window.
 #[tauri::command]
-pub fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
-    let cleared_up_to = state.shared.store.clear_history().map_err(|e| e.to_string())?;
+pub async fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
+    // An import still writing would put texts and photos back after the clear.
+    if state.backup.busy() {
+        return Err(BACKUP_BUSY.into());
+    }
+    let store = state.shared.store.clone();
+    let dir = state.backup.local_dir().to_path_buf();
+    let cleared_up_to = tauri::async_runtime::spawn_blocking(move || clear_stored_history(&store, &dir))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     // Pop-ups and the Bluetooth actor name notifications by row id, and those rows are gone: take
     // the pop-ups back (their buttons would act on nothing tug still shows) and have the actor drop
     // its map from the phone's notification ids to the cleared rows.
@@ -219,6 +244,142 @@ pub fn list_messages(state: State<'_, AppState>, limit: u32) -> Result<Vec<Store
         .map_err(|e| e.to_string())
 }
 
+/// The newest text of every conversation, so ones older than the recent page still list.
+#[tauri::command]
+pub async fn conversation_heads(state: State<'_, AppState>, limit: u32) -> Result<Vec<StoredMessage>> {
+    // A pass over the whole history (years of it, after an import): off the main thread.
+    let store = state.shared.store.clone();
+    tauri::async_runtime::spawn_blocking(move || store.conversation_heads(limit.min(5000)))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// One conversation's whole history (by its numbers), for opening it.
+#[tauri::command]
+pub async fn conversation_messages(state: State<'_, AppState>, addresses: Vec<String>) -> Result<Vec<StoredMessage>> {
+    let store = state.shared.store.clone();
+    tauri::async_runtime::spawn_blocking(move || store.conversation_messages(&addresses, 50_000))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// A stored photo's preview for its bubble (a JPEG data URI), or why there's none (a HEIC photo
+/// without HEIF Image Extensions). By attachment id: the window never names a file.
+#[tauri::command]
+pub async fn attachment_preview(state: State<'_, AppState>, id: i64) -> Result<crate::backup::files::Preview> {
+    let store = state.shared.store.clone();
+    let dir = state.backup.local_dir().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some((key, _)) = crate::backup::import::attachment_file(&store, id).map_err(|e| e.to_string())? else {
+            return Ok(crate::backup::files::Preview::default());
+        };
+        Ok(crate::backup::files::preview(&dir, &key))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Open a stored photo or video in its default app (usually Photos).
+#[tauri::command]
+pub async fn open_attachment(state: State<'_, AppState>, id: i64) -> Result<()> {
+    let store = state.shared.store.clone();
+    let dir = state.backup.local_dir().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (key, _) = crate::backup::import::attachment_file(&store, id)
+            .map_err(|e| e.to_string())?
+            .ok_or("That photo isn't on this PC.")?;
+        crate::backup::files::open(&dir, &key)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The iPhone backups on this PC (Apple Devices app or iTunes), newest first.
+#[tauri::command]
+pub async fn backup_list(state: State<'_, AppState>) -> Result<Vec<crate::backup::discover::BackupInfo>> {
+    let backup = state.backup.clone();
+    tauri::async_runtime::spawn_blocking(move || backup.list())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Windows' folder picker, for a backup kept somewhere else. `None` if nothing was picked; an
+/// error if the folder isn't a backup.
+#[tauri::command]
+pub async fn backup_pick_folder(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<crate::backup::discover::BackupInfo>> {
+    use tauri_plugin_dialog::DialogExt;
+    let backup = state.backup.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(folder) = app
+            .dialog()
+            .file()
+            .blocking_pick_folder()
+            .and_then(|p| p.into_path().ok())
+        else {
+            return Ok(None);
+        };
+        backup.picked(&folder).map(Some).ok_or_else(|| {
+            "That folder isn't an iPhone backup. Choose the folder named with a long string of letters and numbers."
+                .to_string()
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn backup_status(state: State<'_, AppState>) -> crate::backup::BackupStatus {
+    state.backup.status()
+}
+
+/// Unlock (an encrypted backup's `password` is used once, in memory, and never kept) and read a
+/// backup. The outcome arrives as `backup-import` events.
+#[tauri::command]
+pub fn backup_open(state: State<'_, AppState>, id: String, password: Option<String>) -> Result<()> {
+    state.backup.open(&id, password)
+}
+
+#[tauri::command]
+pub fn backup_import(state: State<'_, AppState>, texts: bool, photos: bool) -> Result<()> {
+    state.backup.import(texts, photos)
+}
+
+/// Cancel reading or importing, or close a backup that was read.
+#[tauri::command]
+pub fn backup_cancel(state: State<'_, AppState>) {
+    state.backup.cancel();
+}
+
+/// What's in tug from a backup now (for Settings and the "From your iPhone backup" label).
+#[tauri::command]
+pub fn backup_imported(state: State<'_, AppState>) -> Result<crate::backup::import::Imported> {
+    crate::backup::import::imported(&state.shared.store).map_err(|e| e.to_string())
+}
+
+/// Remove imported history: every text the import added and every photo it copied.
+#[tauri::command]
+pub async fn backup_remove_imported(state: State<'_, AppState>) -> Result<u64> {
+    if state.backup.busy() {
+        return Err(BACKUP_BUSY.into());
+    }
+    let store = state.shared.store.clone();
+    let dir = state.backup.local_dir().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let n = crate::backup::import::remove_imported(&store).map_err(|e| e.to_string())?;
+        let keep = crate::backup::import::file_keys(&store).map_err(|e| e.to_string())?;
+        let files = crate::backup::files::remove_unreferenced(&dir, &keep);
+        log::info!("backup: removed imported history ({n} texts, {files} files)");
+        Ok(n)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub fn get_contacts(state: State<'_, AppState>) -> Result<Vec<Contact>> {
     state.shared.store.contacts().map_err(|e| e.to_string())
@@ -293,6 +454,32 @@ pub async fn app_website(app: tauri::AppHandle, state: State<'_, AppState>, app_
     }
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || crate::app_icons::website(&dir, &app_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The playing album's cover (data URI) for the Now Playing card when Spotify can't supply one:
+/// from the cache, or looked up in Apple's public catalog by artist and album only (see
+/// `album_art`). Nothing is looked up while Show album art is off.
+#[tauri::command]
+pub async fn album_art(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    artist: String,
+    album: String,
+) -> Result<Option<String>> {
+    use tauri::Manager;
+    let store = state.shared.store.clone();
+    // Read now, and again after the lookup waits its turn: switching it off stops a waiting lookup.
+    let enabled = move || {
+        let setting = store.setting(crate::album_art::SETTING).ok().flatten();
+        crate::album_art::enabled_from_setting(setting.as_deref())
+    };
+    if !enabled() {
+        return Ok(None);
+    }
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || crate::album_art::art(&dir, &artist, &album, &enabled))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -597,6 +784,7 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.doNotDisturb",
     "ui.closeToTray",
     "ui.appIcons",
+    "ui.albumArt",
     "ui.dialing",
     "ui.autoCopyCodes",
     "ui.typeCodeHotkey",
@@ -719,7 +907,7 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
         .store
         .set_setting(&key, &value)
         .map_err(|e| e.to_string())?;
-    // Show games also decides whether the jump list offers Play Tugboat Run.
+    // Show games also decides whether the jump list offers Play a game.
     if key == crate::quick_actions::SHOW_GAMES_SETTING {
         crate::quick_actions::install(crate::quick_actions::show_games(Some(&value)));
     }
@@ -1085,14 +1273,21 @@ pub fn tugboat_open_folder(state: State<'_, AppState>, path: Option<String>) -> 
     state.tugboat.open_folder(path.as_deref())
 }
 
-// --- Tugboat Run's phone controller (tugboat/pad.rs) ---
+// --- The games' phone controller (tugboat/pad.rs) ---
 
-/// "Use your phone as a controller": open Tugboat if needed and the controller channel, for one
-/// phone or two (a two-player race; asking again changes how many). Returns Tugboat's status,
-/// whose QR code the game shows.
+/// "Use your phone as a controller": open Tugboat if needed and the controller channel for `game`
+/// (Tugboat Run unless it says), for one phone or two (a two-player game; asking again changes how
+/// many). Returns Tugboat's status, whose QR code the game shows.
 #[tauri::command]
-pub async fn game_pad_open(state: State<'_, AppState>, players: Option<u8>) -> Result<TugboatStatus> {
-    state.tugboat.pad_open(players.unwrap_or(1).clamp(1, 2)).await
+pub async fn game_pad_open(
+    state: State<'_, AppState>,
+    players: Option<u8>,
+    game: Option<crate::tugboat::pad::GameId>,
+) -> Result<TugboatStatus> {
+    state
+        .tugboat
+        .pad_open(players.unwrap_or(1).clamp(1, 2), game.unwrap_or_default())
+        .await
 }
 
 /// The game closed: the phone's inputs are refused again.
@@ -1108,7 +1303,15 @@ pub fn game_pad_feedback(state: State<'_, AppState>, seat: u8, paused: bool, hit
     use crate::tugboat::pad::{PadReply, FIRST, SECOND};
     let seat = if seat == SECOND { SECOND } else { FIRST };
     let player = player.filter(|p| *p == 1 || *p == 2);
-    state.tugboat.pad_feedback(seat, PadReply { paused, hits, player });
+    state.tugboat.pad_feedback(
+        seat,
+        PadReply {
+            paused,
+            hits,
+            player,
+            game: None,
+        },
+    );
 }
 
 // --- Developer tools (the bridge for AI tools and the `tug` command; see devtools/mod.rs) ---
@@ -1155,7 +1358,44 @@ pub async fn devtools_set_on_path(state: State<'_, AppState>, on: bool) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use super::is_http_url;
+    use super::{clear_stored_history, is_http_url};
+
+    #[test]
+    fn clearing_history_takes_imported_texts_and_their_photos() {
+        use crate::backup::files;
+        let store = crate::store::Store::in_memory().unwrap();
+        let local = crate::backup::discover::tests::temp_dir("clear-history");
+        {
+            let conn = store.conn();
+            conn.execute_batch(
+                "INSERT INTO messages (source, handle, direction, address, body, received_at, status)
+                 VALUES ('iphone-backup', 'GUID-1', 'in', '+15550100001', 'from the backup', 1000, 'received'),
+                        ('iphone-map', 'H1', 'in', '+15550100001', 'over Bluetooth', 2000, 'received');
+                 INSERT INTO message_attachments (message_id, source, source_key, kind, ext, file)
+                 VALUES (1, 'iphone-backup', 'ATT-1', 'photo', 'jpg', 'x');",
+            )
+            .unwrap();
+        }
+        let tmp = files::TempDir::create(&local).unwrap();
+        std::fs::write(tmp.file("a"), b"photo").unwrap();
+        let key = files::adopt(&local, &tmp.file("a"), &[0xAB; 32], "jpg").unwrap();
+        assert!(files::attachment_path(&local, &key).unwrap().exists());
+
+        clear_stored_history(&store, &local).unwrap();
+        assert!(store.recent_messages(10).unwrap().is_empty());
+        let left: i64 = store
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM messages WHERE source = 'iphone-backup'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "imported history goes completely");
+        assert!(!local.join(files::ATTACHMENTS_DIR).exists(), "and its photos with it");
+        drop(tmp);
+        std::fs::remove_dir_all(&local).unwrap();
+    }
 
     #[test]
     fn accepts_http_and_https_with_a_host() {

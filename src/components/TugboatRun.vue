@@ -19,7 +19,6 @@ import {
   Flame,
   Gamepad2,
   LifeBuoy,
-  LoaderCircle,
   Pause,
   Play,
   RotateCcw,
@@ -31,27 +30,25 @@ import {
   Wind,
   X,
 } from "lucide-vue-next";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useGameStore } from "../stores/game";
 import { useTugStore } from "../stores/tug";
-import { useTugboatStore } from "../stores/tugboat";
 import { useDevToolsStore } from "../stores/devtools";
 import { useWeatherStore } from "../stores/weather";
 import { useFocusTrap } from "../lib/focusTrap";
-import { api, on } from "../lib/ipc";
-import { capitalised, controllerChannel } from "../lib/tugboat";
+import { useGameController } from "../lib/useGameController";
 import { CALM, FIELD_W, LIVES, advance, laneLayouts, layout, mergeInput, newRun, score, toFieldX, type Layout, type Run } from "../lib/tugboatRun";
 import { CALM_SEAS, conditionsFrom, conditionsLine, currentStreak, dailySeed, handlingFor, localDate, sailedToday, type Conditions } from "../lib/tugboatDaily";
 import { droppedPlayer, playerFor, raceKey, seatFor, winner, type Player, type Seat } from "../lib/tugboatRace";
 import type { GamePad } from "../types/protocol";
 import { draw, type Palette, type Sky } from "./tugboatRunDraw";
+import { readSwatches } from "./gamePalette";
+import PhoneControllerSheet from "./PhoneControllerSheet.vue";
 
 type Phase = "ready" | "playing" | "paused" | "over";
 type Mode = "daily" | "free" | "duo";
 
 const game = useGameStore();
 const tug = useTugStore();
-const tugboat = useTugboatStore();
 const devtools = useDevToolsStore();
 const weather = useWeatherStore();
 
@@ -132,7 +129,6 @@ const padLeads = [false, false];
 /** A Boost press from a phone since the last frame (its release may arrive before the frame). */
 const padPress = [false, false];
 const padBoostWas = [false, false];
-const padConnected = reactive([false, false]);
 
 // --- A race ---
 /** The first phone plays Player 2 (so the keyboard can be Player 1). */
@@ -148,12 +144,20 @@ const raceResult = ref<{ scores: [number, number]; winner: Player | null } | nul
 // --- Phone controller (through Tugboat) ---
 /** "Use your phone as a controller" is showing. */
 const sheet = ref(false);
-/** The controller channel was opened (closed again when the game closes). */
-const controllerOn = ref(false);
-const controllerError = ref<string | null>(null);
-const ts = computed(() => tugboat.status);
-const phoneName = computed(() => ts.value.phone ?? "phone");
 const players = computed<1 | 2>(() => (duo.value ? 2 : 1));
+const controller = useGameController({
+  game: "tugboat-run",
+  players: () => players.value,
+  onPad,
+  // What each phone shows: paused, its boat's hits (for a buzz), and in a race its player.
+  feedback: (seat) => {
+    if (seat === 2 && !duo.value) return null;
+    const player = duo.value ? playerFor(seat, swapped.value) : null;
+    const run = runs[player === null ? 0 : player - 1];
+    return { paused: phase.value !== "playing", hits: run?.hits ?? 0, player };
+  },
+});
+const { controllerOn, controllerError, padConnected } = controller;
 
 /** Another dialog (a call, a text an AI tool wants to send, a pairing PIN) is over the game. */
 const blocked = computed(() => tug.ringing !== null || devtools.confirm !== null || tug.pairingRequest !== null);
@@ -412,12 +416,6 @@ function render() {
 
 /** tug's colours, read from theme classes on hidden swatches (no colour is written in code). */
 function readPalette(set: "day" | "night"): Palette | null {
-  const el = swatches.value;
-  if (!el) return null;
-  const pick = (name: string) => {
-    const s = el.querySelector<HTMLElement>(`[data-swatch="${set}:${name}"]`) ?? el.querySelector<HTMLElement>(`[data-swatch="day:${name}"]`);
-    return s ? getComputedStyle(s).backgroundColor : "";
-  };
   const names = [
     "waterBase",
     "water",
@@ -443,7 +441,7 @@ function readPalette(set: "day" | "night"): Palette | null {
     "beam",
     "glow",
   ] as const;
-  return Object.fromEntries(names.map((n) => [n, pick(n)])) as unknown as Palette;
+  return readSwatches(swatches.value, set, names) as Palette | null;
 }
 
 // --- Input handlers ---
@@ -534,7 +532,6 @@ function onPad(e: GamePad) {
   pad.connected = e.connected;
   pad.steer = e.steer;
   pad.boost = e.boost;
-  padConnected[i] = e.connected;
   const inRace = duo.value && (phase.value === "playing" || phase.value === "paused");
   const player = duo.value ? playerFor(seat, swapped.value) : 1;
   if (e.connected && inRace) {
@@ -565,112 +562,31 @@ function onPad(e: GamePad) {
   padBoostWas[i] = e.connected && e.boost;
 }
 
-/** Bumped by each controller open and off, so only the latest one reports a failure. */
-let padRequest = 0;
-/** The controller channel. Closing the game (or switching the controller off) while an open is on
- * its way closes the channel once it's open; otherwise an open is kept, whichever open it was: the
- * backend has one channel, so an older open landing last must not close the one a newer open made. */
-const channel = controllerChannel(
-  { open: () => api.gamePadOpen(players.value), close: () => api.gamePadClose() },
-  () => ({ on: controllerOn.value, closed: disposed }),
-);
 /** Open (or re-size) the controller channel: one phone, or two in a race. */
-async function openController() {
-  controllerError.value = null;
-  const mine = ++padRequest;
-  try {
-    const kept = await channel.open();
-    if (kept) {
-      lastFeedback[0] = lastFeedback[1] = "";
-      sendFeedback();
-    }
-  } catch (e) {
-    if (disposed || mine !== padRequest) return;
-    controllerOn.value = false;
-    controllerError.value = typeof e === "string" ? e : "Couldn't start Tugboat.";
-  }
-}
+const openController = () => controller.open();
+const sendFeedback = () => controller.sendFeedback();
 
 async function useController() {
   pause();
   sheet.value = true;
-  if (controllerOn.value) return;
-  controllerOn.value = true;
-  await openController();
+  await controller.use();
 }
 
 async function controllerOff() {
-  padRequest++;
-  controllerOn.value = false;
   sheet.value = false;
-  onPad({ seat: 1, connected: false, steer: 0, boost: false });
-  onPad({ seat: 2, connected: false, steer: 0, boost: false });
-  await api.gamePadClose().catch(() => undefined);
-}
-
-/** Tugboat turned off (its panel closed, tug hidden, or 10 minutes unused): so did the controller. */
-watch(
-  () => ts.value.phase,
-  (p) => {
-    if (p === "off" && controllerOn.value) {
-      controllerOn.value = false;
-      onPad({ seat: 1, connected: false, steer: 0, boost: false });
-      onPad({ seat: 2, connected: false, steer: 0, boost: false });
-    }
-  },
-);
-
-const lastFeedback = ["", ""];
-/** What each phone shows: paused, its boat's hits (for a buzz), and in a race its player. */
-function sendFeedback() {
-  if (!controllerOn.value) return;
-  const paused = phase.value !== "playing";
-  for (const seat of [1, 2] as Seat[]) {
-    if (seat === 2 && !duo.value) continue;
-    const player = duo.value ? playerFor(seat, swapped.value) : null;
-    const run = runs[player === null ? 0 : player - 1];
-    const hits = run?.hits ?? 0;
-    const key = `${paused}:${hits}:${player}`;
-    if (key === lastFeedback[seat - 1]) continue;
-    lastFeedback[seat - 1] = key;
-    void api.gamePadFeedback(seat, paused, hits, player).catch(() => undefined);
-  }
+  await controller.off();
 }
 
 /** Whose phone is which, for a race: "Player 1" is coral, "Player 2" teal. */
 const seatOf = (p: Player) => seatFor(p, swapped.value);
 const phoneFor = (p: Player) => padConnected[seatOf(p) - 1];
 const KEYS_LINE: Record<Player, string> = { 1: "← → steer, ↑ hops", 2: "A and D steer, W hops" };
-
-const controllerLine = computed(() => {
-  if (controllerError.value) return controllerError.value;
-  if (duo.value) {
-    const n = (padConnected[0] ? 1 : 0) + (padConnected[1] ? 1 : 0);
-    if (n === 2) return "Both phones are connected. Each one shows its player's colour.";
-    if (padConnected[0]) return "One phone connected. Scan the Player 2 code with the second phone.";
-    if (padConnected[1]) return "One phone connected. Scan Tugboat's code with the other phone.";
-  } else if (padConnected[0]) return `Your ${phoneName.value} is the controller. Steer with the pad, Boost to hop.`;
-  const p = ts.value.phase;
-  if (p === "off") return "Starting Tugboat…";
-  if (p === "noNetwork") return "Connect this PC to your home or office Wi-Fi to use your phone.";
-  if (duo.value) return "Player 1 scans Tugboat's code and Player 2 the Player 2 code, each with their phone's camera.";
-  if (p === "connected" && ts.value.phoneActive) return `Your ${phoneName.value} is on Tugboat. The controller opens on it in a moment.`;
-  if (p === "connected") return `Open Tugboat on your ${phoneName.value} again: scan the code if the page is closed.`;
-  return "Scan with your phone's camera. Tugboat opens on it as a controller.";
-});
 const anyPhone = computed(() => padConnected[0] || padConnected[1]);
-const showCode = computed(() => !duo.value && ts.value.qr !== null && !padConnected[0]);
-/** A race's codes: Tugboat's own for the first phone, the Player 2 code for the second (which can
- * only steer, never reach files or the clipboard). Each until its phone is in. */
-const showRaceCode = computed(() => duo.value && ts.value.qr !== null && !padConnected[0]);
-const showGuestCode = computed(() => duo.value && ts.value.guestQr !== null && !padConnected[1]);
 
 // --- Lifetime ---
 let ro: ResizeObserver | null = null;
 let dprQuery: MediaQueryList | null = null;
 let motionQuery: MediaQueryList | null = null;
-let unlistenPad: UnlistenFn | null = null;
-let disposed = false;
 
 function onDprChange() {
   watchDpr();
@@ -711,15 +627,10 @@ onMounted(() => {
   window.addEventListener("blur", onBlur);
   window.addEventListener("focus", onFocus);
   document.addEventListener("visibilitychange", onVisibility);
-  void on("game-pad", onPad).then((off) => {
-    if (disposed) off();
-    else unlistenPad = off;
-  });
   stage.value?.focus();
 });
 
 onUnmounted(() => {
-  disposed = true;
   stopLoop();
   ro?.disconnect();
   dprQuery?.removeEventListener("change", onDprChange);
@@ -729,8 +640,6 @@ onUnmounted(() => {
   window.removeEventListener("blur", onBlur);
   window.removeEventListener("focus", onFocus);
   document.removeEventListener("visibilitychange", onVisibility);
-  unlistenPad?.();
-  if (controllerOn.value) void api.gamePadClose().catch(() => undefined);
 });
 
 const MODES: Array<{ id: Mode; label: string; icon: typeof Play }> = [
@@ -987,79 +896,22 @@ const leader = computed(() => raceResult.value?.winner ?? null);
       </div>
 
       <!-- Phones as controllers: Tugboat's code and where things stand. -->
-      <aside
+      <PhoneControllerSheet
         v-if="sheet"
-        class="flex w-[320px] shrink-0 flex-col overflow-y-auto border-l border-surface-dark-elevated bg-surface-dark-soft px-6 py-5"
-        aria-labelledby="run-controller-title"
-      >
-        <div class="flex items-center gap-2">
-          <h3 id="run-controller-title" class="font-display text-[22px] leading-tight">{{ duo ? "Phone controllers" : "Phone controller" }}</h3>
-          <button class="ml-auto rounded-md p-1.5 text-on-dark-soft active:bg-surface-dark-elevated" aria-label="Hide phone controller" @click="sheet = false">
-            <X :size="16" />
-          </button>
-        </div>
-        <p class="mt-3 flex items-start gap-2 text-[14px] text-on-dark" role="status">
-          <LoaderCircle v-if="controllerOn && ts.phase === 'off' && !controllerError" :size="16" class="mt-0.5 shrink-0 animate-spin text-on-dark-soft" />
-          <span v-else :class="['mt-[7px] size-2 shrink-0 rounded-full', anyPhone ? 'bg-accent-teal' : 'bg-on-dark-soft/40']" />
-          {{ controllerLine }}
-        </p>
-
-        <div v-if="showCode && ts.qr" class="mx-auto mt-5 rounded-xl bg-canvas p-3">
-          <svg :viewBox="`-2 -2 ${ts.qr.size + 4} ${ts.qr.size + 4}`" class="block size-[200px]" shape-rendering="crispEdges" role="img" aria-label="QR code to use your phone as a controller">
-            <path :d="ts.qr.path" class="fill-ink" />
-          </svg>
-        </div>
-        <p v-if="showCode && ts.qr" class="mt-3 text-center text-[12px] text-on-dark-soft">This is Tugboat's code: the same one for photos and files.</p>
-        <div v-else-if="!duo && padConnected[0]" class="mt-5 flex flex-col items-center gap-2 py-4 text-center">
-          <span class="flex size-14 items-center justify-center rounded-2xl bg-surface-dark-elevated">
-            <Smartphone :size="26" class="text-accent-teal" />
-          </span>
-          <p class="font-display text-[20px]">{{ capitalised(phoneName) }} connected</p>
-        </div>
-
-        <template v-if="duo">
-          <section v-if="showRaceCode && ts.qr" class="mt-5 text-center" aria-labelledby="run-code-p1">
-            <h4 id="run-code-p1" class="text-[13px] text-on-dark">Player 1: Tugboat's code</h4>
-            <div class="mx-auto mt-2 w-fit rounded-xl bg-canvas p-3">
-              <svg :viewBox="`-2 -2 ${ts.qr.size + 4} ${ts.qr.size + 4}`" class="block size-[160px]" shape-rendering="crispEdges" role="img" aria-label="Tugboat's code, for Player 1's phone">
-                <path :d="ts.qr.path" class="fill-ink" />
-              </svg>
-            </div>
-            <p class="mt-2 text-[12px] text-on-dark-soft">The same code as for photos and files.</p>
-          </section>
-          <section v-if="showGuestCode && ts.guestQr" class="mt-5 text-center" aria-labelledby="run-code-p2">
-            <h4 id="run-code-p2" class="text-[13px] text-on-dark">Player 2 code</h4>
-            <div class="mx-auto mt-2 w-fit rounded-xl bg-canvas p-3">
-              <svg :viewBox="`-2 -2 ${ts.guestQr.size + 4} ${ts.guestQr.size + 4}`" class="block size-[160px]" shape-rendering="crispEdges" role="img" aria-label="Player 2 code, for a second phone">
-                <path :d="ts.guestQr.path" class="fill-ink" />
-              </svg>
-            </div>
-            <p class="mt-2 text-[12px] text-on-dark-soft">For a friend's phone: it can only steer, never see your photos, files or clipboard.</p>
-            <p class="mt-1 font-mono text-[11px] break-all text-on-dark-soft/80 select-all">{{ ts.guestUrl }}</p>
-          </section>
-        </template>
-
-        <ul v-if="duo" class="mt-5 space-y-2">
-          <li v-for="p in [1, 2] as Player[]" :key="p" class="flex items-center gap-3 rounded-xl bg-surface-dark-elevated px-3 py-2">
-            <span :class="['size-3 shrink-0 rounded-full', p === 1 ? 'bg-primary' : 'bg-accent-teal']" />
-            <span class="flex-1 text-[14px]">{{ PLAYER_NAME[p] }}</span>
-            <span class="text-[12px]" :class="phoneFor(p) ? 'text-accent-teal' : 'text-on-dark-soft'">{{ phoneFor(p) ? "Phone connected" : "Keyboard" }}</span>
-          </li>
-        </ul>
-        <button v-if="duo && controllerOn && (phase === 'ready' || phase === 'over')" class="btn-on-dark btn-sm mt-2 self-center" @click="swapped = !swapped">
-          <ArrowLeftRight :size="14" />
-          Swap phones
-        </button>
-
-        <div class="mt-auto space-y-2 pt-5">
-          <button v-if="phase === 'paused' && dropped === null" class="btn-primary w-full" :disabled="blocked" @click="resume">
-            <Play :size="16" />
-            Resume
-          </button>
-          <button v-if="controllerOn" class="btn-on-dark btn-sm w-full" @click="controllerOff">{{ duo ? "Stop using phones" : "Stop using the phone" }}</button>
-          <p class="text-center text-[12px] text-on-dark-soft/80">Encrypted, over your Wi-Fi. The keyboard always works too.</p>
-        </div>
-      </aside>
+        :duo="duo"
+        :controller-on="controllerOn"
+        :controller-error="controllerError"
+        :pad-connected="padConnected"
+        :swapped="swapped"
+        solo-hint="Steer with the pad, Boost to hop."
+        :can-swap="duo && controllerOn && (phase === 'ready' || phase === 'over')"
+        :can-resume="phase === 'paused' && dropped === null"
+        :resume-disabled="blocked"
+        @close="sheet = false"
+        @swap="swapped = !swapped"
+        @resume="resume"
+        @off="controllerOff"
+      />
     </div>
 
     <!-- tug's colours for the canvas, read from these (theme tokens only, no colour in code).

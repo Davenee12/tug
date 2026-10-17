@@ -7,13 +7,16 @@ mod args;
 mod format;
 mod lookup;
 mod mcp;
+mod send;
 
 use std::io::Write;
 use std::process::ExitCode;
 
 use args::Command;
 use tug_bridge::client::{time_limit, Client, ClientError};
-use tug_bridge::protocol::{Call, ClientInfo, ClientKind, CodeResult, OfferResult, SendResult, StatusResult};
+use tug_bridge::protocol::{
+    Call, ClientInfo, ClientKind, CodeResult, OfferResult, Progress, SendResult, StatusResult, StdinFile,
+};
 
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -92,36 +95,11 @@ async fn run(command: Command) -> i32 {
             }
             Err(e) => fail(&e),
         },
-        Command::Boat { files } => {
-            let mut paths = Vec::new();
-            for f in &files {
-                let p = std::path::Path::new(f);
-                match std::path::absolute(p) {
-                    Ok(abs) if abs.is_file() => paths.push(abs.to_string_lossy().into_owned()),
-                    Ok(abs) if abs.is_dir() => {
-                        eprintln!("{f} is a folder. Name the files inside it instead.");
-                        return format::USAGE;
-                    }
-                    _ => match resolve_loosely(f) {
-                        Ok(path) => paths.push(path),
-                        Err(code) => return code,
-                    },
-                }
-            }
-            match call_as::<OfferResult>(&c, Call::OfferFiles { paths }).await {
-                Ok(r) => {
-                    for line in format::offer_lines(&r) {
-                        println!("{line}");
-                    }
-                    if r.offered > 0 {
-                        format::OK
-                    } else {
-                        format::FAILED
-                    }
-                }
-                Err(e) => fail(&e),
-            }
-        }
+        Command::Boat {
+            files,
+            stdin_name,
+            wait,
+        } => boat(&c, &files, stdin_name, wait).await,
         Command::Text { to, message } => {
             let call = call_as::<SendResult>(&c, Call::SendText { to, message });
             tokio::pin!(call);
@@ -149,6 +127,99 @@ async fn run(command: Command) -> i32 {
             }
         }
         Command::Mcp | Command::Help | Command::Version => format::OK,
+    }
+}
+
+/// `tug boat`: check the files here (a typo gets a sentence and exit 2 before tug is asked), ask
+/// tug, say how it's going on stderr, and the outcome on stdout. 0 once the phone has downloaded
+/// everything (or, with `--no-wait`, once it's on offer), 1 if it didn't happen, 2 for bad input.
+async fn boat(c: &Client, files: &[String], stdin_name: Option<String>, wait: args::Wait) -> i32 {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => {
+            eprintln!("Couldn't tell which folder this is. Give full paths.");
+            return format::USAGE;
+        }
+    };
+    let mut paths = Vec::new();
+    for f in files {
+        match send::resolve(f, &cwd) {
+            Ok(path) => paths.push(path),
+            // A bare name that isn't here: the file it most likely means, wherever it is.
+            Err(tug_bridge::outgoing::Refusal::Missing) => match resolve_loosely(f) {
+                Ok(found) => match send::resolve(&found, &cwd) {
+                    Ok(path) => paths.push(path),
+                    Err(r) => {
+                        eprintln!("{}", r.sentence(&found));
+                        return format::USAGE;
+                    }
+                },
+                Err(code) => return code,
+            },
+            Err(r) => {
+                eprintln!("{}", r.sentence(f));
+                return format::USAGE;
+            }
+        }
+    }
+    // What's piped in goes to a file of this command's own, which tug reads once you click Send.
+    let mut held_stdin = None;
+    let stdin = match stdin_name {
+        Some(name) => {
+            let bytes = match send::read_stdin() {
+                Ok(b) => b,
+                Err(p) => {
+                    eprintln!("{}", p.sentence());
+                    return format::USAGE;
+                }
+            };
+            let file = match send::TempFile::save(&bytes) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("Couldn't keep what came in on stdin: {e}");
+                    return format::FAILED;
+                }
+            };
+            let s = StdinFile {
+                path: file.path(),
+                name,
+            };
+            held_stdin = Some(file);
+            Some(s)
+        }
+        None => None,
+    };
+    let call = Call::OfferFiles {
+        paths,
+        stdin,
+        wait_secs: wait.wire(),
+        progress: true,
+    };
+    let mut last: Option<String> = None;
+    let mut say = |p: Progress| {
+        let line = format::boat_progress(&p);
+        if last.as_deref() != Some(line.as_str()) {
+            eprintln!("{line}");
+            let _ = std::io::stderr().flush();
+            last = Some(line);
+        }
+    };
+    let answer = c.call_with_progress(c.info(), &call, time_limit(&call), &mut say).await;
+    // tug has read its own copy by now (or never will): the command's copy goes.
+    drop(held_stdin);
+    match answer.and_then(|v| {
+        serde_json::from_value::<OfferResult>(v).map_err(|e| ClientError::Other(format!("unexpected answer: {e}")))
+    }) {
+        Ok(r) => {
+            let (line, ok) = format::boat_outcome(&r);
+            println!("{line}");
+            if ok {
+                format::OK
+            } else {
+                format::FAILED
+            }
+        }
+        Err(e) => fail(&e),
     }
 }
 

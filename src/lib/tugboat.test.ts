@@ -156,6 +156,12 @@ describe("the shared clipboard", () => {
     expect(codeCaption(null)).toMatch(/^Scan with your phone's camera/);
   });
 
+  it("names the files tug boat is holding for the phone", () => {
+    expect(codeCaption(null, { names: ["report.pdf"], expiresAt: 0 })).toBe("Scan to receive report.pdf on your iPhone.");
+    expect(codeCaption(clip("waiting"), { names: ["a.png", "b.png"], expiresAt: 0 })).toBe("Scan to receive 2 files on your iPhone.");
+    expect(codeCaption(clip("waiting"), { names: [], expiresAt: 0 })).toBe("Scan to receive your clipboard on your iPhone.");
+  });
+
   it("confirms text from the phone quietly, and only once it's on the clipboard", () => {
     expect(phoneTextMessage(true, "iPhone")).toEqual({ kind: "info", text: "Copied from your iPhone" });
     expect(phoneTextMessage(false, null)).toEqual({ kind: "error", text: "Text from your phone arrived, but couldn't go on the clipboard" });

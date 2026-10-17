@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { afterPaletteSend, parseActions, type ActionContext, type Person } from "./commands";
+import { afterPaletteSend, notificationPick, parseActions, type ActionContext, type Person } from "./commands";
+import { threadKey } from "./format";
 import type { PhoneNotification } from "../types/protocol";
 
 const people: Person[] = [
@@ -89,11 +90,15 @@ describe("parseActions", () => {
     expect(parseActions("send to phone", people)).toEqual([{ kind: "open", target: "tugboat", label: "Tugboat" }]);
   });
 
-  it("opens Tugboat Run from its words, never from 'play', and only while games are shown", () => {
+  it("opens the games from their words, never from 'play', and only while games are shown", () => {
     const games = { showGames: true };
-    for (const words of ["game", "Games", "tugboat run", "boat game"]) {
-      expect(parseActions(words, people, games)).toEqual([{ kind: "open", target: "game", label: "Tugboat Run" }]);
-    }
+    const run = { kind: "open", target: "tugboat-run", label: "Tugboat Run" };
+    const stack = { kind: "open", target: "harbor-stack", label: "Harbor Stack" };
+    // "game" offers both.
+    for (const words of ["game", "Games"]) expect(parseActions(words, people, games)).toEqual([run, stack]);
+    for (const words of ["tugboat run", "boat game"]) expect(parseActions(words, people, games)).toEqual([run]);
+    for (const words of ["harbor stack", "Harbour Stack", "stack", "stacking game"]) expect(parseActions(words, people, games)).toEqual([stack]);
+    expect(parseActions("stack", people, { showGames: false })).toEqual([]);
     // "play" is music's word: it never opens the game.
     expect(parseActions("play", people, games).some((a) => a.kind === "open")).toBe(false);
     expect(parseActions("play game", people, { ...games, spotifyConnected: true }).some((a) => a.kind === "open")).toBe(false);
@@ -292,5 +297,24 @@ describe("afterPaletteSend", () => {
   });
   it("brings the typed text back when nothing was recorded", () => {
     expect(afterPaletteSend("error")).toBe("restore-query");
+  });
+});
+
+describe("notificationPick (Ctrl+K)", () => {
+  const n = (appId: string, title: string, removedAt: number | null = null) => ({ appId, title, removedAt });
+
+  it("a Messages notification opens its conversation", () => {
+    expect(notificationPick(n("com.apple.MobileSMS", "Zoe"))).toEqual({
+      open: "messages",
+      thread: threadKey({ appId: "com.apple.MobileSMS", title: "Zoe" }),
+    });
+  });
+
+  it("other chat apps open their Feed row, never a Messages thread", () => {
+    for (const appId of ["net.whatsapp.WhatsApp", "com.microsoft.skype.teams", "com.tinyspeck.chatlyio", "com.example.newchat"]) {
+      expect(notificationPick(n(appId, "Zoe"))).toEqual({ open: "feed" });
+      // Cleared from the Feed: shown in full in the results, still not in Messages.
+      expect(notificationPick(n(appId, "Zoe", 1))).toEqual({ open: "here" });
+    }
   });
 });

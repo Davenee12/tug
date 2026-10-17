@@ -2,7 +2,7 @@
 // "text zoe running late", "pause", "copy code", "clear all", "new message". Pure, so it's tested.
 
 import type { MediaCommand, PhoneNotification, SpotifyPlaylist } from "../types/protocol";
-import { cleanName, formatAddress, missedCallFor } from "./format";
+import { cleanName, formatAddress, isConversation, missedCallFor, threadKey } from "./format";
 import { matchPlaylists, normalize, playlistDetail } from "./spotify";
 
 export interface Person {
@@ -41,7 +41,7 @@ export interface ActionContext {
   playlists?: SpotifyPlaylist[];
   /** Spotify is connected, so "play <song>", "queue <song>" and "spotify" are offered. */
   spotifyConnected?: boolean;
-  /** Settings › General › Show games is on, so "game" offers Tugboat Run. */
+  /** Settings › General › Show games is on, so "game" offers the games (and each opens by name). */
   showGames?: boolean;
   /** Voice typing is switched on (Settings › General). */
   voiceTyping?: boolean;
@@ -70,8 +70,8 @@ export type Action =
   | { kind: "send-clipboard"; label: string }
   | { kind: "open"; target: OpenTarget; label: string };
 
-/** Panels and screens Ctrl+K can open by name. */
-export type OpenTarget = "new-message" | "settings" | "spotify" | "tugboat" | "game";
+/** Panels and screens Ctrl+K can open by name (each game by its own). */
+export type OpenTarget = "new-message" | "settings" | "spotify" | "tugboat" | "tugboat-run" | "harbor-stack";
 
 const MEDIA: Array<[string[], MediaCommand, string]> = [
   [["play", "resume"], "play", "Play"],
@@ -88,9 +88,18 @@ const OPEN: Array<[string[], OpenTarget, string]> = [
   [["spotify", "music"], "spotify", "Open Spotify"],
   // Tugboat: files and text to and from the phone over Wi-Fi.
   [["tugboat", "tug boat", "drop", "send files", "send file", "send to phone", "send to iphone", "send to android"], "tugboat", "Tugboat"],
-  // Tugboat Run, the little game. Never "play": that word is for music.
-  [["game", "games", "tugboat run", "boat game"], "game", "Tugboat Run"],
+  // The little games, each by name; "game" offers both (below). Never "play": that word is for music.
+  [["tugboat run", "boat game"], "tugboat-run", "Tugboat Run"],
+  [["harbor stack", "harbour stack", "stack", "stacking game", "container game"], "harbor-stack", "Harbor Stack"],
 ];
+
+/** Words that offer every game. */
+const GAMES = ["game", "games"];
+const GAME_TARGETS: Array<[OpenTarget, string]> = [
+  ["tugboat-run", "Tugboat Run"],
+  ["harbor-stack", "Harbor Stack"],
+];
+const isGame = (t: OpenTarget) => t === "tugboat-run" || t === "harbor-stack";
 
 // Exact phrases only, so "clear" or "code" inside a longer search never fire a one-off action.
 const COPY_CODE = ["copy code", "code"];
@@ -143,8 +152,11 @@ export function parseActions(query: string, people: Person[], ctx: ActionContext
   for (const [words, target, label] of OPEN) {
     if (!words.includes(lower)) continue;
     if (target === "spotify" && !ctx.spotifyConnected) continue;
-    if (target === "game" && !ctx.showGames) continue;
+    if (isGame(target) && !ctx.showGames) continue;
     out.push({ kind: "open", target, label });
+  }
+  if (GAMES.includes(lower) && ctx.showGames) {
+    for (const [target, label] of GAME_TARGETS) out.push({ kind: "open", target, label });
   }
 
   if (COPY_CODE.includes(lower)) out.push(copyCodeAction(ctx));
@@ -310,4 +322,16 @@ export function afterPaletteSend(
   result: "sent" | "unconfirmed" | "failed" | "error",
 ): "open-conversation" | "restore-query" {
   return result === "error" ? "restore-query" : "open-conversation";
+}
+
+/**
+ * Where a notification picked from Ctrl+K's results opens. A Messages notification opens its
+ * conversation; every other app's, WhatsApp and Teams included, opens its row in the Feed, never a
+ * Messages thread tug couldn't reply in. One already cleared from the Feed shows in full in place.
+ */
+export function notificationPick(
+  n: Pick<PhoneNotification, "appId" | "title" | "removedAt">,
+): { open: "messages"; thread: string } | { open: "feed" } | { open: "here" } {
+  if (isConversation(n)) return { open: "messages", thread: threadKey(n) };
+  return n.removedAt == null ? { open: "feed" } : { open: "here" };
 }

@@ -174,6 +174,41 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX messages_in_body ON messages (body, address) WHERE direction = 'in';
     CREATE INDEX notifications_sms_text ON notifications (app_id, message, received_at) WHERE app_id = 'com.apple.MobileSMS';
     "#,
+    // v13: full message history from a local iPhone backup (`backup/`). Imported texts are ordinary
+    // `messages` rows with source 'iphone-backup' (keyed by the backup's message guid, so importing
+    // again adds only what's new; group chats aren't imported), plus:
+    // - `edited` / `unsent`: what the backup says happened to the text;
+    // - `message_attachments`: photos and videos copied to this PC (`file`, a content hash under
+    //   the local app-data folder; NULL until copied, or when only the kind is known), for imported
+    //   texts and for Bluetooth texts the import matched. A trigger drops them with their text.
+    // Columns are added with defaults and the tables are new, so an older build can still write.
+    r#"
+    ALTER TABLE messages ADD COLUMN edited INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE messages ADD COLUMN unsent INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE message_attachments (
+        id         INTEGER PRIMARY KEY,
+        message_id INTEGER NOT NULL,
+        source     TEXT    NOT NULL,
+        source_key TEXT    NOT NULL,
+        kind       TEXT    NOT NULL,
+        ext        TEXT,
+        file       TEXT,
+        bytes      INTEGER,
+        UNIQUE (message_id, source_key)
+    );
+    CREATE INDEX message_attachments_file ON message_attachments (file) WHERE file IS NOT NULL;
+    CREATE TRIGGER messages_attachments_ad AFTER DELETE ON messages BEGIN
+        DELETE FROM message_attachments WHERE message_id = old.id;
+    END;
+    "#,
+    // v14: a Bluetooth text listed after an import, that the imported history already has, is
+    // kept hidden behind the imported row (`dup_of`, its id) instead of being dropped, so Remove
+    // imported history can bring it back. Its own migration (not part of v13) so a database a
+    // pre-release build already moved to v13 gets it too.
+    r#"
+    ALTER TABLE messages ADD COLUMN dup_of INTEGER;
+    CREATE INDEX messages_dup_of ON messages (dup_of) WHERE dup_of IS NOT NULL;
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
@@ -378,6 +413,9 @@ pub struct NewNotification<'a> {
 
 pub struct Store {
     conn: Mutex<Connection>,
+    /// How the phone's zoneless text times are read as UTC when comparing Bluetooth texts with
+    /// history from a backup (`backup::clock`): the PC's and phone's real zone in the app.
+    local_zone: Mutex<crate::backup::clock::LocalZone>,
 }
 
 pub type Result<T> = rusqlite::Result<T>;
@@ -387,9 +425,13 @@ impl Store {
         Self::init(Connection::open(path)?)
     }
 
+    /// In memory, for tests: zoneless phone times are read as UTC unless a test says otherwise
+    /// (`set_local_zone`), so no test depends on the PC's time zone.
     #[cfg(test)]
     pub fn in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?)
+        let store = Self::init(Connection::open_in_memory()?)?;
+        store.set_local_zone(crate::backup::clock::LocalZone::Fixed(0));
+        Ok(store)
     }
 
     fn init(mut conn: Connection) -> Result<Self> {
@@ -397,12 +439,25 @@ impl Store {
         register_functions(&conn)?;
         conn.execute_batch(SCHEMA)?;
         migrate(&mut conn)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+            local_zone: Mutex::new(crate::backup::clock::LocalZone::System),
+        })
     }
 
     pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         // A panic while holding the lock leaves SQLite itself consistent, so keep going.
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Where the phone's zoneless times get their offset (see `backup::clock`).
+    pub(crate) fn local_zone(&self) -> crate::backup::clock::LocalZone {
+        *self.local_zone.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_local_zone(&self, zone: crate::backup::clock::LocalZone) {
+        *self.local_zone.lock().unwrap_or_else(|e| e.into_inner()) = zone;
     }
 
     /// Insert or update a notification and return the stored row.
@@ -659,11 +714,24 @@ impl Store {
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
             params![NOTIFICATION_ID_FLOOR, floor.to_string()],
         )?;
+        // History brought in from an iPhone backup goes completely (no tombstones: the backup never
+        // re-lists anything, and importing it again should bring it all back), with its photos'
+        // rows; the caller deletes the files (`backup::files::remove_all`).
+        tx.execute(
+            "DELETE FROM messages WHERE source = ?1",
+            params![crate::messages::SOURCE_IPHONE_BACKUP],
+        )?;
+        tx.execute_batch("DELETE FROM message_attachments;")?;
+        tx.execute(
+            "DELETE FROM settings WHERE key = ?1",
+            params![crate::backup::import::IMPORT_RECORD],
+        )?;
         // Texts stay as blank, hidden rows (tombstones), keyed by the phone's handle: the phone
         // re-lists its recent texts at every sync, and a row that's gone would come straight back.
         // Blanking the body and rebuilding the index means nothing is readable or searchable.
         tx.execute(
-            "UPDATE messages SET body = '', sender_name = NULL, address = '', hidden_at = COALESCE(hidden_at, ?1)",
+            "UPDATE messages SET body = '', sender_name = NULL, address = '', dup_of = NULL,
+                 hidden_at = COALESCE(hidden_at, ?1)",
             params![crate::state::now_ms()],
         )?;
         tx.execute_batch(
@@ -1038,6 +1106,17 @@ mod tests {
 
     /// Back to a real older database: undo the schema later migrations added, so they apply again.
     fn rewind(conn: &Connection, version: i64) {
+        if version < 14 {
+            conn.execute_batch("DROP INDEX messages_dup_of; ALTER TABLE messages DROP COLUMN dup_of;")
+                .unwrap();
+        }
+        if version < 13 {
+            conn.execute_batch(
+                "DROP TRIGGER messages_attachments_ad; DROP TABLE message_attachments;
+                 ALTER TABLE messages DROP COLUMN edited; ALTER TABLE messages DROP COLUMN unsent;",
+            )
+            .unwrap();
+        }
         if version < 12 {
             conn.execute_batch("DROP INDEX messages_in_body; DROP INDEX notifications_sms_text;")
                 .unwrap();
@@ -1051,6 +1130,66 @@ mod tests {
                 .unwrap();
         }
         conn.pragma_update(None, "user_version", version).unwrap();
+    }
+
+    #[test]
+    fn upgrading_from_v12_adds_backup_history_and_keeps_every_text() {
+        let s = Store::in_memory().unwrap();
+        {
+            let conn = s.conn();
+            conn.execute_batch(
+                "INSERT INTO messages (source, handle, direction, address, body, received_at, status)
+                 VALUES ('iphone-map', 'H1', 'in', '+15550100001', 'lunch?', 1000, 'received');",
+            )
+            .unwrap();
+            rewind(&conn, 12);
+        }
+        migrate(&mut s.conn()).unwrap();
+        let conn = s.conn();
+        let v: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        let (edited, unsent): (i64, i64) = conn
+            .query_row("SELECT edited, unsent FROM messages WHERE handle = 'H1'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((edited, unsent), (0, 0), "existing texts are unedited");
+        // A text's attachments go with it.
+        conn.execute_batch(
+            "INSERT INTO message_attachments (message_id, source, source_key, kind) VALUES (1, 'iphone-backup', 'A1', 'photo');
+             DELETE FROM messages WHERE id = 1;",
+        )
+        .unwrap();
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM message_attachments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+        drop(conn);
+        migrate(&mut s.conn()).unwrap();
+    }
+
+    #[test]
+    fn upgrading_from_v13_adds_hidden_duplicates_and_keeps_every_text() {
+        let s = Store::in_memory().unwrap();
+        {
+            let conn = s.conn();
+            conn.execute_batch(
+                "INSERT INTO messages (source, handle, direction, address, body, received_at, status)
+                 VALUES ('iphone-map', 'H1', 'in', '+15550100001', 'lunch?', 1000, 'received');",
+            )
+            .unwrap();
+            rewind(&conn, 13);
+        }
+        migrate(&mut s.conn()).unwrap();
+        let conn = s.conn();
+        let v: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        let dup: Option<i64> = conn
+            .query_row("SELECT dup_of FROM messages WHERE handle = 'H1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(dup, None, "an existing text is nobody's duplicate");
+        drop(conn);
+        assert_eq!(s.recent_messages(10).unwrap().len(), 1);
     }
 
     #[test]

@@ -12,10 +12,28 @@ use tokio::time::timeout;
 use crate::auth;
 use crate::framing::{read_msg, write_msg, FrameError};
 use crate::protocol::{
-    BridgeError, ClientInfo, ClientMsg, ErrorCode, Request, ServerMsg, MAX_CLIENT_LINE, PROTOCOL_VERSION,
+    BridgeError, ClientInfo, ClientMsg, ErrorCode, Progress, Request, ServerMsg, MAX_CLIENT_LINE, PROTOCOL_VERSION,
 };
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Where a handler reports how a long call is getting on. Goes nowhere unless the caller asked
+/// for progress (`Request::wants_progress`), so a handler can always report.
+#[derive(Clone, Default)]
+pub struct ProgressSink(Option<tokio::sync::mpsc::UnboundedSender<Progress>>);
+
+impl ProgressSink {
+    /// A sink that drops everything.
+    pub fn none() -> ProgressSink {
+        ProgressSink(None)
+    }
+
+    pub fn send(&self, p: Progress) {
+        if let Some(tx) = &self.0 {
+            let _ = tx.send(p);
+        }
+    }
+}
 
 /// How long a client gets to say hello, and then to send its call.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -42,7 +60,13 @@ pub trait Handler: Send + Sync + 'static {
     fn time_limit(&self, request: &Request) -> Duration;
     /// A call failed the token check (logged by the app, without anything the caller sent).
     fn rejected(&self, client: &ClientInfo, why: ErrorCode);
-    fn handle(&self, client: ClientInfo, request: Request) -> BoxFuture<'_, Result<serde_json::Value, BridgeError>>;
+    /// Answer a checked call. `progress` reaches the caller only if it asked for it.
+    fn handle(
+        &self,
+        client: ClientInfo,
+        request: Request,
+        progress: ProgressSink,
+    ) -> BoxFuture<'_, Result<serde_json::Value, BridgeError>>;
 }
 
 async fn send<W: AsyncWrite + Unpin>(w: &mut W, msg: &ServerMsg) {
@@ -123,7 +147,27 @@ pub async fn handle_connection<S: AsyncRead + AsyncWrite + Send + Unpin>(stream:
     // An approved text is saved and queued before anything waits on the phone: past the limit it
     // may still go, so the caller must not be told to try again.
     let is_send = matches!(request, Request::SendText { .. });
-    let answer = match timeout(limit, handler.handle(client, request)).await {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = if request.wants_progress() {
+        ProgressSink(Some(tx))
+    } else {
+        drop(tx);
+        ProgressSink::none()
+    };
+    let work = timeout(limit, handler.handle(client, request, sink));
+    tokio::pin!(work);
+    // Progress goes out as it comes, while the answer is worked on.
+    let done = loop {
+        tokio::select! {
+            done = &mut work => break done,
+            Some(p) = rx.recv() => send(&mut w, &ServerMsg::Progress { progress: p }).await,
+        }
+    };
+    // Anything said just before the answer still goes first, in order.
+    while let Ok(p) = rx.try_recv() {
+        send(&mut w, &ServerMsg::Progress { progress: p }).await;
+    }
+    let answer = match done {
         Ok(Ok(value)) => ServerMsg::Result { ok: value },
         Ok(Err(e)) => ServerMsg::Error(e),
         Err(_) if is_send => ServerMsg::Error(BridgeError::new(

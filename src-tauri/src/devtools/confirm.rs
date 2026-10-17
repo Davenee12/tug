@@ -1,4 +1,4 @@
-//! The "send this text?" confirmation: an AI tool (or `tug text`) can only ask; the person
+//! The "send this?" confirmation: an AI tool (or `tug text`, `tug boat`) can only ask; the person
 //! decides with a click in tug. One question at a time, answered at most once, and it expires
 //! after 2 minutes as not sent. Pure state machine: the async waiting lives in `mod.rs`.
 //!
@@ -20,13 +20,44 @@ pub struct ConfirmRequest {
     pub id: u64,
     /// Who's asking, as it named itself ("claude-code", "tug command").
     pub tool: String,
-    /// The contact's name (or the number, formatted, when it isn't a contact).
-    pub to_name: String,
-    /// The number it would go to.
-    pub to_address: String,
-    pub message: String,
+    /// What it wants to send: `kind` says which.
+    #[serde(flatten)]
+    pub ask: Ask,
     /// Unix ms after which it counts as not sent.
     pub expires_at: i64,
+}
+
+/// What's being asked about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Ask {
+    /// "<tool> wants to text <name>".
+    Text {
+        /// The contact's name (or the number, formatted, when it isn't a contact).
+        to_name: String,
+        /// The number it would go to.
+        to_address: String,
+        message: String,
+    },
+    /// "Send report.pdf (2.1 MB) to your iPhone?"
+    Files { files: Vec<ConfirmFile> },
+}
+
+/// One file on the card: the name the phone will see, its size, and the folder it's in (so the
+/// person sees *which* `notes.txt`, or that it's in `.ssh`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmFile {
+    pub name: String,
+    pub size: u64,
+    /// `None` for what was piped into `tug boat -`.
+    pub folder: Option<String>,
+}
+
+impl Ask {
+    pub fn is_files(&self) -> bool {
+        matches!(self, Ask::Files { .. })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,14 +83,7 @@ impl Confirmations {
     }
 
     /// Ask. Refused while another question is still waiting (an expired one is cleared first).
-    pub fn open(
-        &mut self,
-        tool: String,
-        to_name: String,
-        to_address: String,
-        message: String,
-        now_ms: i64,
-    ) -> Result<ConfirmRequest, Busy> {
+    pub fn open(&mut self, tool: String, ask: Ask, now_ms: i64) -> Result<ConfirmRequest, Busy> {
         if let Some(p) = &self.pending {
             if now_ms < p.expires_at {
                 return Err(Busy);
@@ -70,9 +94,7 @@ impl Confirmations {
         let req = ConfirmRequest {
             id: self.next_id,
             tool,
-            to_name,
-            to_address,
-            message,
+            ask,
             expires_at: now_ms + CONFIRM_TIMEOUT_MS,
         };
         self.pending = Some(req.clone());
@@ -105,20 +127,92 @@ impl Confirmations {
     pub fn cancel(&mut self) -> Option<u64> {
         self.pending.take().map(|p| p.id)
     }
+
+    /// One switch was turned off: drop the question only if it's that switch's kind.
+    pub fn cancel_if(&mut self, which: impl Fn(&Ask) -> bool) -> Option<u64> {
+        if self.pending.as_ref().is_some_and(|p| which(&p.ask)) {
+            self.cancel()
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn text() -> Ask {
+        Ask::Text {
+            to_name: "Sam".into(),
+            to_address: "+15550100".into(),
+            message: "On my way".into(),
+        }
+    }
+
+    fn files() -> Ask {
+        Ask::Files {
+            files: vec![ConfirmFile {
+                name: "report.pdf".into(),
+                size: 2_100_000,
+                folder: Some(r"C:\Users\me\Documents".into()),
+            }],
+        }
+    }
+
     fn open(c: &mut Confirmations, now: i64) -> Result<ConfirmRequest, Busy> {
-        c.open(
-            "claude-code".into(),
-            "Sam".into(),
-            "+15550100".into(),
-            "On my way".into(),
-            now,
-        )
+        c.open("claude-code".into(), text(), now)
+    }
+
+    #[test]
+    fn a_file_card_is_answered_the_same_way() {
+        let mut c = Confirmations::default();
+        let r = c.open("Claude Code".into(), files(), 0).unwrap();
+        // Busy for a text too: one card at a time, whatever it's about.
+        assert_eq!(open(&mut c, 1), Err(Busy));
+        assert_eq!(c.decide(r.id, false, 10), Some(Resolution::Declined));
+        let r = c.open("Claude Code".into(), files(), 20).unwrap();
+        assert_eq!(
+            c.decide(r.id, true, CONFIRM_TIMEOUT_MS + 20),
+            Some(Resolution::TimedOut)
+        );
+    }
+
+    #[test]
+    fn switching_one_kind_off_drops_only_its_card() {
+        let mut c = Confirmations::default();
+        let r = c.open("Claude Code".into(), files(), 0).unwrap();
+        assert_eq!(
+            c.cancel_if(|a| !a.is_files()),
+            None,
+            "the texts switch leaves a file card"
+        );
+        assert_eq!(c.cancel_if(Ask::is_files), Some(r.id));
+        assert!(c.pending().is_none());
+    }
+
+    #[test]
+    fn json_shapes_match_protocol_ts() {
+        let mut c = Confirmations::default();
+        let t = c.open("Claude Code".into(), text(), 0).unwrap();
+        assert_eq!(
+            serde_json::to_value(&t).unwrap(),
+            serde_json::json!({"id": 1, "tool": "Claude Code", "kind": "text", "toName": "Sam",
+                "toAddress": "+15550100", "message": "On my way", "expiresAt": CONFIRM_TIMEOUT_MS})
+        );
+        c.cancel();
+        let f = c.open("tug command".into(), files(), 0).unwrap();
+        assert_eq!(
+            serde_json::to_value(&f).unwrap(),
+            serde_json::json!({"id": 2, "tool": "tug command", "kind": "files",
+                "files": [{"name": "report.pdf", "size": 2_100_000, "folder": "C:\\Users\\me\\Documents"}],
+                "expiresAt": CONFIRM_TIMEOUT_MS})
+        );
+    }
+
+    #[test]
+    fn the_card_waits_as_long_as_the_bridge_expects() {
+        assert_eq!(CONFIRM_TIMEOUT_MS as u64, tug_bridge::protocol::CONFIRM_SECS * 1000);
     }
 
     #[test]

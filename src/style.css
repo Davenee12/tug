@@ -118,6 +118,46 @@
   @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] font-medium;
 }
 
+/* The Now Playing card tinted from its album art (lib/albumArt, stores/albumArt). The card sets
+   --art-from, --art-to and --art-accent inline when a cover gives it colours that pass WCAG AA
+   with its text; otherwise these defaults are the card's usual surface and bars. Registered as
+   colours so a new song's colours ease in (700 ms, only when they change: nothing runs while
+   they stay put), and swap at once with reduced motion. */
+@property --art-from {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: transparent;
+}
+@property --art-to {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: transparent;
+}
+@property --art-accent {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+@utility album-tint {
+  --art-from: var(--color-surface-dark-elevated);
+  --art-to: var(--color-surface-dark-elevated);
+  --art-accent: var(--color-on-dark);
+  background-image: linear-gradient(135deg, var(--art-from), var(--art-to));
+  transition:
+    --art-from 700ms ease,
+    --art-to 700ms ease,
+    --art-accent 700ms ease;
+}
+/* The progress and volume fills inside the card. */
+@utility album-accent {
+  background-color: var(--art-accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .album-tint {
+    transition: none;
+  }
+}
+
 /* Hide previews while sharing or presenting (lib/sharePrivacy): inside a `.previews-hidden` area,
    texts, names and contact photos blur past reading. No transition: hiding must be instant. */
 @utility preview-private {

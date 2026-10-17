@@ -33,6 +33,7 @@ const base: DevToolsStatus = {
 };
 const card: DevToolsConfirm = {
   id: 1,
+  kind: "text",
   tool: "Example tool",
   toName: "Sam",
   toAddress: "+15550100",

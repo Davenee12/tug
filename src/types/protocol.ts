@@ -225,6 +225,108 @@ export interface SmsMessage {
    * listed was new, so older ones from while tug was away may only be on the iPhone.
    */
   gapBefore: boolean;
+  /** Edited on the phone after it was sent (from a backup). */
+  edited?: boolean;
+  /** Unsent on the phone: the words are gone (from a backup). */
+  unsent?: boolean;
+  /** Photos, videos and other attachments a backup had for it (absent means none). */
+  attachments?: MessageAttachment[];
+}
+
+/** One attachment of a text, from an iPhone backup (`messages.rs` `StoredAttachment`). */
+export interface MessageAttachment {
+  id: number;
+  kind: "photo" | "gif" | "sticker" | "video" | "audio" | "contact" | "location" | "file";
+  /** The file is on this PC (photos and videos); otherwise only its kind is known. */
+  stored: boolean;
+  bytes: number | null;
+}
+
+/** A stored photo's preview (`backup/files.rs`). */
+export interface AttachmentPreview {
+  /** A JPEG data URI, when there's a picture to show. */
+  dataUri: string | null;
+  /** A HEIC photo Windows can't open without HEIF Image Extensions. */
+  needsHeif: boolean;
+  /** A HEIC photo HEIF Image Extensions opened but can't show without HEVC Video Extensions. */
+  needsHevc: boolean;
+}
+
+/** One iPhone backup on this PC (`backup/discover.rs`). */
+export interface BackupInfo {
+  /** Opaque: names the backup back to tug, which keeps the folder itself. */
+  id: string;
+  deviceName: string;
+  /** Apple's model identifier ("iPhone15,2"). */
+  model: string | null;
+  iosVersion: string | null;
+  /** When it was last made (ms since 1970). */
+  lastBackup: number | null;
+  sizeBytes: number;
+  encrypted: boolean;
+  problem: "tooOld" | "incomplete" | "unreadable" | null;
+}
+
+/** What an import would add (`backup/import.rs` `Scan`). */
+export interface BackupScan {
+  texts: number;
+  already: number;
+  conversations: number;
+  photos: number;
+  videos: number;
+  mediaBytes: number;
+  /** New texts that carry photos (what "photos only" brings in). */
+  photoTexts: number;
+  /** Texts in group chats, which aren't brought in. */
+  groupTexts: number;
+}
+
+/** What an import did (`backup/import.rs` `Summary`). */
+export interface BackupSummary {
+  texts: number;
+  /** Pictures (photos, GIFs, stickers) copied to this PC. */
+  photos: number;
+  videos: number;
+  conversations: number;
+  already: number;
+  /** Photos the backup listed but didn't have the file for. */
+  missing: number;
+  /** Texts in group chats, left out. */
+  groupTexts: number;
+}
+
+export type BackupPhase = "idle" | "unlocking" | "reading" | "ready" | "importing" | "done" | "cancelled" | "failed";
+export type BackupProblem =
+  | "needsPassword"
+  | "wrongPassword"
+  | "tooOld"
+  | "incomplete"
+  | "unreadable"
+  | "noMessages"
+  | "cantWrite"
+  | "failed";
+
+/** The import's status (`backup/mod.rs` `BackupStatus`), sent as `backup-import` events. */
+export interface BackupStatus {
+  rev: number;
+  phase: BackupPhase;
+  backup: BackupInfo | null;
+  /** 0–1 through the current step, when it can be measured. */
+  progress: number | null;
+  stage: "texts" | "photos" | null;
+  done: number;
+  total: number;
+  scan: BackupScan | null;
+  summary: BackupSummary | null;
+  problem: BackupProblem | null;
+}
+
+/** What's in tug from a backup now (`backup/import.rs` `Imported`). */
+export interface BackupImported {
+  texts: number;
+  photos: number;
+  /** When the backup was made (ms since 1970). */
+  backupDate: number | null;
 }
 
 export interface Contact {
@@ -280,6 +382,11 @@ export interface UiSettings {
   closeToTray: boolean;
   /** Real app icons in the Feed, fetched once per app from Apple's App Store. */
   appIcons: boolean;
+  /**
+   * Album art on the Now Playing card from Apple's public catalog when Spotify has none (on by
+   * default; read by the backend, `album_art.rs`). Sends only the artist and album name.
+   */
+  albumArt: boolean;
   /** A Windows pop-up when the iPhone's battery drops to 20% and 10%. */
   lowBattery: boolean;
   /** tug's pop-ups play the Windows sound (read by the backend, `toast/mod.rs`). */
@@ -598,6 +705,16 @@ export interface TugboatStatus {
   ended: "idle" | "hidden" | null;
   /** The last clipboard sent to the phone: its kind and whether the phone has it, never its contents. */
   clip: TugboatClip | null;
+  /** Files `tug boat` (or an AI tool) is holding for the phone: names and when the hold ends. */
+  held: TugboatHeld | null;
+}
+
+/** Files held for the phone after Send on tug's card (`tugboat/held.rs` `HeldStatus`). */
+export interface TugboatHeld {
+  /** What the phone sees them called. */
+  names: string[];
+  /** When the soonest hold ends (Unix ms). */
+  expiresAt: number;
 }
 
 /** "tugboat-text": text from the phone went (or failed to go) onto the PC clipboard. */
@@ -626,17 +743,23 @@ export interface TugboatClipEvent {
   state: TugboatClipState;
 }
 
+/** Which of tug's games has the phone controller (`tugboat/pad.rs` `GameId`). */
+export type GameId = "tugboat-run" | "harbor-stack";
+
 /**
- * The phone as Tugboat Run's controller (`game-pad` event, `tugboat/pad.rs` `PadEvent`). Sent when
- * steering or boost changes, and when the phone arrives or goes quiet.
+ * The phone as a game's controller (`game-pad` event, `tugboat/pad.rs` `PadEvent`). Sent when
+ * steering, boost or drop changes, and when the phone arrives or goes quiet.
  */
 export interface GamePad {
   /** Which phone: 1 is the one that opened Tugboat, 2 a second phone (two-player games only). */
   seat: 1 | 2;
   connected: boolean;
-  /** -1 (full left) to 1 (full right); 0 whenever not connected. */
+  /** -1 (full left) to 1 (full right); 0 whenever not connected. Harbor Stack: the crane nudge. */
   steer: number;
+  /** Tugboat Run's Boost (always false in Harbor Stack). */
   boost: boolean;
+  /** Harbor Stack's Drop (always false in Tugboat Run). */
+  drop: boolean;
 }
 
 /** A file that couldn't be offered to the phone, and why. */
@@ -835,17 +958,39 @@ export interface DevToolsClient {
   lastUsed: number;
 }
 
-/** The "send this text?" card (`ConfirmRequest`). */
-export interface DevToolsConfirm {
+/** What the "send this?" card has in common (`ConfirmRequest`). */
+interface DevToolsConfirmBase {
   id: number;
   /** Who's asking, as it named itself. */
   tool: string;
-  toName: string;
-  toAddress: string;
-  message: string;
   /** Unix ms after which it counts as not sent. */
   expiresAt: number;
 }
+
+/** "<tool> wants to text <name>" (`Ask::Text`). */
+export interface DevToolsConfirmText extends DevToolsConfirmBase {
+  kind: "text";
+  toName: string;
+  toAddress: string;
+  message: string;
+}
+
+/** One file on the card (`ConfirmFile`): the name the phone will see, its size, and its folder. */
+export interface DevToolsConfirmFile {
+  name: string;
+  size: number;
+  /** null for what was piped into `tug boat -`. */
+  folder: string | null;
+}
+
+/** "Send report.pdf (2.1 MB) to your iPhone?" (`Ask::Files`). */
+export interface DevToolsConfirmFiles extends DevToolsConfirmBase {
+  kind: "files";
+  files: DevToolsConfirmFile[];
+}
+
+/** The "send this?" card: a text, or files for the phone. */
+export type DevToolsConfirm = DevToolsConfirmText | DevToolsConfirmFiles;
 
 /** Everything Settings › Developer tools shows (`DevToolsStatus`). */
 export interface DevToolsStatus {
@@ -915,4 +1060,50 @@ export interface VoiceStatus {
 /** What one hold did (`voice-typed`). The words themselves are never sent. */
 export interface VoiceTyped {
   outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "noTarget" | "keysHeld" | "unavailable" | "failed";
+}
+
+/** Where automatic updates are (`updater::policy::Phase`). */
+export type UpdatePhase =
+  | "notConfigured"
+  | "idle"
+  | "checking"
+  | "upToDate"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "applying"
+  | "failed";
+
+/** Which step failed (`updater::policy::Failure`). */
+export type UpdateFailure = "check" | "download" | "apply";
+
+/** What an update restart would cut off (`updater::policy::Blocker`). */
+export type UpdateBlocker = "call" | "transfer" | "voice";
+
+/** Automatic updates for the Update button and Settings › About (`update_status`, the `update-status` event). */
+export interface UpdateStatus {
+  /** Counts the changes; the store keeps the highest (`lib/ordering`). Optional only for fixtures. */
+  rev?: number;
+  phase: UpdatePhase;
+  /** The version running now. */
+  current: string;
+  /** The newer release found, while there is one. */
+  version: string | null;
+  /** The release notes' first paragraph. */
+  headline: string | null;
+  /** Download progress in percent, when the size is known. */
+  progress: number | null;
+  failure: UpdateFailure | null;
+  /** The portable exe: it can only point at the download. */
+  portable: boolean;
+  /** "Download updates automatically". */
+  auto: boolean;
+  /** When the last check finished (ms since the epoch). */
+  checkedAt: number | null;
+}
+
+/** Restart now's answer when it didn't restart (`updater::ApplyAnswer`). */
+export interface UpdateApplyAnswer {
+  blocked: UpdateBlocker | null;
+  status: UpdateStatus;
 }

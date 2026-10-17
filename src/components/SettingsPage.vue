@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Info, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
+import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, History, Info, MessageSquare, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
+import { useBackupStore } from "../stores/backup";
+import { importedLine } from "../lib/backupImport";
+import BackupImport from "./BackupImport.vue";
 import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { usePcAudioStore } from "../stores/pcAudio";
+import { useUpdateStore } from "../stores/update";
 import { connectionHealth, errorAge, type HealthLink, type LinkState } from "../lib/health";
 import { stepZoom } from "../lib/zoom";
 import { escClosesSettings } from "../lib/escape";
@@ -20,17 +24,28 @@ import DeveloperSettings from "./DeveloperSettings.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsSwitch from "./SettingsSwitch.vue";
 import VoiceSettings from "./VoiceSettings.vue";
+import UpdateSettings from "./UpdateSettings.vue";
 
 const tug = useTugStore();
 const weather = useWeatherStore();
 // Settings › iPhone › Audio: play the iPhone's sound through this PC (words from lib/pcAudio).
 const pcAudio = usePcAudioStore();
 const pcView = computed(() => pcAudio.view);
+// Data & privacy › What goes online: update checks are listed only when this build makes them.
+const update = useUpdateStore();
+const whatGoesOnline = computed(
+  () =>
+    "Weather, only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name. App icons: each app's ID (like com.google.Gmail, never what it sent you) goes to Apple's App Store once. Album art: the artist and album name of what's playing go to Apple's music catalog when tug doesn't have that album's cover yet." +
+    (update.status && update.status.phase !== "notConfigured"
+      ? " Updates: tug asks GitHub whether there's a new version, and downloads it from there (Settings › About)."
+      : ""),
+);
 
 const SECTIONS: Array<{ id: SettingsSection; label: string; icon: Component }> = [
   { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "iphone", label: "iPhone", icon: Smartphone },
   { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "messages", label: "Messages", icon: MessageSquare },
   { id: "connectors", label: "Connectors", icon: Plug },
   { id: "weather", label: "Weather", icon: CloudSun },
   { id: "developer", label: "Developer tools", icon: SquareTerminal },
@@ -111,6 +126,7 @@ const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tu
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
 const startWithWindows = computed({ get: () => tug.autostartEnabled, set: (v) => void tug.setAutostart(v) });
 const appIcons = computed({ get: () => tug.settings.appIcons, set: (v) => void tug.setSetting("appIcons", v) });
+const albumArt = computed({ get: () => tug.settings.albumArt, set: (v) => void tug.setSetting("albumArt", v) });
 const showGames = computed({ get: () => tug.settings.showGames, set: (v) => void tug.setSetting("showGames", v) });
 const filterUnknown = computed({ get: () => tug.settings.filterUnknown, set: (v) => void tug.setSetting("filterUnknown", v) });
 const hidePreviews = computed({
@@ -249,6 +265,23 @@ function changePlace() {
   tug.view = "feed";
 }
 
+// ---- Messages: Bring in your full history (an iPhone backup) ----
+const backup = useBackupStore();
+const importedNow = computed(() => importedLine(backup.imported));
+const confirmRemove = ref(false);
+let removeTimer: number | undefined;
+async function removeImported() {
+  if (!confirmRemove.value) {
+    confirmRemove.value = true;
+    window.clearTimeout(removeTimer);
+    removeTimer = window.setTimeout(() => (confirmRemove.value = false), 4000);
+    return;
+  }
+  confirmRemove.value = false;
+  await backup.removeImported();
+}
+onMounted(() => void backup.refreshImported());
+
 // ---- Data ----
 const confirmClear = ref(false);
 let clearTimer: number | undefined;
@@ -261,7 +294,8 @@ async function clearHistory() {
   }
   confirmClear.value = false;
   // Empties the lists and says "History cleared" only if it worked; a failure says why.
-  await tug.clearHistory();
+  // History brought in from an iPhone backup goes with it.
+  if (await tug.clearHistory()) backup.historyCleared();
 }
 </script>
 
@@ -349,8 +383,15 @@ async function clearHistory() {
                 </button>
               </div>
             </SettingsRow>
-            <SettingsRow class="bg-surface-card" label="Show games" description="A Play button in the sidebar for Tugboat Run, a little boat game, and “game” in Ctrl+K.">
+            <SettingsRow class="bg-surface-card" label="Show games" description="A Play button in the sidebar for tug’s little games, Tugboat Run and Harbor Stack, and “game” in Ctrl+K and the taskbar.">
               <SettingsSwitch v-model="showGames" label="Show games" />
+            </SettingsRow>
+            <SettingsRow
+              class="bg-surface-card"
+              label="Show album art"
+              description="Looks up artwork from Apple's public music catalog. Only the artist and album name go to Apple: nothing else, and no account. Off: Spotify's art if it's connected, otherwise none."
+            >
+              <SettingsSwitch v-model="albumArt" label="Show album art" />
             </SettingsRow>
           </div>
 
@@ -779,6 +820,32 @@ async function clearHistory() {
         </template>
 
         <!-- Data & privacy -->
+        <!-- Messages: the full history from an iPhone backup on this PC. -->
+        <template v-else-if="current.id === 'messages'">
+          <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Bring in your full history"
+              description="Over Bluetooth your iPhone shares only its newest texts, never the ones you send from it, and no photos. A backup of your iPhone on this PC has them all: tug can bring them in once, and keeps everything on this PC."
+            >
+              <button class="btn-secondary btn-sm" @click="backup.openWizard()">
+                <History :size="14" /> Choose a backup…
+              </button>
+              <template #below>
+                <p v-if="importedNow" class="mt-1.5 text-[13px] text-body">{{ importedNow }}</p>
+              </template>
+            </SettingsRow>
+            <SettingsRow
+              v-if="importedNow"
+              label="Remove imported history"
+              description="Deletes every text and photo tug brought in from your iPhone backup. Texts tug got over Bluetooth stay."
+            >
+              <button :class="['btn-secondary btn-sm', confirmRemove ? 'text-error' : '']" @click="removeImported">
+                {{ confirmRemove ? "Click again to remove" : "Remove" }}
+              </button>
+            </SettingsRow>
+          </div>
+        </template>
+
         <template v-else-if="current.id === 'privacy'">
           <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow
@@ -787,7 +854,7 @@ async function clearHistory() {
             />
             <SettingsRow
               label="What goes online"
-              description="Weather, only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name. App icons: each app's ID (like com.google.Gmail, never what it sent you) goes to Apple's App Store once."
+              :description="whatGoesOnline"
             />
             <SettingsRow
               label="Spotify"
@@ -800,6 +867,10 @@ async function clearHistory() {
             <SettingsRow
               label="Voice typing"
               description="Only while you hold its shortcut: Windows' own speech recognition turns your voice into text on this PC. The recording is never sent anywhere or saved."
+            />
+            <SettingsRow
+              label="iPhone backup"
+              description="Only when you bring in your full history: tug reads a backup on this PC and copies your texts and photos into its own folder. Nothing goes online, and an encrypted backup's password is used once and never saved."
             />
             <SettingsRow
               label="App icons"
@@ -825,6 +896,7 @@ async function clearHistory() {
         <template v-else>
           <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow label="tug" :description="version ? `Version ${version}` : 'Version unavailable'" />
+            <UpdateSettings />
             <SettingsRow label="What's new" description="See what changed in this and earlier updates.">
               <button class="btn-secondary btn-sm" @click="tug.openWhatsNew()">
                 <Sparkles :size="14" /> What's new
@@ -846,5 +918,6 @@ async function clearHistory() {
         </template>
       </div>
     </main>
+    <BackupImport v-if="backup.wizardOpen" />
   </div>
 </template>

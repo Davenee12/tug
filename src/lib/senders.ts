@@ -73,7 +73,10 @@ export function isKnownSender(
 }
 
 /** A Messages conversation is known when its name or any of its numbers is. Other apps always are. */
-export function isKnownConversation(c: Pick<Conversation, "appId" | "contact" | "addresses">, index: SenderIndex): boolean {
+export function isKnownConversation(
+  c: Pick<Conversation, "appId" | "contact" | "addresses">,
+  index: SenderIndex,
+): boolean {
   if (c.appId !== MESSAGES_APP) return true;
   return isKnownTo(index, c.contact) || c.addresses.some((a) => isKnownTo(index, a));
 }

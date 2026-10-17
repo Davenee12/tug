@@ -2,7 +2,7 @@
 // The page the iPhone opens from tug's QR code. Phone → PC: photos, videos, files, and text pasted
 // into "Paste to PC". PC → phone: the PC's clipboard ("Send clipboard to iPhone"), files dragged onto
 // tug, and text to copy. Plain words, big targets, light/dark.
-// When tug's game asks, the page becomes its controller (Controller.vue) until the game closes.
+// When one of tug's games asks, the page becomes its controller (Controller.vue) until the game closes.
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { Check, Copy, Download, FileUp, Gamepad2, Image as ImageIcon, LoaderCircle, Send, WifiOff, X } from "lucide-vue-next";
 import TugMark from "../components/TugMark.vue";
@@ -11,6 +11,7 @@ import { TugboatError, type TugboatApi, type PageClip, type PageOffer, type Page
 import { MAX_DOWNLOAD, MAX_UPLOAD, canRetryUpload, formatSize, isFatal, messageFor } from "./chunks";
 import { ackOutcome, copyWith, isNewClip, needsAck, showClip, type ShownClip } from "./clip";
 import { copyEnv, selectText } from "./copy";
+import { controlsFor, gameFrom, type PadGame } from "./pad";
 
 const props = defineProps<{
   api: TugboatApi | null;
@@ -41,6 +42,7 @@ async function poll() {
     if (s.text?.id !== pcText.value?.id) copied.value = false;
     pcText.value = s.text;
     game.value = s.game;
+    if (s.game) gameId.value = gameFrom(s.gameId);
     // The PC's clipboard: show a new one; keep telling the PC we have it until it has heard.
     if (isNewClip(clip.value ?? (dismissedClip === null ? null : { id: dismissedClip }), s.clip)) receiveClip(s.clip);
     else if (needsAck(clip.value)) void ackClip();
@@ -67,6 +69,9 @@ function schedule() {
 
 // --- tug's game wants a controller ---
 const game = ref(false);
+/** Which game (its controller's buttons and its name). */
+const gameId = ref<PadGame>("tugboat-run");
+const gameTitle = computed(() => controlsFor(gameId.value).title);
 /** This phone is a two-player race's second controller: no files or text, only the race. */
 const guest = ref(props.guest === true);
 /** "Stop using as a controller" was tapped: stay on this page until the game asks again. */
@@ -316,7 +321,7 @@ const fatalMessage = computed(() =>
 </script>
 
 <template>
-  <Controller v-if="controller && api" :api="api" @leave="leftController" />
+  <Controller v-if="controller && api" :api="api" :game="gameId" @leave="leftController" />
   <div v-else class="mx-auto flex min-h-dvh max-w-[560px] flex-col px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
     <header class="flex items-center gap-2.5">
       <TugMark :size="30" class="text-ink" />
@@ -351,14 +356,14 @@ const fatalMessage = computed(() =>
       <!-- tug's game is asking, but the controller was put away. -->
       <div v-if="game && padDismissed" class="card mt-5 flex items-center gap-3">
         <Gamepad2 :size="22" class="shrink-0 text-primary" />
-        <p class="flex-1 text-[15px] text-ink">Tugboat Run is open on your PC.</p>
+        <p class="flex-1 text-[15px] text-ink">{{ gameTitle }} is open on your PC.</p>
         <button class="btn-primary btn-sm shrink-0" @click="padDismissed = false">Use as controller</button>
       </div>
 
       <!-- A race's second phone: nothing but the race (never files, text or the clipboard). -->
       <div v-if="guest && !game" class="card mt-5 flex items-center gap-3" role="status">
         <Gamepad2 :size="22" class="shrink-0 text-accent-teal" />
-        <p class="flex-1 text-[15px] text-ink">You're the second controller for Tugboat Run. Keep this page open: you'll join the next two-player race on the PC.</p>
+        <p class="flex-1 text-[15px] text-ink">You're the second controller. Keep this page open: you'll join the next two-player game on the PC.</p>
       </div>
 
       <template v-if="!guest">

@@ -1,0 +1,325 @@
+# Builds a tug release on GitHub's Windows runners and leaves it as a DRAFT release: the owner reads
+# it and publishes it himself (docs/RELEASING.md). Free: GitHub Actions costs nothing for a public
+# repo, the updater signature is Tauri's own minisign key, and SignPath's open-source code signing
+# is free once approved.
+#
+# - Push a tag `v0.5.19` (on a commit on main, with every version file already at 0.5.19). A manual
+#   run with "dry run" off does the same, but only when started on that tag (the `release`
+#   environment only deploys `v*` tags).
+# - Three jobs, so the secrets never share a job with anything that runs npm or cargo:
+#     build    checks, builds and stages the downloads. No secrets at all, in any run.
+#     sign     only for a real release, in the `release` environment (the owner approves each run;
+#              its secrets are environment secrets no other job or branch can read). It downloads
+#              build's files, checks out only scripts/, tauri.conf.json and CHANGELOG.md, code signs
+#              with SignPath (when set up), makes the updater signature with a pinned Tauri CLI
+#              installed with --ignore-scripts, then checksums, latest.json and the notes.
+#     release  creates the draft from sign's files.
+# - Dry runs (a manual run's default, and every pull request that touches the release machinery)
+#   run build only: nothing is signed, no release is made, and no job that can read a secret runs.
+# - Optional steps switch on by themselves when their environment secrets exist: SignPath code
+#   signing (SIGNPATH_API_TOKEN, SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG) and the updater
+#   signature plus latest.json (TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD). Code
+#   signing happens before the updater signature, the checksums and latest.json, so they describe
+#   the signed files.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, exactly as in package.json (for example 0.5.19)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run: build and check only (no signing, no draft release)"
+        type: boolean
+        default: true
+  # A dry run whenever a pull request changes the release machinery, so it's proven before a tag
+  # depends on it. Never signs or releases.
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/release-assets.mjs"
+      - "scripts/remap-paths.mjs"
+      - "scripts/build-cli.mjs"
+
+# Read-only by default; only the release job may write, and only to create the draft.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel a real release half way; a newer push to a pull request replaces its dry run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # A real release: a tag push, or a manual run with dry run off.
+  RELEASING: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
+  # The Tauri CLI the sign job runs (the version package-lock.json has), installed without scripts.
+  TAURI_CLI: "@tauri-apps/cli@2.12.1"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      # Actions are pinned to a commit SHA (tag in the comment), first-party ones included.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole history, to check a release commit is on main.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Work out the version
+        id: version
+        shell: bash
+        env:
+          RELEASE_REF: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          RELEASE_INPUT: ${{ inputs.version }}
+          RELEASE_FROM_FILES: ${{ github.event_name == 'pull_request' }}
+        run: node scripts/release-assets.mjs version
+
+      - name: Releases come only from main
+        if: env.RELEASING == 'true'
+        shell: bash
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Releases are built only from commits on main; $GITHUB_SHA isn't on main."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri -> target
+          # Its own cache, so release builds don't evict check.yml's debug cache.
+          shared-key: release
+
+      - run: npm ci
+
+      # Tauri embeds the built frontend at compile time, so clippy/tests need dist/.
+      - run: npm run build
+
+      # Everything a pull request must pass, again, on exactly what's being released.
+      - run: npm run check
+
+      # The app and the `tug` command, with this runner's paths remapped out of the exes
+      # (scripts/remap-paths.mjs), then the NSIS installer.
+      - run: npm run build:release
+
+      - name: No local paths in the exes
+        shell: bash
+        run: node scripts/release-assets.mjs leaks src-tauri/target/release/tug.exe src-tauri/binaries/tug-cli.exe
+
+      - name: Stage the downloads
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/release-assets.mjs stage "$VERSION" release-out
+
+      # For a dry run's artifact; a real release makes these again in the sign job, after signing.
+      - name: Checksums and release notes (unsigned)
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node scripts/release-assets.mjs checksums release-out/SHA256SUMS.txt \
+            "release-out/tug-$VERSION-setup.exe" "release-out/tug-$VERSION-portable.exe"
+          node scripts/release-assets.mjs notes "$VERSION" release-out/SHA256SUMS.txt release-out/notes.md
+
+      - name: Summary
+        if: always()
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          {
+            echo "## tug ${VERSION:-?}"
+            echo
+            if [ "$RELEASING" = "true" ]; then echo "- Release build: the sign job and a draft release follow."; else echo "- Dry run: nothing signed, no release created."; fi
+            if [ -f release-out/SHA256SUMS.txt ]; then echo; echo 'Unsigned build:'; echo '```'; cat release-out/SHA256SUMS.txt; echo '```'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tug-${{ steps.version.outputs.version }}-unsigned
+          path: release-out
+          if-no-files-found: error
+          retention-days: 14
+
+  sign:
+    needs: build
+    # The same rule as RELEASING (a job's `if` can't read env).
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    runs-on: windows-latest
+    timeout-minutes: 150
+    # Its secrets are this environment's: the owner approves each run, and only `v*` tags may
+    # deploy to it (docs/RELEASING.md, step 3).
+    environment: release
+    permissions:
+      contents: read
+      # SignPath's action reads this run's details and downloads the artifact it signs.
+      actions: read
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      # Whether the optional secrets exist (true/false only; the values never reach a log).
+      HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.SIGNPATH_ORGANIZATION_ID != '' && secrets.SIGNPATH_PROJECT_SLUG != '' }}
+      HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+    steps:
+      # Only what the signing steps read: no package.json, no lockfile, nothing npm or cargo runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/
+            src-tauri/tauri.conf.json
+            CHANGELOG.md
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tug-${{ needs.build.outputs.version }}-unsigned
+          path: release-out
+
+      # ---- Code signing with SignPath (free for open source; only once its secrets exist) ----
+      # One request signs both downloads; SignPath waits for the owner to approve it.
+      - name: "SignPath: collect the downloads"
+        if: env.HAS_SIGNPATH == 'true'
+        shell: bash
+        run: |
+          mkdir -p signpath/downloads
+          cp "release-out/tug-$VERSION-setup.exe" "release-out/tug-$VERSION-portable.exe" signpath/downloads/
+
+      - name: "SignPath: upload the downloads"
+        id: unsigned-downloads
+        if: env.HAS_SIGNPATH == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-downloads
+          path: signpath/downloads
+          retention-days: 1
+
+      - name: "SignPath: sign the installer and the portable app"
+        if: env.HAS_SIGNPATH == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: downloads
+          github-artifact-id: ${{ steps.unsigned-downloads.outputs.artifact-id }}
+          wait-for-completion: true
+          # Time for the owner to approve the request in SignPath.
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signpath/downloads-signed
+
+      - name: "SignPath: use the signed downloads, and check them"
+        if: env.HAS_SIGNPATH == 'true'
+        shell: pwsh
+        run: |
+          $v = $env:VERSION
+          foreach ($name in "tug-$v-setup.exe", "tug-$v-portable.exe") {
+            Copy-Item "signpath/downloads-signed/$name" "release-out/$name" -Force
+            $s = Get-AuthenticodeSignature "release-out/$name"
+            if ($s.Status -ne 'Valid') { Write-Error "$name signature: $($s.Status)"; exit 1 }
+            Write-Output "$name is signed by $($s.SignerCertificate.Subject)"
+          }
+
+      # ---- The updater: signature and latest.json (only once the Tauri signing key exists) ----
+      - name: Sign the installer for the updater
+        if: env.HAS_UPDATER_KEY == 'true'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          # A pinned CLI, installed without running any package scripts. --app-version binds the
+          # signature to this version (tug requires it: requireSignedVersion).
+          npx --yes --ignore-scripts "$TAURI_CLI" signer sign --app-version "$VERSION" "release-out/tug-$VERSION-setup.exe"
+
+      - name: Check the updater signature and make latest.json
+        if: env.HAS_UPDATER_KEY == 'true'
+        shell: bash
+        run: |
+          node scripts/release-assets.mjs keycheck "release-out/tug-$VERSION-setup.exe.sig"
+          node scripts/release-assets.mjs latest "$VERSION" "release-out/tug-$VERSION-setup.exe" release-out/latest.json
+
+      - name: Checksums and release notes
+        shell: bash
+        env:
+          RELEASE_SIGNED: ${{ env.HAS_SIGNPATH }}
+        run: |
+          node scripts/release-assets.mjs checksums release-out/SHA256SUMS.txt \
+            "release-out/tug-$VERSION-setup.exe" "release-out/tug-$VERSION-portable.exe"
+          node scripts/release-assets.mjs notes "$VERSION" release-out/SHA256SUMS.txt release-out/notes.md
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## tug ${VERSION:-?}: signing"
+            echo
+            if [ "$HAS_SIGNPATH" = "true" ]; then echo "- Code signing: SignPath"; else echo "- Code signing: not set up yet"; fi
+            if [ -f release-out/latest.json ]; then echo "- Updater: signed, latest.json made"; else echo "- Updater: no signature or latest.json (no signing key)"; fi
+            if [ -f release-out/SHA256SUMS.txt ]; then echo; echo '```'; cat release-out/SHA256SUMS.txt; echo '```'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tug-${{ needs.build.outputs.version }}
+          path: release-out
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: [build, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Creating the draft release (and, when it's published, its tag).
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tug-${{ needs.build.outputs.version }}
+          path: release-out
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::A release for $tag already exists; delete the draft first to build it again."
+            exit 1
+          fi
+          files=("release-out/tug-$VERSION-setup.exe" "release-out/tug-$VERSION-portable.exe" release-out/SHA256SUMS.txt)
+          [ -f "release-out/tug-$VERSION-setup.exe.sig" ] && files+=("release-out/tug-$VERSION-setup.exe.sig")
+          [ -f release-out/latest.json ] && files+=(release-out/latest.json)
+          # A draft: nothing is public (and latest.json isn't served to anyone) until the owner
+          # publishes it.
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft \
+            --title "tug $VERSION" --notes-file release-out/notes.md --target "$GITHUB_SHA" "${files[@]}"
+          echo "Draft release $tag created: publish it from the Releases page." >> "$GITHUB_STEP_SUMMARY"
