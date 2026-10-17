@@ -17,7 +17,7 @@ use super::auth;
 use super::auth::Authorized;
 use super::clip::{ClipEvent, ClipKind, ClipState, Prepared};
 use super::crypto::{self, ad, Keys};
-use super::pad::{PadEvent, PadReply, BURST, FIRST, SECOND};
+use super::pad::{GameId, PadEvent, PadReply, BURST, FIRST, SECOND};
 use super::server;
 use super::session::{self, FinishReply, PageClip, Session, Sink, StateReply, UploadReply, OFFER_CHUNK};
 use super::upload::MIN_CHUNK;
@@ -185,6 +185,7 @@ async fn phone_session_over_a_socket() {
             offers: vec![],
             text: None,
             game: false,
+            game_id: None,
             clip: None,
             guest: false
         }
@@ -706,21 +707,34 @@ async fn game_controller_inputs_only_steer_the_game() {
     assert!(sink.pads.lock().unwrap().is_empty());
 
     // The game opens the channel: the page sees it at its next check-in.
-    assert!(session.pad_open(1));
-    assert!(!session.pad_open(1), "opening twice is one channel");
+    assert!(session.pad_open(1, GameId::TugboatRun));
+    assert!(!session.pad_open(1, GameId::TugboatRun), "opening twice is one channel");
     let (_, state) = phone.call::<StateReply>("GET", "/api/state", None).await;
-    assert!(state.unwrap().game);
+    let state = state.unwrap();
+    assert!(state.game);
+    assert_eq!(
+        state.game_id,
+        Some(GameId::TugboatRun),
+        "the page shows Tugboat Run's buttons"
+    );
 
     // A steering input reaches the game; the reply carries what the phone shows.
     let feedback = PadReply {
         paused: true,
         hits: 2,
         player: None,
+        game: None,
     };
     session.pad_feedback(FIRST, feedback);
     let (status, reply) = phone.call::<PadReply>("POST", "/api/pad", input(-40, true)).await;
     assert_eq!(status, 200);
-    assert_eq!(reply.unwrap(), feedback);
+    assert_eq!(
+        reply.unwrap(),
+        PadReply {
+            game: Some(GameId::TugboatRun),
+            ..feedback
+        }
+    );
     let last = *sink.pads.lock().unwrap().last().unwrap();
     assert!(last.connected && last.boost && last.seat == FIRST && (last.steer + 0.4).abs() < 1e-6);
     // A heartbeat with the same state doesn't bother the game again.
@@ -860,13 +874,16 @@ async fn a_two_player_game_takes_exactly_two_controllers() {
 
     // The first phone binds the session; a one-player game has no seat for the Player 2 code.
     assert_eq!(first.raw("GET", "/api/state", Vec::new()).await.status, 200);
-    session.pad_open(1);
+    session.pad_open(1, GameId::TugboatRun);
     assert!(!session.wants_guest(), "no Player 2 code to show");
     let r = second.raw("GET", "/api/state", Vec::new()).await;
     assert_eq!((r.status, code(&r.body).as_str()), (403, "no-race"));
 
     // Two players: the second phone joins, sees only that there's a race, and steers seat 2.
-    assert!(!session.pad_open(2), "the same channel, now for two");
+    assert!(
+        !session.pad_open(2, GameId::TugboatRun),
+        "the same channel, now for two"
+    );
     assert!(session.wants_guest(), "the Player 2 code is shown");
     let (status, state) = second.call::<StateReply>("GET", "/api/state", None).await;
     assert_eq!(status, 200);
@@ -876,6 +893,7 @@ async fn a_two_player_game_takes_exactly_two_controllers() {
             offers: vec![],
             text: None,
             game: true,
+            game_id: Some(GameId::TugboatRun),
             clip: None,
             guest: true
         }
@@ -884,6 +902,7 @@ async fn a_two_player_game_takes_exactly_two_controllers() {
         paused: false,
         hits: 0,
         player: Some(player),
+        game: None,
     };
     session.pad_feedback(FIRST, feedback(2));
     session.pad_feedback(SECOND, feedback(1));
@@ -941,7 +960,7 @@ async fn a_two_player_game_takes_exactly_two_controllers() {
     );
 
     // Back to one player: seat 2's phone is let go (the game hears it's gone), and it waits.
-    session.pad_open(1);
+    session.pad_open(1, GameId::TugboatRun);
     assert_eq!(*sink.pads.lock().unwrap().last().unwrap(), PadEvent::gone(SECOND));
     assert_eq!(
         second.call::<PadReply>("POST", "/api/pad", input(0, false)).await.0,
@@ -951,7 +970,7 @@ async fn a_two_player_game_takes_exactly_two_controllers() {
     let state = state.unwrap();
     assert!(!state.game && state.guest);
     // A rematch for two: the same second phone steers again.
-    session.pad_open(2);
+    session.pad_open(2, GameId::TugboatRun);
     assert_eq!(
         second.call::<PadReply>("POST", "/api/pad", input(10, false)).await.0,
         200
@@ -1002,7 +1021,8 @@ async fn a_player_2_code_only_steers_and_never_owns_the_session() {
 
     // A two-player race: the guest is the very first phone to connect. It joins as Player 2, hears
     // only that there's a race (sealed with its own keys), and the session is still nobody's.
-    session.pad_open(2);
+    // (A Harbor Stack stack-off: the guest's Drop is still only a controller input.)
+    session.pad_open(2, GameId::HarborStack);
     let (status, state) = guest.call::<StateReply>("GET", "/api/state", None).await;
     assert_eq!(status, 200);
     assert_eq!(
@@ -1011,15 +1031,17 @@ async fn a_player_2_code_only_steers_and_never_owns_the_session() {
             offers: vec![],
             text: None,
             game: true,
+            game_id: Some(GameId::HarborStack),
             clip: None,
             guest: true
         }
     );
     assert!(session.snapshot().phone.is_none(), "a guest never becomes the owner");
-    let (status, _) = guest.call::<PadReply>("POST", "/api/pad", input(-60, false)).await;
-    assert_eq!(status, 200);
+    let drop = Some(json!({ "steer": -60, "boost": false, "drop": true }));
+    let (status, reply) = guest.call::<PadReply>("POST", "/api/pad", drop).await;
+    assert_eq!((status, reply.unwrap().game), (200, Some(GameId::HarborStack)));
     let last = *sink.pads.lock().unwrap().last().unwrap();
-    assert_eq!((last.seat, last.connected), (SECOND, true));
+    assert_eq!((last.seat, last.connected, last.drop), (SECOND, true, true));
 
     // Nothing else, ever: text, the clipboard, uploads (begin, chunk, finish, cancel), downloads.
     let r = guest
@@ -1108,7 +1130,7 @@ async fn a_guest_poll_never_sees_or_takes_the_owners_clipboard() {
     let mut owner = Phone::new(addr, &secret, "ownerAAAAAAAAAAAAAAAAA");
     let mut guest = Phone::guest(addr, &secret, "guestBBBBBBBBBBBBBBBBB");
     assert_eq!(owner.raw("GET", "/api/state", Vec::new()).await.status, 200);
-    session.pad_open(2);
+    session.pad_open(2, GameId::TugboatRun);
     let id = session.send_clip(Prepared::Text("for the owner's phone only".into()));
     assert!(!session.clip_served());
 
@@ -1162,7 +1184,7 @@ async fn controller_inputs_reuse_one_connection() {
     for i in 0..6 {
         // The game opens the controller after the first (refused) input.
         if i == 1 {
-            session.pad_open(1);
+            session.pad_open(1, GameId::TugboatRun);
         }
         seq += 1;
         let body = keys.seal(
@@ -1208,7 +1230,10 @@ async fn controller_latency_bench() {
     let (addr, stop, server) = start_server(session.clone(), server::Limits::default()).await;
     // BENCH_PLAYERS=2: a two-player game, with a second phone steering at the same pace alongside.
     let duo = std::env::var("BENCH_PLAYERS").is_ok_and(|v| v == "2");
-    session.pad_open(if duo { 2 } else { 1 });
+    // BENCH_GAME=stack: Harbor Stack, whose inputs carry Drop (and are a few bytes longer).
+    let stack = std::env::var("BENCH_GAME").is_ok_and(|v| v == "stack");
+    let game = if stack { GameId::HarborStack } else { GameId::TugboatRun };
+    session.pad_open(if duo { 2 } else { 1 }, game);
     let keys = Keys::derive(&secret);
     let client = "phoneAAAAAAAAAAAAAAAAA";
     let mut first = Phone::new(addr, &secret, client);
@@ -1258,7 +1283,12 @@ async fn controller_latency_bench() {
         let steer = (i % 200) as i64 - 100;
         let body = keys.seal(
             &ad::request(client, seq),
-            format!(r#"{{"steer":{steer},"boost":false}}"#).as_bytes(),
+            if stack {
+                format!(r#"{{"steer":{steer},"boost":false,"drop":{}}}"#, i % 2 == 0)
+            } else {
+                format!(r#"{{"steer":{steer},"boost":false}}"#)
+            }
+            .as_bytes(),
         );
         let req = Request::builder()
             .method("POST")
@@ -1285,7 +1315,7 @@ async fn controller_latency_bench() {
         g.abort();
     }
     println!(
-        "controller round trip on localhost ({} player(s)): n={}, p50 {:?}, p90 {:?}, p99 {:?}, max {:?}",
+        "controller round trip on localhost ({game:?}, {} player(s)): n={}, p50 {:?}, p90 {:?}, p99 {:?}, max {:?}",
         if duo { 2 } else { 1 },
         times.len(),
         at(0.5),
@@ -1311,7 +1341,7 @@ fn closing_the_controller_tells_the_game_the_phone_is_gone() {
     let seq = 1_790_000_000_000 * 1024;
     let header = auth::header(&keys, client, seq, "POST", "/api/pad");
     let ok = session.authorize(Some(&header), "POST", "/api/pad", None).unwrap();
-    session.pad_open(1);
+    session.pad_open(1, GameId::TugboatRun);
     session.pad_admit(&ok).unwrap();
     let body = keys.seal(&ad::request(client, seq), br#"{"steer":-100,"boost":false}"#);
     session.pad_input(&ok, &body).unwrap();
@@ -1319,6 +1349,49 @@ fn closing_the_controller_tells_the_game_the_phone_is_gone() {
     session.pad_close();
     let last = *sink.pads.lock().unwrap().last().unwrap();
     assert!(!last.connected && last.steer == 0.0);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Harbor Stack's Drop rides the same channel under the same rules, and each game only ever sees
+/// its own action: Tugboat Run never a drop, Harbor Stack never a boost. When one game hands the
+/// channel to the other, the phone hears which game it now is from its very next reply.
+#[test]
+fn each_game_hears_only_its_own_buttons() {
+    let root = temp_dir();
+    let secret = crypto::new_secret();
+    let sink = Arc::new(TestSink::default());
+    let session = Session::new(&secret, root.join("Tugboat"), root.join("incoming"), sink.clone());
+    let keys = Keys::derive(&secret);
+    let client = "phoneAAAAAAAAAAAAAAAAA";
+    let mut seq = 1_790_000_000_000 * 1024;
+    let mut send = |plain: &[u8]| {
+        seq += 1;
+        let header = auth::header(&keys, client, seq, "POST", "/api/pad");
+        let ok = session.authorize(Some(&header), "POST", "/api/pad", None).unwrap();
+        session.pad_admit(&ok)?;
+        session.pad_input(&ok, &keys.seal(&ad::request(client, seq), plain))
+    };
+    let last = || *sink.pads.lock().unwrap().last().unwrap();
+
+    session.pad_open(1, GameId::TugboatRun);
+    // Tugboat Run's input, exactly as it has always been.
+    let reply = send(br#"{"steer":30,"boost":true}"#).unwrap();
+    assert_eq!(reply.game, Some(GameId::TugboatRun));
+    assert!(last().boost && !last().drop);
+    // A drop means nothing to Tugboat Run.
+    send(br#"{"steer":30,"boost":false,"drop":true}"#).unwrap();
+    assert!(!last().boost && !last().drop);
+
+    // Harbor Stack takes the channel over (Tugboat Run closed and it opened in the same moment).
+    session.pad_open(1, GameId::HarborStack);
+    let reply = send(br#"{"steer":30,"boost":true}"#).unwrap();
+    assert_eq!(reply.game, Some(GameId::HarborStack), "the phone switches to Drop");
+    assert!(!last().boost && !last().drop);
+    send(br#"{"steer":-50,"boost":false,"drop":true}"#).unwrap();
+    let e = last();
+    assert!(e.drop && e.connected && (e.steer + 0.5).abs() < 1e-6);
+    // Anything beyond the vocabulary is still refused.
+    assert!(send(br#"{"steer":0,"boost":false,"drop":true,"stack":99}"#).is_err());
     std::fs::remove_dir_all(&root).ok();
 }
 
@@ -1519,7 +1592,8 @@ async fn start_server(
 /// minutes, so it can be driven from a desktop browser against this server. Prints the link.
 ///   cargo test --manifest-path src-tauri/Cargo.toml manual_page -- --ignored --nocapture
 /// Received files land in a temp folder (printed); one file is on offer; TUGBOAT_SECS sets how long.
-/// TUGBOAT_GAME=1 also opens the game controller channel, and prints each controller event.
+/// TUGBOAT_GAME=1 also opens the game controller channel, and prints each controller event
+/// (TUGBOAT_GAME=stack for Harbor Stack's controls; a trailing 2 for two players).
 /// TUGBOAT_CLIP=1 sends a made-up clipboard text (and prints when the page acknowledges it).
 /// TUGBOAT_HOST=<this PC's LAN address> serves there instead, so the page runs the way a phone
 /// sees it (not a secure context: no `navigator.clipboard`).
@@ -1541,8 +1615,14 @@ async fn manual_page() {
     session.offer(&[offered]);
     session.set_pc_text("Text from the PC").unwrap();
     if let Ok(game) = std::env::var("TUGBOAT_GAME") {
-        // TUGBOAT_GAME=2: a two-player game (a second browser can join as Player 2).
-        session.pad_open(if game == "2" { 2 } else { 1 });
+        // TUGBOAT_GAME=2: a two-player game (a second browser can join as Player 2). "stack" (or
+        // "stack2") is Harbor Stack instead of Tugboat Run: the page shows Drop.
+        let which = if game.starts_with("stack") {
+            GameId::HarborStack
+        } else {
+            GameId::TugboatRun
+        };
+        session.pad_open(if game.ends_with('2') { 2 } else { 1 }, which);
         let watched = session.clone();
         let pads = sink.clone();
         tokio::spawn(async move {

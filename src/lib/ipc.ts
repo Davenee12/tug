@@ -21,6 +21,7 @@ import type {
   TugboatTextArrived,
   DiscoveredDevice,
   GamePad,
+  GameId,
   MediaCommand,
   NowPlaying,
   PairingRequest,
@@ -190,10 +191,10 @@ export const api = {
   tugboatSendClipboard: () => invoke<TugboatStatus>("tugboat_send_clipboard"),
   /** Open the Tugboat folder, or select a file Tugboat saved. */
   tugboatOpenFolder: (path: string | null) => invoke<void>("tugboat_open_folder", { path }),
-  // --- Tugboat Run's phone controller ---
-  /** Open Tugboat if needed and the controller channel for one phone, or two (a two-player race);
-   * asking again changes how many. Tugboat's status carries the QR code. */
-  gamePadOpen: (players: 1 | 2 = 1) => invoke<TugboatStatus>("game_pad_open", { players }),
+  // --- The games' phone controller ---
+  /** Open Tugboat if needed and the controller channel for `game`, for one phone or two (a
+   * two-player game); asking again changes how many. Tugboat's status carries the QR code. */
+  gamePadOpen: (players: 1 | 2 = 1, game: GameId = "tugboat-run") => invoke<TugboatStatus>("game_pad_open", { players, game }),
   /** The game closed: the phone's inputs are refused again. */
   gamePadClose: () => invoke<void>("game_pad_close"),
   /** What a phone's controller shows: paused, hits this run (it buzzes on a new one), and in a race

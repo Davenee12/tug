@@ -80,3 +80,42 @@
 @utility btn-sm {
   @apply min-h-9 rounded-lg px-3.5 text-[15px];
 }
+
+/* The controller: a ring that spreads from the button on each press, and the phone on the
+   "turn sideways" card turning. Both still with reduced motion. */
+@utility animate-tap {
+  animation: tap-ring 340ms ease-out both;
+}
+@utility animate-turn {
+  animation: turn-sideways 2.4s ease-in-out infinite;
+}
+@keyframes tap-ring {
+  from {
+    transform: scale(0.55);
+    opacity: 0.5;
+  }
+  to {
+    transform: scale(1.3);
+    opacity: 0;
+  }
+}
+@keyframes turn-sideways {
+  0%,
+  25% {
+    transform: rotate(0deg);
+  }
+  55%,
+  100% {
+    transform: rotate(-90deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-tap {
+    animation: none;
+    opacity: 0;
+  }
+  .animate-turn {
+    animation: none;
+    transform: rotate(-90deg);
+  }
+}

@@ -742,7 +742,7 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
         .store
         .set_setting(&key, &value)
         .map_err(|e| e.to_string())?;
-    // Show games also decides whether the jump list offers Play Tugboat Run.
+    // Show games also decides whether the jump list offers Play a game.
     if key == crate::quick_actions::SHOW_GAMES_SETTING {
         crate::quick_actions::install(crate::quick_actions::show_games(Some(&value)));
     }
@@ -1108,14 +1108,21 @@ pub fn tugboat_open_folder(state: State<'_, AppState>, path: Option<String>) -> 
     state.tugboat.open_folder(path.as_deref())
 }
 
-// --- Tugboat Run's phone controller (tugboat/pad.rs) ---
+// --- The games' phone controller (tugboat/pad.rs) ---
 
-/// "Use your phone as a controller": open Tugboat if needed and the controller channel, for one
-/// phone or two (a two-player race; asking again changes how many). Returns Tugboat's status,
-/// whose QR code the game shows.
+/// "Use your phone as a controller": open Tugboat if needed and the controller channel for `game`
+/// (Tugboat Run unless it says), for one phone or two (a two-player game; asking again changes how
+/// many). Returns Tugboat's status, whose QR code the game shows.
 #[tauri::command]
-pub async fn game_pad_open(state: State<'_, AppState>, players: Option<u8>) -> Result<TugboatStatus> {
-    state.tugboat.pad_open(players.unwrap_or(1).clamp(1, 2)).await
+pub async fn game_pad_open(
+    state: State<'_, AppState>,
+    players: Option<u8>,
+    game: Option<crate::tugboat::pad::GameId>,
+) -> Result<TugboatStatus> {
+    state
+        .tugboat
+        .pad_open(players.unwrap_or(1).clamp(1, 2), game.unwrap_or_default())
+        .await
 }
 
 /// The game closed: the phone's inputs are refused again.
@@ -1131,7 +1138,15 @@ pub fn game_pad_feedback(state: State<'_, AppState>, seat: u8, paused: bool, hit
     use crate::tugboat::pad::{PadReply, FIRST, SECOND};
     let seat = if seat == SECOND { SECOND } else { FIRST };
     let player = player.filter(|p| *p == 1 || *p == 2);
-    state.tugboat.pad_feedback(seat, PadReply { paused, hits, player });
+    state.tugboat.pad_feedback(
+        seat,
+        PadReply {
+            paused,
+            hits,
+            player,
+            game: None,
+        },
+    );
 }
 
 // --- Developer tools (the bridge for AI tools and the `tug` command; see devtools/mod.rs) ---

@@ -168,9 +168,18 @@ function drawLane(ctx: CanvasRenderingContext2D, lane: Lane, view: View) {
   if (sky) drawWeather(ctx, run, view, p, sky, top, bottom);
 }
 
-/** Rain streaks, snowflakes and wind streaks over the water. With reduced motion they ride the
- * water down like the ripples instead of falling across it. */
-function drawWeather(ctx: CanvasRenderingContext2D, run: Run, view: View, p: Palette, sky: Sky, top: number, bottom: number) {
+/** Rain streaks, snowflakes and wind streaks over the water (or, in Harbor Stack, over the whole
+ * harbor). With reduced motion they ride the water down like the ripples instead of falling across
+ * it. `run` needs only its clock and how far the water has gone. */
+export function drawWeather(
+  ctx: CanvasRenderingContext2D,
+  run: Pick<Run, "t" | "distance">,
+  view: Pick<View, "reducedMotion">,
+  p: Pick<Palette, "spray" | "flake" | "waterDeep">,
+  sky: Sky,
+  top: number,
+  bottom: number,
+) {
   const height = bottom - top + 20;
   const lean = Math.max(-1, Math.min(1, sky.drift / 9));
   // Over the water only (the quays stay dry, and a race lane's weather stays in its lane).

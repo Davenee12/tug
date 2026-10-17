@@ -361,7 +361,7 @@ async function clearHistory() {
                 </button>
               </div>
             </SettingsRow>
-            <SettingsRow class="bg-surface-card" label="Show games" description="A Play button in the sidebar for Tugboat Run, a little boat game, and “game” in Ctrl+K.">
+            <SettingsRow class="bg-surface-card" label="Show games" description="A Play button in the sidebar for tug’s little games, Tugboat Run and Harbor Stack, and “game” in Ctrl+K and the taskbar.">
               <SettingsSwitch v-model="showGames" label="Show games" />
             </SettingsRow>
             <SettingsRow

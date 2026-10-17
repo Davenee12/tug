@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { HEARTBEAT_MS, MAX_IN_FLIGHT, MIN_GAP_MS, encodePad, nextSendDelay, padErrorAction, positionFromTouch, probe, samePad, tiltSupport } from "./pad";
+import {
+  HEARTBEAT_MS,
+  MAX_IN_FLIGHT,
+  MIN_GAP_MS,
+  PressLatch,
+  chooseLayout,
+  controlsFor,
+  encodeFor,
+  encodePad,
+  encodeStackPad,
+  gameFrom,
+  nextSendDelay,
+  padBody,
+  padErrorAction,
+  positionFromTouch,
+  probe,
+  samePad,
+  tiltSupport,
+  tiltToSteer,
+} from "./pad";
+import { advance, newStack, padDrop } from "../lib/harborStack";
+import vector from "./padVector.json";
 
 describe("encodePad", () => {
   it("sends whole-number steering from -100 to 100 and a real boolean", () => {
@@ -87,5 +108,148 @@ describe("tiltSupport", () => {
     expect(tiltSupport({ secure: false, hasOrientation: false })).toBe("needs-secure");
     expect(tiltSupport({ secure: true, hasOrientation: true })).toBe("available");
     expect(tiltSupport({ secure: true, hasOrientation: false })).toBe("unsupported");
+  });
+});
+
+describe("Harbor Stack's input", () => {
+  it("carries Drop and the crane nudge, never a boost", () => {
+    expect(encodeStackPad(-0.5, true)).toEqual({ steer: -50, boost: false, drop: true });
+    expect(JSON.stringify(encodeStackPad(0, false))).toBe('{"steer":0,"boost":false,"drop":false}');
+    expect(encodeStackPad(Number.NaN, true).steer).toBe(0);
+  });
+
+  it("leaves Tugboat Run's input exactly as it was", () => {
+    expect(encodeFor("tugboat-run", 0.2, true)).toEqual({ steer: 20, boost: true });
+    expect(Object.keys(encodeFor("tugboat-run", 0, false))).toEqual(["steer", "boost"]);
+    expect(encodeFor("harbor-stack", 0.2, true)).toEqual({ steer: 20, boost: false, drop: true });
+  });
+
+  it("counts a change of Drop as a change", () => {
+    expect(samePad(encodeStackPad(0, false), encodeStackPad(0, true))).toBe(false);
+    expect(samePad(encodeStackPad(0, true), encodeStackPad(0, true))).toBe(true);
+    // A Tugboat Run input without the field equals one that says "not held".
+    expect(samePad({ steer: 0, boost: false }, { steer: 0, boost: false, drop: false })).toBe(true);
+  });
+});
+
+describe("which game", () => {
+  it("reads the PC's game id, and falls back to Tugboat Run", () => {
+    expect(gameFrom("harbor-stack")).toBe("harbor-stack");
+    expect(gameFrom("tugboat-run")).toBe("tugboat-run");
+    expect(gameFrom(undefined)).toBe("tugboat-run");
+    expect(gameFrom("snake")).toBe("tugboat-run");
+  });
+
+  it("gives each game its own buttons", () => {
+    const run = controlsFor("tugboat-run");
+    expect([run.title, run.action, run.springBack]).toEqual(["Tugboat Run", "Boost", false]);
+    const stack = controlsFor("harbor-stack");
+    expect([stack.title, stack.action, stack.springBack]).toEqual(["Harbor Stack", "Drop", true]);
+    expect(stack.ends).toEqual(["Slower", "Faster"]);
+  });
+});
+
+describe("chooseLayout", () => {
+  it("is a gamepad held sideways", () => {
+    expect(chooseLayout({ landscape: true, portraitAnyway: false })).toBe("landscape");
+    expect(chooseLayout({ landscape: true, portraitAnyway: true })).toBe("landscape");
+  });
+
+  it("asks to turn the phone when it's upright, unless the player chose to play upright", () => {
+    expect(chooseLayout({ landscape: false, portraitAnyway: false })).toBe("rotate");
+    expect(chooseLayout({ landscape: false, portraitAnyway: true })).toBe("portrait");
+  });
+});
+
+describe("tiltToSteer", () => {
+  it("turns the phone like a steering wheel when it's held sideways", () => {
+    expect(tiltToSteer(12.5, 3, 90)).toBe(0.5);
+    expect(tiltToSteer(12.5, 3, -90)).toBe(-0.5);
+    expect(tiltToSteer(12.5, 3, 270)).toBe(-0.5);
+    expect(tiltToSteer(80, 0, 90)).toBe(1);
+  });
+
+  it("uses side-to-side tilt upright, and is safe without readings", () => {
+    expect(tiltToSteer(40, -25, 0)).toBe(-1);
+    expect(tiltToSteer(null, null, 90)).toBe(0);
+    expect(tiltToSteer(Number.NaN, 0, 90)).toBe(0);
+  });
+});
+
+describe("the body on the wire (padVector.json, shared with the Rust decoder)", () => {
+  it("is exactly what the page's encoder makes, Drop included", () => {
+    for (const c of vector.cases) {
+      const input = encodeFor(gameFrom(c.game), c.steer, c.held || c.pending);
+      const p = "probe" in c ? c.probe : undefined;
+      expect(JSON.stringify(padBody(input, p)), c.name).toBe(c.body);
+    }
+  });
+
+  it("never drops a field the input carries (Drop once went missing here)", () => {
+    expect(padBody({ steer: 0, boost: false, drop: true })).toEqual({ steer: 0, boost: false, drop: true });
+    expect(Object.keys(padBody({ steer: 1, boost: true }, { age: 1, rtt: 2 }))).toEqual(["steer", "boost", "age", "rtt"]);
+  });
+});
+
+describe("PressLatch: a quick tap always reaches the PC", () => {
+  it("keeps the press in every input until a reply to one carrying it comes back", () => {
+    const latch = new PressLatch();
+    expect(latch.pending).toBe(false);
+    // Down and up before the next send: the finger is already off the button.
+    latch.press();
+    const held = false;
+    const first = encodeFor("harbor-stack", 0, held || latch.pending);
+    expect(first.drop).toBe(true);
+    const mark = latch.mark();
+    // A second input goes out before the first reply (two in flight): still the press, so even if
+    // the PC gets this one first and ignores the older, it sees the drop.
+    expect(encodeFor("harbor-stack", 0, held || latch.pending).drop).toBe(true);
+    // The reply comes back: now the release can go.
+    latch.heardUpTo(mark);
+    expect(encodeFor("harbor-stack", 0, held || latch.pending).drop).toBe(false);
+  });
+
+  it("doesn't lose a second tap to the first one's reply, or a failed send", () => {
+    const latch = new PressLatch();
+    latch.press();
+    const one = latch.mark();
+    latch.press(); // a second tap before the first is confirmed
+    latch.heardUpTo(one);
+    expect(latch.pending).toBe(true);
+    // That send failed: nothing confirmed, still waiting.
+    latch.mark();
+    expect(latch.pending).toBe(true);
+    latch.heardUpTo(latch.mark());
+    expect(latch.pending).toBe(false);
+    latch.press();
+    latch.clear();
+    expect(latch.pending).toBe(false);
+  });
+
+  it("drops a container end to end: tap → wire → PC events → the game's next frame", () => {
+    // The phone: a tap whose release comes before the first send.
+    const latch = new PressLatch();
+    latch.press();
+    const press = padBody(encodeFor("harbor-stack", 0, latch.pending));
+    latch.heardUpTo(latch.mark());
+    const release = padBody(encodeFor("harbor-stack", 0, latch.pending));
+    // The PC turns each into a `game-pad` event (the Rust side of this is in pad.rs, from the same
+    // padVector.json bodies): both land between two frames.
+    const events = [press, release].map((b) => ({ connected: true, drop: b.drop === true }));
+    expect(events.map((e) => e.drop)).toEqual([true, false]);
+    let held = false;
+    let latched = false;
+    for (const e of events) {
+      const r = padDrop(held, e);
+      if (r.fresh) latched = true;
+      held = r.held;
+    }
+    // The next frame takes the latched press: exactly one drop.
+    const s = newStack(1);
+    advance(s, { drop: latched, nudge: 0 }, 1 / 60);
+    expect(s.events.filter((e) => e === "drop")).toHaveLength(1);
+    // Holding Drop doesn't drop again; only a new press does.
+    expect(padDrop(true, { connected: true, drop: true }).fresh).toBe(false);
+    expect(padDrop(false, { connected: false, drop: true }).fresh).toBe(false);
   });
 });

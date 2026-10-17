@@ -13,6 +13,8 @@ import ConnectPanel from "./components/ConnectPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
 import TugboatPanel from "./components/TugboatPanel.vue";
 import TugboatRun from "./components/TugboatRun.vue";
+import HarborStack from "./components/HarborStack.vue";
+import GamePicker from "./components/GamePicker.vue";
 import FeedPanel from "./components/FeedPanel.vue";
 import IncomingCall from "./components/IncomingCall.vue";
 import NewConversation from "./components/NewConversation.vue";
@@ -97,7 +99,7 @@ function onShortcut(e: KeyboardEvent) {
     return;
   }
   // A ringing call has the keyboard (Enter answers, Esc declines) until it's dealt with, and
-  // Tugboat Run has it while it's open.
+  // a game (or the games picker) has it while it's open.
   if (tug.ringing || game.open) return;
   const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable]") !== null;
   if (key === "k") {
@@ -230,8 +232,11 @@ onUnmounted(() => {
     <SearchPalette v-if="tug.searchOpen" />
     <SpotifyPanel v-if="tug.spotifyPanelOpen" />
     <WhatsNew v-if="tug.whatsNewOpen" />
-    <!-- The game covers the window; a call, a confirmation card or a pairing PIN still come up over it (and pause it). -->
-    <TugboatRun v-if="game.open" />
+    <!-- The games (and their picker) cover the window; a call, a confirmation card or a pairing PIN
+         still come up over them (and pause a game). -->
+    <GamePicker v-if="game.screen === 'picker'" />
+    <TugboatRun v-else-if="game.screen === 'tugboat-run'" />
+    <HarborStack v-else-if="game.screen === 'harbor-stack'" />
     <TugboatPanel v-if="tugboat.open" />
     <!-- A text an AI tool (or `tug text`) wants to send: nothing goes without Send here. -->
     <ToolConfirmCard v-if="devtools.confirm" :key="devtools.confirm.id" :request="devtools.confirm" />

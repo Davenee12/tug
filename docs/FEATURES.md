@@ -234,9 +234,11 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - **Your phone as a controller:** "Use your phone as a controller" shows Tugboat's code (the same
   code, encryption and rules as Tugboat). The phone's Tugboat page turns into a pad: a slider the
   boat follows closely (it goes where the knob is), Boost to hop the moment you press it, and it buzzes on a hit where the browser can (iPhone's Safari can't). The
-  keyboard always works too and takes over the moment the phone drops. Tilt steering isn't
-  offered: phone browsers only allow it on a secure (HTTPS) page, and Tugboat's page is plain HTTP
-  on your Wi-Fi.
+  keyboard always works too and takes over the moment the phone drops. Hold the phone sideways like
+  a gamepad: the slider under your left thumb, Boost under your right, and both can be held at
+  once. Upright, the page asks you to turn it ("Play in portrait anyway" keeps the upright layout).
+  Tilt steering isn't offered: phone browsers only allow it on a secure (HTTPS) page, and Tugboat's
+  page is plain HTTP on your Wi-Fi (the controller offers it only where it would really work).
 - **Daily challenge** (the start screen's Daily tab): one course a day, the same for everyone that
   day (the course comes from the date), sailed in **your real weather** from the weather card: rain
   brings waves that rock the boat, wind a gentle sideways drift, snow slower water and icy
@@ -258,8 +260,31 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   separate best race score for two players. Nothing runs while the game is closed or paused.
 - With Windows' reduce-motion setting on, the lighthouse beam holds still, rain and snow drift with
   the water instead of falling across it, there are no wind streaks and no screen shake.
-- Open it from the **Play** button beside tug's name, Ctrl+K "game" / "tugboat run", or **Play
-  Tugboat Run** in tug's taskbar menu. Turn **Show games** off in Settings › General to hide them.
+- **Harbor Stack**, a stacking game: a crane swings a cargo container back and forth over a boat;
+  drop it onto the stack. Whatever overhangs is sliced off and falls into the harbor, so the next
+  container is narrower. A drop within a whisker of the one below is **perfect**: no width lost, a
+  combo, and every fourth in a row wins some width back. A container that misses the stack costs
+  one of three. Score is containers stacked; containers come in colours, with a gold one and a
+  little celebration at 10, 25, 50 and 100.
+  - It gets harder as it grows: the crane speeds up, the boat sways more (a taller stack catches
+    more wind), and from 12 up gusts lean on the stack, with the windsock lifting a moment before.
+    The crane lets go by itself after 12 seconds, with a ring counting down the last few.
+  - **Controls:** Space, Enter, ↓ or a click drops; ← → slow the crane down or speed it up a
+    little. On the phone (held sideways): a big **Drop** under your right thumb, and a slider under
+    your left that nudges the crane slower or faster while you hold it.
+  - **Daily stack**: the same containers, swell and gusts for everyone that day, in your real
+    weather (wind leans on the stack and adds to the sway, rain adds chop, snow slows the crane,
+    night brings a dark harbor and a lighthouse); "Calm seas today" with the weather card off. A
+    streak and a best for each day, like Tugboat Run's.
+  - **Free play** (a new stack every time) and **Stack-off** for two: side by side on the same
+    seed, the taller stack wins. Player 1 drops with ↓ or Enter, Player 2 with S, or each with a
+    phone (Tugboat's code and the Player 2 code, as in Tugboat Run's race).
+  - Reduce motion: no shake, the boat doesn't rock or bob (the stack still leans exactly as much as
+    the game says, since that's what you aim at), still water and lighthouse, and bunting without
+    confetti. Scores stay on this PC.
+- Open them from the **Play** button beside tug's name (the games picker), Ctrl+K "game" (both
+  games), "tugboat run", "harbor stack" or "stack", or **Play a game** in tug's taskbar menu. Turn
+  **Show games** off in Settings › General to hide them all.
 
 ## Weather, battery & the phone card
 
@@ -283,17 +308,18 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   - `copy code`, `clear all`, `mark all read`, `dnd on` / `dnd off`, `voice typing on` / `off`;
   - `send clipboard` (or `clipboard`, `paste to phone`) to send the PC's clipboard to your iPhone;
   - an app's name to show its notifications;
-  - `new message`, `settings`, `spotify`, `tugboat` to open them, and `game` for Tugboat Run.
+  - `new message`, `settings`, `spotify`, `tugboat` to open them, and `game` for the games
+    (`tugboat run`, `harbor stack` or `stack` for one).
 - If a name matches several people, tug lists them and waits for you to pick.
 
 **Other shortcuts:** Ctrl+N new message · Ctrl+Shift+C copy the latest code · Ctrl+, Settings ·
 Ctrl+plus / Ctrl+minus / Ctrl+0 zoom · Esc closes dialogs and Settings.
 
 **Quick actions in the taskbar:** right-click tug's taskbar button (or tug in Start) for **New
-message**, **Tugboat**, **Copy latest code**, **Play Tugboat Run** and **Settings**. They bring tug
+message**, **Tugboat**, **Copy latest code**, **Play a game** and **Settings**. They bring tug
 forward and do the same as their Ctrl+K and keyboard versions, and work whether tug is running
 or not (it starts first). Copy latest code says so when there's no code from the last 10 minutes.
-Play Tugboat Run is left out while Show games is off.
+Play a game (the games picker) is left out while Show games is off.
 
 ## Voice typing (voice to code)
 

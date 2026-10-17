@@ -43,29 +43,35 @@ kinds only, never contents. The honest limit is Tugboat's: an active attacker wh
 first page load could read what was sent to the phone or put text on the PC's clipboard (as could
 anyone already able to read Tugboat's page).
 
-**The game controller channel (Tugboat Run).** When the game asks for the phone as a controller,
+**The game controller channel (Tugboat Run, Harbor Stack).** When a game asks for the phone as a controller,
 the bound phone may `POST /api/pad`, under exactly Tugboat's rules: the same secret, a MAC on every
 request, the first phone binds, replays refused, the body sealed to its request. On top of that:
 inputs are refused unless the game has the channel open (and again the moment it closes); they're
 rate limited (90 a second sustained, a burst of 30; a phone sends at most ~60); the body is read
-only up to 104 bytes; and the plaintext must be exactly `{"steer": -100..=100, "boost": bool}`, plus
-an optional latency probe (`"age"` and `"rtt"`, whole milliseconds 0–10000, only ever summarised
-once per session in a debug log line), with any other field, type or range refused. An input that
-lands after a newer one is ignored (the phone may have two in flight). The only
-thing an input can change is the steering and boost the game reads (`tugboat/pad.rs`): it never
-reaches files, the clipboard, the panel or anything else, and an integration test checks that. A
-quiet phone (700 ms without an input) is treated as gone and the boat goes back to the keyboard,
-which always works and always wins. The same honest limit applies: an active attacker who
-tampered with the first page load could steer the boat.
+only up to 120 bytes; and the plaintext must be exactly `{"steer": -100..=100, "boost": bool}`, plus
+an optional `"drop": bool` (Harbor Stack's Drop) and an optional latency probe (`"age"` and
+`"rtt"`, whole milliseconds 0–10000, only ever summarised once per session in a debug log line;
+the only other controller logging is a count of inputs and presses per phone, at most once a
+second at debug level (counts only, never the steering),
+with any other field, type or range refused. Which game is open is the PC's to say (chosen when
+the game opens the channel, and named in `/api/state` and every reply so the page shows that game's
+buttons); an action that isn't the open game's is dropped before the game sees it, so Tugboat Run
+never sees a drop and Harbor Stack never a boost. An input that lands after a newer one is ignored
+(the phone may have two in flight). The only thing an input can change is the steering, boost or
+drop the game reads (`tugboat/pad.rs`): it never reaches files, the clipboard, the panel or
+anything else, and an integration test checks that. A quiet phone (700 ms without an input) is
+treated as gone and the game goes back to the keyboard, which always works and always wins. The
+same honest limit applies: an active attacker who tampered with the first page load could steer
+the boat or drop a container.
 
-**The guest seat (Tugboat Run, two players).** A friend's phone in a two-player race never gets the
+**The guest seat (Tugboat Run's race, Harbor Stack's stack-off).** A friend's phone in a two-player game never gets the
 session secret. The race shows a separate **Player 2 code** whose `#` fragment carries `g.` and a
 guest secret derived from the session secret with HKDF-SHA256 (salt `tugboat/1`, info
 `tugboat guest v1`, 16 bytes): one-way, so it can't be turned back into the session secret, and it
 gives the guest phone keys of its own for signing and sealing. Tugboat checks every request against
 the session's keys and then the guest's. Guest keys can sign exactly two requests, `GET /api/state`
-(which tells the guest only whether there's a race: never files, text or the clipboard) and
-`POST /api/pad` (steering seat 2, under the controller rules above); anything else is refused. A
+(which tells the guest only whether there's a game to join, and which: never files, text or the clipboard) and
+`POST /api/pad` (playing seat 2, under the controller rules above); anything else is refused. A
 guest key can never bind the session, even if it's the first to connect, so it can't become the
 owner; it joins only while a two-player game asks for a second phone, one phone at a time (a third
 is turned away), and the Player 2 code is shown only for as long as the game asks. A guest page

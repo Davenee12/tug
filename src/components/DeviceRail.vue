@@ -122,11 +122,11 @@ const dnd = computed({
       <div class="ml-auto flex items-center gap-1">
         <!-- The Update button, once a new version has downloaded (like Teams'). -->
         <UpdatePill action="confirm" />
-        <!-- Tugboat Run. Beside the name, so the sidebar (which never scrolls) doesn't grow. -->
+        <!-- The games picker. Beside the name, so the sidebar (which never scrolls) doesn't grow. -->
         <button
           v-if="tug.settings.showGames"
           class="inline-flex items-center gap-1.5 rounded-full border border-on-dark-soft/30 px-2.5 py-0.5 text-[12px] font-medium text-on-dark transition-colors active:bg-surface-dark-elevated"
-          title="Tugboat Run: a little boat game"
+          title="Play a game: Tugboat Run or Harbor Stack"
           @click="game.show()"
         >
           <Gamepad2 :size="13" class="text-primary" />
