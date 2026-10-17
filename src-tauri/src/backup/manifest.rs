@@ -36,8 +36,14 @@ impl FileEntry {
     }
 }
 
+/// Open a backup's Manifest.db, read-only. The file is untrusted, like sms.db: its schema gets no
+/// say (no triggers or views running functions, `trusted_schema` off) and SQLite's defensive mode
+/// refuses anything that could corrupt or escape it.
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
-    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    conn.pragma_update(None, "trusted_schema", "OFF")?;
+    conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+    Ok(conn)
 }
 
 /// The file at `domain`/`relative_path`, if the backup has it (regular files only).
@@ -177,6 +183,24 @@ pub(crate) mod tests {
             )
             .unwrap();
         }
+    }
+
+    #[test]
+    fn the_manifest_is_opened_as_untrusted() {
+        let dir = std::env::temp_dir().join(format!("tug-manifest-trust-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("Manifest.db");
+        let _ = std::fs::remove_file(&db);
+        make_manifest(&db, &[]);
+        let conn = open(&db).unwrap();
+        let trusted: i64 = conn.pragma_query_value(None, "trusted_schema", |r| r.get(0)).unwrap();
+        assert_eq!(trusted, 0);
+        assert!(conn
+            .db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DEFENSIVE)
+            .unwrap());
+        assert!(lookup(&conn, SMS_DOMAIN, SMS_DB).unwrap().is_none(), "and still reads");
+        drop(conn);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
