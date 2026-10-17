@@ -4,6 +4,7 @@ mod ancs;
 mod ancs_queue;
 mod app_icons;
 mod autostart;
+mod backup;
 mod ble;
 mod bt_inventory;
 mod cache_trim;
@@ -185,6 +186,14 @@ pub fn run() {
             }
             let show_games = store.setting(quick_actions::SHOW_GAMES_SETTING).ok().flatten();
             quick_actions::install(quick_actions::show_games(show_games.as_deref()));
+            // Bring in your full history: decrypted scratch files an import didn't get to delete
+            // (tug crashed, or the PC lost power mid-import) go now, before an import could start.
+            // Deleting a handful of files: quick, and done before the window can ask for one.
+            let local_dir = app.path().app_local_data_dir()?;
+            if backup::files::sweep_temp(&local_dir) {
+                log::info!("backup: removed scratch files a previous import left behind");
+            }
+            let backup = backup::BackupService::new(app.handle().clone(), store.clone(), local_dir);
             let shared = Arc::new(Shared::new(app.handle().clone(), store.clone()));
             let ble = ble::start(shared.clone());
             let _ = shared.map.set(map::service::start(shared.clone()));
@@ -217,6 +226,7 @@ pub fn run() {
                 tugboat,
                 devtools,
                 pc_audio,
+                backup,
             });
             // Automatic updates: a first check shortly after startup, then every 6 hours, only
             // when set up (a public key in tauri.conf.json) and switched on.
@@ -420,6 +430,19 @@ pub fn run() {
             updater::update_apply,
             updater::update_open_release_page,
             updater::update_take_resume,
+            commands::conversation_heads,
+            commands::conversation_messages,
+            commands::list_message_groups,
+            commands::attachment_preview,
+            commands::open_attachment,
+            commands::backup_list,
+            commands::backup_pick_folder,
+            commands::backup_status,
+            commands::backup_open,
+            commands::backup_import,
+            commands::backup_cancel,
+            commands::backup_imported,
+            commands::backup_remove_imported,
         ])
         .build(context);
     // A setup or WebView failure: say what failed and where the log is, instead of exiting

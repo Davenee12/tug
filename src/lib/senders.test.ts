@@ -206,6 +206,11 @@ describe("grouping unknown senders", () => {
     expect(senderMayToast(wa, senderIndex([], [], []))).toBe(true);
     expect(senderName("+1 (555) 013-2244")).toBe("(555) 013-2244");
   });
+
+  it("a group chat from your own backup is never an unknown sender", () => {
+    const c = { appId: "com.apple.MobileSMS", contact: "(555) 013-2244 & (555) 013-2245", addresses: [], group: "g1" };
+    expect(isKnownConversation(c, senderIndex([], [], []))).toBe(true);
+  });
 });
 
 describe("toasts and unread for unknown senders", () => {

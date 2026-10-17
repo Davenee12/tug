@@ -65,7 +65,18 @@ export function textContent(body: string): Shown {
   return { text: p.text, media: p.media, unreadable: false };
 }
 
-type MessageLike = Pick<SmsMessage, "body" | "msgType"> & { direction?: SmsMessage["direction"] };
+type MessageLike = Pick<SmsMessage, "body" | "msgType"> &
+  Partial<Pick<SmsMessage, "attachments" | "unsent">> & { direction?: SmsMessage["direction"] };
+
+/** What a text that was unsent on the phone says in its place (history from a backup). */
+export const UNSENT = "This message was unsent.";
+
+/** The media a text's backup attachments add up to: one kind and how many, or "attachment" for a mix. */
+function attachmentsMedia(atts: NonNullable<SmsMessage["attachments"]>): Media {
+  const kinds = new Set(atts.map((a) => a.kind));
+  const only = kinds.size === 1 ? atts[0].kind : "attachment";
+  return { kind: only, count: atts.length };
+}
 
 /**
  * What to show for a text. A photo arrives as words ("Attachment: 1 Photo", see lib/attachments).
@@ -75,6 +86,13 @@ type MessageLike = Pick<SmsMessage, "body" | "msgType"> & { direction?: SmsMessa
  * may fill an unreadable text from its notification).
  */
 export function messageContent(m: MessageLike, body = m.body): Shown {
+  if (m.unsent) return plain(UNSENT);
+  // History from a backup knows its real attachments: Bluetooth's "Attachment: 1 Photo" line (on
+  // a text the import matched) gives way to them, and the caption stays.
+  if (m.attachments?.length) {
+    const text = m.direction === "out" ? body : parseAttachments(body).text;
+    return { text, media: attachmentsMedia(m.attachments), unreadable: false };
+  }
   if (m.direction === "out") return plain(body);
   if (!body) {
     const t = (m.msgType ?? "").toUpperCase();

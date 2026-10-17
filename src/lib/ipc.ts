@@ -4,6 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppName,
+  AttachmentPreview,
+  BackupImported,
+  BackupInfo,
+  BackupStatus,
+  MessageGroup,
   BtInventory,
   CallRecord,
   CodeFilled,
@@ -116,9 +121,12 @@ export const api = {
   openWindowsSettings: (page: "bluetooth" | "location" | "notifications" | "microphone" | "language") => invoke<void>("open_windows_settings", { page }),
   /** Open an http(s) link (a notification's "Open in browser") in the default browser. */
   openUrl: (url: string) => invoke<void>("open_url", { url }),
-  /** Delete a conversation (all of it, by sender and address); returns the delete's stamp, which undoes it as `undoAt`. */
-  setConversationHidden: (senders: [string, string][], addresses: string[], undoAt: number | null) =>
-    invoke<number>("set_conversation_hidden", { senders, addresses, undoAt }),
+  /**
+   * Delete a conversation (all of it, by sender and address, or a backup's group chat by id);
+   * returns the delete's stamp, which undoes it as `undoAt`.
+   */
+  setConversationHidden: (senders: [string, string][], addresses: string[], undoAt: number | null, groups: string[] = []) =>
+    invoke<number>("set_conversation_hidden", { senders, addresses, groups, undoAt }),
   locate: () => invoke<{ latitude: number; longitude: number }>("locate"),
   setWatching: (on: boolean) => invoke<void>("set_watching", { on }),
   /** Check the iPhone's switches now (Sync Contacts is read by asking the phone). */
@@ -226,6 +234,28 @@ export const api = {
   updateOpenReleasePage: () => invoke<void>("update_open_release_page"),
   /** The screen to come back to after an update restart, once. */
   updateTakeResume: () => invoke<string | null>("update_take_resume"),
+  // --- Full message history (an iPhone backup) ---
+  /** The newest text of every conversation, so ones older than the recent page still list. */
+  conversationHeads: (limit: number) => invoke<SmsMessage[]>("conversation_heads", { limit }),
+  /** One conversation's whole history: one-to-one by its numbers, or a group by id. */
+  conversationMessages: (addresses: string[], group: string | null) =>
+    invoke<SmsMessage[]>("conversation_messages", { addresses, group }),
+  listMessageGroups: () => invoke<MessageGroup[]>("list_message_groups"),
+  attachmentPreview: (id: number) => invoke<AttachmentPreview>("attachment_preview", { id }),
+  /** Open a stored photo or video in its default app (usually Photos). */
+  openAttachment: (id: number) => invoke<void>("open_attachment", { id }),
+  backupList: () => invoke<BackupInfo[]>("backup_list"),
+  /** Windows' folder picker; null when nothing was picked. */
+  backupPickFolder: () => invoke<BackupInfo | null>("backup_pick_folder"),
+  backupStatus: () => invoke<BackupStatus>("backup_status"),
+  /** Unlock (with the password for an encrypted backup, used once and never kept) and read it. */
+  backupOpen: (id: string, password: string | null) => invoke<void>("backup_open", { id, password }),
+  backupImport: (texts: boolean, photos: boolean) => invoke<void>("backup_import", { texts, photos }),
+  /** Cancel reading or importing, or close a backup that was read. */
+  backupCancel: () => invoke<void>("backup_cancel"),
+  backupImported: () => invoke<BackupImported>("backup_imported"),
+  /** Remove every text the import added and every photo it copied; resolves with how many texts. */
+  backupRemoveImported: () => invoke<number>("backup_remove_imported"),
 };
 
 interface EventPayloads {
@@ -267,6 +297,8 @@ interface EventPayloads {
   "update-status": UpdateStatus;
   /** A text an AI tool (or `tug text`) wants to send; null once it's answered or gone. */
   "devtools-confirm": DevToolsConfirm | null;
+  /** Bringing in history from an iPhone backup: progress, the scan, the outcome (`backup/`). */
+  "backup-import": BackupStatus;
 }
 
 export function on<E extends keyof EventPayloads>(

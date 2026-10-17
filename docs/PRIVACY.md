@@ -24,6 +24,9 @@ in your Windows user profile, readable by your Windows account:
 | Contact photos, app icons, album art and Spotify album art (caches) | `%APPDATA%\dev.davejames.tug` |
 | Logs (rotated, at most about 10 MB), the window's web storage (for example the weather forecast cache), the developer tools' access token, and half-received Tugboat files | `%LOCALAPPDATA%\dev.davejames.tug` |
 | Files you receive with Tugboat | Your **Pictures\Tugboat** folder |
+| Texts brought in from an iPhone backup (if you use **Bring in your full history**) | In `tug.db`, with the rest of your texts |
+| Photos and videos brought in from an iPhone backup, and their small previews | `%LOCALAPPDATA%\dev.davejames.tug\attachments` |
+| While a backup is being read: its decrypted message database and each photo on its way in | `%LOCALAPPDATA%\dev.davejames.tug\backup-tmp`, deleted as soon as it's done (and at the next start if tug was closed mid-way) |
 | Your Spotify sign-in (if you connect Spotify) | Windows Credential Manager (`tug/spotify-refresh-token`) |
 
 tug's logs record connection events and errors, never message text or contact names (album art
@@ -44,6 +47,7 @@ it goes nowhere unless you paste it somewhere yourself.
 | **Spotify** | Spotify (`accounts.spotify.com`, `api.spotify.com`, Spotify's image servers) | Your Spotify sign-in, and the requests you make (search, play, queue, like) | Only after you connect Spotify in Settings › Connectors |
 | **Open on the web** | The website, in your browser | Whatever your browser sends | Only when you click it |
 | **Automatic updates** | GitHub (`github.com` and GitHub's download servers, `objects.githubusercontent.com`) | An ordinary web request for tug's `latest.json`, then the installer if there's a new version; nothing about you, your phone or your data | In release builds set up for updates: shortly after tug starts and then every 6 hours, while **Download updates automatically** is on (Settings › About; on by default); otherwise only when you press **Check for updates**. Builds without an update key never check |
+| **Get it** (HEIF Image Extensions, when iPhone photos can't be shown) | The Microsoft Store page, in your browser | Whatever your browser sends | Only when you click it |
 
 **Spotify** asks for permission to: read your private and collaborative playlists; read and
 control playback; read what's currently playing; and read and change your Liked Songs. The sign-in
@@ -65,6 +69,19 @@ when you click **Update** (or quit from the tray).
   **Send clipboard to iPhone**, held in memory (never saved) for at most 2 minutes until your phone
   has it, and never written to tug's logs. Text you paste on the phone is kept out of Windows'
   clipboard history and cloud clipboard sync.
+- **Bring in your full history** (Settings › Messages) only runs when you start it. tug reads a
+  backup of your iPhone that the Apple Devices app or iTunes already made **on this PC**, copies
+  your texts into its database and your photos and videos into its own folder (never your
+  Pictures), and goes nowhere online to do it. For an encrypted backup you type its password;
+  tug uses it once, in memory, to unlock the backup, and never saves it, logs it or sends it
+  anywhere. The decrypted message database exists only in tug's private temporary folder while
+  it's read, and is deleted straight after (or at tug's next start if it was closed mid-way). tug's
+  logs record how many texts and photos came in and how long it took, never a word of a message,
+  a name, a number, a file name or the password. Once brought in, texts and photos from an
+  encrypted backup are kept like the rest of tug's history (see the table above), no longer behind
+  the backup's password. They're part of your history in tug like any text, so if you let AI tools
+  search your texts (Developer tools), that search includes them. **Remove imported history** in
+  the same place deletes everything it brought in.
 - **Voice typing** is **off by default**. When you turn it on and hold its shortcut, tug listens to
   your microphone only while the keys are down, and Windows' own speech recognizer turns it into
   text **on this PC**: the recording is never sent anywhere, never saved to disk, and dropped as
@@ -87,14 +104,17 @@ when you click **Update** (or quit from the tray).
 
 ## Deleting your data
 
-- **Inside tug:** Settings › Data & privacy › **Clear history** deletes tug's saved notifications.
+- **Inside tug:** Settings › Messages › **Remove imported history** deletes every text, photo and
+  video tug brought in from an iPhone backup (texts it got over Bluetooth stay). Your backup itself
+  is never changed. Settings › Data & privacy › **Clear history** deletes tug's saved notifications,
+  and the imported history too.
   Deleting a conversation hides it in tug. **Start over** (Settings › iPhone) unpairs the phone and
   clears saved recent calls. Disconnecting Spotify removes its sign-in.
 - **Everything:** uninstall tug (Windows Settings › Apps › Installed apps › tug › Uninstall; tick
   the uninstaller's option to delete the app's data if it offers one), then delete any of these that
   are left:
   - `%APPDATA%\dev.davejames.tug`
-  - `%LOCALAPPDATA%\dev.davejames.tug`
+  - `%LOCALAPPDATA%\dev.davejames.tug` (this includes photos brought in from an iPhone backup)
   - `Pictures\Tugboat` (if you want to remove received files)
   - In Windows Credential Manager › Windows Credentials, the `tug/spotify-refresh-token` entry
 - To remove the PC from your iPhone, open iPhone Settings › Bluetooth, tap ⓘ next to this PC, and

@@ -16,6 +16,9 @@
 //   http://localhost:1420/?forgotten  the iPhone forgot this PC while Windows still holds the bond:
 //                                     "iPhone forgot this PC" in the sidebar and "Your iPhone forgot
 //                                     this PC" with Pair again (back to the find step)
+//   http://localhost:1420/?backup     Settings › Messages › Bring in your full history with made-up
+//                                     backups (the encrypted one's password is "test"); &none, &imported,
+//                                     &heif (see devMockBackup.ts)
 //   http://localhost:1420/?nudge      connected, notifications on, but texts/contacts off: the Feed's
 //                                     dismissible "Get more from tug" nudge
 //   http://localhost:1420/?whatsnew   the "What's new" card on launch, previewing the newest entry in
@@ -80,6 +83,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { RELEASE_NOTES } from "./whatsNew";
+import { backupMock, seedImported } from "./devMockBackup";
 import type { CallRecord, CodeHotkeyStatus, VoiceStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack, UpdateStatus } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
@@ -437,6 +441,9 @@ const messages: SmsMessage[] = noPhone
       // in the Feed with Copy code, even though the short code is an unknown sender.
       sms("in", "480579 is your Amazon OTP. Do not share it with anyone.", 2, "98626", null, "SMS_GSM"),
     ];
+// Full message history from an iPhone backup (devMockBackup.ts: ?backup, &imported, &none, &heif).
+const backupCtx = { messages, nextId: () => nextMsg++, zoe: ZOE };
+seedImported(backupCtx);
 
 // Recents (PBAP call history): phone-local times, newest first, as the iPhone sends them.
 const localIso = (agoMin: number) => {
@@ -1618,7 +1625,7 @@ mockIPC(
         console.log("[devMock] spotify add to playlist", a.playlistId, a.trackUri);
         return null;
       default:
-        return null;
+        return backupMock(cmd, a, backupCtx) ?? null;
     }
   },
   { shouldMockEvents: true },
