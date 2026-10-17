@@ -218,14 +218,10 @@ pub struct Candidate {
 }
 
 /// A cover address from a search result, resized to `ART_PX` ("…/100x100bb.jpg" → "…/600x600bb.jpg").
-/// Only `https` on Apple's image servers (`*.mzstatic.com`).
+/// Only `https` on Apple's image servers (`*.mzstatic.com`), by its real host
+/// (`app_icons::is_apple_image_url`).
 pub fn art_url(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://")?;
-    let host = rest.split('/').next()?;
-    if !(host == "mzstatic.com" || host.ends_with(".mzstatic.com")) {
-        return None;
-    }
-    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if !crate::app_icons::is_apple_image_url(url) {
         return None;
     }
     let i = url.rfind('/')?;
@@ -426,7 +422,8 @@ impl Net for Http {
         crate::app_icons::http::get_string(url)
     }
     fn get_bytes(&self, url: &str) -> Result<Vec<u8>, String> {
-        crate::app_icons::http::get_bytes(url)
+        // Checked again there, and fetched without following redirects.
+        crate::app_icons::http::get_image(url)
     }
 }
 
@@ -649,6 +646,19 @@ mod tests {
         assert_eq!(pick(j, "A", "B"), None);
         let j = r#"{"results":[{"artistName":"A","collectionName":"B","artworkUrl100":"http://a1.mzstatic.com/100x100bb.jpg"}]}"#;
         assert_eq!(pick(j, "A", "B"), None);
+        // Nor does anything that only looks like Apple's host.
+        for url in [
+            "https://evil.example?.mzstatic.com/100x100bb.jpg",
+            "https://evil.example#.mzstatic.com/100x100bb.jpg",
+            "https://evil.example\\.mzstatic.com/100x100bb.jpg",
+            "https://a1.mzstatic.com@evil.example/100x100bb.jpg",
+        ] {
+            let j = format!(
+                r#"{{"results":[{{"artistName":"A","collectionName":"B","artworkUrl100":{}}}]}}"#,
+                serde_json::to_string(url).unwrap()
+            );
+            assert_eq!(pick(&j, "A", "B"), None, "{url}");
+        }
     }
 
     #[test]

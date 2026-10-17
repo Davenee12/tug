@@ -21,14 +21,35 @@ pub fn valid_app_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
-/// The icon URL from an App Store lookup answer, resized to `ICON_PX`.
+/// Whether `url` is an `https` address on Apple's image servers (`mzstatic.com` or a subdomain),
+/// judged by its real host. The host runs to the first `/`, `?`, `#` or `\`, and one with user info
+/// (`@`) or a port (`:`) is refused, so `https://evil.example?.mzstatic.com/`, `…#.mzstatic.com`,
+/// `…\.mzstatic.com` and `https://a1.mzstatic.com@evil.example/` never pass for Apple's.
+pub fn is_apple_image_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    if url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '\\') {
+        return false;
+    }
+    let host = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        // Also refuses `@` (user info), `:` (a port) and `%` (an encoded host).
+        return false;
+    }
+    let host = host.to_ascii_lowercase();
+    host == "mzstatic.com" || host.ends_with(".mzstatic.com")
+}
+
+/// The icon URL from an App Store lookup answer, resized to `ICON_PX`. Only on Apple's image
+/// servers (`is_apple_image_url`).
 pub fn artwork_url(lookup_json: &str) -> Option<String> {
     let j: serde_json::Value = serde_json::from_str(lookup_json).ok()?;
     let app = j.get("results")?.as_array()?.first()?;
     let url = ["artworkUrl100", "artworkUrl512", "artworkUrl60"]
         .iter()
         .find_map(|k| app.get(*k)?.as_str())?;
-    if !url.starts_with("https://") {
+    if !is_apple_image_url(url) {
         return None;
     }
     // ".../100x100bb.jpg" → ".../128x128bb.png" (the CDN renders any size and format).
@@ -134,7 +155,7 @@ pub fn icon(dir: &Path, app_id: &str) -> Result<Option<String>, String> {
     }
     let lookup = http::get_string(&format!("https://itunes.apple.com/lookup?bundleId={app_id}"))?;
     let bytes = match artwork_url(&lookup) {
-        Some(url) => http::get_bytes(&url)?,
+        Some(url) => http::get_image(&url)?,
         None => Vec::new(),
     };
     let _ = std::fs::create_dir_all(img.parent().expect("icons dir"));
@@ -162,6 +183,7 @@ pub(crate) mod http {
     use std::time::Duration;
     use windows::core::HSTRING;
     use windows::Foundation::Uri;
+    use windows::Web::Http::Filters::HttpBaseProtocolFilter;
     use windows::Web::Http::HttpClient;
 
     const TIMEOUT: Duration = Duration::from_secs(15);
@@ -190,9 +212,17 @@ pub(crate) mod http {
         })
     }
 
-    pub fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    /// An image from Apple's image servers (an app icon or an album cover). The address is checked
+    /// first (`is_apple_image_url`), and redirects aren't followed: a redirect could lead anywhere,
+    /// so an image comes from the server tug checked or not at all.
+    pub fn get_image(url: &str) -> Result<Vec<u8>, String> {
+        if !super::is_apple_image_url(url) {
+            return Err("Not an Apple image address".into());
+        }
         run(async {
-            let client = HttpClient::new().map_err(err)?;
+            let filter = HttpBaseProtocolFilter::new().map_err(err)?;
+            filter.SetAllowAutoRedirect(false).map_err(err)?;
+            let client = HttpClient::Create(&filter).map_err(err)?;
             let uri = Uri::CreateUri(&HSTRING::from(url)).map_err(err)?;
             let buf = tokio::time::timeout(TIMEOUT, client.GetBufferAsync(&uri).map_err(err)?)
                 .await
@@ -208,7 +238,7 @@ pub(crate) mod http {
     pub fn get_string(_url: &str) -> Result<String, String> {
         Err("App icons are only fetched on Windows".into())
     }
-    pub fn get_bytes(_url: &str) -> Result<Vec<u8>, String> {
+    pub fn get_image(_url: &str) -> Result<Vec<u8>, String> {
         Err("App icons are only fetched on Windows".into())
     }
 }
@@ -225,6 +255,48 @@ mod tests {
         assert!(!valid_app_id("com.evil/../../x"));
         assert!(!valid_app_id("com.a&b=c"));
         assert!(!valid_app_id(""));
+    }
+
+    #[test]
+    fn only_apples_image_servers_pass_the_host_check() {
+        for ok in [
+            "https://is1-ssl.mzstatic.com/image/thumb/Music/a/100x100bb.jpg",
+            "https://a1.mzstatic.com/x.jpg",
+            "https://mzstatic.com/x.jpg",
+            "https://IS1-SSL.MZSTATIC.COM/x.jpg",
+            "https://a1.mzstatic.com",
+            "https://a1.mzstatic.com?size=600",
+        ] {
+            assert!(is_apple_image_url(ok), "{ok}");
+        }
+        for bad in [
+            // The host ends at `?`, `#` or `\`, whatever follows.
+            "https://evil.example?.mzstatic.com/x.jpg",
+            "https://evil.example#.mzstatic.com/x.jpg",
+            "https://evil.example\\.mzstatic.com/x.jpg",
+            "https://a1.mzstatic.com\\@evil.example/x.jpg",
+            // User info or a port in the host.
+            "https://a1.mzstatic.com@evil.example/x.jpg",
+            "https://user@a1.mzstatic.com/x.jpg",
+            "https://a1.mzstatic.com:8443/x.jpg",
+            // Look-alikes.
+            "https://evil.example/.mzstatic.com/x.jpg",
+            "https://mzstatic.com.evil.example/x.jpg",
+            "https://evilmzstatic.com/x.jpg",
+            "https://evil.example%2emzstatic.com/x.jpg",
+            // Not https, or nothing at all.
+            "http://a1.mzstatic.com/x.jpg",
+            "https:///x.jpg",
+            "https://a1.mzstatic.com/x y.jpg",
+            "",
+        ] {
+            assert!(!is_apple_image_url(bad), "{bad}");
+        }
+        // The App Store lookup's artwork goes through the same check.
+        let j = r#"{"results":[{"artworkUrl100":"https://evil.example?.mzstatic.com/100x100bb.jpg"}]}"#;
+        assert_eq!(artwork_url(j), None);
+        let j = r#"{"results":[{"artworkUrl100":"https://a1.mzstatic.com@evil.example/100x100bb.jpg"}]}"#;
+        assert_eq!(artwork_url(j), None);
     }
 
     #[test]
