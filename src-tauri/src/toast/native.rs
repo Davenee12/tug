@@ -150,6 +150,7 @@ mod tests {
             code: Some("482913".into()),
             call_back: true,
             clear: true,
+            ..Default::default()
         };
         for xml in [
             notification_toast(&busy, false),

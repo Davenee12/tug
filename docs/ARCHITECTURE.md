@@ -65,6 +65,7 @@ Inside `tug.exe`:
 | Developer bridge | `devtools/mod.rs`, `crates/tug-bridge/src/server.rs` | A named-pipe accept loop for the app's lifetime (at most 8 connections); answers "off" while switched off. |
 | Tugboat | `tugboat/` | An HTTP server, a 2 s supervisor (idle stop after 10 minutes, network changes) and per-connection tasks; exists only while the panel is open (or Tugboat Run asked for the phone as a controller). While the game's controller channel is open, a 150 ms watch notices a phone that went quiet. |
 | `tug-hotkey` | `code_fill/win.rs` (logic in `code_fill/mod.rs`) | Owns the type-the-code shortcut (RegisterHotKey belongs to the registering thread); each press types the newest code with SendInput on a short-lived `tug-code-fill` thread. |
+| `tug-share-watch` | `share_privacy/win.rs` (logic in `share_privacy/mod.rs`) | Hide previews while sharing or presenting: sleeps on a condition variable until tug's window is on screen or a pop-up finds the screen shared; then one look every 2 s (shell notification state, display topology, a pass over top-level window classes: about 0.3 ms) until the window hides and hiding clears. Each pop-up also takes a fresh look (on a short-lived `tug-share-look` helper, at most 500 ms) before it shows. |
 | Toasts, tray | `toast/`, `tray.rs` | Toast activations arrive on a pool thread and are handed to the async runtime; the tray runs on the main thread. |
 | Spotify, location | `commands.rs`, `spotify/`, `location.rs` | No background task: each command runs on `spawn_blocking`. The UI reads Spotify's player when the song changes. |
 | PC audio | `pc_audio/` | No thread of its own: AudioPlaybackConnection is agile, so `PcAudio` keeps the open connection behind a mutex and each Windows call runs on a time-limited helper (`off_thread`). Follows the connection through a status hook on `Shared` (stop on a phone switch; the opt-in automatic switch). Closed on Stop, Forget and exit. |
@@ -77,7 +78,7 @@ oneshot replies. `Shared` (`state.rs`) is the one `Arc` everything holds; `updat
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
 `pairing-request-closed`, `message`, `contacts`, `calls`, `open-latest-conversation`,
 `open-settings`, `toast-pressed`, `code-filled` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`,
-`game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`). The typed listener
+`game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`); `screen-share` (`share_privacy/`). The typed listener
 map is `EventPayloads` in `src/lib/ipc.ts`.
 
 ## Startup
@@ -215,6 +216,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
+| `share_privacy/mod.rs` | Hide previews while sharing or presenting: which signals mean someone may be watching (shell state confirmed by the foreground window covering its monitor, duplicate display, known share and slideshow windows by program + class), which one names the reason, the log line, and what a hidden pop-up says |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
 
 Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attention`
@@ -225,7 +227,7 @@ updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `co
 `locating`, `media` (which controls show, skip routing), `messageSync`, `messageType`, `pairings`,
 `pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
-(unknown-sender filter), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
+(unknown-sender filter), `sharePrivacy` (hiding previews while sharing: the banner, Show anyway, a pop-up's kind), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `threadWindow` (long conversations render their newest texts first),
 `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: seeded spawning, collisions,
 scoring, the speed curve, inertia, merging the controls), `vips`, `weather`, `weblinks`, `whatsNew`.
@@ -241,8 +243,8 @@ handshake over a real named pipe (including a low-integrity impostor). Hardware 
 
 Everything the backend sends to the UI or takes from it is a serde type in Rust **mirrored by hand**
 in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messages.rs`,
-`map/calls.rs`, `map/health.rs`, `toast/`, `code_fill/`, `spotify/`, `tugboat/`, `bt_inventory/`, `devtools/` and
-`pc_audio/policy.rs`.
+`map/calls.rs`, `map/health.rs`, `toast/`, `code_fill/`, `spotify/`, `tugboat/`, `bt_inventory/`, `devtools/`,
+`pc_audio/policy.rs` and `share_privacy/`.
 
 - App-facing types use `#[serde(rename_all = "camelCase")]` (fields and enum variants), so
   `contacts_off` in Rust is `contactsOff` in TypeScript.
@@ -297,6 +299,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?pcaudio`, `/?pcaudiofail`, `/?pcaudiodrop`, `/?pcaudioold` | iPhone audio playing on this PC / Play on this PC times out / it drops after 6 s (Reconnect) / Windows too old for it |
 | `/?whatsnew` | The What's new card for the newest release |
 | `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
+| `/?sharing` (`&presenting`, `&stop`) | The screen is being shared: blurred texts and names under the `Previews hidden` banner with Show anyway (a slide show / sharing ends after 10 s); add `&call` for the call card |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then

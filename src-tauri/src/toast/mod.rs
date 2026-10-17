@@ -163,8 +163,16 @@ pub fn blocked(app: &AppHandle) -> bool {
     }
 }
 
-/// Pop up one phone notification with the actions its spec allows.
+/// Pop up one phone notification with the actions its spec allows. While the screen is shared
+/// or presented (and the setting is on), it says only which app it's from (`share_privacy`).
+/// Decided here, for every pop-up, so no path from the window can skip it.
 pub fn show(app: &AppHandle, spec: ToastSpec) {
+    let spec = if spec.kind != xml::ToastKind::Info && crate::share_privacy::previews_hidden_now() {
+        crate::share_privacy::redact(&spec)
+    } else {
+        spec
+    };
+    // The spec as shown, so a follow-up can't name someone the pop-up didn't.
     remember(&spec);
     #[cfg(windows)]
     {
@@ -294,7 +302,14 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                     log::info!("reply from a pop-up not sent (row {id}, message {})", stored.id);
                     let body =
                         format!("Use Retry in the conversation when your iPhone is nearby.\n\u{201c}{text}\u{201d}");
-                    note(&app, id, &format!("Couldn't send to {who}"), &body, false);
+                    note(
+                        &app,
+                        id,
+                        &format!("Couldn't send to {who}"),
+                        "Couldn't send",
+                        &body,
+                        false,
+                    );
                     pressed_with(PressKind::Replied, Some(stored));
                 }
                 Ok(stored) if stored.status == crate::messages::Status::Unconfirmed => {
@@ -303,6 +318,7 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                         &app,
                         id,
                         &format!("May have sent to {who}"),
+                        "May have sent",
                         "Check your iPhone to be sure.",
                         false,
                     );
@@ -310,20 +326,27 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 }
                 Ok(stored) => {
                     log::info!("sent a reply from a pop-up (row {id}, message {})", stored.id);
-                    note(&app, id, &format!("Sent to {who}"), &text, true);
+                    note(&app, id, &format!("Sent to {who}"), "Sent", &text, true);
                     pressed_with(PressKind::Replied, Some(stored));
                 }
                 Err(e) => {
                     log::info!("reply from a pop-up not sent (row {id}): {e}");
                     let body = format!("{e}\n\u{201c}{text}\u{201d}");
-                    note(&app, id, &format!("Couldn't send to {who}"), &body, false);
+                    note(
+                        &app,
+                        id,
+                        &format!("Couldn't send to {who}"),
+                        "Couldn't send",
+                        &body,
+                        false,
+                    );
                 }
             }
         }
         ToastAction::Read { .. } => pressed(PressKind::Read),
         ToastAction::Copy { code, .. } => match copy(&app, code).await {
             Ok(()) => pressed(PressKind::Copied),
-            Err(e) => note(&app, id, "Couldn't copy the code", &e, false),
+            Err(e) => note(&app, id, "Couldn't copy the code", "Couldn't copy the code", &e, false),
         },
         ToastAction::CallBack { .. } => {
             let who = name_for(id).unwrap_or_else(|| "them".into());
@@ -340,7 +363,14 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 .await
             {
                 Ok(()) => pressed(PressKind::CalledBack),
-                Err(e) => note(&app, id, &format!("Couldn't call {who} back"), &e, false),
+                Err(e) => note(
+                    &app,
+                    id,
+                    &format!("Couldn't call {who} back"),
+                    "Couldn't call back",
+                    &e,
+                    false,
+                ),
             }
         }
         ToastAction::Clear { .. } => {
@@ -356,7 +386,14 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
                 })
                 .await
             {
-                note(&app, id, "Couldn't clear it on your iPhone", &e, false);
+                note(
+                    &app,
+                    id,
+                    "Couldn't clear it on your iPhone",
+                    "Couldn't clear it on your iPhone",
+                    &e,
+                    false,
+                );
             }
         }
     }
@@ -374,9 +411,15 @@ async fn copy(app: &AppHandle, code: String) -> Result<(), String> {
 }
 
 /// A short follow-up about notification `id`. One per notification (a newer one replaces
-/// it), in its own group so the phone clearing the notification doesn't take it back.
+/// it), in its own group so the phone clearing the notification doesn't take it back. While
+/// previews are hidden it says only `generic` ("Sent"): no name, no text.
 #[cfg(windows)]
-fn note(app: &AppHandle, id: i64, title: &str, body: &str, quiet: bool) {
+fn note(app: &AppHandle, id: i64, title: &str, generic: &str, body: &str, quiet: bool) {
+    let hidden = crate::share_privacy::previews_hidden_now().then(|| crate::share_privacy::redact_note(generic));
+    let (title, body) = match &hidden {
+        Some((t, b)) => (t.as_str(), b.as_str()),
+        None => (title, body),
+    };
     let xml = xml::note_toast(id, title, body, quiet || !sound_on(app));
     let tag = format!("note-{id}");
     if let Err(e) = show_native(app, &xml, &tag, GROUP_NOTES, quiet.then_some(SENT_NOTE_TTL)) {

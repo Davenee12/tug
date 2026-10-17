@@ -472,6 +472,22 @@ pub fn show_toast(app: tauri::AppHandle, spec: crate::toast::ToastSpec) {
     crate::toast::show(&app, spec);
 }
 
+/// tug's window came on screen (`on`) or went away: while it's on screen, check every 2 s whether
+/// previews should be hidden (sharing or presenting). Returns the answer now, so the banner is
+/// right the moment the window shows; changes come as `screen-share` events.
+#[tauri::command]
+pub fn screen_share_watch(on: bool) -> crate::share_privacy::ShareState {
+    #[cfg(windows)]
+    {
+        crate::share_privacy::watch(on)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = on;
+        crate::share_privacy::ShareState::default()
+    }
+}
+
 /// Copy text to the clipboard. Sync on purpose: Tauri runs sync commands on the main
 /// (STA) thread, which the WinRT clipboard requires.
 #[tauri::command]
@@ -630,7 +646,17 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
     if !key.starts_with(UI_SETTING_PREFIX) {
         return Err(format!("{key} is not a UI setting"));
     }
-    state.shared.store.set_setting(&key, &value).map_err(|e| e.to_string())
+    state
+        .shared
+        .store
+        .set_setting(&key, &value)
+        .map_err(|e| e.to_string())?;
+    // Hide previews while sharing: the watcher follows the switch at once (off shows everything).
+    #[cfg(windows)]
+    if key == crate::share_privacy::SETTING {
+        crate::share_privacy::set_enabled(crate::share_privacy::enabled_from_setting(Some(&value)));
+    }
+    Ok(())
 }
 
 /// Whether tug starts with Windows. The registry entry (via the autostart plugin) is the

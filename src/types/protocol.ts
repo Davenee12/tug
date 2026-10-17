@@ -290,6 +290,8 @@ export interface UiSettings {
   typeCodeKeys: string;
   /** The sidebar's Play button and the Ctrl+K "Tugboat Run" command (on by default). */
   showGames: boolean;
+  /** While the screen is shared or presented, pop-ups and the window hide texts and names (on by default; read by the backend, `share_privacy/`). */
+  hidePreviewsWhileSharing: boolean;
 }
 
 /**
@@ -313,6 +315,22 @@ export interface ToastSpec {
   callBack: boolean;
   /** Clearable on the phone (never a ringing call): "Clear". */
   clear: boolean;
+  /** The app it's from ("Messages"): all the pop-up says while previews are hidden. */
+  app: string;
+  /** What it is, for the wording while previews are hidden ("New message", "Incoming call"). */
+  kind: ToastKind;
+}
+
+/** What a pop-up is about (`ToastKind` in `toast/xml.rs`); `info` is tug's own words, never hidden. */
+export type ToastKind = "notification" | "message" | "call" | "missedCall" | "info";
+
+/** Why previews are hidden (`share_privacy::Reason`). */
+export type ShareReason = "sharing" | "presenting" | "fullScreen";
+
+/** Whether previews are hidden right now because the screen is shared or presented (`screen-share`, `share_privacy/`). */
+export interface ShareState {
+  active: boolean;
+  reason: ShareReason | null;
 }
 
 /** A pop-up's body or button was pressed and carried out (`toast-pressed`, `toast/mod.rs`). */

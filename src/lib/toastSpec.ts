@@ -6,6 +6,7 @@
 import type { Contact, PhoneNotification, SmsMessage, ToastSpec } from "../types/protocol";
 import { appLabel, canClear, cleanName, groupConversations, isConversation, threadKey } from "./format";
 import { findCode } from "./codes";
+import { toastKind } from "./sharePrivacy";
 
 const MESSAGES_APP = "com.apple.MobileSMS";
 
@@ -53,5 +54,8 @@ export function toastSpec(n: PhoneNotification, messages: SmsMessage[], contacts
     code: findCode(n.message || n.subtitle)?.code ?? null,
     callBack: n.category === "missedCall" && n.live && n.removedAt == null && n.flags.positiveAction,
     clear: canClear(n),
+    // While the screen is shared, the backend shows only these (lib/sharePrivacy).
+    app: appLabel(n),
+    kind: toastKind(n),
   };
 }

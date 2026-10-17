@@ -87,6 +87,8 @@ describe("toastSpec", () => {
       code: null,
       callBack: false,
       clear: true,
+      app: "Messages",
+      kind: "message",
     });
   });
 

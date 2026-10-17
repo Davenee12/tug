@@ -57,11 +57,14 @@
 //   http://localhost:1420/?pcaudiofail   "Play on this PC" times out: the calm sentence and Try again
 //   http://localhost:1420/?pcaudiodrop   it turns on, then the phone drops it 6 s later: Reconnect
 //   http://localhost:1420/?pcaudioold    Windows too old for it: no button, Settings says so
+//   http://localhost:1420/?sharing    the screen is being shared: the Feed and Messages blur texts and names under
+//                                     the "Previews hidden" banner (Show anyway). &presenting for a slide show,
+//                                     &stop to have sharing end after 10 s (the banner clears), &call for a call
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { RELEASE_NOTES } from "./whatsNew";
-import type { CallRecord, CodeHotkeyStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
+import type { CallRecord, CodeHotkeyStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -842,6 +845,11 @@ function setPcAudio(on: boolean): PcAudioStatus {
   return sendPc();
 }
 // The type-the-code shortcut as the backend registered it at startup (default on, Ctrl+Shift+V).
+// ?sharing: what share_privacy reports while the screen is shared (or a slide show, &presenting).
+const shareState: ShareState = params.has("sharing")
+  ? { active: true, reason: params.has("presenting") ? "presenting" : "sharing" }
+  : { active: false, reason: null };
+
 const codeHotkey: CodeHotkeyStatus = { state: params.has("hotkeybusy") ? "inUse" : "on", keys: "ctrl+shift+v" };
 
 mockIPC(
@@ -870,6 +878,8 @@ mockIPC(
         return null;
       case "set_watching":
         return null;
+      case "screen_share_watch":
+        return settings["ui.hidePreviewsWhileSharing"] === "false" ? { active: false, reason: null } : { ...shareState };
       case "get_status":
         return status;
       case "get_now_playing":
@@ -1291,6 +1301,14 @@ if (setup && params.has("btoff")) {
     status.advertising = "on";
     void emit("device-status", { ...status });
   }, 20000);
+}
+
+// ?sharing&stop: sharing ends 10 s in, and the banner and blur must go with it.
+if (params.has("sharing") && params.has("stop")) {
+  setTimeout(() => {
+    Object.assign(shareState, { active: false, reason: null });
+    void emit("screen-share", { ...shareState });
+  }, 10000);
 }
 
 if (params.has("pairing")) {

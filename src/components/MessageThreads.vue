@@ -337,9 +337,9 @@ async function retry(m: SmsMessage) {
       <header class="flex items-center gap-4 border-b border-hairline px-8 py-4">
         <AppAvatar :app-id="selected.appId" :label="selected.contact" :photo-key="selected.address ?? undefined" person />
         <div class="min-w-0 flex-1">
-          <p class="headline truncate text-[26px] leading-tight">{{ selected.contact }}</p>
+          <p class="headline preview-private truncate text-[26px] leading-tight">{{ selected.contact }}</p>
           <p class="text-[13px] text-muted">
-            {{ selected.appLabel }}<template v-if="selected.address"> · {{ formatAddress(selected.address) }}</template>
+            {{ selected.appLabel }}<template v-if="selected.address"> · <span class="preview-private">{{ formatAddress(selected.address) }}</span></template>
           </p>
         </div>
         <!-- Experimental: only once Settings has checked hands-free dialing works here. -->
@@ -381,7 +381,7 @@ async function retry(m: SmsMessage) {
           >
             <div
               :class="[
-                'selectable rounded-xl px-4 py-2.5 text-[14px] whitespace-pre-line',
+                'preview-private selectable rounded-xl px-4 py-2.5 text-[14px] whitespace-pre-line',
                 bubbleClass(item),
                 item.kind === 'message' && item.m.status === 'pending' ? 'opacity-70' : '',
               ]"
@@ -419,7 +419,7 @@ async function retry(m: SmsMessage) {
         <label v-if="canReply && canPickNumber" class="mb-2 flex items-center gap-2 px-1 text-[12px] text-muted">
           To:
           <select
-            class="rounded-md border border-hairline bg-canvas px-2 py-1 font-mono text-[12px] text-ink"
+            class="preview-private rounded-md border border-hairline bg-canvas px-2 py-1 font-mono text-[12px] text-ink"
             :value="replyTo ?? ''"
             @change="chosen[selected.key] = ($event.target as HTMLSelectElement).value"
           >
@@ -432,7 +432,8 @@ async function retry(m: SmsMessage) {
           v-if="canReply"
           :drafts="drafts"
           :draft-key="selected.key"
-          :placeholder="`Text ${selected.contact}`"
+          :placeholder="tug.previewsHidden ? 'Text message' : `Text ${selected.contact}`"
+          class="preview-private"
           :blocked="sending || !replyTo"
           @update="(text) => setDraftFor(selected!.key, text)"
           @send="send()"

@@ -25,6 +25,7 @@ mod messages;
 mod pc_audio;
 #[cfg(test)]
 mod perf;
+mod share_privacy;
 mod spotify;
 mod startup;
 mod state;
@@ -130,6 +131,10 @@ pub fn run() {
             // Code fill's type-the-code shortcut: registered now (on unless switched off), so it
             // works from a tray-only start too.
             code_fill::start(app.handle(), &shared.store);
+            // Hide previews while sharing or presenting: a thread that sleeps until the window is
+            // on screen or a pop-up finds something to hide.
+            #[cfg(windows)]
+            share_privacy::start(app.handle(), &shared.store);
             app.manage(AppState {
                 shared,
                 ble,
@@ -268,6 +273,7 @@ pub fn run() {
             commands::refresh_calls,
             commands::dial,
             commands::show_toast,
+            commands::screen_share_watch,
             commands::copy_diagnostics,
             commands::bt_inventory,
             commands::open_logs_folder,

@@ -46,11 +46,11 @@ async function act(positive: boolean) {
         <span v-if="n.removedAt" class="text-[12px] text-muted-soft">· cleared on iPhone</span>
         <span class="ml-auto shrink-0 font-mono text-[12px] text-muted-soft">{{ time }}</span>
       </div>
-      <p v-if="n.title" :class="['text-ink', compact ? 'text-[14px] font-medium' : 'mt-0.5 text-[15px] font-medium']">{{ n.title }}</p>
-      <p v-if="n.subtitle" class="text-[14px] text-body-strong">{{ n.subtitle }}</p>
+      <p v-if="n.title" :class="['preview-private text-ink', compact ? 'text-[14px] font-medium' : 'mt-0.5 text-[15px] font-medium']">{{ n.title }}</p>
+      <p v-if="n.subtitle" class="preview-private text-[14px] text-body-strong">{{ n.subtitle }}</p>
       <p
         v-if="n.message"
-        :class="['selectable mt-0.5 cursor-text whitespace-pre-line text-[14px] text-body', expanded ? '' : 'line-clamp-4']"
+        :class="['preview-private selectable mt-0.5 cursor-text whitespace-pre-line text-[14px] text-body', expanded ? '' : 'line-clamp-4']"
         @click="expanded = !expanded"
       >
         {{ n.message }}

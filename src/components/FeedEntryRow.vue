@@ -99,12 +99,12 @@ function open() {
       <AppAvatar :app-id="appId" :label="entry.kind === 'thread' ? title : appLabel" :person="entry.kind === 'thread'" size="sm" />
       <span class="min-w-0 flex-1">
         <span class="flex items-baseline gap-2">
-          <span :class="['truncate text-[14px] text-ink', fresh ? 'font-semibold' : 'font-medium']">{{ title }}</span>
+          <span :class="['truncate text-[14px] text-ink', fresh ? 'font-semibold' : 'font-medium', entry.kind === 'thread' && 'preview-private']">{{ title }}</span>
           <span v-if="entry.kind === 'thread'" class="shrink-0 text-[12px] text-muted-soft">{{ appLabel }}</span>
           <span v-else-if="items.length > 1" class="shrink-0 text-[12px] text-muted-soft">{{ items.length }}</span>
           <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">{{ when }}</span>
         </span>
-        <span :class="['mt-0.5 block truncate text-[13px]', fresh ? 'text-body-strong' : 'text-muted']">{{ preview }}</span>
+        <span :class="['preview-private mt-0.5 block truncate text-[13px]', fresh ? 'text-body-strong' : 'text-muted']">{{ preview }}</span>
       </span>
       <CodeChip v-if="code" :code="code.code" :from="[latest]" />
       <span

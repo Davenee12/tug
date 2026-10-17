@@ -57,6 +57,7 @@ import type {
   PairingRequest,
   PhoneNotification,
   SearchResults,
+  ShareState,
   SpotifyDevice,
   SpotifyPlayer,
   SpotifyPlaylist,
@@ -87,6 +88,7 @@ import {
 } from "../lib/phoneSwitches";
 import { notesUpTo, RELEASE_NOTES, whatsNewToShow, type ReleaseNote } from "../lib/whatsNew";
 import { coalesce, nextFrame } from "../lib/coalesce";
+import { NOT_SHARING, previewsHidden, shareBanner, stillRevealed } from "../lib/sharePrivacy";
 import { useTugboatStore } from "./tugboat";
 import { useDevToolsStore } from "./devtools";
 
@@ -202,6 +204,7 @@ export const useTugStore = defineStore("tug", () => {
     typeCodeHotkey: true,
     typeCodeKeys: DEFAULT_CODE_HOTKEY,
     showGames: true,
+    hidePreviewsWhileSharing: true,
   });
   /** The type-the-code shortcut as the backend registered it (Settings shows "in use" from this). */
   const codeHotkey = ref<CodeHotkeyStatus>({ state: "off", keys: DEFAULT_CODE_HOTKEY });
@@ -409,6 +412,46 @@ export const useTugStore = defineStore("tug", () => {
   const canSee = computed(() =>
     canSeeWindow({ visibility: pageVisible.value ? "visible" : "hidden", focused: windowFocused.value, overlayOpen: overlayOpen.value }),
   );
+
+  // --- Hide previews while sharing or presenting (lib/sharePrivacy; the backend's share_privacy/
+  // decides, and hides pop-up text itself). One source: the backend's answer plus this setting. ---
+  const screenShare = ref<ShareState>(NOT_SHARING);
+  /** "Show anyway" for the share in progress; forgotten when sharing stops. */
+  const shareRevealed = ref(false);
+  const previewsHiddenNow = computed(() =>
+    previewsHidden(settings.value.hidePreviewsWhileSharing, screenShare.value, shareRevealed.value),
+  );
+  const shareBannerText = computed(() =>
+    shareBanner(settings.value.hidePreviewsWhileSharing, screenShare.value, shareRevealed.value),
+  );
+  function setScreenShare(s: ShareState) {
+    screenShare.value = s;
+    shareRevealed.value = stillRevealed(shareRevealed.value, s);
+  }
+  function showPreviewsAnyway() {
+    shareRevealed.value = true;
+  }
+  function hidePreviewsAgain() {
+    shareRevealed.value = false;
+  }
+  /**
+   * The backend looks every 2 s only while the window is on screen (or while hiding is on, until it
+   * clears); hidden in the tray with nothing hidden, it doesn't look at all. Tell it when that changes.
+   */
+  let shareWatching: boolean | null = null;
+  function syncShareWatch() {
+    const on = pageVisible.value && settings.value.hidePreviewsWhileSharing;
+    if (on === shareWatching) return;
+    shareWatching = on;
+    void api
+      .screenShareWatch(on)
+      .then(setScreenShare)
+      .catch(() => undefined);
+  }
+  watch([pageVisible, () => settings.value.hidePreviewsWhileSharing], () => {
+    if (started) syncShareWatch();
+  });
+
   const onWindowBlur = () => {
     windowFocused.value = false;
     leftWindow();
@@ -666,6 +709,8 @@ export const useTugStore = defineStore("tug", () => {
       code: null,
       callBack: false,
       clear: false,
+      app: "",
+      kind: "info",
     };
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
     void api.showToast(spec).catch(() => undefined);
@@ -743,7 +788,7 @@ export const useTugStore = defineStore("tug", () => {
 
   /** A pop-up that only says something; pressing it opens tug (its id matches no notification). */
   function showInfoToast(id: number, title: string, body: string) {
-    const spec: ToastSpec = { id, title, body, name: "", replyTo: null, markRead: false, code: null, callBack: false, clear: false };
+    const spec: ToastSpec = { id, title, body, name: "", replyTo: null, markRead: false, code: null, callBack: false, clear: false, app: "", kind: "info" };
     void api.showToast(spec).catch(() => undefined);
   }
 
@@ -839,6 +884,8 @@ export const useTugStore = defineStore("tug", () => {
       code,
       callBack: false,
       clear: false,
+      app: "Messages",
+      kind: "message",
     };
     const spec = copied && code === found ? copiedToastSpec(plain, code, name) : plain;
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
@@ -1177,6 +1224,7 @@ export const useTugStore = defineStore("tug", () => {
       typeCodeHotkey: raw["ui.typeCodeHotkey"] !== "false",
       typeCodeKeys: knownHotkey(raw["ui.typeCodeKeys"]),
       showGames: raw["ui.showGames"] !== "false",
+      hidePreviewsWhileSharing: raw["ui.hidePreviewsWhileSharing"] !== "false",
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
     // A missing key is a fresh install: null (not ""), so the first launch records the version
@@ -1319,6 +1367,7 @@ export const useTugStore = defineStore("tug", () => {
         on("open-settings", () => openSettings()),
         on("toast-pressed", onToastPressed),
         on("code-filled", onCodeFilled),
+        on("screen-share", setScreenShare),
       ])),
     );
     const [s, np, first, msgs, people, recent] = await Promise.all([
@@ -1348,6 +1397,8 @@ export const useTugStore = defineStore("tug", () => {
       if (!document.hidden) clock.value = Date.now();
     }, 60_000);
     await attempt(loadSettings);
+    // Settings are in: start (or skip) the sharing check for the window (lib/sharePrivacy).
+    syncShareWatch();
     // The backend registered the type-the-code shortcut at startup; Settings shows how that went.
     const hotkey = await attempt(api.codeHotkeyStatus);
     if (hotkey) codeHotkey.value = hotkey;
@@ -1386,6 +1437,7 @@ export const useTugStore = defineStore("tug", () => {
     watchRenew = undefined;
     clockTimer = undefined;
     messagesReady = false;
+    shareWatching = null;
     ready = new Promise<void>((resolve) => (markReady = resolve));
     started = false;
   }
@@ -1876,6 +1928,11 @@ export const useTugStore = defineStore("tug", () => {
     respondToCall,
     overlayOpen,
     canSee,
+    screenShare,
+    previewsHidden: previewsHiddenNow,
+    shareBanner: shareBannerText,
+    showPreviewsAnyway,
+    hidePreviewsAgain,
     settingsSection,
     openSettings,
     closeSettings,

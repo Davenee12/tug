@@ -74,6 +74,13 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   shows a dot when you have unread texts.
 - Closing the window keeps tug running in the tray (you can change this), with a one-time hint.
 - A **low phone battery** pop-up at 20% and again at 10%.
+- **Hide previews while sharing or presenting** (on by default, Settings › Notifications): while
+  Teams, Zoom or a browser (Google Meet and others) shares your screen, a PowerPoint slide show
+  runs, the display is duplicated or an app is full screen, pop-ups say only "New message" or "New
+  notification" with the app's name, calls ring as "Incoming call", and tug's window blurs texts,
+  names and photos under a "Previews hidden" banner with **Show anyway** for that share. It clears
+  within about 2 seconds of the share ending. Webex, Discord and Slack can't be detected unless the
+  share is full screen; nor can a browser shown in a language other than English.
 
 ## Messages (texts)
 
@@ -253,8 +260,8 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
   closed, Start with Windows (starts in the tray), Zoom, Show games, and the keyboard shortcuts.
 - **iPhone:** connection health, Copy diagnostics, Open logs folder, help for the texts pairing,
   Visible to iPhone, Call from tug, and your iPhone's Connect panel.
-- **Notifications:** Filter unknown senders, Quiet hours, Mute calls, Always let through, and
-  muted apps.
+- **Notifications:** Filter unknown senders, Hide previews while sharing or presenting, Quiet
+  hours, Mute calls, Always let through, and muted apps.
 - **Connectors:** connect or disconnect Spotify.
 - **Weather:** show, set up, change place or hide; °F / °C.
 - **Developer tools:** see above.

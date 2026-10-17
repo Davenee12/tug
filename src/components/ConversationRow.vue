@@ -21,7 +21,7 @@ const outgoing = (i: ConversationItem) => i.kind === "message" && i.m.direction 
       <AppAvatar :app-id="c.appId" :label="c.contact" :photo-key="c.address ?? undefined" person size="sm" />
       <span class="min-w-0 flex-1">
         <span class="flex items-baseline gap-2">
-          <span :class="['truncate text-[14px] text-ink', tug.newCount(c.key, c.notifications) ? 'font-semibold' : 'font-medium']">
+          <span :class="['preview-private truncate text-[14px] text-ink', tug.newCount(c.key, c.notifications) ? 'font-semibold' : 'font-medium']">
             {{ c.contact }}
           </span>
           <span
@@ -32,7 +32,7 @@ const outgoing = (i: ConversationItem) => i.kind === "message" && i.m.direction 
           </span>
         </span>
         <span class="flex items-center gap-2">
-          <span class="min-w-0 flex-1 truncate text-[13px] text-muted">
+          <span class="preview-private min-w-0 flex-1 truncate text-[13px] text-muted">
             <template v-if="!c.items.length">New message</template>
             <template v-else-if="outgoing(c.latest)">You: </template>{{ c.latest.body }}
           </span>

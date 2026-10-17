@@ -27,11 +27,11 @@ const when = () => relativeTime(new Date(props.entry.at));
       <AppAvatar :app-id="MESSAGES_APP" :label="entry.sender" person size="sm" />
       <span class="min-w-0 flex-1">
         <span class="flex items-baseline gap-2">
-          <span class="truncate text-[14px] font-semibold text-ink">{{ entry.sender }}</span>
+          <span class="preview-private truncate text-[14px] font-semibold text-ink">{{ entry.sender }}</span>
           <span class="shrink-0 text-[12px] text-muted-soft">Verification code</span>
           <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">{{ when() }}</span>
         </span>
-        <span class="mt-0.5 block truncate text-[13px] text-body-strong">{{ entry.body }}</span>
+        <span class="preview-private mt-0.5 block truncate text-[13px] text-body-strong">{{ entry.body }}</span>
       </span>
       <CodeChip :code="entry.code.code" />
       <span

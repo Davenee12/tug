@@ -130,13 +130,13 @@ const emptyHint = computed(() => callsEmptyHint(tug.status, tug.switchContext));
             </span>
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline gap-2">
-                <span :class="['truncate text-[14px] font-medium', c.direction === 'missed' ? 'text-error' : 'text-ink']">
+                <span :class="['preview-private truncate text-[14px] font-medium', c.direction === 'missed' ? 'text-error' : 'text-ink']">
                   {{ name(c) }}
                 </span>
                 <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">{{ time(c) }}</span>
               </span>
               <span class="mt-0.5 block truncate text-[13px] text-muted">
-                {{ DIRECTION[c.direction].label }}<template v-if="showNumber(c)"> · {{ formatAddress(c.number!) }}</template>
+                {{ DIRECTION[c.direction].label }}<template v-if="showNumber(c)"> · <span class="preview-private">{{ formatAddress(c.number!) }}</span></template>
               </span>
             </span>
             <template v-if="c.number">
