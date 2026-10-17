@@ -180,8 +180,9 @@ pub fn run() {
             // start) so the person sees tug back on the screen they left.
             let resuming = updater::resume_pending(&store);
             // Taskbar quick actions: a task clicked while tug wasn't running started this launch;
-            // the UI carries it out once it has loaded. Then (re)build the jump list itself.
-            if let Some(action) = quick_actions::parse_args(launch_args()) {
+            // the UI carries it out once it has loaded (never again after an update restart,
+            // which relaunches with the old arguments). Then (re)build the jump list itself.
+            if let Some(action) = quick_actions::launch_action(launch_args(), resuming) {
                 quick_actions::queue(action);
             }
             let show_games = store.setting(quick_actions::SHOW_GAMES_SETTING).ok().flatten();

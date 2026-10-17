@@ -91,6 +91,21 @@ impl QuickAction {
 
 /// The action a launch asks for, if any. `args` is the whole command line (the program path
 /// first is fine). An unknown action is ignored rather than guessed at: tug just comes forward.
+/// The quick action this launch should carry out: the one on its command line, unless this launch
+/// is tug coming back from an update restart. The installer starts tug again with the arguments
+/// the old process was started with, so a jump-list task clicked before the update (say "Play a
+/// game") would otherwise run again by itself afterwards.
+pub fn launch_action<I, S>(args: I, resuming_from_update: bool) -> Option<QuickAction>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    if resuming_from_update {
+        return None;
+    }
+    parse_args(args)
+}
+
 pub fn parse_args<I, S>(args: I) -> Option<QuickAction>
 where
     I: IntoIterator<Item = S>,
@@ -434,5 +449,13 @@ mod tests {
         assert_eq!(p.take().len(), QuickAction::ALL.len());
         p.queue = vec![QuickAction::Game; MAX_PENDING];
         assert!(!p.push(QuickAction::Settings));
+    }
+
+    #[test]
+    fn an_update_restart_never_replays_the_old_launchs_action() {
+        let args = ["tug.exe", "--action", "settings"];
+        assert_eq!(launch_action(args, false), Some(QuickAction::Settings));
+        assert_eq!(launch_action(args, true), None);
+        assert_eq!(launch_action(["tug.exe"], false), None);
     }
 }
