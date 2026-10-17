@@ -201,6 +201,14 @@ const MIGRATIONS: &[&str] = &[
         DELETE FROM message_attachments WHERE message_id = old.id;
     END;
     "#,
+    // v14: a Bluetooth text listed after an import, that the imported history already has, is
+    // kept hidden behind the imported row (`dup_of`, its id) instead of being dropped, so Remove
+    // imported history can bring it back. Its own migration (not part of v13) so a database a
+    // pre-release build already moved to v13 gets it too.
+    r#"
+    ALTER TABLE messages ADD COLUMN dup_of INTEGER;
+    CREATE INDEX messages_dup_of ON messages (dup_of) WHERE dup_of IS NOT NULL;
+    "#,
 ];
 
 /// A sender name as people see it, matching the UI's `cleanName` (format.ts): trimmed,
@@ -714,11 +722,16 @@ impl Store {
             params![crate::messages::SOURCE_IPHONE_BACKUP],
         )?;
         tx.execute_batch("DELETE FROM message_attachments;")?;
+        tx.execute(
+            "DELETE FROM settings WHERE key = ?1",
+            params![crate::backup::import::IMPORT_RECORD],
+        )?;
         // Texts stay as blank, hidden rows (tombstones), keyed by the phone's handle: the phone
         // re-lists its recent texts at every sync, and a row that's gone would come straight back.
         // Blanking the body and rebuilding the index means nothing is readable or searchable.
         tx.execute(
-            "UPDATE messages SET body = '', sender_name = NULL, address = '', hidden_at = COALESCE(hidden_at, ?1)",
+            "UPDATE messages SET body = '', sender_name = NULL, address = '', dup_of = NULL,
+                 hidden_at = COALESCE(hidden_at, ?1)",
             params![crate::state::now_ms()],
         )?;
         tx.execute_batch(
@@ -1093,6 +1106,10 @@ mod tests {
 
     /// Back to a real older database: undo the schema later migrations added, so they apply again.
     fn rewind(conn: &Connection, version: i64) {
+        if version < 14 {
+            conn.execute_batch("DROP INDEX messages_dup_of; ALTER TABLE messages DROP COLUMN dup_of;")
+                .unwrap();
+        }
         if version < 13 {
             conn.execute_batch(
                 "DROP TRIGGER messages_attachments_ad; DROP TABLE message_attachments;
@@ -1149,6 +1166,30 @@ mod tests {
         assert_eq!(left, 0);
         drop(conn);
         migrate(&mut s.conn()).unwrap();
+    }
+
+    #[test]
+    fn upgrading_from_v13_adds_hidden_duplicates_and_keeps_every_text() {
+        let s = Store::in_memory().unwrap();
+        {
+            let conn = s.conn();
+            conn.execute_batch(
+                "INSERT INTO messages (source, handle, direction, address, body, received_at, status)
+                 VALUES ('iphone-map', 'H1', 'in', '+15550100001', 'lunch?', 1000, 'received');",
+            )
+            .unwrap();
+            rewind(&conn, 13);
+        }
+        migrate(&mut s.conn()).unwrap();
+        let conn = s.conn();
+        let v: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        let dup: Option<i64> = conn
+            .query_row("SELECT dup_of FROM messages WHERE handle = 'H1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(dup, None, "an existing text is nobody's duplicate");
+        drop(conn);
+        assert_eq!(s.recent_messages(10).unwrap().len(), 1);
     }
 
     #[test]

@@ -15,6 +15,9 @@
 //!   one that happened after the backup was made can't be in it. The Bluetooth copy stays; the
 //!   backup only adds what it lacked (the photos of a text Bluetooth showed as "Attachment: 1
 //!   Photo").
+//! - The other way round (Bluetooth lists a text after the import that the backup already has), the
+//!   Bluetooth copy is kept but hidden behind the backup's row (`dup_of`), never thrown away, so
+//!   Remove imported history brings it back.
 //! - People are tug's: a number the backup writes as `+447700900123` joins the conversation tug
 //!   already has under `07700 900123` (the same last 10 digits), and contacts' names apply as usual.
 //! - Photos and videos are copied in a second pass, through a `FileSink`, so they can be skipped
@@ -332,9 +335,10 @@ fn import_record(conn: &rusqlite::Connection) -> Result<Option<Option<i64>>> {
     }))
 }
 
-/// Whether imported history already holds this incoming Bluetooth text (same conversation, same
-/// words, close in time, by the same rules the import uses the other way round). Uses the partial
-/// index on incoming bodies, so it costs a lookup, not a scan.
+/// The imported row that already holds this incoming Bluetooth text (same conversation, same
+/// words, close in time, by the same rules the import uses the other way round), if any. A row
+/// stands in for one Bluetooth text at most. Uses the partial index on incoming bodies, so it
+/// costs a lookup, not a scan.
 pub(crate) fn backup_has(
     conn: &rusqlite::Connection,
     zone: clock::Resolver,
@@ -342,12 +346,12 @@ pub(crate) fn backup_has(
     body: &str,
     sent_at: Option<&str>,
     received_at: i64,
-) -> Result<bool> {
+) -> Result<Option<i64>> {
     let words = compare_body(body);
     // Only a photo's Bluetooth words ("Attachment: 1 Photo"), or nothing: too little to tell one
     // text from another, so it's never taken for the backup's.
     if words.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     let incoming = Candidate {
         id: 0,
@@ -356,25 +360,32 @@ pub(crate) fn backup_has(
     };
     // Nothing imported, or newer than the newest backup brought in: the backup can't have it.
     match import_record(conn)? {
-        None => return Ok(false),
-        Some(date) if !incoming.before(date) => return Ok(false),
+        None => return Ok(None),
+        Some(date) if !incoming.before(date) => return Ok(None),
         Some(_) => {}
     }
     let key = person_key(address);
     let mut stmt = conn.prepare_cached(
-        "SELECT address, received_at FROM messages
-         WHERE direction = 'in' AND body IN (?1, ?2) AND source = ?3 AND hidden_at IS NULL AND unsent = 0",
+        "SELECT m.id, m.address, m.received_at FROM messages m
+         WHERE m.direction = 'in' AND m.body IN (?1, ?2) AND m.source = ?3 AND m.hidden_at IS NULL
+           AND m.unsent = 0 AND NOT EXISTS (SELECT 1 FROM messages d WHERE d.dup_of = m.id)",
     )?;
     let rows = stmt.query_map(params![body, words, SOURCE_IPHONE_BACKUP], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
     })?;
+    let mut best: Option<(i64, i64)> = None;
     for row in rows {
-        let (a, at) = row?;
-        if person_key(&a) == key && incoming.distance(at).is_some() {
-            return Ok(true);
+        let (id, a, at) = row?;
+        if person_key(&a) != key {
+            continue;
+        }
+        if let Some(d) = incoming.distance(at) {
+            if best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, id));
+            }
         }
     }
-    Ok(false)
+    Ok(best.map(|(_, id)| id))
 }
 
 /// tug's own view of people and texts, read once per plan.
@@ -814,10 +825,18 @@ pub fn imported(store: &Store) -> Result<Imported> {
 }
 
 /// Remove imported history: every imported text, every attachment row (on Bluetooth texts too)
-/// and the record. Returns how many texts went. The caller deletes the files.
+/// and the record. A Bluetooth text hidden behind an imported one (`dup_of`) comes back, hidden
+/// only if that imported text was (its conversation deleted). Returns how many texts went. The
+/// caller deletes the files.
 pub fn remove_imported(store: &Store) -> Result<u64> {
     let mut conn = store.conn();
     let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE messages SET hidden_at = (SELECT b.hidden_at FROM messages b WHERE b.id = messages.dup_of),
+             dup_of = NULL
+         WHERE dup_of IS NOT NULL",
+        [],
+    )?;
     let n = tx.execute("DELETE FROM messages WHERE source = ?1", [SOURCE_IPHONE_BACKUP])?;
     tx.execute(
         "DELETE FROM message_attachments WHERE source = ?1",
@@ -1250,6 +1269,72 @@ mod tests {
         run(&store, &one_ok(T0), all(), &mut FakeSink::default());
         let same = bluetooth_ok("H2", "2025-10-09T04:53:20", T0 + 5 * H);
         assert!(store.insert_incoming(&same).unwrap().is_some());
+    }
+
+    /// Every row, hidden or not: (source, body, hidden, dup_of).
+    fn all_rows(store: &Store) -> Vec<(String, String, bool, Option<i64>)> {
+        let conn = store.conn();
+        let mut stmt = conn
+            .prepare("SELECT source, body, hidden_at IS NOT NULL, dup_of FROM messages ORDER BY id")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap();
+        rows.collect::<rusqlite::Result<_>>().unwrap()
+    }
+
+    #[test]
+    fn a_bluetooth_copy_of_an_imported_text_is_hidden_not_dropped() {
+        let store = Store::in_memory().unwrap();
+        run(&store, &one_ok(T0), all(), &mut FakeSink::default());
+        let backup_row = store.recent_messages(10).unwrap()[0].id;
+        // The phone lists the backup's "ok" seconds after it arrived: the same text.
+        let copy = IncomingMessage {
+            sent_at: Some("2025-10-09T08:53:21Z"),
+            ..bluetooth_ok("H1", "", T0 + 3_000)
+        };
+        assert!(store.insert_incoming(&copy).unwrap().is_none(), "nothing new to show");
+        assert_eq!(store.recent_messages(10).unwrap().len(), 1, "shown once");
+        let rows = all_rows(&store);
+        assert_eq!(rows.len(), 2, "kept, not thrown away");
+        assert_eq!(
+            rows[1],
+            (SOURCE_IPHONE_MAP.to_string(), "ok".to_string(), true, Some(backup_row))
+        );
+        // Listed again: still one copy.
+        assert!(store.insert_incoming(&copy).unwrap().is_none());
+        assert_eq!(all_rows(&store).len(), 2);
+        // A second "ok" moments later is a text of its own: the backup's row stands in for one.
+        let second = IncomingMessage {
+            handle: "H2",
+            sent_at: Some("2025-10-09T08:53:29Z"),
+            ..bluetooth_ok("H2", "", T0 + 9_000)
+        };
+        assert!(store.insert_incoming(&second).unwrap().is_some());
+
+        // Remove imported history: the hidden Bluetooth copy comes back.
+        assert_eq!(remove_imported(&store).unwrap(), 1);
+        let left = store.recent_messages(10).unwrap();
+        assert_eq!(left.len(), 2);
+        assert!(left.iter().all(|m| m.source == SOURCE_IPHONE_MAP && m.body == "ok"));
+        assert!(all_rows(&store).iter().all(|r| r.3.is_none()));
+    }
+
+    #[test]
+    fn removing_imported_history_keeps_a_deleted_conversation_deleted() {
+        let store = Store::in_memory().unwrap();
+        run(&store, &one_ok(T0), all(), &mut FakeSink::default());
+        let copy = IncomingMessage {
+            sent_at: Some("2025-10-09T08:53:21Z"),
+            ..bluetooth_ok("H1", "", T0 + 3_000)
+        };
+        assert!(store.insert_incoming(&copy).unwrap().is_none());
+        store
+            .set_conversation_hidden(&[], &["+15550100001".into()], T0 + H, true)
+            .unwrap();
+        remove_imported(&store).unwrap();
+        assert!(store.recent_messages(10).unwrap().is_empty(), "still deleted");
+        assert_eq!(all_rows(&store).len(), 1);
     }
 
     #[test]

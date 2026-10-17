@@ -210,6 +210,8 @@ export const useBackupStore = defineStore("backup", () => {
     imported.value = { texts: 0, photos: 0, backupDate: null };
     historyLoaded.clear();
     previews.clear();
+    // Bluetooth texts that were hidden behind an imported copy are back: read them in.
+    void refreshAfterImport();
     tug.notify("info", "Removed the history from your iPhone backup.");
     return true;
   }

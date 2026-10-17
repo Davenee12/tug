@@ -192,7 +192,9 @@ guid, so a re-run or a cancelled run adds only what's new), plus `edited`/`unsen
 person, or marked as a group by iOS) stay on the iPhone, because Messages in tug holds only
 conversations it can reply to and Bluetooth can't send to a group. A Bluetooth text the import
 matched is never changed: its photos are attachment rows pointing at it, undone by Remove imported
-history.
+history. The other way round, a Bluetooth text listed after the import that the backup already has
+is kept but hidden behind the imported row (`dup_of`, v14), and Remove imported history shows it
+again (hidden only if its conversation was deleted).
 
 **A media command**
 

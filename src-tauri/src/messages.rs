@@ -281,9 +281,13 @@ impl Store {
             return Ok(None);
         }
         // History brought in from a backup already has it (a text that reached the phone while tug
-        // couldn't list it, listed now): the same text twice is worse than this copy's handle lost.
-        if m.source != SOURCE_IPHONE_BACKUP
-            && crate::backup::import::backup_has(
+        // couldn't list it, listed now): kept, but hidden behind the backup's row (`dup_of`), so
+        // it shows once, the phone's re-listings find it, and Remove imported history brings it
+        // back. Nothing new to show or announce.
+        let dup_of = if m.source == SOURCE_IPHONE_BACKUP {
+            None
+        } else {
+            crate::backup::import::backup_has(
                 &conn,
                 self.local_zone().resolver(),
                 m.address,
@@ -291,12 +295,10 @@ impl Store {
                 m.sent_at,
                 m.received_at,
             )?
-        {
-            return Ok(None);
-        }
+        };
         let inserted = conn.execute(
-            "INSERT OR IGNORE INTO messages (source, handle, direction, address, sender_name, body, sent_at, received_at, status, unread_on_phone, msg_type)
-             VALUES (?1, ?2, 'in', ?3, ?4, ?5, ?6, ?7, 'received', ?8, ?9)",
+            "INSERT OR IGNORE INTO messages (source, handle, direction, address, sender_name, body, sent_at, received_at, status, unread_on_phone, msg_type, dup_of, hidden_at)
+             VALUES (?1, ?2, 'in', ?3, ?4, ?5, ?6, ?7, 'received', ?8, ?9, ?10, CASE WHEN ?10 IS NULL THEN NULL ELSE ?11 END)",
             params![
                 m.source,
                 m.handle,
@@ -306,10 +308,12 @@ impl Store {
                 m.sent_at,
                 m.received_at,
                 m.unread_on_phone,
-                m.msg_type
+                m.msg_type,
+                dup_of,
+                crate::state::now_ms(),
             ],
         )?;
-        if inserted == 0 {
+        if inserted == 0 || dup_of.is_some() {
             return Ok(None);
         }
         let id = conn.last_insert_rowid();
