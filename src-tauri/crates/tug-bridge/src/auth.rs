@@ -5,7 +5,7 @@
 //! HMAC over both nonces, the server first. So a process that squats the pipe name while tug is
 //! closed can't learn the token, and a client without the file can't call anything.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 pub const TOKEN_BYTES: usize = 32;
@@ -56,7 +56,7 @@ pub fn valid_nonce(s: &str) -> bool {
 
 fn mac(token: &str, label: &[u8], client_nonce: &str, server_nonce: &str) -> Hmac<Sha256> {
     let key = unhex(token).unwrap_or_default();
-    let mut m = <Hmac<Sha256> as Mac>::new_from_slice(&key).expect("HMAC takes any key length");
+    let mut m = <Hmac<Sha256> as KeyInit>::new_from_slice(&key).expect("HMAC takes any key length");
     m.update(label);
     m.update(b"\0");
     m.update(client_nonce.as_bytes());
