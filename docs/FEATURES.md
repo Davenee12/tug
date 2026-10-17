@@ -90,7 +90,13 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - Opening a conversation marks its texts read on your iPhone and clears their notifications, even
   if the phone was out of reach at the time.
 - Unknown senders sit in their own section, with **Move to conversations**.
-- A photo with no caption reads "Photo or attachment — open it on your iPhone".
+- A photo, sticker, video or other attachment shows as a chip ("Photo", "2 photos", "Sticker"…)
+  with **Open it on your iPhone**, beside its caption if it has one; the conversation list says
+  "📷 Photo", and pop-ups say the same.
+- A text whose words didn't come through from the iPhone takes them from its notification, or
+  says "This text didn't come through".
+- Texts you send from tug show in the conversation; texts you send on your iPhone stay on your
+  iPhone (a one-time tip under the conversation says so).
 - When the iPhone may not have shared every text from while tug was away, the conversation says so.
 - Messages from other chat apps (WhatsApp and so on) show as read-only conversations: reply on your
   phone.
@@ -294,7 +300,7 @@ of them one day (see [COMPANION-PLAN.md](COMPANION-PLAN.md)).
 - **Texts:** iOS shares only about the **10 newest incoming texts** when tug catches up (on a fresh
   install or after time away); everything after that is kept in tug's history.
 - **Texts you send from the iPhone itself** never reach tug, and photos and attachments aren't
-  shared (tug says "Photo or attachment").
+  shared (tug shows a "Photo" chip with "Open it on your iPhone").
 - **iMessage vs SMS:** iOS usually reports every message as a text, so tug can't tell them apart.
 - **Group texts:** a group's messages arrive per sender, so a reply from tug goes to that one
   person, and group pop-ups have no reply box.

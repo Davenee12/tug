@@ -2,11 +2,13 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { ChevronRight, ExternalLink, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { canClear, notificationTime, relativeTime, type FeedEntry } from "../lib/format";
+import { canClear, MESSAGES_APP, notificationTime, relativeTime, type FeedEntry } from "../lib/format";
 import { findCode } from "../lib/codes";
+import { previewOf, textContent } from "../lib/messageType";
 import { GMAIL_APP_ID, mayHaveWebsite, webLinkFor, type WebLink } from "../lib/weblinks";
 import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
+import MediaChip from "./MediaChip.vue";
 import NotificationItem from "./NotificationItem.vue";
 
 const props = defineProps<{ entry: FeedEntry }>();
@@ -23,6 +25,12 @@ const preview = computed(() => {
   if (props.entry.kind === "thread") return n.message || n.subtitle || "(no preview)";
   return [n.title, n.message || n.subtitle].filter(Boolean).join(" · ");
 });
+// A text's photo ("Attachment: 1 Photo") reads as a chip, not the raw line (lib/attachments).
+const content = computed(() => {
+  const n = latest.value;
+  return props.entry.kind === "thread" && n.appId === MESSAGES_APP && n.message ? textContent(n.message) : null;
+});
+const chipOnly = computed(() => !!content.value && !content.value.text && (!!content.value.media || content.value.unreadable));
 const fresh = computed(() => tug.newCount(props.entry.key, items.value));
 const when = computed(() => relativeTime(notificationTime(latest.value)));
 // A ringing call needs its buttons without expanding anything.
@@ -104,7 +112,11 @@ function open() {
           <span v-else-if="items.length > 1" class="shrink-0 text-[12px] text-muted-soft">{{ items.length }}</span>
           <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">{{ when }}</span>
         </span>
-        <span :class="['mt-0.5 block truncate text-[13px]', fresh ? 'text-body-strong' : 'text-muted']">{{ preview }}</span>
+        <span :class="['mt-0.5 block truncate text-[13px]', fresh ? 'text-body-strong' : 'text-muted']">
+          <MediaChip v-if="chipOnly && content" inline :media="content.media" :unreadable="content.unreadable" />
+          <template v-else-if="content?.media">{{ previewOf(content) }}</template>
+          <template v-else>{{ preview }}</template>
+        </span>
       </span>
       <CodeChip v-if="code" :code="code.code" :from="[latest]" />
       <span

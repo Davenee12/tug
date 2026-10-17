@@ -2,10 +2,12 @@
 import { computed, ref } from "vue";
 import { Bell, BellOff, ExternalLink } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { appLabel, clockTime, notificationTime } from "../lib/format";
+import { appLabel, clockTime, MESSAGES_APP, notificationTime } from "../lib/format";
+import { textContent } from "../lib/messageType";
 import { mayHaveWebsite, webLinkFor, type WebLink } from "../lib/weblinks";
 import type { PhoneNotification } from "../types/protocol";
 import AppAvatar from "./AppAvatar.vue";
+import MediaChip from "./MediaChip.vue";
 
 // `compact`: inside an expanded app stack, where the avatar and app name are already shown.
 const props = defineProps<{ n: PhoneNotification; compact?: boolean }>();
@@ -23,6 +25,10 @@ const webLink = computed<WebLink | null>(() => {
   const site = mayHaveWebsite(props.n.appId) ? tug.websiteFor(props.n.appId) : null;
   return site ? { url: site, label: appLabel(props.n) } : null;
 });
+// A text's photo ("Attachment: 1 Photo") reads as a chip under any caption (lib/attachments).
+const content = computed(() => (props.n.appId === MESSAGES_APP && props.n.message ? textContent(props.n.message) : null));
+const hasChip = computed(() => !!content.value && (!!content.value.media || content.value.unreadable));
+const messageText = computed(() => (hasChip.value ? (content.value?.text ?? "") : props.n.message));
 const expanded = ref(false);
 const busy = ref<"positive" | "negative" | null>(null);
 const isCall = computed(() => props.n.category === "incomingCall");
@@ -49,12 +55,14 @@ async function act(positive: boolean) {
       <p v-if="n.title" :class="['text-ink', compact ? 'text-[14px] font-medium' : 'mt-0.5 text-[15px] font-medium']">{{ n.title }}</p>
       <p v-if="n.subtitle" class="text-[14px] text-body-strong">{{ n.subtitle }}</p>
       <p
-        v-if="n.message"
+        v-if="messageText"
         :class="['selectable mt-0.5 cursor-text whitespace-pre-line text-[14px] text-body', expanded ? '' : 'line-clamp-4']"
         @click="expanded = !expanded"
       >
-        {{ n.message }}
+        {{ messageText }}
       </p>
+      <MediaChip v-if="hasChip && content" class="mt-1 text-[14px] text-body" :media="content.media" :unreadable="content.unreadable" />
+
 
       <div :class="['flex items-center gap-2', compact ? 'mt-1.5' : 'mt-2.5']">
         <template v-if="n.live">

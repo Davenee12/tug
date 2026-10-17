@@ -135,6 +135,32 @@ describe("groupConversations — duplicates (M4)", () => {
     expect(c.items[0].kind).toBe("message");
   });
 
+  it("fills a text that came through as only U+FFFD from its notification", () => {
+    // The phone sent the text as a lone replacement character; its notification ~10 s later has the words.
+    const [c] = groupConversations([note("Zoe", "see you at 6", 0.2)], [sms("+1302", "�", 0, "in", "Zoe")], []);
+    expect(c.items).toHaveLength(1);
+    expect(c.items[0].kind).toBe("message");
+    expect(c.items[0].body).toBe("see you at 6");
+  });
+
+  it("fills each unreadable text from the nearest notification, and only once", () => {
+    const messages = [sms("+1302", "�", 0, "in", "Zoe"), sms("+1302", "ok", 1, "in", "Zoe"), sms("+1302", "�", 2, "in", "Zoe")];
+    const notes = [note("Zoe", "first", 0.2), note("Zoe", "ok", 1.1), note("Zoe", "second", 2.2)];
+    const [c] = groupConversations(notes, messages, []);
+    expect(c.items.map((i) => [i.kind, i.body])).toEqual([
+      ["message", "first"],
+      ["message", "ok"],
+      ["message", "second"],
+    ]);
+  });
+
+  it("leaves an unreadable text alone with no notification close by, or in another conversation", () => {
+    const [c] = groupConversations([note("Zoe", "much later", 30)], [sms("+1302", "�", 0, "in", "Zoe")], []);
+    expect(c.items.map((i) => i.body)).toEqual(["�", "much later"]);
+    const convs = groupConversations([note("Sam", "hi", 0.2)], [sms("+1302", "�", 0, "in", "Zoe")], []);
+    expect(convs.find((x) => x.contact === "Zoe")?.items.map((i) => i.body)).toEqual(["�"]);
+  });
+
   it("keeps two genuinely identical texts: one message can't absorb two notifications", () => {
     const notifications = [note("Zoe", "ok", 0), note("Zoe", "ok", 2)];
     const [c] = groupConversations(notifications, [sms("+1302", "ok", 0, "in", "Zoe")], []);
