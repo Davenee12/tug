@@ -13,6 +13,7 @@ import {
   stillRevealed,
   toastKind,
 } from "./sharePrivacy";
+import paletteVue from "../components/SearchPalette.vue?raw";
 import { toastSpec } from "./toastSpec";
 
 const sharing: ShareState = { active: true, reason: "sharing" };
@@ -83,6 +84,33 @@ describe("waiting for the backend's first answer", () => {
   it("assumes hidden, and says why, when the backend can't be asked", () => {
     expect(previewsHidden(true, SHARE_UNKNOWN, false)).toBe(true);
     expect(shareBanner(true, SHARE_UNKNOWN, false)).toBe("Previews hidden until tug can check your screen");
+  });
+});
+
+describe("search (Ctrl+K) while previews are hidden", () => {
+  // No component test runner here, so read the markup: the palette must hide its own results.
+  const section = (from: string, to: string) => {
+    const start = paletteVue.indexOf(from);
+    const end = paletteVue.indexOf(to, start);
+    expect(start, from).toBeGreaterThan(-1);
+    expect(end, to).toBeGreaterThan(start);
+    return paletteVue.slice(start, end);
+  };
+
+  it("blurs inside the palette whenever the Feed would, so Show anyway reveals both", () => {
+    expect(paletteVue).toContain("tug.previewsHidden && 'previews-hidden'");
+  });
+
+  it("marks people, texts and notifications private, and leaves tug's own actions alone", () => {
+    const person = section("<!-- Person -->", "<!-- Text message -->");
+    expect(person.match(/preview-private/g)?.length, "name and number").toBe(2);
+    const text = section("<!-- Text message -->", "<!-- Notification -->");
+    expect(text.match(/preview-private/g)?.length, "sender and text").toBe(2);
+    // The sender's avatar is theirs (photo or initials), so it blurs like the Feed's.
+    expect(text).toMatch(/<AppAvatar[^>]*\bperson\b/);
+    const notification = section("<!-- Notification -->", "</button>");
+    expect(notification.match(/preview-private/g)?.length, "title and text").toBe(2);
+    expect(section("<!-- Action -->", "<!-- Person -->")).not.toContain("preview-private");
   });
 });
 

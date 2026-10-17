@@ -309,12 +309,17 @@ function onKey(e: KeyboardEvent) {
 
 <template>
   <div class="fixed inset-0 z-50 flex items-start justify-center bg-ink/30 px-6 pt-[10vh] backdrop-blur-[2px]" @click.self="close">
+    <!-- While the screen is shared or presented, people, texts and notifications blur as in the Feed
+         (lib/sharePrivacy); Show anyway in the Feed's banner reveals them here too. -->
     <div
       ref="root"
       role="dialog"
       aria-modal="true"
       aria-label="Search"
-      class="flex max-h-[76vh] w-full max-w-[620px] flex-col overflow-hidden rounded-xl border border-hairline bg-canvas"
+      :class="[
+        'flex max-h-[76vh] w-full max-w-[620px] flex-col overflow-hidden rounded-xl border border-hairline bg-canvas',
+        tug.previewsHidden && 'previews-hidden',
+      ]"
     >
       <div class="flex items-center gap-3 border-b border-hairline-soft px-5 py-3.5">
         <Search :size="18" class="shrink-0 text-muted-soft" />
@@ -384,25 +389,25 @@ function onKey(e: KeyboardEvent) {
               <template v-else-if="o.kind === 'person'">
                 <AppAvatar app-id="com.apple.MobileSMS" :label="o.c.name" :photo-key="o.c.address" person size="sm" />
                 <span class="min-w-0 flex-1">
-                  <span class="block truncate text-[14px] font-medium text-ink">
+                  <span class="preview-private block truncate text-[14px] font-medium text-ink">
                     <template v-for="(r, j) in highlight(cleanName(o.c.name), query)" :key="j">
                       <mark v-if="r.match" class="rounded-sm bg-accent-amber/30 text-ink">{{ r.text }}</mark>
                       <template v-else>{{ r.text }}</template>
                     </template>
                   </span>
-                  <span class="block font-mono text-[12px] text-muted-soft">{{ formatAddress(o.c.address) }}</span>
+                  <span class="preview-private block font-mono text-[12px] text-muted-soft">{{ formatAddress(o.c.address) }}</span>
                 </span>
               </template>
 
               <!-- Text message -->
               <template v-else-if="o.kind === 'message'">
-                <AppAvatar app-id="com.apple.MobileSMS" :label="messageName(o.m)" size="sm" />
+                <AppAvatar app-id="com.apple.MobileSMS" :label="messageName(o.m)" :photo-key="o.m.address" person size="sm" />
                 <span class="min-w-0 flex-1">
                   <span class="flex items-baseline gap-2">
-                    <span class="truncate text-[14px] font-medium text-ink">{{ messageName(o.m) }}</span>
+                    <span class="preview-private truncate text-[14px] font-medium text-ink">{{ messageName(o.m) }}</span>
                     <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">{{ when(messageTime(o.m)) }}</span>
                   </span>
-                  <span class="block text-[13px] text-body">
+                  <span class="preview-private block text-[13px] text-body">
                     <span v-if="o.m.direction === 'out'" class="text-muted">You: </span>
                     <template v-for="(r, j) in highlight(snippet(o.m.body, query), query)" :key="j">
                       <mark v-if="r.match" class="rounded-sm bg-accent-amber/30 text-ink">{{ r.text }}</mark>
@@ -418,12 +423,12 @@ function onKey(e: KeyboardEvent) {
                 <span class="min-w-0 flex-1">
                   <span class="flex items-baseline gap-2">
                     <span class="truncate text-[14px] font-medium text-ink">
-                      {{ appLabel(o.n) }}<template v-if="o.n.title"> · {{ cleanName(o.n.title) }}</template>
+                      {{ appLabel(o.n) }}<template v-if="o.n.title"> · <span class="preview-private">{{ cleanName(o.n.title) }}</span></template>
                     </span>
                     <span v-if="o.n.removedAt" class="shrink-0 text-[11px] text-muted-soft">cleared</span>
                     <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">{{ when(notificationTime(o.n)) }}</span>
                   </span>
-                  <span :class="['block text-[13px] text-body', expanded === o.n.id ? 'whitespace-pre-line' : '']">
+                  <span :class="['preview-private block text-[13px] text-body', expanded === o.n.id ? 'whitespace-pre-line' : '']">
                     <template
                       v-for="(r, j) in highlight(expanded === o.n.id ? o.n.message : snippet(o.n.message || o.n.subtitle, query), query)"
                       :key="j"
