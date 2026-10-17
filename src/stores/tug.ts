@@ -18,7 +18,8 @@ import {
   type Conversation,
   type Thread,
 } from "../lib/format";
-import { replyAddress, replyReadsConversation, toastSpec } from "../lib/toastSpec";
+import { replyAddress, replyReadsConversation, sendOutcome, toastSpec } from "../lib/toastSpec";
+import { clearHistory as clearHistoryNow } from "../lib/clearHistory";
 import { shouldPopUp, type PopupEvent } from "../lib/popup";
 import { isVip, vipIndex } from "../lib/vips";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
@@ -35,8 +36,7 @@ import {
   shouldAutoCopy,
 } from "../lib/codeFill";
 import { MESSAGES_APP } from "../lib/format";
-import { batteryAlert } from "../lib/battery";
-import { copyText } from "../lib/clipboard";
+import { batteryAlert, restoreBatteryAlerted, saveBatteryAlerted } from "../lib/battery";
 import { isAddressLike, normalizeAddress } from "../lib/address";
 import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync, warmDue } from "../lib/messageSync";
 import { canSeeWindow } from "../lib/attention";
@@ -658,22 +658,28 @@ export const useTugStore = defineStore("tug", () => {
   /** Whether the settings let a pop-up through right now, for a given event (see lib/popup). */
   const popupAllowed = (event: PopupEvent) => shouldPopUp(event, settings.value, new Date());
 
-  // Low phone battery: one pop-up at 20% and one at 10% per discharge (see lib/battery).
+  // Low phone battery: one pop-up at 20% and one at 10% per discharge (see lib/battery). The mark
+  // is saved (ui.batteryAlerted), so restarting tug mid-discharge doesn't announce 20% again.
   let batteryAlerted: number | null = null;
+  function setBatteryAlerted(alerted: number | null) {
+    if (alerted === batteryAlerted) return;
+    batteryAlerted = alerted;
+    void api.setSetting("ui.batteryAlerted", saveBatteryAlerted(alerted, Date.now())).catch(() => undefined);
+  }
   async function checkBattery(level: number | null) {
     await ready;
     const r = batteryAlert(level, batteryAlerted);
     // An alert that couldn't be shown (switch off, Do not disturb…) isn't used up: it comes
     // when it can. Only a shown alert (or a charge, which resets it) moves the mark.
     if (r.alert == null) {
-      batteryAlerted = r.alerted;
+      setBatteryAlerted(r.alerted);
       return;
     }
     // A low-battery alert is a system pop-up (no app, no VIP): held by Windows pop-ups off, DND or
     // quiet hours, like any other.
     if (!settings.value.lowBattery) return;
     if (!popupAllowed({ appId: "", isCall: false, isVip: false }) || !(await hasToastPermission())) return;
-    batteryAlerted = r.alerted;
+    setBatteryAlerted(r.alerted);
     // Through tug's own Windows toast like every other pop-up: the generic notification call
     // never showed on the test PC at 20%. Its id sits outside notification ids, so pressing it
     // just opens tug.
@@ -992,7 +998,13 @@ export const useTugStore = defineStore("tug", () => {
 
   /** Copy a one-time code; once it's used, its notification has done its job on the phone too. */
   async function copyCode(code: string, from: PhoneNotification[] = []): Promise<boolean> {
-    if (!(await copyText(code))) {
+    // The same private path as auto-copy: kept out of Win+V clipboard history and cloud sync, and
+    // taken off again after 2 minutes if it's still there.
+    const copied = await api.copyCodePrivately(code).then(
+      () => true,
+      () => false,
+    );
+    if (!copied) {
       notify("error", "Couldn't copy to the clipboard.");
       return false;
     }
@@ -1099,9 +1111,11 @@ export const useTugStore = defineStore("tug", () => {
     }
   }
 
+  /** Names with numbers tug knows (contacts, recent calls): a missed call matches a name only if it's unique here. */
+  const knownPeople = computed(() => [...contacts.value, ...calls.value.map((c) => ({ name: c.name, address: c.number }))]);
   /** A missed call from this person still on the phone, to call back from (no hands-free needed). */
   function missedCallFrom(name: string | null, address: string | null): PhoneNotification | null {
-    return missedCallFor(notifications.value, { name, address });
+    return missedCallFor(notifications.value, { name, address }, knownPeople.value);
   }
 
   /** How tug can call this person right now: back from their missed call, by dialing, or not yet. */
@@ -1217,6 +1231,7 @@ export const useTugStore = defineStore("tug", () => {
       showGames: raw["ui.showGames"] !== "false",
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
+    batteryAlerted = restoreBatteryAlerted(raw["ui.batteryAlerted"], Date.now());
     // A missing key is a fresh install: null (not ""), so the first launch records the version
     // silently instead of greeting a brand-new user with a card about changes they never saw.
     // Before 0.5.9 nothing recorded a seen version. Someone who finished the old setup wizard
@@ -2030,26 +2045,30 @@ export const useTugStore = defineStore("tug", () => {
     deleteConversation,
     appNameFor,
     /**
-     * Send through the iPhone. The pending message appears via the `message` event. "failed" means
-     * it's shown as "Not sent" with Retry (so the composer shouldn't keep the text too); "error"
-     * means nothing was recorded, so the composer keeps the text.
+     * Send through the iPhone. The pending message appears via the `message` event. "sent" means
+     * the phone took it (the same rule as a pop-up reply, `replyReadsConversation`); "unconfirmed"
+     * means it may have sent but the phone never said, shown as "May have sent"; "failed" means
+     * it's shown as "Not sent" with Retry. For all three the composer shouldn't keep the text too;
+     * "error" means nothing was recorded, so the composer keeps the text.
      */
-    async sendMessage(address: string, text: string): Promise<"sent" | "failed" | "error"> {
+    async sendMessage(address: string, text: string): Promise<"sent" | "unconfirmed" | "failed" | "error"> {
       try {
-        const m = await api.sendMessage(address, text);
-        if (m.status !== "failed") return "sent";
-        notify("error", NOT_SENT);
-        return "failed";
+        const outcome = sendOutcome(await api.sendMessage(address, text));
+        if (outcome === "failed") notify("error", NOT_SENT);
+        return outcome;
       } catch (e) {
         notify("error", errorMessage(e));
         return "error";
       }
     },
-    /** Try a failed send again: the same message, to the number it was meant for. */
+    /**
+     * Try a failed send again: the same message, to the number it was meant for. True only when
+     * the phone took it; an unconfirmed retry ("May have sent") is false, like a failed one.
+     */
     async retryMessage(id: number): Promise<boolean> {
       try {
-        const m = await api.retryMessage(id);
-        if (m.status !== "failed") return true;
+        const outcome = sendOutcome(await api.retryMessage(id));
+        if (outcome !== "failed") return outcome === "sent";
         notify("error", NOT_SENT);
       } catch (e) {
         notify("error", errorMessage(e));
@@ -2109,10 +2128,15 @@ export const useTugStore = defineStore("tug", () => {
       pairingRequest.value = null;
       await attempt(() => api.confirmPairing(accept));
     },
-    async clearHistory() {
-      await attempt(api.clearHistory);
-      notifications.value = [];
-      hasMore.value = false;
+    /** Settings › Clear history; true only if it worked (lists emptied, "History cleared"). */
+    async clearHistory(): Promise<boolean> {
+      const emptyLists = () => {
+        notifications.value = [];
+        messages.value = [];
+        calls.value = [];
+        hasMore.value = false;
+      };
+      return clearHistoryNow(() => api.clearHistory(), { emptyLists, say: notify }, errorMessage);
     },
   };
 });

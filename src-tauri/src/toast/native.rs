@@ -146,13 +146,20 @@ mod tests {
             body: "code 482913 \u{1}\u{1F697}".into(),
             name: "Zoe".into(),
             reply_to: Some("+1 (302) 555-0123".into()),
+            open: false,
             mark_read: true,
             code: Some("482913".into()),
             call_back: true,
             clear: true,
         };
+        let open = ToastSpec {
+            reply_to: None,
+            open: true,
+            ..busy.clone()
+        };
         for xml in [
             notification_toast(&busy, false),
+            notification_toast(&open, false),
             notification_toast(&ToastSpec::default(), true),
             note_toast(1, "Sent to Zoe", "on my way & <b>", true),
         ] {

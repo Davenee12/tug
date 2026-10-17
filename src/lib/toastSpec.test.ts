@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { replyAddress, replyReadsConversation, toastSpec } from "./toastSpec";
+import { replyAddress, replyReadsConversation, replyTarget, sendOutcome, toastSpec } from "./toastSpec";
 import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const T0 = Date.parse("2026-10-05T12:00:00");
@@ -55,9 +55,20 @@ describe("replyAddress", () => {
     expect(replyAddress(note("zoe ", "omw"), [], contacts)).toBe("+13025550123");
   });
 
-  it("never guesses between several numbers, unless one of them just texted", () => {
+  it("never offers a pop-up reply when the name has several numbers, even if one just texted", () => {
+    // Two different Sams: the pop-up's reply box can't show which number it sends to, and the
+    // most recent texter isn't necessarily who this notification is from.
     expect(replyAddress(note("Sam", "hey"), [], contacts)).toBeNull();
-    expect(replyAddress(note("Sam", "hey"), [sms("+13025550112", "Sam")], contacts)).toBe("+13025550112");
+    expect(replyAddress(note("Sam", "hey"), [sms("+13025550112", "Sam")], contacts)).toBeNull();
+    expect(replyTarget(note("Sam", "hey"), [sms("+13025550112", "Sam")], contacts)).toEqual({ to: null, ambiguous: true });
+    // One person whose texts came from two numbers is just as ambiguous for a blind reply.
+    const twoPhones = [sms("+13025550123", "Zoe"), sms("+13025550124", "Zoe")];
+    expect(replyTarget(note("Zoe", "hey"), twoPhones, contacts)).toEqual({ to: null, ambiguous: true });
+  });
+
+  it("a single number is not ambiguous", () => {
+    expect(replyTarget(note("Zoe", "omw"), [], contacts)).toEqual({ to: "+13025550123", ambiguous: false });
+    expect(replyTarget(note("Pat", "hi"), [], contacts)).toEqual({ to: null, ambiguous: false });
   });
 
   it("uses the number or email iOS shows for someone not in contacts", () => {
@@ -83,11 +94,17 @@ describe("toastSpec", () => {
       body: "omw, 10 mins",
       name: "Zoe",
       replyTo: "+13025550123",
+      open: false,
       markRead: true,
       code: null,
       callBack: false,
       clear: true,
     });
+  });
+
+  it("a text under a name with several numbers: Open in tug instead of a reply box", () => {
+    const spec = toastSpec(note("Sam", "you around?"), [sms("+13025550111", "Sam")], contacts);
+    expect(spec).toMatchObject({ replyTo: null, open: true, markRead: true });
   });
 
   it("a one-time code: Copy code", () => {
@@ -139,5 +156,17 @@ describe("replyReadsConversation", () => {
   it("keeps the old behaviour without a stored row", () => {
     expect(replyReadsConversation(null)).toBe(true);
     expect(replyReadsConversation(undefined)).toBe(true);
+  });
+});
+
+describe("sendOutcome", () => {
+  const msg = (status: SmsMessage["status"]) => ({ status }) as SmsMessage;
+  it("counts a send as done only when the phone took it, like a pop-up reply", () => {
+    expect(sendOutcome(msg("accepted"))).toBe("sent");
+    expect(sendOutcome(msg("sent"))).toBe("sent");
+    // "May have sent" must not clear the conversation's notifications on the phone.
+    expect(sendOutcome(msg("unconfirmed"))).toBe("unconfirmed");
+    expect(sendOutcome(msg("pending"))).toBe("unconfirmed");
+    expect(sendOutcome(msg("failed"))).toBe("failed");
   });
 });

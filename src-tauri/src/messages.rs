@@ -22,6 +22,40 @@ const LEARN_WINDOW_MS: i64 = 10 * 60 * 1000;
 /// handle. A row stored this recently is a different message, not a re-listing.
 const RELIST_GUARD_MS: i64 = 60 * 1000;
 
+/// What both name learners start from, worked out once per pass rather than per row (the old
+/// per-row subqueries made a pass slow on a long history). `{ONLY}` is replaced by `learn_ctes`:
+/// nothing for every sender, or a filter to the JSON list of senders in `?2` (a separate query
+/// rather than `?2 IS NULL OR …`, which would stop SQLite using the address index).
+/// - `cand`: those senders' incoming texts (all of them, old ones too, so the checks are complete);
+/// - `one_sender`: texts only one sender ever sent ("ok" from two people names neither);
+/// - `one_name`: of those, the ones every Messages notification showing them gives one name.
+///
+/// Literal `'in'` and the Messages app id let SQLite use the partial indexes from migration v12.
+const LEARN_CTES: &str = "WITH
+     cand AS (
+         SELECT address, body, received_at FROM messages
+         WHERE direction = 'in' AND body <> '' {ONLY}
+     ),
+     one_sender AS (
+         SELECT body FROM messages
+         WHERE direction = 'in' AND body IN (SELECT body FROM cand)
+         GROUP BY body HAVING COUNT(DISTINCT address) = 1
+     ),
+     one_name AS (
+         SELECT message FROM notifications
+         WHERE app_id = 'com.apple.MobileSMS' AND message IN (SELECT body FROM one_sender)
+         GROUP BY message HAVING COUNT(DISTINCT clean_name(title)) = 1
+     )";
+
+fn learn_ctes(only_some_senders: bool) -> String {
+    let only = if only_some_senders {
+        "AND address IN (SELECT value FROM json_each(?2))"
+    } else {
+        "AND ?2 IS NULL"
+    };
+    LEARN_CTES.replace("{ONLY}", only)
+}
+
 /// A `SendingSuccess`/`SendingFailure` report arrives within seconds of the send it's about. Only
 /// sends this recent are candidates, so an old send that never got a report (stuck at `accepted`)
 /// can't absorb a stray report meant for a newer one.
@@ -94,7 +128,7 @@ pub struct StoredMessage {
     /// Learned contact name for the address, if any.
     pub contact_name: Option<String>,
     pub body: String,
-    /// Phone-local ISO time from the phone, when known.
+    /// ISO time from the phone, when known: phone-local without a zone, or UTC with a `Z`.
     pub sent_at: Option<String>,
     pub received_at: i64,
     pub status: Status,
@@ -281,14 +315,17 @@ impl Store {
         conn.query_row(&format!("{SELECT} WHERE m.id = ?1"), [id], map_row)
     }
 
-    /// Outgoing messages not yet confirmed sent (still `pending` or `accepted`) and sent within
-    /// `CONFIRM_WINDOW_MS` of `now`, for matching a MAP `Sending{Success,Failure}` event to the send
-    /// it reports (see `map::mns::choose_outgoing`). Returns `(id, handle, received_at)`.
+    /// Outgoing messages the phone has been handed but hasn't confirmed (`accepted`, or
+    /// `unconfirmed`) and sent within `CONFIRM_WINDOW_MS` of `now`, for matching a MAP
+    /// `Sending{Success,Failure}` event to the send it reports (see `map::mns::choose_outgoing`).
+    /// Never a `pending` row: that text hasn't been pushed yet, so no report can be about it, and
+    /// settling it would mark it Sent (or failed) without it ever being sent. Returns
+    /// `(id, handle, received_at)`.
     pub fn outgoing_unconfirmed(&self, source: &str, now: i64) -> Result<Vec<(i64, Option<String>, i64)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, handle, received_at FROM messages
-             WHERE source = ?1 AND direction = 'out' AND status IN ('pending', 'accepted', 'unconfirmed')
+             WHERE source = ?1 AND direction = 'out' AND status IN ('accepted', 'unconfirmed')
                AND received_at > ?2",
         )?;
         let rows = stmt.query_map(params![source, now - CONFIRM_WINDOW_MS], |r| {
@@ -428,7 +465,7 @@ impl Store {
             let mut forget = tx.prepare("DELETE FROM contact_aliases WHERE address = ?1 AND alias = ?2")?;
             let mut stmt = tx.prepare(
                 "INSERT INTO contacts (address, name, match_key) VALUES (?1, ?2, match_key(?1))
-                 ON CONFLICT (address) DO UPDATE SET name = excluded.name",
+                 ON CONFLICT (address) DO UPDATE SET name = excluded.name, match_key = excluded.match_key",
             )?;
             for (address, name) in entries {
                 remember.execute(params![address, name])?;
@@ -506,27 +543,43 @@ impl Store {
     /// own text never reached tug is a coincidence, not a rename.) Group texts never count: a
     /// notification with a subtitle or a title naming several people ("Sam & Alex") isn't one
     /// contact's name, and an alias from it would retitle the whole group. Returns how many were
-    /// learned.
+    /// learned. Looks at every sender; see `learn_aliases_for` after a sync.
     pub fn learn_aliases(&self) -> Result<usize> {
+        self.learn_aliases_among(None)
+    }
+
+    /// `learn_aliases`, but only for these senders (the ones a sync just brought texts from). Every
+    /// text of theirs still counts, old ones included, so the evidence and ambiguity checks are the
+    /// same as a full pass; only senders with nothing new are skipped.
+    pub fn learn_aliases_for(&self, addresses: &[String]) -> Result<usize> {
+        if addresses.is_empty() {
+            return Ok(0);
+        }
+        self.learn_aliases_among(Some(addresses))
+    }
+
+    fn learn_aliases_among(&self, addresses: Option<&[String]>) -> Result<usize> {
+        let only = addresses.map(|a| serde_json::to_string(a).expect("addresses serialize"));
+        let ctes = learn_ctes(only.is_some());
         self.conn().execute(
-            "INSERT OR IGNORE INTO contact_aliases (address, alias)
-             SELECT address, alias FROM (
-                 SELECT m.address AS address, clean_name(n.title) AS alias, COUNT(DISTINCT m.body) AS evidence
-                 FROM messages m
-                 JOIN contacts c ON c.address = m.address
-                 JOIN notifications n
-                   ON n.app_id = ?1 AND n.message = m.body AND abs(n.received_at - m.received_at) <= ?2
-                  AND n.subtitle = '' AND NOT group_like(n.title)
-                 WHERE m.direction = 'in' AND m.body <> ''
-                   AND clean_name(n.title) <> '' AND name_key(n.title) <> name_key(c.name)
-                   AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
-                        WHERE m2.direction = 'in' AND m2.body = m.body) = 1
-                   AND (SELECT COUNT(DISTINCT clean_name(n2.title)) FROM notifications n2
-                        WHERE n2.app_id = ?1 AND n2.message = m.body) = 1
-                 GROUP BY m.address, alias
-             )
-             WHERE evidence >= 2",
-            params![MESSAGES_APP, LEARN_WINDOW_MS],
+            &format!(
+                "{ctes}
+                 INSERT OR IGNORE INTO contact_aliases (address, alias)
+                 SELECT address, alias FROM (
+                     SELECT m.address AS address, clean_name(n.title) AS alias, COUNT(DISTINCT m.body) AS evidence
+                     FROM cand m
+                     JOIN one_name b ON b.message = m.body
+                     JOIN contacts c ON c.address = m.address
+                     JOIN notifications n
+                       ON n.app_id = '{MESSAGES_APP}' AND n.message = m.body
+                      AND n.received_at BETWEEN m.received_at - ?1 AND m.received_at + ?1
+                      AND n.subtitle = '' AND NOT group_like(n.title)
+                     WHERE clean_name(n.title) <> '' AND name_key(n.title) <> name_key(c.name)
+                     GROUP BY m.address, alias
+                 )
+                 WHERE evidence >= 2"
+            ),
+            params![LEARN_WINDOW_MS, only],
         )
     }
 
@@ -536,33 +589,44 @@ impl Store {
     /// one sender and match exactly one name — otherwise two people who both sent
     /// "ok" could swap names. Group texts (a subtitle, or a title naming several people) never name
     /// anyone, though they still count against a text being unambiguous. Returns the newly learned
-    /// contacts.
+    /// contacts. Looks at every sender; see `learn_contacts_for` after a sync.
     pub fn learn_contacts(&self) -> Result<Vec<Contact>> {
+        self.learn_contacts_among(None)
+    }
+
+    /// `learn_contacts`, but only for these senders (see `learn_aliases_for`).
+    pub fn learn_contacts_for(&self, addresses: &[String]) -> Result<Vec<Contact>> {
+        if addresses.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.learn_contacts_among(Some(addresses))
+    }
+
+    fn learn_contacts_among(&self, addresses: Option<&[String]>) -> Result<Vec<Contact>> {
+        let only = addresses.map(|a| serde_json::to_string(a).expect("addresses serialize"));
+        let ctes = learn_ctes(only.is_some());
         let conn = self.conn();
         // Names as the UI shows them (clean_name mirrors format.ts cleanName).
-        let mut stmt = conn.prepare(
-            "WITH titled AS (
-                 SELECT message, received_at, clean_name(title) AS name,
-                        subtitle = '' AND NOT group_like(title) AS solo
-                 FROM notifications WHERE app_id = ?1
-             )
+        let mut stmt = conn.prepare(&format!(
+            "{ctes}
              INSERT OR IGNORE INTO contacts (address, name, match_key)
              SELECT address, name, match_key(address) FROM (
-                 SELECT m.address AS address, MIN(n.name) AS name, COUNT(DISTINCT n.name) AS names
-                 FROM messages m
-                 JOIN titled n
-                   ON n.message = m.body AND n.name <> '' AND n.solo AND abs(n.received_at - m.received_at) <= ?2
-                 WHERE m.direction = 'in' AND m.body <> ''
+                 SELECT m.address AS address, MIN(clean_name(n.title)) AS name,
+                        COUNT(DISTINCT clean_name(n.title)) AS names
+                 FROM cand m
+                 JOIN one_name b ON b.message = m.body
+                 JOIN notifications n
+                   ON n.app_id = '{MESSAGES_APP}' AND n.message = m.body
+                  AND n.received_at BETWEEN m.received_at - ?1 AND m.received_at + ?1
+                  AND n.subtitle = '' AND NOT group_like(n.title)
+                 WHERE clean_name(n.title) <> ''
                    AND m.address NOT IN (SELECT address FROM contacts)
-                   AND (SELECT COUNT(DISTINCT m2.address) FROM messages m2
-                        WHERE m2.direction = 'in' AND m2.body = m.body) = 1
-                   AND (SELECT COUNT(DISTINCT n2.name) FROM titled n2 WHERE n2.message = m.body) = 1
                  GROUP BY m.address
              )
              WHERE names = 1
-             RETURNING address, name",
-        )?;
-        let rows = stmt.query_map(params![MESSAGES_APP, LEARN_WINDOW_MS], |r| {
+             RETURNING address, name"
+        ))?;
+        let rows = stmt.query_map(params![LEARN_WINDOW_MS, only], |r| {
             Ok(Contact {
                 address: r.get(0)?,
                 name: r.get(1)?,
@@ -649,6 +713,27 @@ mod tests {
         assert_eq!(email.contact_name.as_deref(), Some("Ana"));
         let short = s.insert_incoming(&incoming("H3", "12345", "code 1")).unwrap().unwrap();
         assert_eq!(short.contact_name, None);
+    }
+
+    #[test]
+    fn a_phonebook_sync_refreshes_a_stale_match_key() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[("+447700900123".into(), "Priya".into())]).unwrap();
+        // A row whose match key is missing or out of date (written by an older build, or before
+        // the key's rule changed): the next sync of that contact sets it again, so a text from the
+        // same number in another format still finds her name.
+        s.conn()
+            .execute(
+                "UPDATE contacts SET match_key = NULL WHERE address = '+447700900123'",
+                [],
+            )
+            .unwrap();
+        s.save_phonebook(&[("+447700900123".into(), "Priya".into())]).unwrap();
+        let national = s
+            .insert_incoming(&incoming("H1", "07700900123", "hello"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(national.contact_name.as_deref(), Some("Priya"));
     }
 
     #[test]
@@ -835,6 +920,55 @@ mod tests {
         // that need no rewriting come back as iOS sent them; the UI cleans the reply suffix).
         s.save_phonebook(&[("+13025550173".into(), "zoe 💜".into())]).unwrap();
         assert_eq!(titles(&s), vec!["zoe 💜", "zoe 💜 replied to you", "zoe 💜"]);
+    }
+
+    #[test]
+    fn the_learners_shared_query_names_the_messages_app() {
+        // LEARN_CTES spells the app id out (for the partial index); it must be this one.
+        assert!(LEARN_CTES.contains(&format!("'{MESSAGES_APP}'")));
+    }
+
+    #[test]
+    fn learning_for_new_senders_only_still_checks_all_their_texts() {
+        let s = Store::in_memory().unwrap();
+        // An unknown number texted under two different names (a shared phone): never named.
+        notify(&s, 1, "Alice", "see you at 6", 990);
+        s.insert_incoming(&incoming("H1", "+13015550101", "see you at 6"))
+            .unwrap();
+        notify(&s, 2, "Bob", "running late", 990);
+        s.insert_incoming(&incoming("H2", "+13015550101", "running late"))
+            .unwrap();
+        // Only the newest text is "new", but the older one still counts against naming them.
+        assert!(s.learn_contacts_for(&["+13015550101".into()]).unwrap().is_empty());
+
+        // Someone with nothing new isn't looked at; once they're included, they're learned.
+        notify(&s, 3, "Zoe", "omw", 990);
+        s.insert_incoming(&incoming("H3", "+13025550173", "omw")).unwrap();
+        assert!(s.learn_contacts_for(&["+13015550101".into()]).unwrap().is_empty());
+        assert!(s.learn_contacts_for(&[]).unwrap().is_empty());
+        let learned = s.learn_contacts_for(&["+13025550173".into()]).unwrap();
+        assert_eq!(learned.len(), 1);
+        assert_eq!(learned[0].name, "Zoe");
+    }
+
+    #[test]
+    fn learning_aliases_for_new_senders_counts_their_older_texts_as_evidence() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[("+13025550173".into(), "zoe".into())]).unwrap();
+        notify(&s, 1, "zoe 💜", "dinner at 7?", 990);
+        s.insert_incoming(&incoming("H1", "+13025550173", "dinner at 7?"))
+            .unwrap();
+        assert_eq!(s.learn_aliases_for(&["+13025550173".into()]).unwrap(), 0);
+        // The second text arrives in a later sync: with the first, that's two pieces of evidence.
+        notify(&s, 2, "zoe 💜", "running late", 990);
+        s.insert_incoming(&incoming("H2", "+13025550173", "running late"))
+            .unwrap();
+        assert_eq!(
+            s.learn_aliases_for(&["+15550000009".into()]).unwrap(),
+            0,
+            "someone else"
+        );
+        assert_eq!(s.learn_aliases_for(&["+13025550173".into()]).unwrap(), 1);
     }
 
     #[test]
@@ -1111,7 +1245,7 @@ mod tests {
     }
 
     #[test]
-    fn outgoing_unconfirmed_lists_pending_and_accepted_only() {
+    fn outgoing_unconfirmed_lists_handed_over_sends_only() {
         let s = Store::in_memory().unwrap();
         let pending = s
             .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "a", 1_000)
@@ -1130,11 +1264,18 @@ mod tests {
             .unwrap();
         s.set_outgoing_status(failed.id, Status::Failed, None).unwrap();
 
+        let maybe = s
+            .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "e", 4_500)
+            .unwrap();
+        s.set_outgoing_status(maybe.id, Status::Unconfirmed, None).unwrap();
+
         let mut got = s.outgoing_unconfirmed(SOURCE_IPHONE_MAP, 5_000).unwrap();
         got.sort_by_key(|(id, ..)| *id);
+        // The pending one hasn't been pushed yet, so no send report can be about it.
+        assert!(got.iter().all(|(id, ..)| *id != pending.id));
         assert_eq!(
             got,
-            vec![(pending.id, None, 1_000), (accepted.id, Some("A1".into()), 2_000)]
+            vec![(accepted.id, Some("A1".into()), 2_000), (maybe.id, None, 4_500)]
         );
     }
 
@@ -1149,8 +1290,9 @@ mod tests {
         let recent = s
             .insert_outgoing(SOURCE_IPHONE_MAP, "+13025550100", "new", now - 5_000)
             .unwrap();
+        s.set_outgoing_status(recent.id, Status::Accepted, Some("A2")).unwrap();
         let got = s.outgoing_unconfirmed(SOURCE_IPHONE_MAP, now).unwrap();
-        assert_eq!(got, vec![(recent.id, None, now - 5_000)]);
+        assert_eq!(got, vec![(recent.id, Some("A2".into()), now - 5_000)]);
     }
 
     #[test]

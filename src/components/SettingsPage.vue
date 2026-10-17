@@ -234,11 +234,8 @@ async function clearHistory() {
     return;
   }
   confirmClear.value = false;
+  // Empties the lists and says "History cleared" only if it worked; a failure says why.
   await tug.clearHistory();
-  // The store clears notifications; texts and recent calls went too.
-  tug.messages = [];
-  tug.calls = [];
-  tug.notify("info", "History cleared");
 }
 </script>
 

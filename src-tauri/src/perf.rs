@@ -12,6 +12,8 @@ use crate::store::{NewNotification, Store};
 const NOTIFICATIONS: u32 = 50_000;
 const MESSAGES: u32 = 10_000;
 const CONTACTS: u32 = 500;
+/// Numbers that text but aren't in the phonebook: the senders name learning works on.
+const UNKNOWN_SENDERS: u32 = 200;
 const APPS: [&str; 6] = [
     "com.apple.MobileSMS",
     "net.whatsapp.WhatsApp",
@@ -87,7 +89,7 @@ fn perf_large_history() {
     }
     for i in 0..MESSAGES {
         let handle = format!("H{i}");
-        let address = format!("+1302555{:04}", i % CONTACTS);
+        let address = format!("+1302555{:04}", i % (CONTACTS + UNKNOWN_SENDERS));
         let body = text(i + 3);
         store
             .insert_incoming(&IncomingMessage {
@@ -109,7 +111,7 @@ fn perf_large_history() {
         .collect();
     store.save_phonebook(&phonebook).unwrap();
     println!(
-        "\nseeded {NOTIFICATIONS} notifications, {MESSAGES} messages, {CONTACTS} contacts in {:?}",
+        "\nseeded {NOTIFICATIONS} notifications, {MESSAGES} messages, {CONTACTS} contacts ({UNKNOWN_SENDERS} unknown senders) in {:?}",
         t.elapsed()
     );
     println!(
@@ -239,7 +241,22 @@ fn perf_large_history() {
                 .unwrap()
         }),
     );
-    report("learn contacts", time(5, || store.learn_contacts().unwrap()));
+    // Name learning: a full pass (startup, contacts sync) and the per-sync pass over the senders of
+    // the texts just added (two unknown senders and a contact).
+    report("learn contacts (full)", time(5, || store.learn_contacts().unwrap()));
+    report("learn aliases (full)", time(5, || store.learn_aliases().unwrap()));
+    let senders: Vec<String> = [CONTACTS + 1, CONTACTS + 2, 3]
+        .iter()
+        .map(|i| format!("+1302555{i:04}"))
+        .collect();
+    report(
+        "learn contacts (after a sync, 3 senders)",
+        time(5, || store.learn_contacts_for(&senders).unwrap()),
+    );
+    report(
+        "learn aliases (after a sync, 3 senders)",
+        time(5, || store.learn_aliases_for(&senders).unwrap()),
+    );
     let t = Instant::now();
     let swept = store.sweep_stale("s101", 1).unwrap().len();
     report(&format!("sweep after reconnect ({swept} rows)"), t.elapsed());

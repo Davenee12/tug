@@ -481,6 +481,11 @@ impl Actor {
                 }
             }
             Command::StopDiscovery => self.stop_discovery(),
+            Command::ForgetRows { up_to } => {
+                if let Some(a) = self.link.as_mut().and_then(|l| l.ancs.as_mut()) {
+                    forget_cleared_rows(&mut a.rows, up_to);
+                }
+            }
             Command::RescanDiscovery => {
                 if let Err(e) = self.rescan_classic() {
                     log::debug!("rescan for the iPhone failed: {}", e.message());
@@ -900,9 +905,22 @@ impl Actor {
     }
 }
 
+/// Clear history removed every notification row up to `up_to`: drop the phone uids that pointed at
+/// them, keeping ones stored since (higher ids, as ids never go back).
+fn forget_cleared_rows(rows: &mut HashMap<u32, i64>, up_to: i64) {
+    rows.retain(|_, row| *row > up_to);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_history_forgets_the_cleared_rows_only() {
+        let mut rows = HashMap::from([(7, 3), (8, 10), (9, 11)]);
+        forget_cleared_rows(&mut rows, 10);
+        assert_eq!(rows, HashMap::from([(9, 11)]));
+    }
 
     #[test]
     fn connect_retries_back_off_then_cap() {

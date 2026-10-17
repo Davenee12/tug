@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import { Bell, BellOff, ExternalLink } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
-import { appLabel, clockTime, notificationTime } from "../lib/format";
+import { actionLabels, appLabel, clockTime, notificationTime } from "../lib/format";
 import { mayHaveWebsite, webLinkFor, type WebLink } from "../lib/weblinks";
 import type { PhoneNotification } from "../types/protocol";
 import AppAvatar from "./AppAvatar.vue";
@@ -26,6 +26,7 @@ const webLink = computed<WebLink | null>(() => {
 const expanded = ref(false);
 const busy = ref<"positive" | "negative" | null>(null);
 const isCall = computed(() => props.n.category === "incomingCall");
+const labels = computed(() => actionLabels(props.n));
 
 async function act(positive: boolean) {
   busy.value = positive ? "positive" : "negative";
@@ -64,10 +65,10 @@ async function act(positive: boolean) {
             :disabled="busy !== null"
             @click="act(true)"
           >
-            {{ n.category === "missedCall" ? "Call back" : n.positiveLabel || "Accept" }}
+            {{ labels.positive }}
           </button>
           <button v-if="n.flags.negativeAction" class="btn-secondary btn-sm" :disabled="busy !== null" @click="act(false)">
-            {{ n.negativeLabel || "Dismiss" }}
+            {{ labels.negative }}
           </button>
         </template>
         <button

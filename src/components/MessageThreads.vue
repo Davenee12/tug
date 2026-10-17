@@ -279,7 +279,8 @@ async function send(text = draft.value) {
   // Only when nothing was recorded: a failed send already shows as "Not sent" with Retry, and
   // putting the text back too invited sending it twice.
   if (result === "error" && !draftFor(key)) setDraftFor(key, text);
-  // You've answered, so their notifications on the phone are done with.
+  // You've answered, so their notifications on the phone are done with; but only once the phone
+  // took the text (as for a pop-up reply): a failed or unconfirmed one leaves them to come back to.
   if (result === "sent") void tug.clearItems(conv.notifications);
   sending.value = false;
 }

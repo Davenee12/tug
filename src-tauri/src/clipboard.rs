@@ -15,9 +15,9 @@ pub fn set_text(text: &str) -> Result<(), String> {
     Clipboard::Flush().map_err(err)
 }
 
-/// Put something secret-ish on the clipboard (Tugboat's link, which carries the session secret):
-/// kept out of Win+V clipboard history and cloud clipboard sync, and not flushed, so it goes
-/// when tug exits.
+/// Put something secret-ish on the clipboard (verification codes, whether auto-copied or copied
+/// by hand; Tugboat's link, which carries the session secret): kept out of Win+V clipboard history
+/// and cloud clipboard sync, and not flushed, so it goes when tug exits.
 #[cfg(windows)]
 pub fn set_text_private(text: &str) -> Result<(), String> {
     use windows::core::HSTRING;

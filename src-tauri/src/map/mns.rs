@@ -141,21 +141,25 @@ pub struct Outgoing {
 
 /// Which still-unconfirmed outgoing message a Sending{Success,Failure} report is about.
 ///
+/// `candidates` are sends the phone has already been handed (accepted or unconfirmed), never a
+/// pending one that hasn't been pushed yet: a report can't be about a text the phone never got,
+/// and settling one would mark it Sent without sending it (the worker only pushes pending rows).
+///
 /// Handle first: if the report's handle equals one a PushMessage stored, that's the one.
-/// The roadmap's risk is that iOS's SendingSuccess handle differs from the PushMessage
-/// handle — and the report carries no recipient — so when the handle doesn't match we fall
-/// back to the most recent unconfirmed send. Sends run one at a time through the MAP worker,
-/// so the newest pending/accepted message is the one that just completed.
+/// iOS's report handle can differ from the PushMessage handle, and the report carries no
+/// recipient, so when the handle doesn't match the report is taken only when exactly one send
+/// is waiting. With two or more, guessing could mark the wrong text failed (and Retry would
+/// send it a second time) or the wrong one sent; leaving them as they are is the honest choice.
 pub fn choose_outgoing(report_handle: Option<&str>, candidates: &[Outgoing]) -> Option<i64> {
     if let Some(h) = report_handle.filter(|h| !h.is_empty()) {
         if let Some(m) = candidates.iter().find(|c| c.handle.as_deref() == Some(h)) {
             return Some(m.id);
         }
     }
-    candidates
-        .iter()
-        .max_by(|a, b| a.received_at.cmp(&b.received_at).then(a.id.cmp(&b.id)))
-        .map(|m| m.id)
+    match candidates {
+        [only] => Some(only.id),
+        _ => None,
+    }
 }
 
 /// Per-connection OBEX server state: accumulates a (possibly multi-packet) PUT body and
@@ -609,21 +613,24 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_the_newest_unconfirmed_send() {
-        // iOS's report handle doesn't match any stored one: take the most recent pending send.
-        let candidates = [out(1, Some("AA"), 100), out(2, Some("BB"), 300), out(3, None, 200)];
-        assert_eq!(choose_outgoing(Some("ZZ"), &candidates), Some(2));
-        assert_eq!(choose_outgoing(None, &candidates), Some(2));
-        // Ties on time break by id, so the pick is deterministic.
-        let tied = [out(5, None, 300), out(6, None, 300)];
-        assert_eq!(choose_outgoing(None, &tied), Some(6));
+    fn an_unmatched_handle_settles_the_only_waiting_send() {
+        // iOS's report handle can differ from PushMessage's; with one send waiting, it's that one.
+        let one = [out(1, Some("AA"), 100)];
+        assert_eq!(choose_outgoing(Some("ZZ"), &one), Some(1));
+        assert_eq!(choose_outgoing(None, &one), Some(1));
+        assert_eq!(choose_outgoing(Some(""), &one), Some(1));
     }
 
     #[test]
-    fn empty_report_handle_falls_back_to_newest() {
-        let candidates = [out(1, Some("AA"), 50), out(2, Some("BB"), 100)];
-        // An empty report handle never matches; fall back to the newest send.
-        assert_eq!(choose_outgoing(Some(""), &candidates), Some(2));
+    fn an_unmatched_handle_never_guesses_between_two_sends() {
+        // Used to take the newest: a failure meant for the older text marked the newer one
+        // failed, and Retry sent it twice.
+        let candidates = [out(1, Some("AA"), 100), out(2, Some("BB"), 300), out(3, None, 200)];
+        assert_eq!(choose_outgoing(Some("ZZ"), &candidates), None);
+        assert_eq!(choose_outgoing(None, &candidates), None);
+        assert_eq!(choose_outgoing(Some(""), &candidates), None);
+        // A matching handle still picks its own send among several.
+        assert_eq!(choose_outgoing(Some("BB"), &candidates), Some(2));
     }
 
     #[test]

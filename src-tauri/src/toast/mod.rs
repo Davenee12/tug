@@ -344,9 +344,13 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
             }
         }
         ToastAction::Clear { .. } => {
-            // A ringing call's negative action is Decline: only its own button sends that.
-            if category().as_deref() == Some("incomingCall") {
-                return log::warn!("clear pressed on ringing call row {id}; ignored");
+            match category().as_deref() {
+                // Gone from tug (Clear history): nothing to act on, and the phone's notification
+                // is no longer tied to this pop-up.
+                None => return log::info!("clear pressed on row {id}, which tug no longer has; ignored"),
+                // A ringing call's negative action is Decline: only its own button sends that.
+                Some("incomingCall") => return log::warn!("clear pressed on ringing call row {id}; ignored"),
+                Some(_) => {}
             }
             if let Err(e) = ble
                 .request(|reply| Command::PerformAction {
@@ -362,15 +366,20 @@ async fn act(app: AppHandle, action: xml::ToastAction, input: Option<String>) {
     }
 }
 
-/// The clipboard wants the main (STA) thread, and presses arrive on a thread-pool thread.
+/// The clipboard wants the main (STA) thread, and presses arrive on a thread-pool thread. A code
+/// goes the same private way as auto-copy (`commands::copy_code`): kept out of Win+V clipboard
+/// history and cloud sync, and taken off again after a while if it's still there.
 #[cfg(windows)]
 async fn copy(app: &AppHandle, code: String) -> Result<(), String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
+    let copied = code.clone();
     app.run_on_main_thread(move || {
-        let _ = tx.send(crate::clipboard::set_text(&code));
+        let _ = tx.send(crate::clipboard::set_text_private(&copied));
     })
     .map_err(|e| e.to_string())?;
-    rx.await.map_err(|_| "The clipboard didn't answer".to_string())?
+    rx.await.map_err(|_| "The clipboard didn't answer".to_string())??;
+    crate::code_fill::clear_later(code);
+    Ok(())
 }
 
 /// A short follow-up about notification `id`. One per notification (a newer one replaces
