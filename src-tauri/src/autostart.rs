@@ -7,7 +7,9 @@
 //! tug used tauri-plugin-autostart before, which tries `HKLM` first. A tug that happened to run
 //! elevated (Run as administrator) wrote an unquoted machine-wide entry that started this user's
 //! tug for every account, couldn't be turned off from the switch, and outlived uninstalling. When
-//! tug runs elevated it moves such an entry, if it points at this tug, back to this user.
+//! tug runs elevated it moves such an entry, if it points at this tug, back to this user, but only
+//! when this tug lives in the process user's own Local AppData (elevated as another administrator,
+//! "this user" is the wrong person).
 //!
 //! The rules (`is_enabled`, `enable`, `disable`, `migrate_machine_entry`) work on a `Registry`
 //! trait, so they're tested against an in-memory fake; `WinRegistry` is the thin Windows side.
@@ -180,10 +182,43 @@ pub enum Migration {
     Removed,
 }
 
+/// Whether `path` is inside the folder `dir` (at any depth). Case-insensitive like Windows, either
+/// slash, a trailing slash or a `\\?\` prefix on either side doesn't matter, and a sibling folder
+/// that merely starts the same (`Local2`, `Local Low`) isn't inside.
+pub fn is_inside(path: &str, dir: &str) -> bool {
+    fn norm(p: &str) -> String {
+        let p = p.trim().trim_matches('"').replace('/', "\\").to_lowercase();
+        let p = p.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(p);
+        p.trim_end_matches('\\').to_string()
+    }
+    let (path, dir) = (norm(path), norm(dir));
+    !dir.is_empty()
+        && path
+            .strip_prefix(&dir)
+            .is_some_and(|rest| rest.starts_with('\\') && rest.len() > 1)
+}
+
 /// Running elevated: move a machine-wide entry that starts this tug back to this user, keeping
 /// whether it was on. Entries for anything else (another copy, another user's tug) are left alone.
-pub fn migrate_machine_entry(reg: &dyn Registry, exe: &str, args: &[&str], elevated: bool) -> Migration {
+///
+/// Only when this tug lives in the process user's own Local AppData (`local_app_data`, the folder
+/// for the process token). Elevated by a different administrator (UAC asking for another
+/// account's password), "this user" is that administrator: moving the entry would take Start with
+/// Windows away from the person whose tug it is and hand it to an account that doesn't use it.
+pub fn migrate_machine_entry(
+    reg: &dyn Registry,
+    exe: &str,
+    args: &[&str],
+    elevated: bool,
+    local_app_data: Option<&str>,
+) -> Migration {
     if !elevated || !machine_entry_for(reg, exe).unwrap_or(false) {
+        return Migration::Nothing;
+    }
+    if !local_app_data.is_some_and(|dir| is_inside(exe, dir)) {
+        log::info!(
+            "autostart: leaving the all-users Start with Windows entry alone: this tug isn't in this account's own folder (elevated as another account?)"
+        );
         return Migration::Nothing;
     }
     let was_on = approved(
@@ -234,7 +269,9 @@ pub fn set(on: bool) -> Result<(), String> {
     if on {
         enable(&WinRegistry, &exe, &[crate::MINIMIZED_ARG])?;
         // Elevated: also move an old all-users entry, so there's only ever this one.
-        migrate_machine_entry(&WinRegistry, &exe, &[crate::MINIMIZED_ARG], is_elevated());
+        let elevated = is_elevated();
+        let own = if elevated { local_app_data() } else { None };
+        migrate_machine_entry(&WinRegistry, &exe, &[crate::MINIMIZED_ARG], elevated, own.as_deref());
         Ok(())
     } else {
         disable(&WinRegistry, &exe)
@@ -247,8 +284,35 @@ pub fn tidy_at_startup() {
         return;
     }
     if let Ok(exe) = current_exe() {
-        migrate_machine_entry(&WinRegistry, &exe, &[crate::MINIMIZED_ARG], true);
+        migrate_machine_entry(
+            &WinRegistry,
+            &exe,
+            &[crate::MINIMIZED_ARG],
+            true,
+            local_app_data().as_deref(),
+        );
     }
+}
+
+/// The process user's Local AppData (FOLDERID_LocalAppData for the process token), where a
+/// per-user install of tug lives.
+#[cfg(windows)]
+fn local_app_data() -> Option<String> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    // SAFETY: no token means this process's own; the returned string is read once, then freed
+    // with CoTaskMemFree as documented.
+    unsafe {
+        let p = SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None).ok()?;
+        let path = p.to_string();
+        CoTaskMemFree(Some(p.0 as *const core::ffi::c_void));
+        path.ok()
+    }
+}
+
+#[cfg(not(windows))]
+fn local_app_data() -> Option<String> {
+    None
 }
 
 /// Whether this process runs elevated (Run as administrator, or UAC off for an administrator).
@@ -576,6 +640,8 @@ mod tests {
     }
 
     const EXE: &str = r"C:\Users\Sam Lee\AppData\Local\tug\tug.exe";
+    /// The process user's Local AppData when tug runs as its owner.
+    const LOCAL: &str = r"C:\Users\Sam Lee\AppData\Local";
     const ARGS: &[&str] = &["--minimized"];
     const DISABLED: [u8; 12] = [0x03, 0, 0, 0, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x01];
 
@@ -692,7 +758,10 @@ mod tests {
         );
         assert!(!is_enabled(&reg, EXE).unwrap());
         disable(&reg, EXE).unwrap();
-        assert_eq!(migrate_machine_entry(&reg, EXE, ARGS, true), Migration::Nothing);
+        assert_eq!(
+            migrate_machine_entry(&reg, EXE, ARGS, true, Some(LOCAL)),
+            Migration::Nothing
+        );
         assert!(reg.get(Hive::LocalMachine, RUN_KEY, VALUE_NAME).is_some());
     }
 
@@ -701,8 +770,14 @@ mod tests {
         let reg = Fake::new(true);
         plugin_machine_entry(&reg);
         // Not elevated: nothing happens (it couldn't).
-        assert_eq!(migrate_machine_entry(&reg, EXE, ARGS, false), Migration::Nothing);
-        assert_eq!(migrate_machine_entry(&reg, EXE, ARGS, true), Migration::Moved);
+        assert_eq!(
+            migrate_machine_entry(&reg, EXE, ARGS, false, Some(LOCAL)),
+            Migration::Nothing
+        );
+        assert_eq!(
+            migrate_machine_entry(&reg, EXE, ARGS, true, Some(LOCAL)),
+            Migration::Moved
+        );
         assert_eq!(reg.get(Hive::LocalMachine, RUN_KEY, VALUE_NAME), None);
         assert_eq!(reg.get(Hive::LocalMachine, APPROVED_KEY, VALUE_NAME), None);
         assert_eq!(
@@ -711,7 +786,50 @@ mod tests {
         );
         assert!(is_enabled(&reg, EXE).unwrap());
         // Once moved, there's nothing left to move.
-        assert_eq!(migrate_machine_entry(&reg, EXE, ARGS, true), Migration::Nothing);
+        assert_eq!(
+            migrate_machine_entry(&reg, EXE, ARGS, true, Some(LOCAL)),
+            Migration::Nothing
+        );
+    }
+
+    #[test]
+    fn elevated_as_another_account_leaves_the_machine_entry_alone() {
+        // Sam's tug, elevated with an administrator's password (UAC as another account): this
+        // process's HKCU and Local AppData are the administrator's, not Sam's.
+        let reg = Fake::new(true);
+        plugin_machine_entry(&reg);
+        let admins = Some(r"C:\Users\Admin\AppData\Local");
+        assert_eq!(migrate_machine_entry(&reg, EXE, ARGS, true, admins), Migration::Nothing);
+        // Folder unknown: same, never a guess.
+        assert_eq!(migrate_machine_entry(&reg, EXE, ARGS, true, None), Migration::Nothing);
+        // Nothing moved: Sam's tug still starts for Sam, and the admin got no entry.
+        assert!(reg.get(Hive::LocalMachine, RUN_KEY, VALUE_NAME).is_some());
+        assert_eq!(reg.get(Hive::CurrentUser, RUN_KEY, VALUE_NAME), None);
+        // Run as its own (administrator) owner, it moves.
+        assert_eq!(
+            migrate_machine_entry(&reg, EXE, ARGS, true, Some(LOCAL)),
+            Migration::Moved
+        );
+    }
+
+    #[test]
+    fn inside_a_folder_is_case_and_slash_blind_and_not_fooled_by_siblings() {
+        assert!(is_inside(EXE, LOCAL));
+        assert!(is_inside(EXE, r"c:\users\sam lee\appdata\local\"));
+        assert!(is_inside(r"C:/Users/Sam Lee/AppData/Local/tug/tug.exe", LOCAL));
+        assert!(is_inside(EXE, "C:/USERS/SAM LEE/APPDATA/LOCAL/"));
+        assert!(is_inside(r"\\?\C:\Users\Sam Lee\AppData\Local\tug\tug.exe", LOCAL));
+        // A sibling folder that starts the same, another account, or the folder itself.
+        assert!(!is_inside(r"C:\Users\Sam Lee\AppData\Local2\tug\tug.exe", LOCAL));
+        assert!(!is_inside(r"C:\Users\Sam Lee\AppData\LocalLow\tug\tug.exe", LOCAL));
+        assert!(!is_inside(
+            r"C:\Users\Sam Lee2\AppData\Local\tug\tug.exe",
+            r"C:\Users\Sam Lee"
+        ));
+        assert!(!is_inside(r"C:\Users\Alex\AppData\Local\tug\tug.exe", LOCAL));
+        assert!(!is_inside(LOCAL, LOCAL));
+        assert!(!is_inside(r"C:\Program Files\tug\tug.exe", LOCAL));
+        assert!(!is_inside(EXE, ""));
     }
 
     #[test]
@@ -724,7 +842,10 @@ mod tests {
             VALUE_NAME,
             Val::Bin(DISABLED.to_vec()),
         );
-        assert_eq!(migrate_machine_entry(&reg, EXE, ARGS, true), Migration::Removed);
+        assert_eq!(
+            migrate_machine_entry(&reg, EXE, ARGS, true, Some(LOCAL)),
+            Migration::Removed
+        );
         assert!(reg.values.borrow().is_empty());
         assert!(!is_enabled(&reg, EXE).unwrap());
     }

@@ -93,7 +93,8 @@ map is `EventPayloads` in `src/lib/ipc.ts`.
 `src-tauri/src/lib.rs`: claim tug's AppUserModelID (`quick_actions::init`, before any window) →
 plugins (single-instance first, so a second launch just shows the window or carries out its
 `--action`; log with rotation; notification; dialog) → withdraw the last run's pop-ups and, running
-elevated, move an old all-users Start with Windows entry back to this user (both off the main thread;
+elevated, move an old all-users Start with Windows entry back to this user if tug lives in that
+account's own Local AppData (both off the main thread;
 `autostart.rs` owns the HKCU Run entry, quoted, with `--minimized`) → create the data folder →
 open the SQLite store and migrate → queue this launch's `--action`, if any, and build the taskbar
 jump list (off-thread) → `Shared` → start the BLE actor → start the MAP worker → media
@@ -326,7 +327,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
 | `tugboat/pad.rs` | The game controller channel: what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone, two seats for a two-player game |
 | `tugboat/net.rs`, `tugboat/tally.rs`, `tugboat/session.rs` (`choose_folder`) | Which adapter the phone can reach (including a Hyper-V external switch); logging strangers' refused requests once a minute with a count; Pictures or the Downloads fallback |
-| `autostart.rs`, `session_end.rs` | Start with Windows over a `Registry` trait (tested with a fake: HKCU only, moving an old HKLM entry); what exit skips when Windows is ending the session |
+| `autostart.rs`, `session_end.rs` | Start with Windows over a `Registry` trait (tested with a fake: HKCU only, moving an old HKLM entry only for a tug in the process user's own Local AppData); what exit skips when Windows is ending the session |
 | `tugboat/clip.rs`, `tugboat/dib.rs` | The shared clipboard: one waiting clipboard at a time, delivered only on the phone's word, dropped after 2 minutes, what can be sent; a clipboard bitmap to PNG |
 | `quick_actions/mod.rs` | Taskbar quick actions: reading `--action` from a launch, the jump list's tasks (the game only with Show games on), the AppUserModelID for installed, portable and cargo builds, the take-once queue |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
