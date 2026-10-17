@@ -329,7 +329,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 
 Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `attachments`
 ("Attachment: 1 Photo" → a photo chip), `attention`
-(is the window really visible), `battery`, `coalesce` (one render per frame for bursts of
+(is the window really visible), `battery`, `callKeys` (no keystroke answers or declines a call), `coalesce` (one render per frame for bursts of
 updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),
 `devtools`, `errorReport`, `escape`, `feedPaging` (keep paging while the Feed's end is in view),
@@ -346,7 +346,7 @@ scoring, the speed curve, inertia, the weather's handling, merging the controls)
 daily challenge: the date's seed, weather → water, the start screen's line, the streak), `tugboatRace`
 (two players: who steers what, the result, when a dropped phone pauses the race), `useCitySearch` (the
 weather card's city box), `vips`, `voice` (voice typing's Settings words and problems), `weather`, `weblinks`, `whatsNew`. Thin DOM composables such as
-`useElementSize` (an element's size in zoomed CSS pixels) feed these rules.
+`useElementSize` (an element's size in zoomed CSS pixels) and `useCallButtonGate` (a ringing call's Feed buttons) feed these rules.
 The phone page has its own: `tugboat-page/chunks`, `crypto`, `clip` (the PC's clipboard: when to
 acknowledge it, copying without a secure context) and `pad` (the controller's wire format, pacing
 and errors). Components and

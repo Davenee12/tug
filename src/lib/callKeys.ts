@@ -66,3 +66,13 @@ export class AnswerGate {
 
 // A lone modifier isn't typing (Ctrl+Tab, Alt to look at the menu); the key that follows is.
 const MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph", "CapsLock"]);
+
+/**
+ * The Answer / Decline buttons a ringing call also gets in the Feed. They're ordinary buttons
+ * there, reachable with Tab, so the same gate applies: true when a key must be swallowed (Space
+ * always; Enter until the call has been on screen a moment with no keystrokes), so a key pressed
+ * while typing never picks up or hangs up. A click still works.
+ */
+export function blocksCallButton(gate: AnswerGate, e: CallKey, target: "answer" | "decline", now: number): boolean {
+  return gate.key(e, target, now) === "block";
+}

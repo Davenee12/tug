@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ANSWER_ARM_MS, AnswerGate } from "./callKeys";
+import { ANSWER_ARM_MS, AnswerGate, blocksCallButton } from "./callKeys";
 
 const T0 = 1_000_000;
 
@@ -78,5 +78,18 @@ describe("AnswerGate (keys on the incoming-call card)", () => {
     const gate = new AnswerGate(T0);
     gate.key({ key: "Shift" }, "card", T0 + 1400);
     expect(gate.key({ key: "Enter" }, "card", T0 + 1600)).toBe("answer");
+  });
+});
+
+describe("blocksCallButton (a ringing call's buttons in the Feed)", () => {
+  it("never lets Space press Answer or Decline, and holds Enter until the call has been up quietly", () => {
+    const t0 = 10_000;
+    const gate = new AnswerGate(t0);
+    expect(blocksCallButton(gate, { key: " ", type: "keydown" }, "answer", t0 + 5_000)).toBe(true);
+    expect(blocksCallButton(gate, { key: " ", type: "keyup" }, "decline", t0 + 5_000)).toBe(true);
+    // The Space just now restarted the quiet wait: an Enter straight after is held back too.
+    expect(blocksCallButton(gate, { key: "Enter" }, "answer", t0 + 5_100)).toBe(true);
+    // Quiet for the arming time: Enter on the focused button presses it.
+    expect(blocksCallButton(gate, { key: "Enter" }, "answer", t0 + 5_100 + ANSWER_ARM_MS)).toBe(false);
   });
 });

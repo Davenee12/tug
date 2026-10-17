@@ -11,6 +11,7 @@ import CodeChip from "./CodeChip.vue";
 import MediaChip from "./MediaChip.vue";
 import NotificationItem from "./NotificationItem.vue";
 import { singleFlight } from "../lib/singleFlight";
+import { useCallButtonGate } from "../lib/useCallButtonGate";
 
 const props = defineProps<{ entry: FeedEntry }>();
 const tug = useTugStore();
@@ -36,6 +37,8 @@ const fresh = computed(() => tug.newCount(props.entry.key, items.value));
 const when = computed(() => relativeTime(notificationTime(latest.value)));
 // A ringing call needs its buttons without expanding anything.
 const ringing = computed(() => latest.value.category === "incomingCall" && latest.value.live);
+// Space never answers or declines here either; Enter only once it has rung a moment untouched.
+const { onCallKey } = useCallButtonGate(ringing);
 const clearable = computed(() => items.value.some(canClear));
 // A verification code in the newest notification: copy it right from the row.
 const code = computed(() => findCode(latest.value.message || latest.value.subtitle));
@@ -165,10 +168,26 @@ function open() {
     </div>
 
     <div v-if="ringing && !expanded" class="flex gap-2 px-3 pb-3 pl-14">
-      <button v-if="latest.flags.positiveAction" class="btn-primary btn-sm" :disabled="answering" @click="respond(true)">
+      <button
+        v-if="latest.flags.positiveAction"
+        class="btn-primary btn-sm"
+        data-call-button
+        :disabled="answering"
+        @keydown="onCallKey($event, 'answer')"
+        @keyup="onCallKey($event, 'answer')"
+        @click="respond(true)"
+      >
         {{ latest.positiveLabel || "Answer" }}
       </button>
-      <button v-if="latest.flags.negativeAction" class="btn-secondary btn-sm" :disabled="answering" @click="respond(false)">
+      <button
+        v-if="latest.flags.negativeAction"
+        class="btn-secondary btn-sm"
+        data-call-button
+        :disabled="answering"
+        @keydown="onCallKey($event, 'decline')"
+        @keyup="onCallKey($event, 'decline')"
+        @click="respond(false)"
+      >
         {{ latest.negativeLabel || "Decline" }}
       </button>
     </div>

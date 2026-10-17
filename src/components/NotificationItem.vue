@@ -5,6 +5,7 @@ import { useTugStore } from "../stores/tug";
 import { actionLabels, appLabel, clockTime, MESSAGES_APP, notificationTime } from "../lib/format";
 import { textContent } from "../lib/messageType";
 import { mayHaveWebsite, webLinkFor, type WebLink } from "../lib/weblinks";
+import { useCallButtonGate } from "../lib/useCallButtonGate";
 import type { PhoneNotification } from "../types/protocol";
 import AppAvatar from "./AppAvatar.vue";
 import MediaChip from "./MediaChip.vue";
@@ -32,6 +33,12 @@ const messageText = computed(() => (hasChip.value ? (content.value?.text ?? "") 
 const expanded = ref(false);
 const busy = ref<"positive" | "negative" | null>(null);
 const isCall = computed(() => props.n.category === "incomingCall");
+// A ringing call's buttons: Space never presses them; Enter only once it has rung a moment untouched.
+const ringing = computed(() => isCall.value && props.n.live);
+const { onCallKey } = useCallButtonGate(ringing);
+function onActionKey(e: KeyboardEvent, positive: boolean) {
+  if (ringing.value) onCallKey(e, positive ? "answer" : "decline");
+}
 const labels = computed(() => actionLabels(props.n));
 
 async function act(positive: boolean) {
@@ -71,11 +78,22 @@ async function act(positive: boolean) {
             v-if="n.flags.positiveAction"
             :class="[isCall ? 'btn-primary' : 'btn-secondary', 'btn-sm']"
             :disabled="busy !== null"
+            :data-call-button="ringing ? '' : undefined"
+            @keydown="onActionKey($event, true)"
+            @keyup="onActionKey($event, true)"
             @click="act(true)"
           >
             {{ labels.positive }}
           </button>
-          <button v-if="n.flags.negativeAction" class="btn-secondary btn-sm" :disabled="busy !== null" @click="act(false)">
+          <button
+            v-if="n.flags.negativeAction"
+            class="btn-secondary btn-sm"
+            :disabled="busy !== null"
+            :data-call-button="ringing ? '' : undefined"
+            @keydown="onActionKey($event, false)"
+            @keyup="onActionKey($event, false)"
+            @click="act(false)"
+          >
             {{ labels.negative }}
           </button>
         </template>
