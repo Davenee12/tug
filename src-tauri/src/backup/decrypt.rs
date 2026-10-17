@@ -40,18 +40,6 @@ pub struct Copied {
     pub sha256: [u8; 32],
 }
 
-/// Decrypt a whole buffer in place (Manifest.db and other small files). Returns the plaintext
-/// length: the padding is stripped when it's valid PKCS#7, and the result is cut to `size` when the
-/// manifest gives one.
-pub fn decrypt_in_place(key: &Key, buf: &mut [u8], size: Option<u64>) -> Result<usize, CopyError> {
-    if !buf.len().is_multiple_of(BLOCK) {
-        return Err(CopyError::Corrupt);
-    }
-    let mut dec = Decryptor::new((&**key).into(), &[0u8; BLOCK].into());
-    decrypt_blocks(&mut dec, buf);
-    Ok(plain_len(buf, size))
-}
-
 fn decrypt_blocks(dec: &mut Decryptor, buf: &mut [u8]) {
     let (blocks, rest) = Array::slice_as_chunks_mut(buf);
     debug_assert!(rest.is_empty());
@@ -216,21 +204,6 @@ pub(crate) mod tests {
 
     fn key(b: u8) -> Key {
         Zeroizing::new([b; 32])
-    }
-
-    #[test]
-    fn decrypts_in_place_and_strips_the_padding() {
-        let plain = b"SQLite format 3\0 and then some pages".to_vec();
-        let mut buf = encrypt(&[7; 32], &plain);
-        let n = decrypt_in_place(&key(7), &mut buf, None).unwrap();
-        assert_eq!(&buf[..n], &plain[..]);
-        let mut buf = encrypt(&[7; 32], &plain);
-        let n = decrypt_in_place(&key(7), &mut buf, Some(6)).unwrap();
-        assert_eq!(&buf[..n], b"SQLite");
-        assert!(matches!(
-            decrypt_in_place(&key(7), &mut [0u8; 15], None),
-            Err(CopyError::Corrupt)
-        ));
     }
 
     #[test]

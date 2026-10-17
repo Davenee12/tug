@@ -426,26 +426,25 @@ impl BackupService {
 
         // Manifest.db: decrypted (or copied) into the scratch folder, read, and deleted.
         let manifest_db = temp.file("Manifest.db");
-        match &keys {
-            Some(keys) => {
-                let key = manifest
+        let manifest_key = match &keys {
+            Some(keys) => Some(
+                manifest
                     .get("ManifestKey")
                     .and_then(plist::Value::as_data)
                     .and_then(|k| keys.unwrap_tagged(k))
-                    .ok_or_else(|| fail(Problem::Unreadable, "manifest key"))?;
-                let mut bytes =
-                    std::fs::read(folder.join("Manifest.db")).map_err(|_| fail(Problem::Unreadable, "Manifest.db"))?;
-                let n = decrypt::decrypt_in_place(&key, &mut bytes, None)
-                    .map_err(|_| fail(Problem::Unreadable, "Manifest.db"))?;
-                let written = std::fs::write(&manifest_db, &bytes[..n]);
-                zeroize::Zeroize::zeroize(&mut bytes);
-                written.map_err(|_| fail(Problem::CantWrite, "Manifest.db copy"))?;
-            }
-            None => {
-                std::fs::copy(folder.join("Manifest.db"), &manifest_db)
-                    .map_err(|_| fail(Problem::Unreadable, "Manifest.db"))?;
-            }
-        }
+                    .ok_or_else(|| fail(Problem::Unreadable, "manifest key"))?,
+            ),
+            None => None,
+        };
+        copy_manifest(folder, &manifest_db, manifest_key.as_ref(), || {
+            !cancel.load(Ordering::Relaxed)
+        })
+        .map_err(|e| match e {
+            decrypt::CopyError::Cancelled => Phase::Cancelled,
+            decrypt::CopyError::Io(e) if disk_full(&e) => fail(Problem::CantWrite, "Manifest.db copy"),
+            _ => fail(Problem::Unreadable, "Manifest.db"),
+        })?;
+        drop(manifest_key);
         let conn = manifest::open(&manifest_db).map_err(|_| fail(Problem::Unreadable, "Manifest.db open"))?;
         let sms = manifest::lookup(&conn, manifest::SMS_DOMAIN, manifest::SMS_DB)
             .map_err(|_| fail(Problem::Unreadable, "Manifest.db query"))?
@@ -642,6 +641,18 @@ impl BackupService {
             }
         });
     }
+}
+
+/// Stream the backup's Manifest.db into `dest`, decrypted with `key` for an encrypted backup:
+/// chunk by chunk with `go_on()` asked between chunks, never read whole into memory (a big
+/// backup's manifest runs to hundreds of megabytes, and Cancel should answer at once).
+fn copy_manifest(
+    folder: &Path,
+    dest: &Path,
+    key: Option<&keybag::Key>,
+    go_on: impl FnMut() -> bool,
+) -> Result<decrypt::Copied, decrypt::CopyError> {
+    decrypt::copy_file(&folder.join("Manifest.db"), dest, key, None, go_on)
 }
 
 /// A backup file's plaintext size: from the manifest, else the file itself.
@@ -875,6 +886,32 @@ mod tests {
             service.cancel();
         }
         assert!(walk(&local.join(files::TEMP_DIR)).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_manifest_is_streamed_and_cancel_stops_it() {
+        let root = temp_dir("backup-manifest");
+        // Bigger than one 1 MiB chunk, so it takes several reads.
+        let plain: Vec<u8> = (0..(3 << 20) + 77).map(|i: usize| (i * 7 % 253) as u8).collect();
+        let key = zeroize::Zeroizing::new([0x4D; 32]);
+        std::fs::write(root.join("Manifest.db"), encrypt(&key, &plain)).unwrap();
+        let dest = root.join("plain.db");
+        let copied = copy_manifest(&root, &dest, Some(&key), || true).unwrap();
+        assert_eq!(copied.bytes, plain.len() as u64);
+        assert_eq!(std::fs::read(&dest).unwrap(), plain);
+        // Cancel answers between chunks, long before the end.
+        let mut asks = 0;
+        let r = copy_manifest(&root, &dest, Some(&key), || {
+            asks += 1;
+            asks < 2
+        });
+        assert!(matches!(r, Err(decrypt::CopyError::Cancelled)));
+        assert!(std::fs::metadata(&dest).unwrap().len() < plain.len() as u64);
+        // An unencrypted backup's manifest is copied the same way.
+        std::fs::write(root.join("Manifest.db"), &plain).unwrap();
+        copy_manifest(&root, &dest, None, || true).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), plain);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
