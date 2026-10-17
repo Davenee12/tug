@@ -705,6 +705,11 @@ impl TugboatService {
         tauri::async_runtime::spawn(async move { svc.stop(Some(Ended::Hidden)).await });
     }
 
+    /// Files are moving to or from the phone right now (an update restart waits for them).
+    pub fn transferring(&self) -> bool {
+        self.session().is_some_and(|s| s.transferring())
+    }
+
     /// The window is back: a transfer that outlived the hide can keep Tugboat open after all.
     pub fn window_shown(&self) {
         if let Some(r) = lock(&self.inner.running).as_mut() {

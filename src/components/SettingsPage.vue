@@ -6,6 +6,7 @@ import { api, errorMessage } from "../lib/ipc";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { usePcAudioStore } from "../stores/pcAudio";
+import { useUpdateStore } from "../stores/update";
 import { connectionHealth, errorAge, type HealthLink, type LinkState } from "../lib/health";
 import { stepZoom } from "../lib/zoom";
 import { escClosesSettings } from "../lib/escape";
@@ -20,12 +21,22 @@ import DeveloperSettings from "./DeveloperSettings.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsSwitch from "./SettingsSwitch.vue";
 import VoiceSettings from "./VoiceSettings.vue";
+import UpdateSettings from "./UpdateSettings.vue";
 
 const tug = useTugStore();
 const weather = useWeatherStore();
 // Settings › iPhone › Audio: play the iPhone's sound through this PC (words from lib/pcAudio).
 const pcAudio = usePcAudioStore();
 const pcView = computed(() => pcAudio.view);
+// Data & privacy › What goes online: update checks are listed only when this build makes them.
+const update = useUpdateStore();
+const whatGoesOnline = computed(
+  () =>
+    "Weather, only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name. App icons: each app's ID (like com.google.Gmail, never what it sent you) goes to Apple's App Store once." +
+    (update.status && update.status.phase !== "notConfigured"
+      ? " Updates: tug asks GitHub whether there's a new version, and downloads it from there (Settings › About)."
+      : ""),
+);
 
 const SECTIONS: Array<{ id: SettingsSection; label: string; icon: Component }> = [
   { id: "general", label: "General", icon: SlidersHorizontal },
@@ -787,7 +798,7 @@ async function clearHistory() {
             />
             <SettingsRow
               label="What goes online"
-              description="Weather, only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name. App icons: each app's ID (like com.google.Gmail, never what it sent you) goes to Apple's App Store once."
+              :description="whatGoesOnline"
             />
             <SettingsRow
               label="Spotify"
@@ -825,6 +836,7 @@ async function clearHistory() {
         <template v-else>
           <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow label="tug" :description="version ? `Version ${version}` : 'Version unavailable'" />
+            <UpdateSettings />
             <SettingsRow label="What's new" description="See what changed in this and earlier updates.">
               <button class="btn-secondary btn-sm" @click="tug.openWhatsNew()">
                 <Sparkles :size="14" /> What's new

@@ -41,6 +41,8 @@ import type {
   SpotifyTrack,
   ToastPressed,
   ToastSpec,
+  UpdateApplyAnswer,
+  UpdateStatus,
   VoiceStatus,
   VoiceTyped,
 } from "../types/protocol";
@@ -207,6 +209,20 @@ export const api = {
   devtoolsConfirm: (id: number, send: boolean) => invoke<void>("devtools_confirm", { id, send }),
   /** Add tug's command folder to (or remove it from) the user's PATH. */
   devtoolsSetOnPath: (on: boolean) => invoke<DevToolsStatus>("devtools_set_on_path", { on }),
+  // --- Automatic updates (src-tauri/src/updater) ---
+  updateStatus: () => invoke<UpdateStatus>("update_status"),
+  /** Check for updates now; answers Checking, the outcome comes as `update-status`. */
+  updateCheck: () => invoke<UpdateStatus>("update_check"),
+  /** Download the release a check found (automatic downloads off). */
+  updateDownload: () => invoke<UpdateStatus>("update_download"),
+  /** "Download updates automatically". */
+  updateSetAuto: (on: boolean) => invoke<UpdateStatus>("update_set_auto", { on }),
+  /** Restart now: installs and restarts (this never answers then), or says what has to finish first. */
+  updateApply: (resume: string | null) => invoke<UpdateApplyAnswer>("update_apply", { resume }),
+  /** The new release's page on GitHub (its notes; the portable download). */
+  updateOpenReleasePage: () => invoke<void>("update_open_release_page"),
+  /** The screen to come back to after an update restart, once. */
+  updateTakeResume: () => invoke<string | null>("update_take_resume"),
 };
 
 interface EventPayloads {
@@ -244,6 +260,8 @@ interface EventPayloads {
   "pc-audio": PcAudioStatus;
   "voice-status": VoiceStatus;
   "voice-typed": VoiceTyped;
+  /** Automatic updates changed (`updater/`). */
+  "update-status": UpdateStatus;
   /** A text an AI tool (or `tug text`) wants to send; null once it's answered or gone. */
   "devtools-confirm": DevToolsConfirm | null;
 }
