@@ -469,13 +469,17 @@ pub async fn album_art(
     album: String,
 ) -> Result<Option<String>> {
     use tauri::Manager;
-    let setting = state.shared.store.setting(crate::album_art::SETTING).ok().flatten();
-    let enabled = crate::album_art::enabled_from_setting(setting.as_deref());
-    if !enabled {
+    let store = state.shared.store.clone();
+    // Read now, and again after the lookup waits its turn: switching it off stops a waiting lookup.
+    let enabled = move || {
+        let setting = store.setting(crate::album_art::SETTING).ok().flatten();
+        crate::album_art::enabled_from_setting(setting.as_deref())
+    };
+    if !enabled() {
         return Ok(None);
     }
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || crate::album_art::art(&dir, &artist, &album, enabled))
+    tauri::async_runtime::spawn_blocking(move || crate::album_art::art(&dir, &artist, &album, &enabled))
         .await
         .map_err(|e| e.to_string())?
 }

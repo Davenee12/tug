@@ -461,8 +461,10 @@ fn usable(name: &str) -> bool {
 
 /// The album's cover as a `data:` URI: from the cache, or looked up now. `Ok(None)` when the setting
 /// is off, the names aren't usable, Apple has no match (remembered for a day), or a newer lookup
-/// replaced this one; `Err` for a network failure (asked again next time).
-pub fn art(dir: &Path, artist: &str, album: &str, enabled: bool) -> Result<Option<String>, String> {
+/// replaced this one; `Err` for a network failure (asked again next time). `enabled` reads Show
+/// album art now; it's asked again after waiting at the gate, so switching it off stops a lookup
+/// that was still waiting.
+pub fn art(dir: &Path, artist: &str, album: &str, enabled: &dyn Fn() -> bool) -> Result<Option<String>, String> {
     art_with(dir, artist, album, enabled, &Http, &GATE)
 }
 
@@ -471,11 +473,11 @@ pub fn art_with(
     dir: &Path,
     artist: &str,
     album: &str,
-    enabled: bool,
+    enabled: &dyn Fn() -> bool,
     net: &dyn Net,
     gate: &Mutex<Gate>,
 ) -> Result<Option<String>, String> {
-    if !enabled || !usable(artist) || !usable(album) {
+    if !enabled() || !usable(artist) || !usable(album) {
         return Ok(None);
     }
     let started = Instant::now();
@@ -498,6 +500,11 @@ pub fn art_with(
     }
     if !wait_turn(gate, ticket, started) {
         log::debug!("album art: lookup skipped, the song changed");
+        return Ok(None);
+    }
+    // Show album art may have been switched off while this waited its turn: then nothing goes out.
+    if !enabled() {
+        log::debug!("album art: lookup skipped, switched off while it waited");
         return Ok(None);
     }
     let asked = Instant::now();
@@ -766,6 +773,14 @@ mod tests {
         }
     }
 
+    fn on() -> bool {
+        true
+    }
+
+    fn off() -> bool {
+        false
+    }
+
     fn open_gate() -> Mutex<Gate> {
         Mutex::new(Gate::new(Duration::ZERO, Duration::ZERO))
     }
@@ -781,7 +796,7 @@ mod tests {
         let dir = temp("cache");
         let net = fake(&[result("Massive Attack", "Mezzanine", "m")]);
         let gate = open_gate();
-        let first = art_with(&dir, "Massive Attack", "Mezzanine", true, &net, &gate).unwrap();
+        let first = art_with(&dir, "Massive Attack", "Mezzanine", &on, &net, &gate).unwrap();
         assert_eq!(first.as_deref(), Some("data:image/png;base64,iVBORwECAw=="));
         assert_eq!(net.asked.borrow().len(), 2, "one search, one download");
         assert!(dir
@@ -789,7 +804,7 @@ mod tests {
             .join(format!("{}.img", cache_key("Massive Attack", "Mezzanine")))
             .exists());
         // Same album again (even named as an edition): no network at all.
-        let again = art_with(&dir, "Massive Attack", "Mezzanine (Remastered)", true, &net, &gate).unwrap();
+        let again = art_with(&dir, "Massive Attack", "Mezzanine (Remastered)", &on, &net, &gate).unwrap();
         assert_eq!(again, first);
         assert_eq!(net.asked.borrow().len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
@@ -800,10 +815,10 @@ mod tests {
         let dir = temp("miss");
         let net = fake(&[result("Someone Else", "Other Album", "x")]);
         let gate = open_gate();
-        assert_eq!(art_with(&dir, "Nobody", "Nothing", true, &net, &gate).unwrap(), None);
+        assert_eq!(art_with(&dir, "Nobody", "Nothing", &on, &net, &gate).unwrap(), None);
         assert_eq!(net.asked.borrow().len(), 1, "searched, nothing to download");
         // Asked again soon: not looked up.
-        assert_eq!(art_with(&dir, "Nobody", "Nothing", true, &net, &gate).unwrap(), None);
+        assert_eq!(art_with(&dir, "Nobody", "Nothing", &on, &net, &gate).unwrap(), None);
         assert_eq!(net.asked.borrow().len(), 1);
         // A day later it's worth asking again.
         let marker = dir.join(DIR).join(format!("{}.none", cache_key("Nobody", "Nothing")));
@@ -814,7 +829,7 @@ mod tests {
             .unwrap()
             .set_modified(old)
             .unwrap();
-        assert_eq!(art_with(&dir, "Nobody", "Nothing", true, &net, &gate).unwrap(), None);
+        assert_eq!(art_with(&dir, "Nobody", "Nothing", &on, &net, &gate).unwrap(), None);
         assert_eq!(net.asked.borrow().len(), 2);
         // The startup sweep keeps fresh markers and drops stale ones.
         let stale = dir.join(DIR).join("stale.none");
@@ -840,7 +855,7 @@ mod tests {
         net.image.resize(crate::app_icons::MAX_IMAGE_BYTES + 1, 0);
         let gate = open_gate();
         assert_eq!(
-            art_with(&dir, "Massive Attack", "Mezzanine", true, &net, &gate).unwrap(),
+            art_with(&dir, "Massive Attack", "Mezzanine", &on, &net, &gate).unwrap(),
             None
         );
         let key = cache_key("Massive Attack", "Mezzanine");
@@ -852,7 +867,7 @@ mod tests {
         // Just under the limit is fine.
         let dir2 = temp("oversized-ok");
         net.image.truncate(crate::app_icons::MAX_IMAGE_BYTES);
-        assert!(art_with(&dir2, "Massive Attack", "Mezzanine", true, &net, &gate)
+        assert!(art_with(&dir2, "Massive Attack", "Mezzanine", &on, &net, &gate)
             .unwrap()
             .is_some());
         let _ = std::fs::remove_dir_all(&dir);
@@ -865,17 +880,39 @@ mod tests {
         let net = fake(&[result("Massive Attack", "Mezzanine", "m")]);
         let gate = open_gate();
         assert_eq!(
-            art_with(&dir, "Massive Attack", "Mezzanine", false, &net, &gate).unwrap(),
+            art_with(&dir, "Massive Attack", "Mezzanine", &off, &net, &gate).unwrap(),
             None
         );
-        assert_eq!(art_with(&dir, "  ", "Mezzanine", true, &net, &gate).unwrap(), None);
-        assert_eq!(art_with(&dir, "Massive Attack", "", true, &net, &gate).unwrap(), None);
+        assert_eq!(art_with(&dir, "  ", "Mezzanine", &on, &net, &gate).unwrap(), None);
+        assert_eq!(art_with(&dir, "Massive Attack", "", &on, &net, &gate).unwrap(), None);
         assert_eq!(
-            art_with(&dir, "Massive Attack", &"x".repeat(400), true, &net, &gate).unwrap(),
+            art_with(&dir, "Massive Attack", &"x".repeat(400), &on, &net, &gate).unwrap(),
             None
         );
         assert!(net.asked.borrow().is_empty());
         assert!(!dir.exists(), "nothing written either");
+    }
+
+    #[test]
+    fn switching_album_art_off_stops_a_lookup_waiting_its_turn() {
+        let dir = temp("switched-off");
+        let net = fake(&[result("Massive Attack", "Mezzanine", "m")]);
+        let gate = Mutex::new(Gate::new(Duration::from_millis(200), Duration::ZERO));
+        // On when the song started; switched off while the lookup waited at the gate.
+        let switch = std::sync::atomic::AtomicBool::new(true);
+        let enabled = || switch.load(std::sync::atomic::Ordering::SeqCst);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(50));
+                switch.store(false, std::sync::atomic::Ordering::SeqCst);
+            });
+            assert_eq!(
+                art_with(&dir, "Massive Attack", "Mezzanine", &enabled, &net, &gate).unwrap(),
+                None
+            );
+        });
+        assert!(net.asked.borrow().is_empty(), "nothing went out");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -890,7 +927,7 @@ mod tests {
                 gate.lock().unwrap().ticket();
             });
             assert_eq!(
-                art_with(&dir, "Massive Attack", "Mezzanine", true, &net, &gate).unwrap(),
+                art_with(&dir, "Massive Attack", "Mezzanine", &on, &net, &gate).unwrap(),
                 None
             );
         });
@@ -905,12 +942,12 @@ mod tests {
     fn fetches_a_real_cover_once_then_from_the_cache() {
         let dir = temp("network");
         let gate = open_gate();
-        let first = art_with(&dir, "Massive Attack", "Mezzanine", true, &Http, &gate)
+        let first = art_with(&dir, "Massive Attack", "Mezzanine", &on, &Http, &gate)
             .expect("lookup failed")
             .expect("no match");
         assert!(first.starts_with("data:image/jpeg;base64,"));
         assert_eq!(
-            art_with(&dir, "Massive Attack", "Mezzanine", true, &Http, &gate)
+            art_with(&dir, "Massive Attack", "Mezzanine", &on, &Http, &gate)
                 .unwrap()
                 .unwrap(),
             first
@@ -919,7 +956,7 @@ mod tests {
             &dir,
             "Nobody Real Tug Test",
             "No Such Album Tug Test",
-            true,
+            &on,
             &Http,
             &gate,
         )
