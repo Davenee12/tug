@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { Battery, BatteryFull, BatteryLow, BatteryMedium, BluetoothOff, Gamepad2, QrCode } from "lucide-vue-next";
 import { connectionBusy, connectionLabel as connectionLabelFor } from "../lib/connectionStatus";
 import { useTugStore } from "../stores/tug";
@@ -8,6 +8,8 @@ import { useGameStore } from "../stores/game";
 import { phoneModel } from "../lib/phoneModel";
 import { canWiggle, shouldTug } from "../lib/logoTricks";
 import { logoSpins } from "../lib/logoSpin";
+import { railDensity } from "../lib/layout";
+import { useElementSize } from "../lib/useElementSize";
 import NowPlayingCard from "./NowPlayingCard.vue";
 import PhoneArt from "./PhoneArt.vue";
 import ToggleRow from "./ToggleRow.vue";
@@ -24,14 +26,16 @@ const s = computed(() => tug.status);
 // bottom. The threshold sits above 768 — the roomy layout with the two-row card needs ~780 px, so a
 // 1366×768 laptop (the common case) must use the compact layout to avoid clipping the bottom row,
 // which can't scroll into view.
-const vh = ref(window.innerHeight);
-const onResize = () => (vh.value = window.innerHeight);
-onMounted(() => window.addEventListener("resize", onResize));
-onUnmounted(() => window.removeEventListener("resize", onResize));
-const compact = computed(() => vh.value < 800);
-// Below this even the compact card has no room for the volume bar's row (at the 600 px minimum the
-// one-row card only just fits), so the card keeps its volume buttons in the transport row instead.
-const tight = computed(() => vh.value < 640);
+// Measured from the sidebar itself, so it follows tug's zoom (Ctrl +): at 150% a 768 px window
+// lays out 512 px, and the window's own height would have kept the roomy layout (lib/layout).
+// Below "tight" even the compact card has no room for the volume bar's row, so the card keeps its
+// volume buttons in the transport row instead. At the biggest zooms nothing fits a short window;
+// the sidebar then scrolls rather than cut its bottom row off.
+const rail = ref<HTMLElement | null>(null);
+const { height: railHeight } = useElementSize(rail, { width: 288, height: window.innerHeight });
+const density = computed(() => railDensity(railHeight.value));
+const compact = computed(() => density.value.compact);
+const tight = computed(() => density.value.tight);
 
 // The logo's one-shot moments: a tug on the rope when the iPhone connects (each time, not on a
 // status refresh that changes nothing), a wiggle on hover (at most every couple of seconds) and a
@@ -103,7 +107,10 @@ const dnd = computed({
 </script>
 
 <template>
-  <aside :class="['flex h-full flex-col overflow-hidden bg-surface-dark px-4 text-on-dark', compact ? 'py-4' : 'py-6']">
+  <aside
+    ref="rail"
+    :class="['flex h-full flex-col overflow-x-hidden overflow-y-auto bg-surface-dark px-4 text-on-dark', compact ? 'py-4' : 'py-6']"
+  >
     <div class="flex items-center gap-2.5 px-2">
       <span :key="plays" :class="['inline-flex', trick && TRICK_CLASS[trick]]" @mouseenter="onLogoHover" @animationend="trick = null">
         <TugMark :size="30" class="text-on-dark" />
