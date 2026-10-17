@@ -300,6 +300,8 @@ struct Seat {
     received: u32,
     late: u32,
     presses: u32,
+    /// When these counts started (the last summary line for this phone, or the channel opening).
+    counting_since: Instant,
 }
 
 impl Seat {
@@ -315,12 +317,16 @@ impl Seat {
             received: 0,
             late: 0,
             presses: 0,
+            counting_since: now,
         }
     }
 }
 
-/// How often the controller's traffic is summarised in the debug log (never per input).
+/// How often the controller's traffic is looked at for the debug log (never per input).
 pub const SUMMARY_EVERY: Duration = Duration::from_secs(1);
+/// A phone that only steers or sends its heartbeat (no presses, nothing late) gets a line at most
+/// this often: enough to show it's still there without a line every second of a whole game.
+pub const QUIET_SUMMARY_EVERY: Duration = Duration::from_secs(30);
 
 /// One open controller channel: one seat, or two in a two-player game.
 #[derive(Debug)]
@@ -346,31 +352,39 @@ impl Pad {
         }
     }
 
-    /// At most once every `SUMMARY_EVERY`: one line per phone that sent anything since the last
-    /// summary ("controller 1: inputs 58, late 0, presses 2 in 1.0 s"), for the debug log, so a
-    /// controller that doesn't seem to work can be told apart from one whose inputs never arrive.
-    /// Counts only: never what was steered.
+    /// Looked at once every `SUMMARY_EVERY`: a line per phone ("controller 1: inputs 58, late 0,
+    /// presses 2 in 1.0 s") for the debug log, so a controller that doesn't seem to work can be told
+    /// apart from one whose inputs never arrive. Only when something worth seeing happened (a press,
+    /// or an input that arrived late), or every `QUIET_SUMMARY_EVERY` for a phone that only steered
+    /// or kept its heartbeat; the counts cover everything since that phone's last line. Counts
+    /// only: never what was steered.
     pub fn summary(&mut self, now: Instant) -> Vec<String> {
-        let span = now.saturating_duration_since(self.summary_at);
-        if span < SUMMARY_EVERY {
+        if now.saturating_duration_since(self.summary_at) < SUMMARY_EVERY {
             return Vec::new();
         }
         self.summary_at = now;
         let mut lines = Vec::new();
         for (i, s) in self.seats.iter_mut().enumerate() {
-            if s.received > 0 {
-                lines.push(format!(
-                    "controller {}: inputs {}, late {}, presses {} in {:.1} s",
-                    i + 1,
-                    s.received,
-                    s.late,
-                    s.presses,
-                    span.as_secs_f64()
-                ));
+            let span = now.saturating_duration_since(s.counting_since);
+            if s.received == 0 {
+                s.counting_since = now;
+                continue;
             }
+            if s.presses == 0 && s.late == 0 && span < QUIET_SUMMARY_EVERY {
+                continue;
+            }
+            lines.push(format!(
+                "controller {}: inputs {}, late {}, presses {} in {:.1} s",
+                i + 1,
+                s.received,
+                s.late,
+                s.presses,
+                span.as_secs_f64()
+            ));
             s.received = 0;
             s.late = 0;
             s.presses = 0;
+            s.counting_since = now;
         }
         lines
     }
@@ -861,6 +875,42 @@ mod tests {
     }
 
     #[test]
+    fn a_phone_that_only_steers_is_summarised_every_thirty_seconds() {
+        let t0 = Instant::now();
+        let mut pad = Pad::new(t0, 1, GameId::TugboatRun);
+        let steer = |s| Decoded {
+            input: PadInput {
+                steer: s,
+                boost: false,
+                drop: false,
+            },
+            probe: None,
+        };
+        // A minute of steering and heartbeats, five inputs a second, no presses.
+        let mut lines = Vec::new();
+        for tick in 1..=60u32 {
+            for k in 0..5u32 {
+                let seq = u64::from(tick * 5 + k);
+                pad.input(
+                    FIRST,
+                    seq,
+                    steer((tick % 20) as i16),
+                    t0 + Duration::from_secs(u64::from(tick)),
+                );
+            }
+            lines.extend(pad.summary(t0 + Duration::from_secs(u64::from(tick))));
+        }
+        assert_eq!(
+            lines,
+            vec![
+                "controller 1: inputs 150, late 0, presses 0 in 30.0 s".to_string(),
+                "controller 1: inputs 150, late 0, presses 0 in 30.0 s".to_string()
+            ],
+            "two lines in a minute, not sixty"
+        );
+    }
+
+    #[test]
     fn the_traffic_summary_comes_at_most_once_a_second() {
         let t0 = Instant::now();
         let mut pad = Pad::new(t0, 2, GameId::HarborStack);
@@ -877,15 +927,18 @@ mod tests {
         pad.input(FIRST, 6, drop(true), t0); // still held: not another press
         pad.input(SECOND, 1, drop(false), t0);
         assert!(pad.summary(t0 + SUMMARY_EVERY / 2).is_empty(), "not yet");
+        // Phone 1 pressed (and one input came late): a line now. Phone 2 only sent a heartbeat.
         assert_eq!(
             pad.summary(t0 + SUMMARY_EVERY),
-            vec![
-                "controller 1: inputs 3, late 1, presses 1 in 1.0 s".to_string(),
-                "controller 2: inputs 1, late 0, presses 0 in 1.0 s".to_string()
-            ]
+            vec!["controller 1: inputs 3, late 1, presses 1 in 1.0 s".to_string()]
         );
         // Counts start again; a quiet second says nothing.
         assert!(pad.summary(t0 + SUMMARY_EVERY * 2).is_empty());
+        // Phone 2's heartbeat is summarised once its quiet half-minute is up.
+        assert_eq!(
+            pad.summary(t0 + QUIET_SUMMARY_EVERY),
+            vec!["controller 2: inputs 1, late 0, presses 0 in 30.0 s".to_string()]
+        );
     }
 
     #[test]

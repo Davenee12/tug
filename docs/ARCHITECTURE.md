@@ -357,9 +357,10 @@ timeout (10 s) doubles as the idle limit for a kept-alive connection; it restart
 request, so an active controller never meets it, and only connections left idle are closed. The
 phone's probe (`age` = how long the newest touch waited before going out, `rtt` = its last round
 trip) gives a touch-to-PC estimate of `age + rtt/2`, logged as one summary line at debug level
-when the controller closes. While the channel is open, the 150 ms watch also logs, at most once a
-second and only for a phone that sent anything, a debug line of counts (`controller 1: inputs 58,
-late 0, presses 2 in 1.0 s`), and an info line when a phone starts sending (`game controller 1
+when the controller closes. While the channel is open, the 150 ms watch also logs a debug line of
+counts per phone (`controller 1: inputs 58, late 0, presses 2 in 1.0 s`): within a second of a
+press or a late input, otherwise at most every 30 s for a phone that only steers or keeps its
+heartbeat, and an info line when a phone starts sending (`game controller 1
 sending`), so "the button does nothing" can be told apart from "nothing arrives".
 
 A quick tap on the phone can't be lost between sends: the press stays in every input until a reply
