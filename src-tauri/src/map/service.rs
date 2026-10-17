@@ -403,6 +403,26 @@ mod worker {
         failures > TEXTS_UNREACHABLE_AFTER
     }
 
+    /// What `warm` (the user is typing a text) knows when deciding whether to open message access.
+    struct Warm {
+        session_open: bool,
+        warmed_lately: bool,
+        /// A failed connect set a retry time that hasn't come yet.
+        backing_off: bool,
+        connect_failures: u32,
+    }
+
+    /// Whether typing a text may start a connect. Never while one is failing (backing off, any
+    /// failure in a row, or the phone known unreachable): typing mustn't start a connect that a
+    /// Send then has to wait behind; the Send's own push reconnects. Pure.
+    fn warm_allowed(w: Warm) -> bool {
+        !w.session_open
+            && !w.warmed_lately
+            && !w.backing_off
+            && w.connect_failures == 0
+            && !texts_unreachable(w.connect_failures)
+    }
+
     /// After a failed attempt: the failure count to keep and how long to wait. The first failure
     /// right after a working session (`session_was_up`, nothing failed before it) retries in
     /// `MAP_QUICK_RETRY` and doesn't count, so if that misses the usual backoff starts from its
@@ -801,7 +821,14 @@ mod worker {
         /// doesn't wait on a reconnect. Cheap when it's already open (the usual case: the poll keeps
         /// the session alive), and at most once per `WARM_GAP`.
         async fn warm(&mut self) {
-            if self.session.is_some() || self.last_warm.is_some_and(|t| t.elapsed() < WARM_GAP) {
+            let now = Instant::now();
+            let allowed = warm_allowed(Warm {
+                session_open: self.session.is_some(),
+                warmed_lately: self.last_warm.is_some_and(|t| t.elapsed() < WARM_GAP),
+                backing_off: self.next_retry.is_some_and(|r| r > now),
+                connect_failures: self.connect_failures,
+            });
+            if !allowed {
                 return;
             }
             self.last_warm = Some(Instant::now());
@@ -2228,12 +2255,61 @@ mod worker {
     mod tests {
         use super::{
             after_failure, after_push_failure, map_retry_delay, may_have_missed, photo_sync_due, pushed_after,
-            queue_reads, remember_accepted, take_accepted, texts_unreachable, FetchTries, PushOutcome, ACCEPTED_KEEP,
-            MAP_RETRY_CAP, QUEUED_READS_MAX,
+            queue_reads, remember_accepted, take_accepted, texts_unreachable, warm_allowed, FetchTries, PushOutcome,
+            Warm, ACCEPTED_KEEP, MAP_RETRY_CAP, QUEUED_READS_MAX,
         };
         use crate::map::session::MapError;
         use std::time::Duration;
         use tokio::time::Instant;
+
+        #[test]
+        fn typing_never_starts_a_connect_while_message_access_is_failing() {
+            let idle = || Warm {
+                session_open: false,
+                warmed_lately: false,
+                backing_off: false,
+                connect_failures: 0,
+            };
+            assert!(
+                warm_allowed(idle()),
+                "closed and nothing failing: open it while they type"
+            );
+            assert!(
+                !warm_allowed(Warm {
+                    session_open: true,
+                    ..idle()
+                }),
+                "already open"
+            );
+            assert!(
+                !warm_allowed(Warm {
+                    warmed_lately: true,
+                    ..idle()
+                }),
+                "at most once per gap"
+            );
+            assert!(
+                !warm_allowed(Warm {
+                    backing_off: true,
+                    ..idle()
+                }),
+                "inside the retry backoff"
+            );
+            assert!(
+                !warm_allowed(Warm {
+                    connect_failures: 1,
+                    ..idle()
+                }),
+                "a connect just failed"
+            );
+            assert!(
+                !warm_allowed(Warm {
+                    connect_failures: 9,
+                    ..idle()
+                }),
+                "the phone is unreachable"
+            );
+        }
 
         #[test]
         fn a_report_is_never_matched_to_a_send_pushed_after_it_arrived() {
