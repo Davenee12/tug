@@ -24,7 +24,7 @@ use tokio::task::{AbortHandle, Id as TaskId, JoinSet};
 use super::auth::Authorized;
 use super::crypto::OVERHEAD;
 use super::page;
-use super::session::{ApiError, Session, TextRequest, UploadRequest};
+use super::session::{ApiError, ClipAckRequest, Session, TextRequest, UploadRequest};
 use super::tally::{self, Tally};
 use super::upload::MAX_CHUNK;
 
@@ -44,6 +44,7 @@ fn router(session: Arc<Session>, body_timeout: Duration) -> Router {
         .route("/assets/{file}", get(asset))
         .route("/api/state", get(state))
         .route("/api/text", post(text))
+        .route("/api/clip", post(clip_ack))
         .route("/api/up/{id}", post(begin_upload).delete(cancel_upload))
         .route("/api/up/{id}/{index}", put(put_chunk))
         .route("/api/finish/{id}", post(finish_upload))
@@ -376,6 +377,17 @@ async fn text(State(s): Shared, req: Request) -> Response {
         let (ok, body) = authorize_then_read(&s, req).await?;
         let msg: TextRequest = s.open_json(&ok, &body)?;
         s.phone_text(msg.text)?;
+        Ok(sealed(s.seal_json(&ok, &serde_json::json!({ "ok": true }))))
+    };
+    run.await.unwrap_or_else(error)
+}
+
+/// The phone has the PC's clipboard: until it says so, nothing on the PC claims it was sent.
+async fn clip_ack(State(s): Shared, req: Request) -> Response {
+    let run = async {
+        let (ok, body) = authorize_then_read(&s, req).await?;
+        let msg: ClipAckRequest = s.open_json(&ok, &body)?;
+        s.clip_ack(msg.id)?;
         Ok(sealed(s.seal_json(&ok, &serde_json::json!({ "ok": true }))))
     };
     run.await.unwrap_or_else(error)

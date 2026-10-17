@@ -40,7 +40,8 @@ const waiting = (rev: number): TugboatStatus => ({
 });
 const off = (rev: number): TugboatStatus => ({ ...TUGBOAT_OFF, rev });
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const init = (t: ReturnType<typeof useTugboatStore>) => t.init({ onSkipped: () => undefined, onText: () => undefined });
+const init = (t: ReturnType<typeof useTugboatStore>) =>
+  t.init({ onSkipped: () => undefined, onText: () => undefined, say: () => undefined });
 
 describe("tugboat store ordering", () => {
   beforeEach(() => {

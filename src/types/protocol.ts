@@ -557,11 +557,34 @@ export interface TugboatStatus {
   receiving: boolean;
   /** Why Tugboat turned itself off. */
   ended: "idle" | "hidden" | null;
+  /** The last clipboard sent to the phone: its kind and whether the phone has it, never its contents. */
+  clip: TugboatClip | null;
 }
 
 /** "tugboat-text": text from the phone went (or failed to go) onto the PC clipboard. */
 export interface TugboatTextArrived {
   ok: boolean;
+}
+
+// --- Tugboat's shared clipboard (src-tauri/src/tugboat/clip.rs) ---
+
+export type TugboatClipKind = "text" | "image";
+/** Waiting for the phone; the phone has it; or no phone took it within 2 minutes (dropped). */
+export type TugboatClipState = "waiting" | "delivered" | "expired";
+
+/** The last clipboard sent with "Send clipboard to iPhone" (`ClipStatus`). */
+export interface TugboatClip {
+  id: number;
+  kind: TugboatClipKind;
+  state: TugboatClipState;
+  /** When a waiting clipboard is dropped (Unix ms). */
+  expiresAt: number;
+}
+
+/** "tugboat-clip": the clipboard reached the phone, or was dropped (`ClipEvent`). */
+export interface TugboatClipEvent {
+  kind: TugboatClipKind;
+  state: TugboatClipState;
 }
 
 /**

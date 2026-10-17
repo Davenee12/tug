@@ -28,6 +28,21 @@ logged at most once a minute, with a count. Plain HTTP means an
 *active* attacker on the network could tamper with the first page load; that's documented and out
 of scope (see SECURITY.md).
 
+**The shared clipboard (Tugboat).** The PC's clipboard is read only when the person presses Send
+clipboard to iPhone (tray, Ctrl+K or the panel), never in the background, and goes out only over
+Tugboat's existing channel: the same port, secret, MACs, binding and sealing, with no new network
+destination. Only the bound phone gets it, at its next signed check-in. The PC holds it in memory
+(a picture as PNG bytes, never written to disk) for at most 2 minutes; it's let go the moment the
+phone acknowledges it (`POST /api/clip`, signed and sealed like any request; for a picture only
+after the phone really fetched every chunk), dropped when the 2 minutes are up, replaced by a newer
+press, and gone with the session. Text or pictures beyond Tugboat's limits (256 KB of text, 64 MB
+or 40 megapixels for a picture) are refused, and the clipboard's bitmap is parsed by a bounds-checked
+pure module (`tugboat/dib.rs`). In the other direction, text pasted on the phone goes onto the
+clipboard kept out of Windows' clipboard history and cloud clipboard sync. Logs record lengths and
+kinds only, never contents. The honest limit is Tugboat's: an active attacker who tampered with the
+first page load could read what was sent to the phone or put text on the PC's clipboard (as could
+anyone already able to read Tugboat's page).
+
 **The game controller channel (Tugboat Run).** When the game asks for the phone as a controller,
 the bound phone may `POST /api/pad`, under exactly Tugboat's rules: the same secret, a MAC on every
 request, the first phone binds, replays refused, the body sealed to its request. On top of that:

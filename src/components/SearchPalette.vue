@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Bell, CheckCheck, Copy, FastForward, Gamepad2, ListMusic, ListPlus, MessageSquare, Moon, Music2, Phone, Plus, QrCode, Repeat, Rewind, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, ThumbsDown, ThumbsUp, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
+import { Bell, CheckCheck, ClipboardCopy, Copy, FastForward, Gamepad2, ListMusic, ListPlus, MessageSquare, Moon, Music2, Phone, Plus, QrCode, Repeat, Rewind, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, ThumbsDown, ThumbsUp, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
 import { useGameStore } from "../stores/game";
@@ -167,6 +167,7 @@ function actionIcon(a: Action) {
   if (a.kind === "mark-all-read") return CheckCheck;
   if (a.kind === "dnd") return Moon;
   if (a.kind === "show-app") return Bell;
+  if (a.kind === "send-clipboard") return ClipboardCopy;
   if (a.target === "spotify") return Music2;
   if (a.target === "tugboat") return QrCode;
   if (a.target === "game") return Gamepad2;
@@ -235,6 +236,8 @@ async function run(a: Action) {
   } else if (a.kind === "show-app") {
     tug.view = "feed";
     tug.focusItem = `n${a.focusId}`;
+  } else if (a.kind === "send-clipboard") {
+    void tugboat.sendClipboard();
   } else if (a.target === "new-message") {
     tug.view = "messages";
     tug.pickerOpen = true;
@@ -337,6 +340,7 @@ function onKey(e: KeyboardEvent) {
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">dnd</kbd>
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">new message</kbd>
             <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">tugboat</kbd>
+            <kbd class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">send clipboard</kbd>
             <kbd v-if="tug.settings.showGames" class="mx-0.5 rounded border border-hairline px-1.5 font-mono text-[11px]">game</kbd>
           </p>
         </li>

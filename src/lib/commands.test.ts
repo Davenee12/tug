@@ -79,6 +79,16 @@ describe("parseActions", () => {
     expect(parseActions("dropbox invoice", people)).toEqual([]);
   });
 
+  it("sends the clipboard to the phone from its words, and only those", () => {
+    const send = [{ kind: "send-clipboard", label: "Send clipboard to iPhone" }];
+    for (const words of ["clipboard", "Send clipboard", "send clipboard to iPhone", "paste to phone", "copy to iphone", "share clipboard"]) {
+      expect(parseActions(words, people)).toEqual(send);
+    }
+    // A search that merely mentions the clipboard stays a search, and "send to phone" is still Tugboat.
+    expect(parseActions("clipboard manager", people)).toEqual([]);
+    expect(parseActions("send to phone", people)).toEqual([{ kind: "open", target: "tugboat", label: "Tugboat" }]);
+  });
+
   it("opens Tugboat Run from its words, never from 'play', and only while games are shown", () => {
     const games = { showGames: true };
     for (const words of ["game", "Games", "tugboat run", "boat game"]) {

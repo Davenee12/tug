@@ -1,6 +1,6 @@
-//! Put text on the Windows clipboard (one-time codes), and take an auto-copied code off it
-//! again. Done natively because the webview's Clipboard API can be refused depending on focus
-//! and permissions.
+//! Put text on the Windows clipboard (one-time codes, text from Tugboat), take an auto-copied code
+//! off it again, and read it when the person sends their clipboard to the phone. Done natively
+//! because the webview's Clipboard API can be refused depending on focus and permissions.
 
 #[cfg(windows)]
 pub fn set_text(text: &str) -> Result<(), String> {
@@ -100,6 +100,121 @@ fn clipboard_text_start() -> Option<String> {
         let _ = GlobalUnlock(memory);
         Some(text)
     }
+}
+
+/// What's on the clipboard, for Tugboat's "Send clipboard to iPhone": its text (refused unread
+/// past `max_text_bytes`), else a picture as the clipboard's `CF_DIB`, else nothing or something
+/// tug can't send. Only called when the person asks; contents are never logged.
+///
+/// Win32 rather than WinRT, off the main thread, for the same reason as `clear_if_holds`.
+#[cfg(windows)]
+pub fn read_for_sharing(max_text_bytes: usize) -> Result<crate::tugboat::clip::Reading, String> {
+    use crate::tugboat::clip::{Reading, MAX_IMAGE_PIXELS};
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, CountClipboardFormats, IsClipboardFormatAvailable, OpenClipboard,
+    };
+
+    const CF_DIB: u32 = 8;
+    const CF_UNICODETEXT: u32 = 13;
+    // A 32-bit bitmap at the pixel limit, plus room for its header and masks.
+    let max_dib = MAX_IMAGE_PIXELS as usize * 4 + 4096;
+    let err = |e: windows::core::Error| e.message().to_string();
+    let mut opened = Err(String::new());
+    for _ in 0..10 {
+        // SAFETY: no owner window; closed below on every path.
+        opened = unsafe { OpenClipboard(None) }.map_err(err);
+        if opened.is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    opened.map_err(|_| "Another app is using the clipboard. Try again in a moment.".to_string())?;
+    // SAFETY: the clipboard is open on this thread for everything below.
+    let reading = unsafe {
+        if IsClipboardFormatAvailable(CF_UNICODETEXT).is_ok() {
+            // Each UTF-16 unit is at least one UTF-8 byte, so no terminator within this many units
+            // means more than `max_text_bytes`.
+            match clipboard_units(CF_UNICODETEXT, max_text_bytes + 1) {
+                Some(Some(units)) => Reading::Text(String::from_utf16_lossy(&units)),
+                Some(None) => Reading::TooLong,
+                None => Reading::Other,
+            }
+        } else if IsClipboardFormatAvailable(CF_DIB).is_ok() {
+            match clipboard_bytes(CF_DIB, max_dib) {
+                Some(Some(bytes)) => Reading::Image(bytes),
+                Some(None) => Reading::ImageTooBig,
+                None => Reading::Other,
+            }
+        } else if CountClipboardFormats() == 0 {
+            Reading::Empty
+        } else {
+            Reading::Other
+        }
+    };
+    // SAFETY: opened above on this thread.
+    let _ = unsafe { CloseClipboard() };
+    Ok(reading)
+}
+
+/// A NUL-terminated UTF-16 clipboard format, up to `max_units` (`Some(None)` if it's longer).
+/// `None` if Windows wouldn't hand it over.
+///
+/// # Safety
+/// The clipboard must be open on this thread.
+#[cfg(windows)]
+unsafe fn clipboard_units(format: u32, max_units: usize) -> Option<Option<Vec<u16>>> {
+    use windows::Win32::Foundation::HGLOBAL;
+    use windows::Win32::System::DataExchange::GetClipboardData;
+    use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+
+    let handle = GetClipboardData(format).ok()?;
+    let memory = HGLOBAL(handle.0);
+    let units = GlobalSize(memory) / 2;
+    let ptr = GlobalLock(memory) as *const u16;
+    if ptr.is_null() {
+        return None;
+    }
+    // Reads stay within GlobalSize and stop at the terminator.
+    let slice = std::slice::from_raw_parts(ptr, units.min(max_units + 1));
+    let text = match slice.iter().position(|&u| u == 0) {
+        Some(end) => Some(slice[..end].to_vec()),
+        // No terminator anywhere in the block: take it all, if that fits.
+        None if units <= max_units => Some(slice.to_vec()),
+        None => None,
+    };
+    let _ = GlobalUnlock(memory);
+    Some(text)
+}
+
+/// A clipboard format's bytes, up to `max` (`Some(None)` if it's bigger). `None` if Windows
+/// wouldn't hand it over.
+///
+/// # Safety
+/// The clipboard must be open on this thread.
+#[cfg(windows)]
+unsafe fn clipboard_bytes(format: u32, max: usize) -> Option<Option<Vec<u8>>> {
+    use windows::Win32::Foundation::HGLOBAL;
+    use windows::Win32::System::DataExchange::GetClipboardData;
+    use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+
+    let handle = GetClipboardData(format).ok()?;
+    let memory = HGLOBAL(handle.0);
+    let size = GlobalSize(memory);
+    if size > max {
+        return Some(None);
+    }
+    let ptr = GlobalLock(memory) as *const u8;
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = std::slice::from_raw_parts(ptr, size).to_vec();
+    let _ = GlobalUnlock(memory);
+    Some(Some(bytes))
+}
+
+#[cfg(not(windows))]
+pub fn read_for_sharing(_max_text_bytes: usize) -> Result<crate::tugboat::clip::Reading, String> {
+    Err("The clipboard is only supported on Windows".into())
 }
 
 #[cfg(not(windows))]

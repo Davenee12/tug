@@ -22,7 +22,7 @@ import PairingDialog from "./components/PairingDialog.vue";
 import ToolConfirmCard from "./components/ToolConfirmCard.vue";
 import { nextDownSince, RECONNECT_GRACE_MS, showConnectionPanel } from "./lib/connectionPanel";
 import { showsReconnecting } from "./lib/connectionStatus";
-import { skippedMessage } from "./lib/tugboat";
+import { phoneTextMessage, skippedMessage } from "./lib/tugboat";
 import { START_FAILED } from "./lib/startup";
 import { isWide } from "./lib/layout";
 import { useElementSize } from "./lib/useElementSize";
@@ -121,10 +121,12 @@ onMounted(async () => {
       if (msg) tug.notify("info", msg);
     },
     // Text from the phone replaces the clipboard without asking, so say so (only once it's true).
-    onText: (ok) =>
-      ok
-        ? tug.notify("info", "Text from your phone is on your clipboard")
-        : tug.notify("error", "Text from your phone arrived, but couldn't go on the clipboard"),
+    onText: (ok) => {
+      const m = phoneTextMessage(ok, tugboat.status.phone);
+      tug.notify(m.kind, m.text);
+    },
+    // The shared clipboard's notes: sending, on the phone, not sent in time, or why it can't go.
+    say: (kind, text) => tug.notify(kind, text),
   });
   // Developer tools: only listens for the confirmation card (a text an AI tool wants to send).
   void devtools.init();

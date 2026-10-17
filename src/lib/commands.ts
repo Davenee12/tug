@@ -62,6 +62,8 @@ export type Action =
   | { kind: "mark-all-read"; count: number; label: string }
   | { kind: "dnd"; enabled: boolean; label: string }
   | { kind: "show-app"; appId: string; focusId: number; label: string }
+  /** Send what's on the PC's clipboard to the phone's Tugboat page. */
+  | { kind: "send-clipboard"; label: string }
   | { kind: "open"; target: OpenTarget; label: string };
 
 /** Panels and screens Ctrl+K can open by name. */
@@ -90,6 +92,17 @@ const OPEN: Array<[string[], OpenTarget, string]> = [
 const COPY_CODE = ["copy code", "code"];
 const CLEAR_ALL = ["clear all", "clear everything", "clear all notifications"];
 const MARK_READ = ["mark all read", "mark all as read", "mark everything read"];
+const SEND_CLIPBOARD = [
+  "clipboard",
+  "send clipboard",
+  "send clipboard to iphone",
+  "send clipboard to phone",
+  "share clipboard",
+  "paste to iphone",
+  "paste to phone",
+  "copy to iphone",
+  "copy to phone",
+];
 const DND = /^(?:do not disturb|dnd)(?:\s+(on|off))?$/i;
 
 const SEND = /^(?:text|msg|message|tell|send)\s+(.+)$/i;
@@ -132,6 +145,7 @@ export function parseActions(query: string, people: Person[], ctx: ActionContext
   if (COPY_CODE.includes(lower)) out.push(copyCodeAction(ctx));
   if (CLEAR_ALL.includes(lower)) out.push(clearAllAction(ctx));
   if (MARK_READ.includes(lower)) out.push(markReadAction(ctx));
+  if (SEND_CLIPBOARD.includes(lower)) out.push({ kind: "send-clipboard", label: "Send clipboard to iPhone" });
   const dnd = DND.exec(lower);
   if (dnd) out.push(dndAction(dnd[1], ctx));
   out.push(...appActions(q, ctx));
