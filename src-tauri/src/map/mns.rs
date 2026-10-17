@@ -260,7 +260,7 @@ fn connect_target(req: &Request) -> Option<[u8; 16]> {
 }
 
 #[cfg(windows)]
-pub use server::{start, MnsServer, ServerMessage};
+pub use server::{start, Arrived, MnsServer, ServerMessage};
 
 /// The WinRT plumbing: advertise the service, accept the phone's connection, and run the pure
 /// `MnsConn` over the socket. Thin on purpose; everything decidable lives above.
@@ -306,6 +306,21 @@ mod server {
         Disconnected,
     }
 
+    /// A [`ServerMessage`] and when it arrived, so a send report is only matched against sends
+    /// the phone had already accepted by then.
+    #[derive(Debug, Clone)]
+    pub struct Arrived {
+        pub at: std::time::Instant,
+        pub msg: ServerMessage,
+    }
+
+    fn arrived(msg: ServerMessage) -> Arrived {
+        Arrived {
+            at: std::time::Instant::now(),
+            msg,
+        }
+    }
+
     /// A running MNS advertisement + listener. Dropping it stops advertising and unhooks the
     /// connection handler, so a torn-down session can't leave a stale SDP record or handler.
     pub struct MnsServer {
@@ -331,7 +346,7 @@ mod server {
     /// Advertise the MNS service and start listening. The caller must already hold a MAP (MAS)
     /// session; it sends `SetNotificationRegistration(on)` *after* this returns so the phone has
     /// a record to find. Events arrive on `tx`.
-    pub async fn start(tx: UnboundedSender<ServerMessage>) -> Result<MnsServer, MapError> {
+    pub async fn start(tx: UnboundedSender<Arrived>) -> Result<MnsServer, MapError> {
         let service_id = RfcommServiceId::FromUuid(GUID::from_u128(MNS_UUID))?;
         let provider = bounded(RfcommServiceProvider::CreateAsync(&service_id)?).await?;
         let listener = StreamSocketListener::new()?;
@@ -360,7 +375,7 @@ mod server {
                     Ok(()) => log::info!("MNS connection closed by the iPhone"),
                     Err(e) => log::info!("MNS connection ended: {e}"),
                 }
-                let _ = tx.send(ServerMessage::Disconnected);
+                let _ = tx.send(arrived(ServerMessage::Disconnected));
             });
             Ok(())
         }))?;
@@ -404,7 +419,7 @@ mod server {
     /// disconnects or the link closes.
     async fn serve_connection(
         socket: StreamSocket,
-        tx: UnboundedSender<ServerMessage>,
+        tx: UnboundedSender<Arrived>,
         stopped: Arc<AtomicBool>,
     ) -> Result<(), MapError> {
         let reader = DataReader::CreateDataReader(&socket.InputStream()?)?;
@@ -427,10 +442,10 @@ mod server {
             let action = conn.handle(&req);
             write_packet(&writer, &action.response).await?;
             if !was_connected && conn.is_connected() {
-                let _ = tx.send(ServerMessage::Connected);
+                let _ = tx.send(arrived(ServerMessage::Connected));
             }
             if let Some(event) = action.event {
-                let _ = tx.send(ServerMessage::Event(event));
+                let _ = tx.send(arrived(ServerMessage::Event(event)));
             }
             if action.close {
                 let _ = socket.Close();
