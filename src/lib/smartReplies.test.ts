@@ -25,9 +25,21 @@ describe("suggestReplies: the rules", () => {
   });
 
   it("where / ETA gets On my way / 5 minutes / Running late, before it counts as a question", () => {
-    for (const text of ["Where are you?", "where r u", "ETA?", "how long till you're here", "omw", "Are you on your way?", "When will you be here?"]) {
+    for (const text of ["Where are you?", "where r u", "ETA?", "how long till you're here", "How far away are you", "When will you be here?"]) {
       expect(say(text), text).toEqual(["On my way", "5 minutes", "Running late"]);
     }
+  });
+
+  it("them on their way gets See you soon / 👍 / Drive safe, never On my way back", () => {
+    for (const text of ["omw", "OMW!", "omw, 10 mins 🚗", "On my way", "on my way, where are you?", "Be there soon"]) {
+      expect(say(text), text).toEqual(["See you soon", "👍", "Drive safe"]);
+      expect(say(text), text).not.toContain("On my way");
+    }
+  });
+
+  it("asking whether you're on your way is a question, not an ETA or an acknowledgement", () => {
+    expect(ruleFor("Are you on your way?")).toBe("question");
+    expect(ruleFor("on your way yet?")).toBe("question");
   });
 
   it("thanks gets You're welcome / 👍", () => {

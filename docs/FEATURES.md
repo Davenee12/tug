@@ -57,8 +57,9 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   back and Clear where they fit.
 - **Suggested replies** (on by default): a text's pop-up gets up to three one-tap replies beside
   the reply box and Mark read, such as "On my way" / "5 minutes" / "Running late" for "Where are
-  you?", "Yes" / "No" / "Let me check" for a question, "You're welcome" / "👍" for thanks, and
-  "Calling you now" / "Call you later" for "call me". tug picks them on your PC from what the text
+  you?", "See you soon" / "👍" / "Drive safe" for "omw", "Yes" / "No" / "Let me check" for a
+  question, "You're welcome" / "👍" for thanks, and "Calling you now" / "Call you later" for
+  "call me". tug picks them on your PC from what the text
   says (no internet, no AI service); codes, short codes and "Reply STOP" texts get none.
 - Pop-ups disappear from Windows when the phone clears the notification or tug quits.
 - At most 3 pop-ups every 10 seconds; the rest become one "N more notifications" pop-up.

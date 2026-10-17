@@ -19,14 +19,15 @@ export const DEFAULT_REPLIES: readonly string[] = ["👍", "OK", "Talk soon"];
 
 export interface ReplyRule {
   /** For tests and Settings' explanation; never logged with a message. */
-  name: "call" | "eta" | "question" | "thanks";
+  name: "call" | "ack" | "eta" | "question" | "thanks";
   test: RegExp;
   replies: readonly string[];
 }
 
 /**
- * The rules, most specific first: "Can you call me?" is a call request before it's a question, and
- * "Where are you?" is about where you are before it's a question.
+ * The rules, most specific first: "Can you call me?" is a call request before it's a question,
+ * "omw" is them on their way (acknowledged), and "Where are you?" is about where you are before
+ * it's a question.
  */
 export const RULES: readonly ReplyRule[] = [
   {
@@ -35,8 +36,14 @@ export const RULES: readonly ReplyRule[] = [
     replies: ["Calling you now", "Call you later"],
   },
   {
+    // They're on their way: acknowledge it. Offering "On my way" back would be wrong.
+    name: "ack",
+    test: /\bomw\b|\bon my way\b|\bbe there soon\b/i,
+    replies: ["See you soon", "👍", "Drive safe"],
+  },
+  {
     name: "eta",
-    test: /\bwhere (are|r) (you|u)\b|\beta\b|\bhow long\b|\bomw\b|\bon (your|ur) way\b|\bhow far\b|\bwhen will (you|u) (be|get)\b/i,
+    test: /\bwhere (are|r) (you|u)\b|\beta\b|\bhow long\b|\bhow far\b|\bwhen will (you|u) (be|get)\b/i,
     replies: ["On my way", "5 minutes", "Running late"],
   },
   {
