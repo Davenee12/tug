@@ -6,6 +6,7 @@
 import type { Contact, PhoneNotification, SmsMessage, ToastSpec } from "../types/protocol";
 import { appLabel, canClear, cleanName, groupConversations, isConversation, threadKey } from "./format";
 import { findCode } from "./codes";
+import { suggestReplies, type ReplyOptions } from "./smartReplies";
 
 const MESSAGES_APP = "com.apple.MobileSMS";
 
@@ -62,7 +63,15 @@ export function replyAddress(n: PhoneNotification, messages: SmsMessage[], conta
   return replyTarget(n, messages, contacts).to;
 }
 
-export function toastSpec(n: PhoneNotification, messages: SmsMessage[], contacts: Contact[]): ToastSpec {
+/** Suggested replies are off unless the caller passes the settings (lib/smartReplies). */
+const NO_REPLIES: Omit<ReplyOptions, "sender"> = { enabled: false, defaults: [] };
+
+export function toastSpec(
+  n: PhoneNotification,
+  messages: SmsMessage[],
+  contacts: Contact[],
+  replyOptions: Omit<ReplyOptions, "sender"> = NO_REPLIES,
+): ToastSpec {
   const conversation = isConversation(n);
   const ringing = n.category === "incomingCall";
   const reply = ringing ? { to: null, ambiguous: false } : replyTarget(n, messages, contacts);
@@ -77,5 +86,8 @@ export function toastSpec(n: PhoneNotification, messages: SmsMessage[], contacts
     code: findCode(n.message || n.subtitle)?.code ?? null,
     callBack: n.category === "missedCall" && n.live && n.removedAt == null && n.flags.positiveAction,
     clear: canClear(n),
+    // Only where a typed reply could go: no reply box (a group, a ringing call, an unknown
+    // address) means no suggestions either. Short codes and code texts get none (smartReplies).
+    replies: reply.to ? suggestReplies(n.message || n.subtitle, { ...replyOptions, sender: reply.to }) : [],
   };
 }

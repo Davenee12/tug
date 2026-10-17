@@ -13,6 +13,7 @@ import { formatAddress } from "../lib/format";
 import { normalizeAddress } from "../lib/address";
 import { SPOTIFY_BETA_LABEL, SPOTIFY_BETA_NOTE, SPOTIFY_RECONNECT } from "../lib/spotify";
 import { CODE_HOTKEYS, hotkeyAlternatives, hotkeyLabel, typeCodeShortcut } from "../lib/codeFill";
+import { cleanReplies, DEFAULT_REPLIES, MAX_REPLIES, REPLY_MAX_CHARS } from "../lib/smartReplies";
 import AppAvatar from "./AppAvatar.vue";
 import ConnectPanel from "./ConnectPanel.vue";
 import DeveloperSettings from "./DeveloperSettings.vue";
@@ -138,6 +139,21 @@ function toggleDay(d: number) {
   setQuiet({ days: next.length === 7 ? [] : next });
 }
 const muteCalls = computed({ get: () => tug.settings.muteCalls, set: (v) => void tug.setSetting("muteCalls", v) });
+
+// Suggested replies: on/off, and the list for texts no rule matches (lib/smartReplies). Three
+// boxes; an edit is cleaned (trimmed, no repeats) and saved when the box loses focus.
+const smartReplies = computed({ get: () => tug.settings.smartReplies, set: (v) => void tug.setSetting("smartReplies", v) });
+const replySlots = computed(() => Array.from({ length: MAX_REPLIES }, (_, i) => tug.settings.smartReplyDefaults[i] ?? ""));
+function onReplyDefault(i: number, e: Event) {
+  const box = e.target as HTMLInputElement;
+  const next = [...replySlots.value];
+  next[i] = box.value;
+  void tug.setSetting("smartReplyDefaults", cleanReplies(next));
+  // Show what was kept: a repeat or a blank leaves the box as saved, not as typed.
+  box.value = replySlots.value[i];
+}
+const repliesChanged = computed(() => tug.settings.smartReplyDefaults.join("\n") !== DEFAULT_REPLIES.join("\n"));
+const resetReplyDefaults = () => void tug.setSetting("smartReplyDefaults", [...DEFAULT_REPLIES]);
 
 // Code fill: copy new codes automatically, and a shortcut that types the latest one (lib/codeFill).
 const autoCopyCodes = computed({ get: () => tug.settings.autoCopyCodes, set: (v) => void tug.setSetting("autoCopyCodes", v) });
@@ -479,6 +495,37 @@ async function clearHistory() {
             >
               <SettingsSwitch v-model="filterUnknown" label="Filter unknown senders" />
             </SettingsRow>
+          </div>
+
+          <!-- Suggested replies: one-tap answers on text pop-ups and in Messages (lib/smartReplies). -->
+          <div class="mb-4 rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Suggested replies"
+              description="One-tap replies like “On my way” on a text's pop-up and above the reply box in Messages. tug picks them on this PC from what the text says, and nothing is sent until you tap one. Codes and automated texts get none."
+            >
+              <SettingsSwitch v-model="smartReplies" label="Suggested replies" />
+            </SettingsRow>
+            <div v-if="tug.settings.smartReplies" class="border-t border-hairline-soft px-5 py-4">
+              <p class="text-[14px] font-medium text-ink">For everything else</p>
+              <p class="mt-0.5 text-[13px] leading-snug text-muted">
+                Offered when a text isn't a question, a thank-you, a request to call, or asking where you are. Leave them empty to offer
+                nothing then.
+              </p>
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                <input
+                  v-for="(r, i) in replySlots"
+                  :key="i"
+                  type="text"
+                  class="input h-9 w-40"
+                  :value="r"
+                  :maxlength="REPLY_MAX_CHARS"
+                  :aria-label="`Reply ${i + 1} for everything else`"
+                  placeholder="Add a reply"
+                  @change="onReplyDefault(i, $event)"
+                />
+                <button v-if="repliesChanged" class="btn-secondary btn-sm" @click="resetReplyDefaults">Reset</button>
+              </div>
+            </div>
           </div>
 
           <!-- Code fill: new codes go on the clipboard; a shortcut types the latest one. -->

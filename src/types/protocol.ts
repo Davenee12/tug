@@ -298,6 +298,10 @@ export interface UiSettings {
   typeCodeKeys: string;
   /** The sidebar's Play button and the Ctrl+K "Tugboat Run" command (on by default). */
   showGames: boolean;
+  /** One-tap suggested replies on text pop-ups and in Messages (on by default; lib/smartReplies). */
+  smartReplies: boolean;
+  /** The suggestions for texts no rule matches (at most 3; lib/smartReplies `DEFAULT_REPLIES` unless changed). */
+  smartReplyDefaults: string[];
 }
 
 /**
@@ -323,6 +327,11 @@ export interface ToastSpec {
   callBack: boolean;
   /** Clearable on the phone (never a ringing call): "Clear". */
   clear: boolean;
+  /**
+   * Suggested replies, one button each, sent like a typed reply to `replyTo` (only with a reply
+   * box). At most 3, each at most 40 characters; the backend fits them in beside the other buttons.
+   */
+  replies?: string[];
 }
 
 /** A pop-up's body or button was pressed and carried out (`toast-pressed`, `toast/mod.rs`). */

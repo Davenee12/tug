@@ -292,7 +292,7 @@ answers never land), `layout` (sidebar density and "wide", from sizes that follo
 `ordering` (newest state wins over late events and reads), `pairings`,
 `pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `senders`
-(unknown-sender filter), `singleFlight` (one press, one action), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
+(unknown-sender filter), `singleFlight` (one press, one action), `smartReplies` (suggested replies: the rules, and when there are none), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `startup` (startup reads that fail are retried, never block), `threadWindow` (long conversations render their newest texts first),
 `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
 scoring, the speed curve, inertia, the weather's handling, merging the controls), `tugboatDaily` (the

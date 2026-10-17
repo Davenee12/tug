@@ -56,6 +56,12 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   this off).
 - **Windows pop-ups** for new notifications, with a reply box for texts, Mark read, Copy code, Call
   back and Clear where they fit.
+- **Suggested replies** (on by default): a text's pop-up gets up to three one-tap replies beside
+  the reply box and Mark read, such as "On my way" / "5 minutes" / "Running late" for "Where are
+  you?", "See you soon" / "👍" / "Drive safe" for "omw", "Yes" / "No" / "Let me check" for a
+  question, "You're welcome" / "👍" for thanks, and "Calling you now" / "Call you later" for
+  "call me". tug picks them on your PC from what the text
+  says (no internet, no AI service); codes, short codes and "Reply STOP" texts get none.
 - Pop-ups disappear from Windows when the phone clears the notification or tug quits.
 - At most 3 pop-ups every 10 seconds; the rest become one "N more notifications" pop-up.
 - Notifications that arrive while the iPhone reconnects still pop up (more than three become one
@@ -80,6 +86,9 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 - Texts arrive the moment your iPhone gets them, and you can **reply** from tug (Enter sends,
   Shift+Enter adds a line).
+- **Suggested replies** sit above the reply box while their newest text is the last word; one tap
+  sends it just like typing it (Sending…, Sent, or Not sent with Retry), and a pop-up's suggestion
+  shows in the conversation the same way.
 - Start a **new conversation** with Ctrl+N or +: recent people, contacts, or a typed number.
 - Drafts are kept per conversation while tug is open, so text typed to one person can't go to
   another.
@@ -283,8 +292,9 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
   closed, Start with Windows (starts in the tray), Zoom, Show games, and the keyboard shortcuts.
 - **iPhone:** connection health, Copy diagnostics, Open logs folder, help for the texts pairing,
   Visible to iPhone, Call from tug, and your iPhone's Connect panel.
-- **Notifications:** Filter unknown senders, Quiet hours, Mute calls, Always let through, and
-  muted apps.
+- **Notifications:** Filter unknown senders, Suggested replies (on or off, and your own three for
+  texts no rule fits; 👍 / OK / Talk soon to start), Quiet hours, Mute calls, Always let through,
+  and muted apps.
 - **Connectors:** connect or disconnect Spotify.
 - **Weather:** show, set up, change place or hide; °F / °C.
 - **Developer tools:** see above.

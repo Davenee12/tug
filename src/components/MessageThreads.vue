@@ -12,7 +12,9 @@ import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import ConversationRow from "./ConversationRow.vue";
 import MessageComposer from "./MessageComposer.vue";
+import SmartReplyChips from "./SmartReplyChips.vue";
 import { findCode } from "../lib/codes";
+import { conversationReplies } from "../lib/smartReplies";
 import type { SmsMessage } from "../types/protocol";
 
 const tug = useTugStore();
@@ -267,6 +269,15 @@ const replyHint = computed(() => {
   return "";
 });
 
+// Suggested replies to their newest text, while it's theirs (Settings › Notifications; lib/smartReplies).
+// Only where the composer is: a conversation tug can't reply to gets no suggestions either.
+const suggestions = computed(() =>
+  canReply.value
+    ? conversationReplies(selected.value, { enabled: tug.settings.smartReplies, defaults: tug.settings.smartReplyDefaults })
+    : [],
+);
+
+// A suggestion sends exactly like typing it and pressing Enter (same Sending…, Not sent with Retry).
 async function send(text = draft.value) {
   const conv = selected.value;
   const to = replyTo.value;
@@ -433,6 +444,13 @@ async function retry(m: SmsMessage) {
           </select>
           <span v-if="selected.addresses.length > 1">· {{ selected.addresses.length }} numbers under this name</span>
         </label>
+        <SmartReplyChips
+          v-if="canReply"
+          :replies="suggestions"
+          :contact="selected.contact"
+          :disabled="sending || !replyTo"
+          @pick="(text) => send(text)"
+        />
         <MessageComposer
           v-if="canReply"
           :drafts="drafts"

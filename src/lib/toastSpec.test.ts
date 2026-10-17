@@ -99,6 +99,38 @@ describe("toastSpec", () => {
       code: null,
       callBack: false,
       clear: true,
+      replies: [],
+    });
+  });
+
+  describe("suggested replies", () => {
+    const on = { enabled: true, defaults: ["👍", "OK", "Talk soon"] };
+
+    it("a text from a person gets the replies its rule picks, beside the reply box", () => {
+      expect(toastSpec(note("Zoe", "where are you?"), [], contacts, on)).toMatchObject({
+        replyTo: "+13025550123",
+        replies: ["On my way", "5 minutes", "Running late"],
+      });
+      expect(toastSpec(note("Zoe", "see you at the game"), [], contacts, on).replies).toEqual(["👍", "OK", "Talk soon"]);
+    });
+
+    it("none when switched off, or unless the caller passes the settings", () => {
+      expect(toastSpec(note("Zoe", "are you free?"), [], contacts, { ...on, enabled: false }).replies).toEqual([]);
+      expect(toastSpec(note("Zoe", "are you free?"), [], contacts).replies).toEqual([]);
+    });
+
+    it("none without a reply box: groups and unclear numbers, other apps, ringing calls", () => {
+      expect(toastSpec(note("Sam", "are you free?"), [], contacts, on)).toMatchObject({ replyTo: null, replies: [] });
+      expect(toastSpec(note("Zoe", "are you free?", { appId: "net.whatsapp.WhatsApp", appName: "WhatsApp" }), [], contacts, on).replies).toEqual([]);
+      const ringing = note("Zoe", "Incoming Call", { appId: "com.apple.mobilephone", appName: "Phone", category: "incomingCall" });
+      expect(toastSpec(ringing, [], contacts, on).replies).toEqual([]);
+    });
+
+    it("none for codes, short codes and robots: the Copy code button stays", () => {
+      const code = toastSpec(note("+1 (302) 555-0199", "Your verification code is 482913"), [], contacts, on);
+      expect(code).toMatchObject({ code: "482913", replies: [] });
+      expect(toastSpec(note("72975", "Your table is ready, see you soon"), [], contacts, on)).toMatchObject({ replyTo: "72975", replies: [] });
+      expect(toastSpec(note("+1 (302) 555-0199", "Sale ends today! Reply STOP to opt out"), [], contacts, on).replies).toEqual([]);
     });
   });
 

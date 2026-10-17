@@ -2,7 +2,7 @@
 //! toast the way tug builds it and prints every press (arguments, decoded action, typed
 //! reply) so activation can be checked on the pop-up, from Action Center, and after exit.
 //!
-//!   cargo run --example toast_probe                     # a text with Reply / Mark read, under PowerShell's AUMID
+//!   cargo run --example toast_probe                     # a text with Reply, three suggested replies and Mark read, under PowerShell's AUMID
 //!   cargo run --example toast_probe -- --aumid tug      # …under the installed tug's AUMID (dev.davejames.tug)
 //!   cargo run --example toast_probe -- --kind code      # one-time code: Copy code / Clear
 //!   cargo run --example toast_probe -- --kind missed    # missed call: Call back / Clear
@@ -60,6 +60,7 @@ fn main() {
             reply_to: Some("+15555550123".into()),
             mark_read: true,
             clear: true,
+            replies: vec!["On my way".into(), "5 minutes".into(), "Running late".into()],
             ..base
         },
     };
