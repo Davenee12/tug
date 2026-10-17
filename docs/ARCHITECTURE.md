@@ -221,7 +221,8 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `link_policy.rs` | What a failed connect means, the sticky "away" state, waiting for link-up, keep-or-relink after wake, when to ask for a re-pair |
 | `wedge.rs` | An adapter that's connected but not answering: relink with backoff and a cap |
 | `wake.rs` | A real sleep vs a stalled thread, from two clocks and the resume flag |
-| `map/contacts_watch.rs` | When to pull the phonebook; when an empty phonebook means Sync Contacts is off |
+| `map/contacts_watch.rs` | When to check the phonebook (every 10 min, plus triggers; every 10 s while the switches are on screen), whether a check must pull the names (PBAP 1.2 version counters), when an empty phonebook means Sync Contacts is off |
+| `pin_confirm.rs` | The PIN prompt waiting on the user, by id, so one pairing's leftovers can't close the next's |
 | `map/command_queue.rs` | The message worker's priority order: sends before refreshes, mark-read last |
 | `map/obex.rs`, `bmessage.rs`, `listing.rs`, `vcard.rs`, `mns_event.rs`, `mns.rs`, `pick.rs` | OBEX framing, MAP/PBAP parsers, MNS event handling, which paired device is the iPhone |
 | `devtools/confirm.rs`, `rate_limit.rs`, `recipient.rs`, `settings.rs` | The send-confirmation state machine, per-tool limits, name → contact, switch defaults |

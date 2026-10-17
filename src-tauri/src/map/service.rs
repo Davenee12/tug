@@ -18,9 +18,16 @@ use crate::state::{events, Shared};
 
 pub enum MapCommand {
     Refresh,
-    /// Pull the phone's contacts now (the switches came on screen, tug's window came to the front,
-    /// or "Check again"), so a Sync Contacts flip shows up at once instead of at the next due pull.
+    /// Check the phone's contacts now ("Check again"), so a Sync Contacts flip shows up at once
+    /// instead of at the next routine check.
     CheckContacts,
+    /// The iPhone's switches are on screen (setup, Settings › iPhone), or stopped being: quick
+    /// contacts checks while they are (`contacts_watch::QUICK_RETRY`). Lapses on its own unless
+    /// renewed (`SWITCHES_ON_SCREEN_FOR`), so a missed "off" can't leave quick checks running.
+    SwitchesOnScreen(bool),
+    /// Start over: the phone was forgotten (or another adopted). Drop the session and everything
+    /// learned about the old phone, so nothing of it is shown or written back afterwards.
+    Forget,
     /// Pull recent calls once `after` has passed (a call that just ended needs a moment to
     /// reach the phone's log).
     RefreshCalls(Duration),
@@ -54,6 +61,8 @@ impl crate::map::command_queue::Laned for MapCommand {
     fn lane(&self) -> crate::map::command_queue::Lane {
         use crate::map::command_queue::Lane;
         match self {
+            // Everything queued after it must see the reset.
+            MapCommand::Forget => Lane::Urgent,
             // Someone is waiting on these right now.
             MapCommand::Deliver { .. } | MapCommand::Dial { .. } => Lane::Send,
             // Nobody waits on marking texts read: never ahead of a send, nor of a refresh.
@@ -62,6 +71,7 @@ impl crate::map::command_queue::Laned for MapCommand {
             | MapCommand::CheckContacts
             | MapCommand::RefreshCalls(_)
             | MapCommand::InventoryFolders { .. }
+            | MapCommand::SwitchesOnScreen(_)
             | MapCommand::Warm => Lane::Normal,
         }
     }
@@ -89,6 +99,16 @@ impl MapHandle {
     /// Check Sync Contacts right away (see `MapCommand::CheckContacts`).
     pub fn check_contacts(&self) {
         let _ = self.tx.send(MapCommand::CheckContacts);
+    }
+
+    /// The iPhone's switches are (or stopped being) on screen (see `MapCommand::SwitchesOnScreen`).
+    pub fn switches_on_screen(&self, on: bool) {
+        let _ = self.tx.send(MapCommand::SwitchesOnScreen(on));
+    }
+
+    /// Start over (see `MapCommand::Forget`).
+    pub fn forget(&self) {
+        let _ = self.tx.send(MapCommand::Forget);
     }
 
     pub fn refresh_calls(&self, after: Duration) {
@@ -245,14 +265,15 @@ mod worker {
     use super::MapCommand;
     use crate::map::address::normalize;
     use crate::map::command_queue::{CommandQueue, Laned};
-    use crate::map::contacts_watch::{check_now_at, ContactsWatch, Pull, Transition};
+    use crate::map::contacts_watch::{check_now_at, ContactsWatch, Fingerprint, Pull, Transition, TriggerGate};
     use crate::map::health::{Attempt, Health, LiveTexts, TextsPairing};
     use crate::map::listing;
     use crate::map::mns::{self, Outgoing};
     use crate::map::obex::RSP_NOT_FOUND;
     use crate::map::pick::choose_device;
     use crate::map::session::{
-        find_devices, pull_call_history, pull_contacts, MapDevice, MapError, MapSession, PushError, PBAP_TURN,
+        check_contacts, find_devices, pull_call_history, pull_contacts, MapDevice, MapError, MapSession,
+        PhonebookCheck, PushError, PBAP_TURN,
     };
     use crate::messages::{IncomingMessage, Status, StoredMessage, SOURCE_IPHONE_MAP};
     use crate::state::{events, keys, ConnectionState, Shared};
@@ -427,7 +448,27 @@ mod worker {
         last_warm: Option<Instant>,
         /// A refresh stopped early to let a send through: run another one straight after.
         resync_soon: bool,
+        /// What the phone said about its phonebook at the last check that pulled contacts on this
+        /// texts connection: an unchanged answer needs no pull (`contacts_watch::after_check`).
+        /// None until then, so a connection's first check pulls the names.
+        contacts_fp: Option<Fingerprint>,
+        /// This phone reported a non-zero phonebook size that a pull bore out, so its "0" means
+        /// Sync Contacts is off.
+        zero_trusted: bool,
+        /// Why the next contacts check was brought forward ("Check again", the texts connection
+        /// opening, ...); None for the routine one.
+        contacts_trigger: Option<&'static str>,
+        /// Until when the iPhone's switches count as on screen (quick contacts checks).
+        switches_until: Option<Instant>,
+        /// At most one check per `contacts_watch::UNKNOWN_SENDER_GAP` for texts from numbers with
+        /// no name.
+        unknown_sender: TriggerGate<Instant>,
+        /// Counts Start overs: a refresh that started before one doesn't write its results back.
+        forget_gen: u64,
     }
+
+    /// How long a "the switches are on screen" lasts unless renewed (the window renews it).
+    const SWITCHES_ON_SCREEN_FOR: Duration = Duration::from_secs(90);
 
     /// Sends awaiting the phone's own report, kept for timing.
     const ACCEPTED_KEEP: usize = 32;
@@ -484,6 +525,12 @@ mod worker {
             accepted_at: Vec::new(),
             last_warm: None,
             resync_soon: false,
+            contacts_fp: None,
+            zero_trusted: false,
+            contacts_trigger: None,
+            switches_until: None,
+            unknown_sender: TriggerGate::default(),
+            forget_gen: 0,
         };
         // Interrupted sends were already marked failed in `start`, before any send could be queued.
         // Old names from renames that happened while tug wasn't keeping track.
@@ -564,18 +611,13 @@ mod worker {
         async fn run(&mut self, cmd: MapCommand, next: &mut Instant) {
             match cmd {
                 MapCommand::Refresh => self.refresh().await,
-                MapCommand::CheckContacts => {
-                    // Either way: the user may have just turned Sync Contacts on OR off. Only a
-                    // check that brings the pull forward does anything: a second ask (focus +
-                    // visibility, "Check again") finds it already due and costs nothing, rather
-                    // than another inbox listing and phonebook pull.
-                    if let Some(at) = self.contacts_due_now() {
-                        if at <= Instant::now() {
-                            self.refresh().await;
-                        } else {
-                            // Too soon after the last pull: wake for it once the gap is up.
-                            *next = (*next).min(at);
-                        }
+                MapCommand::CheckContacts => self.check_contacts_now("Check again", next).await,
+                MapCommand::SwitchesOnScreen(on) => {
+                    let was = self.switches_on_screen();
+                    self.switches_until = on.then(|| Instant::now() + SWITCHES_ON_SCREEN_FOR);
+                    // Just came on screen: the user may be about to flip Sync Contacts either way.
+                    if on && !was {
+                        self.check_contacts_now("the switches came on screen", next).await;
                     }
                 }
                 // Wake for it: the next refresh pulls the calls once they're due.
@@ -585,7 +627,9 @@ mod worker {
                     let _ = reply.send(self.inventory_folders().await);
                 }
                 MapCommand::Warm => self.warm().await,
-                cmd @ (MapCommand::Deliver { .. } | MapCommand::Dial { .. }) => self.run_priority(cmd).await,
+                cmd @ (MapCommand::Deliver { .. } | MapCommand::Dial { .. } | MapCommand::Forget) => {
+                    self.run_priority(cmd).await
+                }
             }
         }
 
@@ -599,6 +643,7 @@ mod worker {
                 MapCommand::Dial { number, reply } => {
                     let _ = reply.send(self.dial(number.as_deref()).await);
                 }
+                MapCommand::Forget => self.forget(),
                 other => self.queue.push(other),
             }
         }
@@ -763,8 +808,11 @@ mod worker {
                     self.publish_contacts();
                 }
                 // A fresh texts connection: check Sync Contacts straight away, not at the next due
-                // pull (a re-pair resets the switch, and it may have been flipped meanwhile).
+                // check (a re-pair resets the switch, and it may have been flipped meanwhile), and
+                // pull the names on it. It runs after the sync, behind any send waiting.
                 self.next_contacts_sync = Instant::now();
+                self.contacts_trigger = Some("the texts connection opened");
+                self.contacts_fp = None;
                 // Only once connecting worked: a device that won't connect isn't "the phone".
                 self.remember_texts_device(&device.id);
                 // The LE side often reports the bare "iPhone"; the Classic side carries the real
@@ -869,13 +917,80 @@ mod worker {
             });
         }
 
-        /// Pull contacts as soon as possible (no sooner than `contacts_watch::CHECK_GAP` after the
-        /// last). Returns when, if that brought the pull forward; `None` if one was already due by
-        /// then, so the caller doesn't refresh again for nothing.
-        fn contacts_due_now(&mut self) -> Option<Instant> {
+        /// Check contacts as soon as possible (no sooner than `contacts_watch::CHECK_GAP` after the
+        /// last), for `why`. Returns when, if that brought the check forward; `None` if one was
+        /// already due by then, so the caller doesn't refresh again for nothing.
+        fn contacts_due_now(&mut self, why: &'static str) -> Option<Instant> {
             let at = check_now_at(Instant::now(), self.last_contacts_pull, self.next_contacts_sync)?;
             self.next_contacts_sync = at;
+            self.contacts_trigger = Some(why);
             Some(at)
+        }
+
+        /// An asked-for check ("Check again", the switches coming on screen): now, or once the gap
+        /// since the last one is up. Either way behind any send waiting (`refresh` serves them
+        /// before the contacts step).
+        async fn check_contacts_now(&mut self, why: &'static str, next: &mut Instant) {
+            if let Some(at) = self.contacts_due_now(why) {
+                if at <= Instant::now() {
+                    self.refresh().await;
+                } else {
+                    *next = (*next).min(at);
+                }
+            }
+        }
+
+        /// The iPhone's switches are on screen right now (renewed by the window).
+        fn switches_on_screen(&self) -> bool {
+            self.switches_until.is_some_and(|t| Instant::now() < t)
+        }
+
+        /// Start over: drop the session and everything about the old phone, here and in the
+        /// status, so the next phone starts clean. A refresh in progress (this can run between its
+        /// steps, `serve_sends`) sees `forget_gen` move and writes nothing back.
+        fn forget(&mut self) {
+            log::info!("message access: starting over (the iPhone was forgotten or replaced)");
+            self.forget_gen = self.forget_gen.wrapping_add(1);
+            // Dropping the session closes its socket (`ObexLink`'s Drop); registration goes with it.
+            self.session = None;
+            self.session_epoch = self.session_epoch.wrapping_add(1);
+            self.stop_live_texts();
+            self.reset_photo_pass();
+            self.device_id = None;
+            self.texts_device = None;
+            self.health = Health::default();
+            self.contacts.forget();
+            self.contacts_fp = None;
+            self.zero_trusted = false;
+            self.contacts_trigger = None;
+            self.phonebook_sig = None;
+            self.last_contacts_pull = None;
+            self.next_contacts_sync = Instant::now();
+            self.last_calls_pull = None;
+            self.next_calls_sync = Instant::now();
+            self.backfilled = false;
+            self.fetch_tries = FetchTries::default();
+            self.connect_failures = 0;
+            self.next_retry = None;
+            self.quick_retry = None;
+            self.session_synced = false;
+            self.queued_reads.clear();
+            self.accepted_at.clear();
+            self.mns_reopened_at = None;
+            self.mns_grace_warned = false;
+            self.last_type_counts = None;
+            self.shared.update_status(|s| {
+                s.services.messages = false;
+                s.messages_error = None;
+                s.texts_were_connected = false;
+                s.texts_unreachable = false;
+                s.texts_pairing = TextsPairing::Unknown;
+                s.texts_device = None;
+                s.contacts_error = None;
+                s.contacts_shared = false;
+                s.contacts_off = false;
+                s.live_texts = LiveTexts::Off;
+            });
         }
 
         fn fail(&mut self, e: &MapError) {
@@ -891,6 +1006,7 @@ mod worker {
             // What the phone shares is per connection; ask again on the next one, and treat its
             // first phonebook as new (saved, and the photo pass started) rather than "unchanged".
             self.contacts.connection_dropped();
+            self.contacts_fp = None;
             self.phonebook_sig = None;
             self.publish_contacts();
             self.reset_photo_pass();
@@ -1021,36 +1137,81 @@ mod worker {
                 self.next_contacts_sync = Instant::now() + CONTACTS_BUSY_RETRY;
                 return;
             };
-            // Bounded as a whole: the pull runs on the same worker as sending and mark-read. No
-            // photos here (`with_photos: false`) — asking for them made the pull ~4x slower and so
-            // blocked texts; a separate background pass fetches faces off this worker.
-            // A send that arrives mid-pull goes first: the pull is dropped (closing its PBAP
+            let quick = self.switches_on_screen();
+            // What brought this check forward, if anything; none means the routine one.
+            let trigger = self.contacts_trigger.take();
+            let routine = trigger.is_none() && !quick;
+            // Bounded as a whole: it runs on the same worker as sending and mark-read. No photos
+            // here — asking for them made the pull ~4x slower; a separate background pass fetches
+            // faces off this worker. Usually just the size and version counters (`check_contacts`).
+            // A send that arrives meanwhile goes first: the check is dropped (closing its PBAP
             // connection) and asked again shortly.
-            let pull = tokio::time::timeout(CONTACTS_PULL_TIMEOUT, pull_contacts(&device_id, false));
-            let Some(pulled) = self.unless_send(pull).await else {
+            let check = tokio::time::timeout(
+                CONTACTS_PULL_TIMEOUT,
+                check_contacts(&device_id, self.contacts_fp, self.zero_trusted, routine),
+            );
+            let Some(checked) = self.unless_send(check).await else {
                 drop(turn);
-                log::debug!("contacts sync stopped for a send; trying again shortly");
+                log::debug!("contacts check stopped for a send; trying again shortly");
+                self.contacts_trigger = trigger;
                 self.next_contacts_sync = Instant::now() + CONTACTS_BUSY_RETRY;
                 return;
             };
-            let pulled = pulled.unwrap_or(Err(MapError::Timeout));
+            let checked = checked.unwrap_or(Err(MapError::Timeout));
             // Released before the photo pass below takes its own turn.
             drop(turn);
             self.last_contacts_pull = Some(Instant::now());
-            let watching = self.shared.watching();
-            let pull = match &pulled {
-                Ok(entries) if entries.is_empty() => Pull::Empty,
-                Ok(_) => Pull::Shared,
-                Err(MapError::ContactsConsent) => Pull::Refused,
-                Err(_) => Pull::Failed,
+            let why = trigger.unwrap_or(if quick { "the switches are on screen" } else { "routine" });
+            let (pull, pulled) = match checked {
+                Ok(PhonebookCheck::Settled { empty: true, .. }) => {
+                    log::debug!("contacts check ({why}): the phonebook is empty");
+                    self.contacts_fp = None;
+                    (Pull::Empty, Ok(Vec::new()))
+                }
+                Ok(PhonebookCheck::Settled {
+                    empty: false,
+                    fingerprint,
+                }) => {
+                    log::debug!(
+                        "contacts check ({why}): unchanged ({}), nothing pulled",
+                        if fingerprint.has_counters() {
+                            "version counters"
+                        } else {
+                            "size"
+                        }
+                    );
+                    self.contacts_fp = Some(fingerprint);
+                    (Pull::Shared, Ok(Vec::new()))
+                }
+                Ok(PhonebookCheck::Entries { entries, fingerprint }) => {
+                    log::debug!(
+                        "contacts check ({why}): pulled the names (the phone {} version counters)",
+                        if fingerprint.has_counters() {
+                            "sends"
+                        } else {
+                            "sends no"
+                        }
+                    );
+                    if entries.is_empty() {
+                        self.contacts_fp = None;
+                        (Pull::Empty, Ok(entries))
+                    } else {
+                        // A non-zero size borne out by a pull: this phone's sizes mean something.
+                        self.zero_trusted |= fingerprint.size.is_some_and(|n| n > 0);
+                        self.contacts_fp = Some(fingerprint);
+                        (Pull::Shared, Ok(entries))
+                    }
+                }
+                Err(e @ MapError::ContactsConsent) => (Pull::Refused, Err(e)),
+                Err(e) => (Pull::Failed, Err(e)),
             };
-            let outcome = self.contacts.record(pull, watching);
+            let outcome = self.contacts.record(pull, quick);
             self.next_contacts_sync = Instant::now() + outcome.next;
             // The toggle follows at once: the status event goes out before the slower save below.
             self.publish_contacts();
             match outcome.transition {
                 Some(Transition::Off) => log::info!(
-                    "Sync Contacts looks off on the iPhone (it shared no contacts); checking every {}s",
+                    "Sync Contacts looks off on the iPhone (it shared no contacts); next check in {}s",
                     outcome.next.as_secs()
                 ),
                 Some(Transition::On) => log::info!("Sync Contacts is on again: the iPhone is sharing contacts"),
@@ -1059,11 +1220,16 @@ mod worker {
             match pulled {
                 // The iPhone answers with an empty list, not a refusal, while Sync Contacts is
                 // off. Keep any names already saved and keep asking (`contacts_watch`).
+                // Unchanged since the names were last pulled: the check did its job.
+                Ok(entries) if entries.is_empty() && pull == Pull::Shared => {
+                    self.shared.update_status(|s| s.contacts_error = None);
+                    self.maybe_sync_photos();
+                }
                 Ok(entries) if entries.is_empty() => {
                     // It answered, so it isn't refusing any more (the switch is just off).
                     self.shared.update_status(|s| s.contacts_error = None);
                     if outcome.log_empty {
-                        log::debug!("the iPhone shared no contacts (Sync Contacts off?), asking again soon");
+                        log::debug!("the iPhone shared no contacts (Sync Contacts off?)");
                     }
                 }
                 Ok(entries) => {
@@ -1311,7 +1477,12 @@ mod worker {
                 }
                 return;
             }
+            let gen = self.forget_gen;
             let result = self.sync().await;
+            // Start over ran while this sync made way for a send: its results are the old phone's.
+            if self.forget_gen != gen {
+                return;
+            }
             self.record_health(&result);
             if result.is_ok() {
                 // Between each step, a send that arrived meanwhile goes out first; the pulls also
@@ -1410,8 +1581,13 @@ mod worker {
             let epoch = self.session_epoch;
             let mut interrupted = false;
             let session = self.session_for(epoch).ok_or(MapError::Closed)?;
-            if let Err(e) = session.update_inbox().await {
-                log::debug!("UpdateInbox: {e}");
+            match session.update_inbox().await {
+                Ok(()) => {}
+                // The link is dead or out of step: a listing on it would only wait out another
+                // timeout. Fail the sync so the session is dropped and reopened.
+                Err(e @ (MapError::Timeout | MapError::Closed)) => return Err(e),
+                // A refusal (some phones don't do UpdateInbox) is harmless: list anyway.
+                Err(e) => log::debug!("UpdateInbox: {e}"),
             }
             let mut listed = session.list("inbox", LIST_MAX, 0).await?;
             if backfill {
@@ -1473,6 +1649,7 @@ mod worker {
                 );
             }
             let mut added = 0;
+            let mut new_senders: Vec<String> = Vec::new();
             // A download that timed out leaves the session in an unknown state: stop the sync there
             // (dropping the session) once what's been fetched is saved.
             let mut stop: Option<MapError> = None;
@@ -1556,6 +1733,7 @@ mod worker {
                     }
                     shared.emit(events::MESSAGE, m);
                     added += 1;
+                    new_senders.push(address.clone());
                 }
                 if stop.is_some() {
                     break;
@@ -1564,8 +1742,16 @@ mod worker {
             if added > 0 {
                 let named = !shared.store.learn_contacts()?.is_empty();
                 let aliased = shared.store.learn_aliases()? > 0;
+                let contacts = shared.store.contacts()?;
+                // A text from a number tug has no name for: the phone may have a new contact. One
+                // check (at most every UNKNOWN_SENDER_GAP), after the texts, behind any send.
+                let known: std::collections::HashSet<&str> = contacts.iter().map(|c| c.address.as_str()).collect();
+                if new_senders.iter().any(|a| !known.contains(a.as_str())) && self.unknown_sender.allow(Instant::now())
+                {
+                    self.contacts_due_now("a text from a number with no name");
+                }
                 if named || aliased {
-                    shared.emit(events::CONTACTS, shared.store.contacts()?);
+                    shared.emit(events::CONTACTS, contacts);
                 }
             }
             if let Some(e) = stop {
@@ -2054,6 +2240,8 @@ mod lane_tests {
         match c {
             MapCommand::Refresh => "refresh".into(),
             MapCommand::CheckContacts => "contacts".into(),
+            MapCommand::SwitchesOnScreen(_) => "switches".into(),
+            MapCommand::Forget => "forget".into(),
             MapCommand::RefreshCalls(_) => "calls".into(),
             MapCommand::MarkRead(ids) => format!("read {ids:?}"),
             MapCommand::Deliver { id, .. } => format!("send {id}"),
@@ -2083,6 +2271,22 @@ mod lane_tests {
             ["send 7", "send 8", "refresh", "contacts", "calls", "warm", "read [1]", "read [2]"],
             "sends first in order, one refresh, reads last"
         );
+    }
+
+    #[test]
+    fn start_over_runs_before_anything_queued_and_cuts_into_a_refresh() {
+        let mut q = CommandQueue::default();
+        q.push(MapCommand::MarkRead(vec![1]));
+        q.push(deliver(4));
+        q.push(MapCommand::SwitchesOnScreen(true));
+        q.push(MapCommand::Forget);
+        assert_eq!(
+            q.take_priority().map(|c| name(&c)).as_deref(),
+            Some("forget"),
+            "between a refresh's steps, so the rest of it sees the reset"
+        );
+        let order: Vec<String> = std::iter::from_fn(|| q.pop()).map(|c| name(&c)).collect();
+        assert_eq!(order, ["send 4", "switches", "read [1]"]);
     }
 
     #[test]

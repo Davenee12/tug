@@ -861,7 +861,7 @@ mockIPC(
       case "plugin:app|version":
         return appVersion;
       // Sync Contacts is read by asking the phone: ?contactsoff&flip turns it on at the next check
-      // ("Check again", or the window coming to the front), as if the switch had just been flipped.
+      // ("Check again"), as if the switch had just been flipped.
       case "check_switches":
         if (status.contactsOff && params.has("flip")) {
           Object.assign(status, { contactsOff: false, contactsShared: true });
@@ -869,6 +869,7 @@ mockIPC(
         }
         return null;
       case "set_watching":
+      case "set_switches_visible":
       case "warm_texts":
         return null;
       case "get_status":
