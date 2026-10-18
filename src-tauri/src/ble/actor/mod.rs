@@ -272,6 +272,8 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         advertise_gen: 0,
         carried_name: None,
         cccd_check_in: CCCD_CHECK_SECS,
+        probe_interrupted: 0,
+        routine_check_logged: None,
         optional_retry_at: None,
         link_down_at: None,
         wedge: WedgeWatch::default(),
@@ -325,6 +327,11 @@ struct Actor {
     carried_name: Option<String>,
     /// Seconds until the ANCS subscription is verified on the iPhone again.
     cccd_check_in: u32,
+    /// Authorization probes in a row the link cut off (`link_policy::next_subscription_check`).
+    probe_interrupted: u32,
+    /// When a subscription check that found nothing new last said so in the log (None: not yet on
+    /// this subscription).
+    routine_check_logged: Option<Instant>,
     /// Last retry of media/battery discovery: full GATT discovery, so it keeps the slow
     /// cadence even while the user watches the switches (and the probe runs every 2 s).
     optional_retry_at: Option<Instant>,

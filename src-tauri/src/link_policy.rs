@@ -225,9 +225,88 @@ pub const WAKE_CHECK: Duration = Duration::from_secs(10);
 /// to block every connect until tug restarted.
 pub const RADIO_RECHECK_SECS: u32 = 45;
 
+/// What the ANCS authorization probe (a Control Point request iOS refuses one way while it shares
+/// notifications with this PC and another way while it doesn't) came back with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Probe {
+    /// The phone answered: sharing, or not. Either way the link works.
+    Answered,
+    /// Cut off by the link: Windows cancelled the request as the connection dropped, couldn't
+    /// reach the phone, or it went unanswered. Says nothing about sharing.
+    Interrupted,
+    /// Anything else (an ATT code iOS isn't known to send for it).
+    Failed,
+}
+
+/// Re-checks after a probe the link cut off, in seconds: then the routine cadence. Seen on hardware
+/// (six days): 20 of the 26 times Windows closed tug's objects for the phone, the probe had been cut
+/// off 14–16 s earlier and nothing noticed until the next routine check, so notifications (calls
+/// included) were dead in between. Checking again soon notices in seconds; backing off keeps a
+/// flapping link from being asked every two seconds.
+pub const PROBE_RECHECK_SECS: [u32; 3] = [2, 4, 8];
+
+/// Seconds until the next ANCS subscription check, given what this one's probe found, how many
+/// probes in a row (this one included) the link cut off, and the routine cadence (15 s, or 2 s while
+/// someone is looking at the iPhone's switches). Never later than the routine cadence: a revoked
+/// permission is noticed as fast as before.
+pub fn next_subscription_check(probe: Probe, interrupted_in_a_row: u32, routine: u32) -> u32 {
+    match probe {
+        Probe::Interrupted => {
+            let i = interrupted_in_a_row.saturating_sub(1) as usize;
+            PROBE_RECHECK_SECS.get(i).copied().unwrap_or(routine).min(routine)
+        }
+        Probe::Answered | Probe::Failed => routine,
+    }
+}
+
+/// The subscription check runs every 15 s; while nothing changes, its "all fine" line is written at
+/// most this often. It was three DEBUG lines per check (63% of the lines in a day's log on
+/// hardware), which pushed real history out of the rotated logs sooner.
+pub const ROUTINE_CHECK_LOG_EVERY: Duration = Duration::from_secs(60 * 60);
+
+/// Whether a check that found nothing new should say so in the log: the first one on a
+/// subscription (`since_last_logged` is None), then hourly.
+pub fn log_routine_check(since_last_logged: Option<Duration>) -> bool {
+    since_last_logged.is_none_or(|d| d >= ROUTINE_CHECK_LOG_EVERY)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_probe_the_link_cut_off_is_checked_again_soon_then_backs_off() {
+        let routine = 15;
+        let waits: Vec<u32> = (1..=5)
+            .map(|n| next_subscription_check(Probe::Interrupted, n, routine))
+            .collect();
+        assert_eq!(
+            waits,
+            vec![2, 4, 8, 15, 15],
+            "then the routine cadence, never faster forever"
+        );
+        assert_eq!(next_subscription_check(Probe::Answered, 0, routine), 15);
+        assert_eq!(
+            next_subscription_check(Probe::Failed, 0, routine),
+            15,
+            "an odd answer isn't the link going"
+        );
+        // While the switches are on screen the routine check is already every 2 s: never slower.
+        assert_eq!(next_subscription_check(Probe::Interrupted, 3, 2), 2);
+        assert_eq!(
+            next_subscription_check(Probe::Interrupted, 0, routine),
+            2,
+            "no underflow"
+        );
+    }
+
+    #[test]
+    fn an_unchanged_subscription_check_is_logged_once_then_hourly() {
+        assert!(log_routine_check(None), "the first check on a subscription");
+        assert!(!log_routine_check(Some(Duration::from_secs(16))));
+        assert!(!log_routine_check(Some(Duration::from_secs(59 * 60))));
+        assert!(log_routine_check(Some(ROUTINE_CHECK_LOG_EVERY)));
+    }
 
     #[test]
     fn a_wake_keeps_a_healthy_link_and_rebuilds_a_dead_one() {
