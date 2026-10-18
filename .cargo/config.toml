@@ -1,0 +1,18 @@
+# Build settings for whisper.cpp, which voice typing's accurate engine compiles from source through
+# `whisper-rs-sys` (CMake + MSVC). Here, at the repository root, so they apply however cargo is
+# started: `npm run check` (from the root, with --manifest-path), `tauri build` (from src-tauri) and
+# CI. Only whisper-rs-sys's build script reads them (it passes GGML_* on to CMake). A value already
+# set in the environment wins. (whisper-rs-sys also generates its Rust bindings with bindgen, which
+# needs libclang: the bindings it ships were made on Linux and don't compile for Windows.)
+[env]
+# A fixed instruction set instead of "whatever the build machine has": a release built on a CI
+# runner with AVX-512 must still run on a laptop without it. AVX2 + FMA + F16C (+ BMI2) is every
+# Intel CPU since Haswell (2013) and every AMD Ryzen; tug checks for them at run time and keeps the
+# basic engine on a PC that lacks them (voice::engine::cpu_supported), never calling whisper.cpp.
+GGML_NATIVE = "OFF"
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+GGML_BMI2 = "ON"
+GGML_AVX512 = "OFF"

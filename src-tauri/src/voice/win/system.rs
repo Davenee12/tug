@@ -151,3 +151,46 @@ pub fn type_strokes(strokes: &[Stroke]) -> bool {
     }
     send(&inputs)
 }
+
+/// The default microphone's name and the sample rate Windows mixes it at, if there is one. Must
+/// run on a COM thread (the voice worker). Read-only: the device isn't opened for recording.
+pub fn default_mic() -> Option<(String, u32)> {
+    use windows::core::GUID;
+    use windows::Win32::Foundation::PROPERTYKEY;
+    use windows::Win32::Media::Audio::{eCapture, eConsole, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator};
+    // PKEY_Device_FriendlyName (functiondiscoverykeys_devpkey.h), spelled out rather than
+    // pulling in the whole FunctionDiscovery feature for one constant.
+    #[allow(non_upper_case_globals)]
+    const PKEY_Device_FriendlyName: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0),
+        pid: 14,
+    };
+    use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToBSTR};
+    use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, STGM_READ};
+
+    // SAFETY: COM calls on a COM thread with valid arguments; the PROPVARIANT is cleared and the
+    // mix format freed with CoTaskMemFree, as their APIs require.
+    unsafe {
+        let devices: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+        let mic = devices.GetDefaultAudioEndpoint(eCapture, eConsole).ok()?;
+        let name = mic
+            .OpenPropertyStore(STGM_READ)
+            .and_then(|store| {
+                let mut value = store.GetValue(&PKEY_Device_FriendlyName)?;
+                let name = PropVariantToBSTR(&value).map(|b| b.to_string());
+                let _ = PropVariantClear(&mut value);
+                name
+            })
+            .unwrap_or_default();
+        let rate = mic
+            .Activate::<IAudioClient>(CLSCTX_ALL, None)
+            .and_then(|client| client.GetMixFormat())
+            .map(|format| {
+                let rate = if format.is_null() { 0 } else { (*format).nSamplesPerSec };
+                CoTaskMemFree(Some(format as *const core::ffi::c_void));
+                rate
+            })
+            .unwrap_or(0);
+        Some((name, rate))
+    }
+}

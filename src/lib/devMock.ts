@@ -1079,7 +1079,11 @@ const codeHotkey: CodeHotkeyStatus = { state: params.has("hotkeybusy") ? "inUse"
 // Voice typing (voice/ in Rust): off by default; `/?voice` starts it on (`&micblocked`,
 // `&nospeech` for a PC without a speech language, `&voicebusy` for a taken shortcut).
 // `?voicefail`: turning it on fails and the switch goes back off with the reason.
+// The accurate engine's model: not downloaded by default (the first-time offer shows once it's
+// on); `&model` downloaded, `&modelpaused` a download paused at 40%, `&modelfail` downloads fail
+// part way, `&noavx` a processor that can't run it, `&phonemic` a hands-free headset.
 const voiceOn = params.has("voice");
+const MODEL_BYTES = 81_781_811;
 const voiceLanguages = params.has("nospeech")
   ? []
   : [
@@ -1089,13 +1093,69 @@ const voiceLanguages = params.has("nospeech")
     ];
 const voice: VoiceStatus = {
   enabled: voiceOn,
-  state: !voiceOn ? "off" : params.has("nospeech") ? "unavailable" : params.has("voicebusy") ? "inUse" : "on",
+  state: !voiceOn
+    ? "off"
+    : params.has("nospeech") && !(params.has("model") && !params.has("noavx"))
+      ? "unavailable"
+      : params.has("voicebusy")
+        ? "inUse"
+        : "on",
   keys: "ctrl+alt+space",
   language: voiceLanguages[0]?.id ?? null,
   languages: [],
   micBlocked: params.has("micblocked"),
   startError: null,
+  engine: "accurate",
+  activeEngine: params.has("model") && !params.has("noavx") ? "accurate" : "basic",
+  model: {
+    state: params.has("model") ? "ready" : "missing",
+    received: params.has("model") ? MODEL_BYTES : params.has("modelpaused") ? Math.round(MODEL_BYTES * 0.4) : 0,
+    total: MODEL_BYTES,
+    error: null,
+  },
+  accurateSupported: !params.has("noavx"),
+  modelOffered: params.has("model") || params.has("modelpaused"),
+  phoneMic: params.has("phonemic"),
 };
+/** What a hold would use, as `voice::engine::pick_engine` decides it. */
+function voiceActive(): VoiceStatus["activeEngine"] {
+  const english = !voice.language || (Number.parseInt(voice.language, 16) & 0x3ff) === 0x09;
+  const accurate = voice.model.state === "ready" && voice.accurateSupported && english;
+  if (voice.engine === "accurate" && accurate) return "accurate";
+  return voice.language ? "basic" : null;
+}
+voice.activeEngine = voiceActive();
+function sendVoice(patch: Partial<VoiceStatus> = {}) {
+  Object.assign(voice, patch);
+  voice.activeEngine = voiceActive();
+  void emit("voice-status", structuredClone(voice));
+  return structuredClone(voice);
+}
+let voiceDownload: ReturnType<typeof setInterval> | null = null;
+function mockModelDownload() {
+  if (voiceDownload) return structuredClone(voice);
+  const answer = sendVoice({ model: { ...voice.model, state: "downloading", error: null } });
+  voiceDownload = setInterval(() => {
+    const received = Math.min(MODEL_BYTES, voice.model.received + MODEL_BYTES / 25);
+    if (params.has("modelfail") && received > MODEL_BYTES * 0.6) {
+      if (voiceDownload) clearInterval(voiceDownload);
+      voiceDownload = null;
+      sendVoice({
+        model: {
+          ...voice.model,
+          state: "missing",
+          error: "The download stopped. Check your internet connection and try again; it picks up where it left off.",
+        },
+      });
+      return;
+    }
+    if (received < MODEL_BYTES) return void sendVoice({ model: { ...voice.model, received } });
+    if (voiceDownload) clearInterval(voiceDownload);
+    voiceDownload = null;
+    sendVoice({ model: { state: "ready", received: MODEL_BYTES, total: MODEL_BYTES, error: null } });
+  }, 250);
+  return answer;
+}
 
 // Automatic updates (updater/ in Rust). Without a flag the build isn't set up for updates, like a
 // real build before the owner adds the key. ?update: a new version has downloaded (the Update
@@ -1500,19 +1560,29 @@ mockIPC(
       }
       case "voice_status":
         if (a.languages) voice.languages = voiceLanguages;
-        return { ...voice };
+        return sendVoice();
+      case "set_voice_engine":
+        return sendVoice({ engine: a.engine === "basic" ? "basic" : "accurate" });
+      case "voice_model_download":
+        return mockModelDownload();
+      case "voice_model_cancel":
+        if (voiceDownload) clearInterval(voiceDownload);
+        voiceDownload = null;
+        return sendVoice({ model: { state: "missing", received: 0, total: MODEL_BYTES, error: null } });
+      case "voice_model_offered":
+        return sendVoice({ modelOffered: true });
       case "set_voice_typing": {
         const keys = String(a.keys);
         const lang = voiceLanguages.find((l) => l.id === a.language)?.id ?? voiceLanguages[0]?.id ?? null;
         const taken = params.has("voicebusy") && keys === "ctrl+alt+space";
         if (a.enabled && params.has("voicefail")) {
           const startError = "Voice typing couldn't start: Windows couldn't show the listening indicator.";
-          Object.assign(voice, { enabled: false, keys, language: lang, languages: voiceLanguages, state: "off", startError });
-          return { ...voice };
+          return sendVoice({ enabled: false, keys, language: lang, languages: voiceLanguages, state: "off", startError });
         }
-        const state = !a.enabled ? "off" : lang === null ? "unavailable" : taken ? "inUse" : "on";
-        Object.assign(voice, { enabled: Boolean(a.enabled), keys, language: lang, languages: voiceLanguages, state, startError: null });
-        return { ...voice };
+        voice.language = lang;
+        const canListen = voiceActive() !== null;
+        const state = !a.enabled ? "off" : !canListen ? "unavailable" : taken ? "inUse" : "on";
+        return sendVoice({ enabled: Boolean(a.enabled), keys, language: lang, languages: voiceLanguages, state, startError: null });
       }
       // Windows pop-ups don't exist in a browser; log what tug would have shown.
       case "show_toast":

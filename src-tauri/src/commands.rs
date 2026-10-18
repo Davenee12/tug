@@ -776,6 +776,46 @@ pub async fn set_voice_typing(
         .map_err(|e| e.to_string())
 }
 
+/// Pick voice typing's engine: "accurate" (whisper.cpp with the downloaded model, the default)
+/// or "basic" (Windows' own recognizer), and save it.
+#[tauri::command]
+pub async fn set_voice_engine(state: State<'_, AppState>, engine: String) -> Result<crate::voice::VoiceStatus> {
+    let choice = match engine.as_str() {
+        "accurate" => crate::voice::engine::EngineChoice::Accurate,
+        "basic" => crate::voice::engine::EngineChoice::Basic,
+        other => return Err(format!("unknown voice engine: {other}")),
+    };
+    let shared = state.shared.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::voice::set_engine(&shared.store, choice))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Download voice typing's speech model (or resume a paused download). Returns at once; progress
+/// arrives as `voice-status` events.
+#[tauri::command]
+pub async fn voice_model_download() -> Result<crate::voice::VoiceStatus> {
+    tauri::async_runtime::spawn_blocking(crate::voice::download_model)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Cancel the speech model download (what it had is deleted).
+#[tauri::command]
+pub fn voice_model_cancel() -> crate::voice::VoiceStatus {
+    crate::voice::cancel_download()
+}
+
+/// Settings offered the speech model download and the person answered (Download or Not now):
+/// it isn't offered by itself again.
+#[tauri::command]
+pub async fn voice_model_offered(state: State<'_, AppState>) -> Result<crate::voice::VoiceStatus> {
+    let shared = state.shared.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::voice::model_offered(&shared.store))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Settings safe to print in a support report: scalar on/off flags, never the "seen"
 /// conversation map (its keys embed contact names) or anything carrying message content.
 const DIAGNOSTIC_SETTINGS: &[&str] = &[
@@ -792,6 +832,8 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.voiceTyping",
     "ui.voiceKeys",
     "ui.voiceLanguage",
+    "ui.voiceEngine",
+    "ui.voiceModelOffered",
     "ui.zoom",
     "ui.onboarded",
     "ui.seenSince",

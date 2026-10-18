@@ -39,6 +39,17 @@ allow = [
   "MPL-2.0",
 ]
 confidence-threshold = 0.9
+# Crate-by-crate exceptions, so these licences aren't open to the rest of the graph.
+exceptions = [
+  # Voice typing's accurate engine: the Rust bindings to whisper.cpp are released under the
+  # Unlicense (public domain dedication, no conditions). The whisper.cpp and ggml C++ they compile
+  # and link into tug is MIT, which is already allowed.
+  { crate = "whisper-rs", allow = ["Unlicense"] },
+  { crate = "whisper-rs-sys", allow = ["Unlicense"] },
+  # libloading (ISC, the MIT-style permissive licence) is how bindgen loads libclang while
+  # whisper-rs-sys builds. A build-time tool only: none of it is in tug.exe.
+  { crate = "libloading", allow = ["ISC"] },
+]
 
 [bans]
 # Several crates appear at two versions because Tauri and the `windows` crate move at different

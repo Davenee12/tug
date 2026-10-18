@@ -250,13 +250,14 @@ impl Engine for Sapi {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use windows::Win32::Media::Speech::{ISpVoice, SpVoice};
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED, STREAM_SEEK_SET};
 
     /// Speak `text` with Windows' text-to-speech into 16 kHz PCM, as a stand-in for a microphone.
-    fn speak(text: &str) -> Vec<i16> {
+    /// (The Whisper comparison in `whisper.rs` uses it too.)
+    pub(crate) fn speak(text: &str) -> Vec<i16> {
         unsafe {
             let (stream, base) = memory_stream(&[]).unwrap();
             let voice: ISpVoice = CoCreateInstance(&SpVoice, None, CLSCTX_ALL).unwrap();

@@ -340,8 +340,20 @@ Play a game (the games picker) is left out while Show games is off.
   editor, a terminal, a browser, Claude Code). **Off until you turn it on** in Settings › General.
 - The shortcut is **Ctrl+Alt+Space** by default, or Ctrl+Shift+Alt+Space, Ctrl+Alt+F12 or
   Ctrl+Shift+F11; Settings says if another app already holds it and offers the others.
-- Recognition is **Windows' own offline speech recognizer**: nothing to download, and your voice
-  is **never sent anywhere or saved**. Pick the language if Windows has more than one installed.
+- Recognition runs **on this PC**, and your voice is **never sent anywhere or saved**. Two engines
+  (Settings › General › Voice typing › Speech engine):
+  - **Accurate** (the default once it's downloaded): whisper.cpp with a 78 MB English speech
+    model, downloaded once when you press **Download** (with progress and Cancel; an interrupted
+    download picks up where it left off). Far better with short commands and code words ("check
+    logs", "camel case user id"), and still quick: about a quarter to half a second for a short
+    phrase on a recent laptop. The first time you turn voice typing on, Settings offers it.
+  - **Basic**: Windows' own offline speech recognizer, built in, nothing to download, in any
+    language Windows has speech for. It listens until the model is downloaded, for languages
+    other than English, and on the few processors that can't run Accurate. Settings says when
+    it's the one listening.
+- Pick the language if Windows has more than one installed.
+- If your microphone is a Bluetooth headset in its phone-call (hands-free) mode, Settings says
+  accuracy will be lower.
 - **Code-aware:** say symbols ("open paren", "dot", "equals", "semicolon", "quote … quote", "new
   line") and casing ("camel case user id" → `userId`; also snake, pascal, kebab and constant
   case, "capitalize", "all caps", and "literal" to type a command word as a word). In code editors

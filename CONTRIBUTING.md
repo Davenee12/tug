@@ -16,7 +16,15 @@ You need Windows 10 or 11 (tug is Windows-only: WinRT Bluetooth and an NSIS inst
    (`rustup component add clippy rustfmt`).
 3. **Visual Studio Build Tools** with *Desktop development with C++*, including a **Windows 10/11
    SDK** (it provides `RC.EXE`, which the Rust build needs for tug's icon and manifest).
-4. **WebView2 Runtime** (already on Windows 11 and up-to-date Windows 10).
+4. **CMake** and **LLVM**, for voice typing's accurate engine: the Rust build compiles
+   [whisper.cpp](https://github.com/ggml-org/whisper.cpp) from source (CMake drives the C++
+   compiler from step 3) and generates its Rust bindings with bindgen, which needs `libclang.dll`.
+   `winget install Kitware.CMake LLVM.LLVM` installs both (open a new terminal afterwards so CMake
+   is on `PATH`). The *C++ CMake tools for Windows* and *C++ Clang tools for Windows* components of
+   the Build Tools installer work too: put that CMake on `PATH` (or set `CMAKE` to its
+   `cmake.exe`) and set `LIBCLANG_PATH` to the folder holding `libclang.dll`
+   (`…\VC\Tools\Llvm\x64\bin`).
+5. **WebView2 Runtime** (already on Windows 11 and up-to-date Windows 10).
 
 Then:
 
@@ -31,7 +39,13 @@ npm run check        # everything CI runs; must pass before you push
 tests (`node --test`), `cargo fmt --check`,
 `cargo clippy -D warnings` and `cargo test` across the Rust workspace. If the Rust build fails
 with an `RC.EXE` error, install the Windows SDK from the Build Tools installer, or run
-`cargo clean -p tug --manifest-path src-tauri/Cargo.toml` and try again.
+`cargo clean -p tug --manifest-path src-tauri/Cargo.toml` and try again. If `whisper-rs-sys`
+fails with "is `cmake` not installed?" or "Unable to find libclang", see step 4. The first build
+compiles whisper.cpp, which takes a few minutes; later builds reuse it. Its build settings (a fixed
+AVX2 instruction set, so a release runs on any PC that has it) are in `.cargo/config.toml`.
+
+Releases are built in GitHub Actions (`.github/workflows/release.yml`), so you don't need a local
+release build; `npm run check` is what a pull request must pass.
 
 Most UI work needs no phone: `npm run dev` loads `src/lib/devMock.ts`, which plays scenarios from
 the URL (`/?call`, `/?setup`, `/?devconfirm`, …). The full list is in

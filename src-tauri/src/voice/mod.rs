@@ -7,27 +7,37 @@
 //! typed with SendInput Unicode keystrokes. One hold, one insertion: a second press while one is
 //! being typed is ignored, and every path ends with the microphone closed and the indicator gone.
 //!
-//! Recognition is behind [`engine::Engine`]. Today's engine is Windows' own desktop speech
-//! recognizer (SAPI 5, the offline "Microsoft Speech Recognizer" that ships with Windows): no
-//! download, no network, nothing extra to build. Audio never leaves the PC and is never written
-//! to disk: it lives in memory for one hold and is dropped. Logs carry lengths and durations,
+//! Recognition is behind [`engine::Engine`], with two engines that both run on the PC: Accurate
+//! (whisper.cpp with an English speech model downloaded once, on request: `model.rs`,
+//! `win/whisper.rs`) and Basic (Windows' own offline SAPI 5 recognizer, nothing to download:
+//! `win/sapi.rs`). Accurate is the default once its model is there; until then, and wherever it
+//! can't run, Basic listens ([`engine::pick_engine`]). Audio never leaves the PC and is never
+//! written to disk: it lives in memory for one hold and is dropped. The model download is the
+//! only network use, and carries nothing about the person. Logs carry lengths and durations,
 //! never what was said.
 //!
 //! This file is the pure part (shortcuts, settings, what a hold means, the status the UI reads)
-//! plus the bookkeeping; `win/` is the thin Windows I/O.
+//! plus the bookkeeping (status, the model download); `win/` is the thin Windows I/O.
 
+pub mod audio;
 pub mod engine;
+pub mod model;
 pub mod text;
+pub mod vocab;
 #[cfg(windows)]
 mod win;
 
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::code_fill::Keys;
+use engine::{EngineChoice, EngineInputs};
+use model::{ModelState, ModelStatus};
 
 /// The status event (`VoiceStatus`), sent when it changes.
 pub const STATUS_EVENT: &str = "voice-status";
@@ -38,6 +48,10 @@ pub const TYPED_EVENT: &str = "voice-typed";
 pub const SETTING_ENABLED: &str = "ui.voiceTyping";
 pub const SETTING_KEYS: &str = "ui.voiceKeys";
 pub const SETTING_LANGUAGE: &str = "ui.voiceLanguage";
+/// "accurate" (the default) or "basic".
+pub const SETTING_ENGINE: &str = "ui.voiceEngine";
+/// "true" once Settings has offered the speech model download (accepted or not).
+pub const SETTING_MODEL_OFFERED: &str = "ui.voiceModelOffered";
 
 /// The hold-to-talk shortcuts tug offers, in Settings' order; the first is the default. Mirrors
 /// `src/lib/voiceHotkeys.json` (a test reads it). None clash with tug's own shortcuts, code fill's,
@@ -163,6 +177,14 @@ pub fn mic_blocked(device: Option<&str>, user: Option<&str>, desktop_apps: Optio
         .any(|v| v.is_some_and(|v| v.trim().eq_ignore_ascii_case("deny")))
 }
 
+/// Whether the default microphone is a phone-call headset: a Bluetooth headset's hands-free link
+/// (Windows names it "… Hands-Free …") or anything Windows mixes at 16 kHz or less. Those carry
+/// narrow, compressed audio, and every recognizer does worse with it; Settings says so.
+pub fn phone_call_mic(name: &str, mix_rate: u32) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.contains("hands-free") || name.contains("handsfree") || (mix_rate > 0 && mix_rate <= 16_000)
+}
+
 /// What one hold did, told to the UI (`voice-typed`). Never the words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -239,7 +261,7 @@ pub fn pill_problem(outcome: VoiceOutcome) -> Option<&'static str> {
         VoiceOutcome::MicBusy => "The microphone is busy right now. Try again in a moment",
         VoiceOutcome::NoTarget => "The window changed, so nothing was typed",
         VoiceOutcome::KeysHeld => "Let go of the keys",
-        VoiceOutcome::Unavailable => "Voice typing needs a Windows speech language",
+        VoiceOutcome::Unavailable => "Voice typing needs a speech language. Open tug's Settings",
         VoiceOutcome::Failed => "Couldn't type that. Try again",
     })
 }
@@ -252,7 +274,8 @@ pub enum VoiceState {
     On,
     /// Another app registered the shortcut first.
     InUse,
-    /// This PC has no Windows speech recognizer to listen with.
+    /// Nothing can listen: Windows has no speech language, and the accurate engine can't stand
+    /// in (no model yet, or Basic was picked).
     Unavailable,
 }
 
@@ -271,11 +294,60 @@ pub struct VoiceStatus {
     /// The last attempt to turn it on failed, so it was switched back off: what to tell the person
     /// ("Voice typing couldn't start: …"). `None` otherwise.
     pub start_error: Option<String>,
+    /// The engine picked in Settings.
+    pub engine: EngineChoice,
+    /// The engine a hold would use right now ([`engine::pick_engine`]); `None` when nothing can
+    /// listen. Settings uses it to say "Basic until the model is downloaded".
+    pub active_engine: Option<EngineChoice>,
+    /// The accurate engine's speech model.
+    pub model: ModelStatus,
+    /// This processor can run the accurate engine ([`engine::cpu_supported`]).
+    pub accurate_supported: bool,
+    /// Settings has already offered the model download once.
+    pub model_offered: bool,
+    /// The default microphone is a phone-call headset ([`phone_call_mic`]).
+    pub phone_mic: bool,
 }
 
-/// The state for a request: off unless asked for, unavailable without a recognizer.
-pub fn state_for(enabled: bool, has_language: bool, registered: bool) -> VoiceState {
-    match (enabled, has_language, registered) {
+/// What the speech thread listens with. Built from the status by [`engine_config`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EngineConfig {
+    /// `None` while voice typing is off or nothing can listen: both engines are let go.
+    pub engine: Option<EngineChoice>,
+    /// Windows' recognizer language (Basic, and Accurate's fallback).
+    pub language: Option<String>,
+    /// The model file, when Accurate is the engine.
+    pub model: Option<PathBuf>,
+}
+
+/// The inputs to [`engine::pick_engine`] from a status.
+fn engine_inputs(s: &VoiceStatus) -> EngineInputs<'_> {
+    EngineInputs {
+        choice: s.engine,
+        model_ready: s.model.state == ModelState::Ready,
+        cpu_ok: s.accurate_supported,
+        sapi_language: s.language.as_deref(),
+    }
+}
+
+/// What the speech thread should listen with for this status (`model_file`: where the model is).
+pub fn engine_config(s: &VoiceStatus, model_file: Option<&Path>) -> EngineConfig {
+    if s.state != VoiceState::On {
+        return EngineConfig::default();
+    }
+    let engine = engine::pick_engine(&engine_inputs(s));
+    EngineConfig {
+        engine,
+        language: s.language.clone(),
+        model: (engine == Some(EngineChoice::Accurate))
+            .then(|| model_file.map(Path::to_path_buf))
+            .flatten(),
+    }
+}
+
+/// The state for a request: off unless asked for, unavailable when no engine can listen.
+pub fn state_for(enabled: bool, can_listen: bool, registered: bool) -> VoiceState {
+    match (enabled, can_listen, registered) {
         (false, _, _) => VoiceState::Off,
         (true, false, _) => VoiceState::Unavailable,
         (true, true, true) => VoiceState::On,
@@ -329,8 +401,8 @@ pub struct Settled {
 }
 
 /// Settle a request. `attempt` is how starting went: `Ok(registered)` (false: another app has the
-/// shortcut, or there's no language to listen in), or what failed. Turning it off can't fail.
-pub fn settle(enabled: bool, has_language: bool, attempt: Result<bool, StartError>) -> Settled {
+/// shortcut, or no engine can listen), or what failed. Turning it off can't fail.
+pub fn settle(enabled: bool, can_listen: bool, attempt: Result<bool, StartError>) -> Settled {
     if !enabled {
         return Settled {
             enabled: false,
@@ -341,7 +413,7 @@ pub fn settle(enabled: bool, has_language: bool, attempt: Result<bool, StartErro
     match attempt {
         Ok(registered) => Settled {
             enabled: true,
-            state: state_for(true, has_language, registered),
+            state: state_for(true, can_listen, registered),
             start_error: None,
         },
         Err(e) => Settled {
@@ -354,6 +426,19 @@ pub fn settle(enabled: bool, has_language: bool, attempt: Result<bool, StartErro
 
 static STATUS: Mutex<Option<VoiceStatus>> = Mutex::new(None);
 static APP: Mutex<Option<AppHandle>> = Mutex::new(None);
+/// Where the speech model lives (`speech\` under tug's local app data), set at startup.
+static MODEL_DIR: OnceLock<PathBuf> = OnceLock::new();
+/// A model download is running.
+static DOWNLOADING: AtomicBool = AtomicBool::new(false);
+/// Set by Cancel; the download stops within one chunk.
+static CANCEL_DOWNLOAD: AtomicBool = AtomicBool::new(false);
+
+fn model_status_now() -> ModelStatus {
+    match MODEL_DIR.get() {
+        Some(dir) => model::status_on_disk(dir, &model::MODEL),
+        None => ModelStatus::new(ModelState::Missing, 0, model::MODEL.size),
+    }
+}
 
 fn default_status() -> VoiceStatus {
     VoiceStatus {
@@ -364,40 +449,66 @@ fn default_status() -> VoiceStatus {
         languages: Vec::new(),
         mic_blocked: false,
         start_error: None,
+        engine: EngineChoice::Accurate,
+        active_engine: None,
+        model: model_status_now(),
+        accurate_supported: engine::cpu_supported(),
+        model_offered: false,
+        phone_mic: false,
     }
+}
+
+/// The status as last published (or the default), without looking at anything again.
+fn current() -> VoiceStatus {
+    STATUS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_else(default_status)
+}
+
+/// The model file, if it's downloaded.
+fn model_file() -> Option<PathBuf> {
+    MODEL_DIR.get().and_then(|dir| model::installed(dir, &model::MODEL))
 }
 
 /// The current status, with a fresh look at the microphone privacy switch.
 pub fn status() -> VoiceStatus {
-    let mut s = STATUS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
-        .unwrap_or_else(default_status);
     let blocked = mic_blocked_now();
-    if blocked != s.mic_blocked {
-        s.mic_blocked = blocked;
-        publish(s.clone());
-    }
-    s
+    update(|s| s.mic_blocked = blocked)
 }
 
-/// Store and emit a status if it changed.
-fn publish(next: VoiceStatus) {
-    let changed = {
+/// Change the status under its lock (so the download thread, the speech thread and Settings never
+/// undo each other's changes), work out `active_engine` from the rest, emit it if it changed, and
+/// tell the speech thread if what it listens with changed.
+fn update(change: impl FnOnce(&mut VoiceStatus)) -> VoiceStatus {
+    let (before, after) = {
         let mut cur = STATUS.lock().unwrap_or_else(|e| e.into_inner());
-        let changed = cur.as_ref() != Some(&next);
+        let before = cur.clone();
+        let mut next = before.clone().unwrap_or_else(default_status);
+        change(&mut next);
+        next.active_engine = engine::pick_engine(&engine_inputs(&next));
         *cur = Some(next.clone());
-        changed
+        (before, next)
     };
-    if changed {
+    if before.as_ref() != Some(&after) {
         if let Some(app) = APP.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             use tauri::Emitter;
-            if let Err(e) = app.emit(STATUS_EVENT, next) {
+            if let Err(e) = app.emit(STATUS_EVENT, after.clone()) {
                 log::warn!("emit voice-status failed: {e}");
             }
         }
     }
+    let was = before.map(|b| engine_config(&b, None)).unwrap_or_default();
+    if was != engine_config(&after, None) {
+        configure(&after);
+    }
+    after
+}
+
+/// Tell the speech thread what to listen with, from the status.
+fn configure(s: &VoiceStatus) {
+    set_engine_config(engine_config(s, model_file().as_deref()));
 }
 
 /// Tell the UI what a hold did.
@@ -414,13 +525,7 @@ fn emit_typed(outcome: VoiceOutcome) {
 /// Note what the microphone switch said on a hold, so Settings shows it without a refresh.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn note_mic_blocked(blocked: bool) {
-    let cur = STATUS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    if let Some(mut s) = cur {
-        if s.mic_blocked != blocked {
-            s.mic_blocked = blocked;
-            publish(s);
-        }
-    }
+    update(|s| s.mic_blocked = blocked);
 }
 
 /// Turn voice typing on (with this shortcut and language) or off, and say how that went. Starting
@@ -438,16 +543,19 @@ pub fn apply(enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
     }
     let languages = listed.clone().unwrap_or_default();
     let language = pick_language(language, &languages, ui_language());
+    let mut probe = current();
+    probe.language = language.clone();
+    let can_listen = engine::pick_engine(&engine_inputs(&probe)).is_some();
     let attempt = match (enabled, listed) {
         (false, _) => Ok(false),
         (true, Err(e)) => Err(e),
-        (true, Ok(_)) if language.is_none() => Ok(false),
+        (true, Ok(_)) if !can_listen => Ok(false),
         (true, Ok(_)) => set_registration(parse_hotkey(id)),
     };
     if let Err(e) = &attempt {
         log::warn!("voice typing couldn't start: {}", e.detail());
     }
-    let settled = settle(enabled, language.is_some(), attempt);
+    let settled = settle(enabled, can_listen, attempt);
     let on = settled.state == VoiceState::On;
     if !on {
         // Nothing to undo if it never got as far as the shortcut thread.
@@ -461,27 +569,67 @@ pub fn apply(enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
             language.as_deref().unwrap_or("-")
         ),
         VoiceState::InUse => log::info!("voice typing shortcut {id} is taken by another app"),
-        VoiceState::Unavailable => log::info!("voice typing: no Windows speech recognizer installed"),
+        VoiceState::Unavailable => {
+            log::info!("voice typing: nothing to listen with (no Windows speech language, no usable speech model)")
+        }
         VoiceState::Off if settled.start_error.is_some() => log::info!("voice typing switched back off"),
         VoiceState::Off => log::info!("voice typing off"),
     }
-    set_engine_language(if on { language.clone() } else { None });
-    let s = VoiceStatus {
-        enabled: settled.enabled,
-        state: settled.state,
-        keys: id.into(),
-        language,
-        languages,
-        mic_blocked: mic_blocked_now(),
-        start_error: settled.start_error,
-    };
-    publish(s.clone());
+    let blocked = mic_blocked_now();
+    // The engine, the model and the microphone stay as they are now (a download may be running).
+    let s = update(|s| {
+        s.enabled = settled.enabled;
+        s.state = settled.state;
+        s.keys = id.into();
+        s.language = language;
+        s.languages = languages;
+        s.mic_blocked = blocked;
+        s.start_error = settled.start_error;
+    });
+    if on {
+        log::info!(
+            "voice typing: listening with the {} engine",
+            s.active_engine.map_or("-", EngineChoice::as_str)
+        );
+    }
+    // Always, so a fresh start (or a changed language) reaches the speech thread.
+    configure(&s);
     s
 }
 
 /// Start the shortcut thread and turn voice typing on if the owner switched it on.
 pub fn start(app: &AppHandle, store: &crate::store::Store) {
     *APP.lock().unwrap_or_else(|e| e.into_inner()) = Some(app.clone());
+    {
+        use tauri::Manager;
+        match app.path().app_local_data_dir() {
+            Ok(dir) => {
+                let _ = MODEL_DIR.set(dir.join(model::DIR));
+            }
+            Err(e) => log::warn!("voice typing: no local app data folder for the speech model ({e})"),
+        }
+    }
+    let saved = |key: &str| store.setting(key).ok().flatten();
+    let engine = EngineChoice::parse(saved(SETTING_ENGINE).as_deref());
+    let offered = saved(SETTING_MODEL_OFFERED).as_deref() == Some("true");
+    let s = update(|s| {
+        s.engine = engine;
+        s.model_offered = offered;
+        s.model = model_status_now();
+    });
+    log::info!(
+        "voice typing: {} engine picked, speech model {}{}",
+        s.engine.as_str(),
+        match s.model.state {
+            ModelState::Ready => "downloaded",
+            _ => "not downloaded",
+        },
+        if s.accurate_supported {
+            ""
+        } else {
+            " (this processor can't run it)"
+        }
+    );
     let enabled = store.setting(SETTING_ENABLED).ok().flatten().as_deref() == Some("true");
     if !enabled {
         // Nothing to register and no recognizer to load until it's switched on: Settings reads
@@ -520,22 +668,154 @@ pub fn set(store: &crate::store::Store, enabled: bool, keys: &str, language: Opt
     s
 }
 
-/// The installed languages, listed once the first time they're needed. Settings calls this
-/// before voice typing is on, so the language list is there to choose from.
-pub fn refresh_languages() -> VoiceStatus {
-    let mut s = status();
-    if s.languages.is_empty() {
-        s.languages = installed_languages().unwrap_or_else(|e| {
-            log::warn!("voice typing: couldn't list the speech languages: {}", e.detail());
-            Vec::new()
+/// Pick the engine (Settings) and save it. The accurate engine is loaded on the next hold that
+/// uses it; picking Basic lets its model go now.
+pub fn set_engine(store: &crate::store::Store, choice: EngineChoice) -> VoiceStatus {
+    if let Err(e) = store.set_setting(SETTING_ENGINE, choice.as_str()) {
+        log::warn!("couldn't save {SETTING_ENGINE}: {e}");
+    }
+    log::info!("voice typing: {} engine picked", choice.as_str());
+    update(|s| s.engine = choice)
+}
+
+/// Settings has offered the model download (the person chose Download or Not now): don't offer it
+/// again by itself.
+pub fn model_offered(store: &crate::store::Store) -> VoiceStatus {
+    if let Err(e) = store.set_setting(SETTING_MODEL_OFFERED, "true") {
+        log::warn!("couldn't save {SETTING_MODEL_OFFERED}: {e}");
+    }
+    update(|s| s.model_offered = true)
+}
+
+/// Start downloading the speech model (or resume a paused download) on a thread of its own.
+/// Progress arrives as status events; once the model is checked, the accurate engine takes over
+/// from the next hold. A second call while one runs does nothing.
+pub fn download_model() -> VoiceStatus {
+    let Some(dir) = MODEL_DIR.get().cloned() else {
+        return update(|s| {
+            s.model.error = Some("tug couldn't find its data folder to save the speech model in.".into())
         });
-        s.language = pick_language(s.language.as_deref(), &s.languages, ui_language());
-        if s.enabled && s.languages.is_empty() {
+    };
+    if DOWNLOADING.swap(true, Ordering::SeqCst) {
+        return current();
+    }
+    CANCEL_DOWNLOAD.store(false, Ordering::SeqCst);
+    let started = update(|s| {
+        s.model.state = ModelState::Downloading;
+        s.model.received = model::partial(&dir, &model::MODEL);
+        s.model.error = None;
+    });
+    log::info!(
+        "voice typing: downloading the speech model ({} of {} bytes already here)",
+        started.model.received,
+        model::MODEL.size
+    );
+    let spawned = std::thread::Builder::new()
+        .name("tug-voice-model".into())
+        .spawn(move || {
+            let t0 = std::time::Instant::now();
+            let mut sent = 0u64;
+            let step = model::MODEL.size / 100;
+            let result = model::HttpFetch::new().and_then(|mut fetch| {
+                model::download(&mut fetch, &model::MODEL, &dir, &CANCEL_DOWNLOAD, &mut |got, total| {
+                    if model::progress_due(sent, got, total, step) {
+                        sent = got;
+                        update(|s| s.model.received = got);
+                    }
+                })
+            });
+            match &result {
+                Ok(_) => log::info!(
+                    "voice typing: speech model downloaded and checked in {} s",
+                    t0.elapsed().as_secs()
+                ),
+                Err(e) => log::warn!("voice typing: speech model download stopped: {}", e.detail()),
+            }
+            DOWNLOADING.store(false, Ordering::SeqCst);
+            update(|s| {
+                s.model = model::status_on_disk(&dir, &model::MODEL);
+                s.model.error = result.err().and_then(|e| e.message()).map(str::to_string);
+            });
+        });
+    if let Err(e) = spawned {
+        DOWNLOADING.store(false, Ordering::SeqCst);
+        log::warn!("voice typing: the download thread didn't start ({e})");
+        return update(|s| {
+            s.model.state = ModelState::Missing;
+            s.model.error = Some("tug couldn't start the download. Try again.".into());
+        });
+    }
+    current()
+}
+
+/// Stop a running download and delete what it had (Cancel).
+pub fn cancel_download() -> VoiceStatus {
+    if DOWNLOADING.load(Ordering::SeqCst) {
+        log::info!("voice typing: speech model download cancelled");
+        CANCEL_DOWNLOAD.store(true, Ordering::SeqCst);
+    }
+    current()
+}
+
+/// The model failed its check or didn't load (called from the speech thread): delete it, say so,
+/// and go back to Basic until it's downloaded again.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn model_damaged(why: &str) {
+    log::warn!("voice typing: the speech model is damaged ({why}); deleting it and using the basic engine");
+    if let Some(dir) = MODEL_DIR.get() {
+        model::remove(dir, &model::MODEL);
+    }
+    update(|s| {
+        s.model = model_status_now();
+        s.model.error =
+            Some("The speech model was damaged, so tug deleted it and is using Basic. Download it again.".into());
+    });
+}
+
+/// Note what the default microphone is (from the speech thread), so Settings can say when it's a
+/// phone-call headset.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn note_phone_mic(phone: bool) {
+    if current().phone_mic != phone {
+        log::info!(
+            "voice typing: the default microphone is {}a phone-call headset",
+            if phone { "" } else { "not " }
+        );
+        update(|s| s.phone_mic = phone);
+    }
+}
+
+/// The installed languages, listed once the first time they're needed. Settings calls this
+/// before voice typing is on, so the language list is there to choose from. Also takes a fresh
+/// look at the default microphone and the model on disk.
+pub fn refresh_languages() -> VoiceStatus {
+    if let Some(phone) = check_phone_mic() {
+        note_phone_mic(phone);
+    }
+    if !DOWNLOADING.load(Ordering::SeqCst) {
+        // The model on disk now (deleted by hand, or a paused download), keeping any message.
+        let on_disk = model_status_now();
+        update(|s| {
+            s.model.state = on_disk.state;
+            s.model.received = on_disk.received;
+        });
+    }
+    let s = status();
+    if !s.languages.is_empty() {
+        return s;
+    }
+    let languages = installed_languages().unwrap_or_else(|e| {
+        log::warn!("voice typing: couldn't list the speech languages: {}", e.detail());
+        Vec::new()
+    });
+    let language = pick_language(s.language.as_deref(), &languages, ui_language());
+    update(|s| {
+        s.languages = languages;
+        s.language = language;
+        if s.enabled && engine::pick_engine(&engine_inputs(s)).is_none() {
             s.state = VoiceState::Unavailable;
         }
-        publish(s.clone());
-    }
-    s
+    })
 }
 
 #[cfg(windows)]
@@ -567,11 +847,21 @@ fn set_registration(_keys: Option<Keys>) -> Result<bool, StartError> {
 }
 
 #[cfg(windows)]
-fn set_engine_language(language: Option<String>) {
-    win::set_language(language);
+fn set_engine_config(config: EngineConfig) {
+    win::configure(config);
 }
 #[cfg(not(windows))]
-fn set_engine_language(_language: Option<String>) {}
+fn set_engine_config(_config: EngineConfig) {}
+
+/// Whether the default microphone is a phone-call headset, asked on the speech thread (COM).
+#[cfg(windows)]
+fn check_phone_mic() -> Option<bool> {
+    win::phone_mic()
+}
+#[cfg(not(windows))]
+fn check_phone_mic() -> Option<bool> {
+    None
+}
 
 /// Whether voice typing is in the middle of a hold right now (listening, recognizing or typing):
 /// an update restart waits for it.
@@ -824,11 +1114,98 @@ mod tests {
             }],
             mic_blocked: false,
             start_error: None,
+            engine: EngineChoice::Accurate,
+            active_engine: Some(EngineChoice::Basic),
+            model: ModelStatus {
+                state: ModelState::Downloading,
+                received: 10,
+                total: 20,
+                error: None,
+            },
+            accurate_supported: true,
+            model_offered: false,
+            phone_mic: true,
         })
         .unwrap();
         assert_eq!(
             json,
-            r#"{"enabled":true,"state":"inUse","keys":"ctrl+alt+space","language":"409","languages":[{"id":"409","name":"English (US)"}],"micBlocked":false,"startError":null}"#
+            r#"{"enabled":true,"state":"inUse","keys":"ctrl+alt+space","language":"409","languages":[{"id":"409","name":"English (US)"}],"micBlocked":false,"startError":null,"engine":"accurate","activeEngine":"basic","model":{"state":"downloading","received":10,"total":20,"error":null},"accurateSupported":true,"modelOffered":false,"phoneMic":true}"#
         );
+    }
+
+    fn on_status(engine: EngineChoice, model: ModelState, language: Option<&str>) -> VoiceStatus {
+        let mut s = default_status();
+        s.enabled = true;
+        s.state = VoiceState::On;
+        s.engine = engine;
+        s.model.state = model;
+        s.accurate_supported = true;
+        s.language = language.map(str::to_string);
+        s
+    }
+
+    #[test]
+    fn the_speech_thread_gets_the_engine_the_status_says() {
+        let file = Path::new("C:/models/ggml.bin");
+        let c = engine_config(
+            &on_status(EngineChoice::Accurate, ModelState::Ready, Some("409")),
+            Some(file),
+        );
+        assert_eq!(c.engine, Some(EngineChoice::Accurate));
+        assert_eq!(c.model.as_deref(), Some(file));
+        assert_eq!(
+            c.language.as_deref(),
+            Some("409"),
+            "Basic stays available as the fallback"
+        );
+
+        let c = engine_config(
+            &on_status(EngineChoice::Accurate, ModelState::Missing, Some("409")),
+            None,
+        );
+        assert_eq!(c.engine, Some(EngineChoice::Basic), "no model yet");
+        assert_eq!(c.model, None);
+
+        let c = engine_config(
+            &on_status(EngineChoice::Accurate, ModelState::Downloading, Some("409")),
+            None,
+        );
+        assert_eq!(c.engine, Some(EngineChoice::Basic), "still downloading");
+
+        let c = engine_config(
+            &on_status(EngineChoice::Basic, ModelState::Ready, Some("409")),
+            Some(file),
+        );
+        assert_eq!(c.engine, Some(EngineChoice::Basic));
+        assert_eq!(c.model, None, "Basic picked: the model isn't loaded");
+
+        let mut off = on_status(EngineChoice::Accurate, ModelState::Ready, Some("409"));
+        off.state = VoiceState::Off;
+        assert_eq!(
+            engine_config(&off, Some(file)),
+            EngineConfig::default(),
+            "off: both let go"
+        );
+        let mut busy = on_status(EngineChoice::Accurate, ModelState::Ready, Some("409"));
+        busy.state = VoiceState::InUse;
+        assert_eq!(
+            engine_config(&busy, Some(file)),
+            EngineConfig::default(),
+            "no shortcut: nothing loaded"
+        );
+    }
+
+    #[test]
+    fn a_phone_call_headset_is_recognised() {
+        assert!(phone_call_mic("Headset (WH-1000XM4 Hands-Free AG Audio)", 16_000));
+        assert!(phone_call_mic("Headset Microphone (Example Buds Hands-Free)", 0));
+        assert!(phone_call_mic("Headset (Example Handsfree)", 48_000));
+        assert!(phone_call_mic("Microphone (USB Audio)", 8_000), "8 kHz is a phone line");
+        assert!(!phone_call_mic("Microphone Array (Realtek(R) Audio)", 48_000));
+        assert!(
+            !phone_call_mic("Headset (WH-1000XM4)", 48_000),
+            "the same headset in its stereo mode"
+        );
+        assert!(!phone_call_mic("", 0), "unknown: no note");
     }
 }

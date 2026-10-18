@@ -48,6 +48,7 @@ import type {
   ToastSpec,
   UpdateApplyAnswer,
   UpdateStatus,
+  VoiceEngine,
   VoiceStatus,
   VoiceTyped,
 } from "../types/protocol";
@@ -106,6 +107,14 @@ export const api = {
   /** Turn voice typing on (shortcut, language) or off, and save it; says if the shortcut is taken or no language is installed. */
   setVoiceTyping: (enabled: boolean, keys: string, language: string | null) =>
     invoke<VoiceStatus>("set_voice_typing", { enabled, keys, language }),
+  /** Pick voice typing's engine (accurate or basic) and save it. */
+  setVoiceEngine: (engine: VoiceEngine) => invoke<VoiceStatus>("set_voice_engine", { engine }),
+  /** Download (or resume) the accurate engine's speech model; progress comes as `voice-status` events. */
+  voiceModelDownload: () => invoke<VoiceStatus>("voice_model_download"),
+  /** Cancel the speech model download (what it had is deleted). */
+  voiceModelCancel: () => invoke<VoiceStatus>("voice_model_cancel"),
+  /** The person answered the speech model offer (Download or Not now): don't offer it by itself again. */
+  voiceModelOffered: () => invoke<VoiceStatus>("voice_model_offered"),
   /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */
   copyDiagnostics: () => invoke<string>("copy_diagnostics"),
   /** The Bluetooth inventory: what the iPhone exposes to tug (runs it now; privacy-safe). */

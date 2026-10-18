@@ -66,7 +66,8 @@ Inside `tug.exe`:
 | Tugboat | `tugboat/` | An HTTP server, a 2 s supervisor (idle stop after 10 minutes, network changes) and per-connection tasks; exists only while the panel is open (or Tugboat Run asked for the phone as a controller). While the game's controller channel is open, a 150 ms watch notices a phone that went quiet. |
 | `tug-hotkey` | `code_fill/win.rs` (logic in `code_fill/mod.rs`) | Owns the type-the-code shortcut (RegisterHotKey belongs to the registering thread); each press types the newest code with SendInput on a short-lived `tug-code-fill` thread. |
 | `tug-share-watch` | `share_privacy/win.rs` (logic in `share_privacy/mod.rs`) | Hide previews while sharing or presenting: sleeps on a condition variable until tug's window is on screen or a pop-up finds the screen shared; then one look every 2 s (shell notification state, display topology, a pass over top-level window classes, reading the titles of browser and Teams windows only, compared on the spot and never kept or logged: about 0.3 ms) until the window hides and hiding clears. Each pop-up also takes a fresh look (on a short-lived `tug-share-look` helper, at most 500 ms) before it shows. It fails closed: no answer in time, or a failed Windows call with nothing found, hides the preview and blurs the window with a banner saying tug couldn't check; a look stuck for 2 s is replaced by a fresh one (at most three at once). When hiding starts, the phone's pop-ups and their follow-ups are taken back from the screen and Action Center (`toast::withdraw_while_hiding`); tug's own stay. |
-| `tug-voice-key`, `tug-voice` | `voice/win/` (logic in `voice/mod.rs`, `voice/text.rs`) | Only once voice typing is switched on. `tug-voice-key` owns the hold-to-talk shortcut (RegisterHotKey) and the GDI listening indicator; `tug-voice` is a COM thread that runs each hold (microphone while the key is down, Windows' offline SAPI recognizer, the text rules, SendInput) and keeps the recognizer between holds. |
+| `tug-voice-key`, `tug-voice` | `voice/win/` (logic in `voice/mod.rs`, `voice/engine.rs`, `voice/audio.rs`, `voice/vocab.rs`, `voice/text.rs`) | Only once voice typing is switched on. `tug-voice-key` owns the hold-to-talk shortcut (RegisterHotKey) and the GDI listening indicator; `tug-voice` is a COM thread that runs each hold (microphone while the key is down, the engine, the text rules, SendInput) and keeps the engines between holds: whisper.cpp (Accurate, loaded by a short-lived `tug-voice-load` thread during the first hold) and Windows' offline SAPI recognizer (Basic). Both are let go when voice typing goes off. whisper.cpp starts its own worker threads only while it recognizes a hold. |
+| `tug-voice-model` | `voice/mod.rs` (logic in `voice/model.rs`) | Only while the speech model downloads (the person pressed Download): one HTTPS download from Hugging Face, resumable, checked against its SHA-256, then gone. |
 | Toasts, tray | `toast/`, `tray.rs` | Toast activations arrive on a pool thread and are handed to the async runtime; the tray runs on the main thread. |
 | `tug-jump-list` | `quick_actions/win.rs` (logic in `quick_actions/mod.rs`) | A short-lived COM thread that hands the taskbar jump list's Tasks to Windows, at startup and when Show games changes; nothing waits for it. |
 | Automatic updates | `updater/mod.rs` (logic in `updater/policy.rs`) | Only in release builds with a real public key in `tauri.conf.json`. An async task that looks at the clock every minute: the first check 90 s after startup, then every 6 hours (an hour after a failure), while Download updates automatically is on. `tauri-plugin-updater` fetches `latest.json` from GitHub Releases, downloads the NSIS installer and verifies its minisign signature; the verified bytes wait in memory until the person clicks Update (`update_apply`, refused during a ringing call, a Tugboat transfer or voice typing) or quits from the tray. Applying runs the exit tidy-up (`tidy_before_exit`), starts the installer in update mode and exits; the installer restarts tug, which reopens the saved screen. |
@@ -377,18 +378,63 @@ cargo test both read it).
 hold the shortcut ─WM_HOTKEY─► tug-voice-key: note the window in front ─► tug-voice
   privacy switch blocks the mic? ─► "Microphone blocked" (indicator + Settings)
   wave-in (16 kHz mono, memory only) while GetAsyncKeyState says the key is down, + 200 ms
-  ─► too short / silent? stop ─► SAPI in-process recognizer, dictation, from a memory stream
+    (first hold with Accurate: tug-voice-load checks the model's SHA-256 and loads it meanwhile)
+  ─► too short / silent / only steady noise (voice::audio::has_speech)? stop
+  ─► Accurate: trim, level, pad (voice::audio) ─► whisper.cpp, greedy, English, vocabulary prompt
+       (voice::vocab), 15 s encoder window ─► voice::vocab::clean      (fails? Basic for this hold)
+     Basic: SAPI in-process recognizer, dictation, from a memory stream
   ─► voice::text::format (spoken symbols, casing, style from the program's .exe name)
   ─► keys let go, same window still in front? ─► SendInput (Unicode; new line = Shift+Enter in known prose and chat apps, a space elsewhere)
   ─► emit "voice-typed" (the outcome only) ─► indicator hides or says what went wrong
+  ─► (after typing) is the default microphone a hands-free headset? ─► Settings' note
 ```
 
-Recognition sits behind `voice::engine::Engine`. Windows' desktop SAPI recognizer was chosen
-because it is offline, ships with Windows and needs nothing new to build. `Windows.Media.SpeechRecognition`
-was ruled out: its free-dictation grammar is recognized by Microsoft's online service and it needs
-package identity, which tug (an unpackaged installer) doesn't have. whisper.cpp (`whisper-rs`)
-would be more accurate but needs CMake and libclang that contributors don't have, plus a model
-download; it can be added later as another `Engine`.
+Recognition sits behind `voice::engine::Engine`, with two engines, both on the PC.
+`voice::engine::pick_engine` decides which one a hold uses, from plain values (tested): Accurate
+when it's picked (the default), its model is downloaded, the processor can run it and the
+language is English; otherwise Basic, if Windows has a speech language; otherwise nothing
+(`unavailable`). `VoiceStatus.activeEngine` carries that decision to Settings, so it can say "tug
+uses Basic until the speech model is downloaded" rather than imply Accurate is listening.
+
+- **Accurate: whisper.cpp** through `whisper-rs` (`voice/win/whisper.rs`), compiled from source
+  and linked statically, on the CPU (no GPU backend). Its model is `ggml-base.en-q8_0.bin` (78 MB),
+  picked by measuring on the test phrases, clean, with room noise and band-limited like a
+  hands-free headset (`compares_whisper_with_windows_recognizer`, an `--ignored` test that speaks
+  them with Windows' text-to-speech): base.en (141 MB) was exactly as accurate and a little
+  slower; small.en (465 MB) and small.en q5_1 (181 MB) were no more accurate and three to four
+  times slower. On a Ryzen 9 6900HX it typed 23 of 24 samples exactly right (Basic: 7 of 24) in
+  about 250 ms with 8 threads, about 400 ms with 4. The vocabulary prompt (`voice/vocab.rs`, the
+  spoken commands and coding words, lower case with no punctuation) matters: without it the
+  same model got none of the code phrases right. The encoder window is 768 positions (15 s)
+  rather than 30 s: about half the time, and windows sized to just the audio made the model
+  repeat itself. Load takes about 0.1 s and happens while the first hold records.
+- **Basic: Windows' desktop SAPI recognizer** (`voice/win/sapi.rs`): offline, ships with Windows,
+  any language Windows has speech for. `Windows.Media.SpeechRecognition` was ruled out: its
+  free-dictation grammar is recognized by Microsoft's online service and it needs package
+  identity, which tug (an unpackaged installer) doesn't have.
+
+**The model** (`voice/model.rs`) is downloaded only when the person presses Download (Settings
+offers it once, the first time voice typing is on), from a Hugging Face address pinned to a commit,
+by Rust (reqwest with Windows' TLS, HTTPS only, redirects too; no CSP change). It goes to
+`%LOCALAPPDATA%\dev.davejames.tug\speech\<file>.part`; a dropped connection keeps the `.part` and
+the next download resumes it with a Range request (starting over if the server ignores the range);
+Cancel deletes it; more bytes than the model's size stop it. Only a file whose SHA-256 matches is
+renamed into place, and it's checked again on every load, so whisper.cpp never sees a damaged or
+swapped file: a mismatch (or a load failure) deletes it, says so in Settings and Basic takes over.
+The download is written against a `Fetch` trait, so its tests run against a fake server.
+
+**Building it.** `whisper-rs-sys` runs CMake (MSVC) on whisper.cpp's sources and generates Rust
+bindings with bindgen, which loads libclang (the bindings it ships were generated on Linux and
+don't compile for Windows). `.cargo/config.toml` fixes ggml's instruction set at AVX2 + FMA + F16C +
+BMI2 (`GGML_NATIVE=OFF`), so a release built on a CI runner with AVX-512 still runs everywhere;
+`voice::engine::cpu_supported` checks for those before whisper.cpp is ever called, and keeps Basic
+on a processor without them. Only ggml's CPU backend (`ggml-cpu`) is compiled with `/arch:AVX2`, and
+it has no static initializers; the inline STL and CRT functions it shares with the plain-x64
+libraries are the copies from whisper.cpp's objects, which the linker meets first. (Not tried on a
+processor without AVX.) `scripts/remap-paths.mjs` passes MSVC's `/d1trimfile:<target folder>` so
+`__FILE__` strings in ggml's asserts don't carry the build machine's path into the release exe
+(the release workflow's leak check fails otherwise). whisper.cpp's log output is switched off
+(`whisper_rs::install_logging_hooks` with no backend): debug builds can print decoded tokens.
 
 Switching it on can't take tug down. Each start step (listing the speech languages on the COM
 thread, starting the shortcut thread, creating the indicator on it, registering the shortcut) is
@@ -436,7 +482,8 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
 | `album_art.rs` | Album art from Apple's catalog: names normalised (editions like Remastered/Deluxe and featured artists set aside), the best match by artist and album, the cache key, the day-long miss memory, the debounce and rate limit (`Gate`); the cache and setting tested with a fake network |
 | `share_privacy/mod.rs` | Hide previews while sharing or presenting: which signals mean someone may be watching (shell state confirmed by the foreground window covering its monitor, duplicate display, known share and slideshow windows by program + class), which one names the reason, the log line, what a hidden pop-up says, and that no answer means hidden (which looks to join, start or give up on), which pop-ups to take back when hiding starts |
-| `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, keys still held, window changed) and what the pill says; spoken symbols, casing commands, code vs prose style and where "new line" may break a line, by program; keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
+| `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, keys still held, window changed) and what the pill says, what the speech thread listens with for a status (`engine_config`), a phone-call headset by name and sample rate; spoken symbols, casing commands, code vs prose style and where "new line" may break a line, by program; keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
+| `voice/engine.rs`, `voice/model.rs`, `voice/audio.rs`, `voice/vocab.rs` | Voice typing's engines: which one listens (Accurate, Basic or none) and the fallbacks, English language ids, the processor check; the speech model's download (resume with Range, a server that ignores it, cancel and temp cleanup, an overlong or wrong file, SHA-256) against a fake HTTP layer, plus an `--ignored` test against Hugging Face; trimming, levelling and padding a recording, and telling speech from steady noise; the vocabulary prompt (every command in it is one `text.rs` understands) and tidying Whisper's output. `voice/win/whisper.rs` has the `--ignored` Whisper-vs-SAPI comparison that picked the model |
 | `backup/discover.rs`, `keybag.rs`, `decrypt.rs`, `manifest.rs`, `smsdb.rs`, `typedstream.rs`, `import.rs`, `clock.rs`, `files.rs` | Bring in your full history: which backups exist and what they are; iOS backup encryption (keybag TLV, both PBKDF2 steps, RFC 3394 unwrap, AES-256-CBC streaming, against RFC vectors and a generated encrypted backup); Manifest.db and its NSKeyedArchiver file records; Messages' tables across iOS versions, Apple-epoch times, which chats are groups (left out), edits, unsends, tapbacks; the text in `attributedBody`; what's new, dedupe against Bluetooth texts (the phone's zoneless times read in UTC with an offset tug knows, never guessed; nothing after the backup's date), resumable batches, Remove imported; content-addressed photo files, key checks, the scratch folder and its startup sweep. `backup/mod.rs` runs a whole encrypted backup end to end in a test |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
 | `updater/policy.rs` | Automatic updates: whether the build is set up (a real minisign public key, not a debug build), installed vs portable, newer-only version comparison (no downgrades), the check schedule, what a check leads to, what holds a restart (a ringing call, a Tugboat transfer, voice typing), applying on quit, the release-notes headline |
@@ -550,6 +597,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?sharing` (`&presenting`, `&stop`) | The screen is being shared: blurred texts and names under the `Previews hidden` banner with Show anyway (a slide show / sharing ends after 10 s); add `&call` for the call card |
 | `/?voice` (`&micblocked`, `&nospeech`, `&voicebusy`) | Settings › General › Voice typing on, with the microphone blocked / no speech language / the shortcut taken |
 | `/?voicefail` | Settings › General › Voice typing: turning it on fails, the switch goes back off and says why |
+| `/?voice` (`&model`, `&modelpaused`, `&modelfail`, `&noavx`, `&phonemic`) | Voice typing's speech engine: the model downloaded / a download paused at 40% / downloads that fail part way / a processor that can't run Accurate / a hands-free headset. Without `&model` the first-time download offer shows, and Download plays a progress bar |
 | `/?backup` (`&none`, `&imported`, `&heif`, `&hevc`) | Settings › Messages › Bring in your full history with made-up backups (the encrypted one's password is `test`) / no backups / history already brought in (the label, photos) / photos Windows can't show without HEIF Image Extensions / with HEIF but without HEVC Video Extensions |
 | `/?heavy` | A long history for performance work: ~2,000 texts in ~60 conversations, ~500 notifications, 120 calls, Spotify playing, weather on |
 
