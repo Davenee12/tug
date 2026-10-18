@@ -452,7 +452,16 @@ Universal CRT. The release workflow checks the exes' import tables (`release-ass
 and fails on any DLL that isn't part of Windows. `.cargo/config.toml` fixes ggml's instruction set at AVX2 + FMA + F16C +
 BMI2 (`GGML_NATIVE=OFF`), so a release built on a CI runner with AVX-512 still runs everywhere;
 `voice::engine::cpu_supported` checks for those before whisper.cpp is ever called, and keeps Basic
-on a processor without them. Only ggml's CPU backend (`ggml-cpu`) is compiled with `/arch:AVX2`, and
+on a processor without them. It also sets `CMAKE_C_FLAGS_RELEASE`/`CMAKE_CXX_FLAGS_RELEASE` to
+`/MT /O2 /Ob2 /DNDEBUG`: whisper-rs-sys always builds CMake's Release configuration, and with Visual
+Studio's generator the `cmake` crate otherwise replaces those flags with its own (no `/O2`, no
+`/DNDEBUG`), which is how v0.5.19 shipped whisper.cpp unoptimised and about 12 times slower. Cargo
+doesn't rerun whisper-rs-sys's build script when those values change, so `BINDGEN_EXTRA_CLANG_ARGS`
+(which it does watch) carries a `TUG_WHISPER_BUILD` number to bump with them. CI checks the result:
+`release-assets.mjs whisper <profile>` reads the build's `CMakeCache.txt` and `ggml-cpu.vcxproj` and
+fails unless the Release flags have `/O2`, `/DNDEBUG` and `/MT`, MSBuild compiles ggml-cpu at
+MaxSpeed with NDEBUG, and the GGML options are the fixed AVX2 set (release.yml on the release
+build, check.yml on the tests'). Only ggml's CPU backend (`ggml-cpu`) is compiled with `/arch:AVX2`, and
 it has no static initializers; the inline STL and CRT functions it shares with the plain-x64
 libraries are the copies from whisper.cpp's objects, which the linker meets first. (Not tried on a
 processor without AVX2: whisper.cpp is never called there, and that's all tug can promise.) `scripts/remap-paths.mjs` passes MSVC's `/d1trimfile:<target folder>` so
