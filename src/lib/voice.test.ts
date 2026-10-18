@@ -39,6 +39,7 @@ function status(over: Partial<VoiceStatus> = {}): VoiceStatus {
     accurateSupported: true,
     modelOffered: false,
     phoneMic: false,
+    accurateProblem: null,
     ...over,
   };
 }
@@ -105,6 +106,12 @@ describe("voiceProblem", () => {
     const p = voiceProblem(status({ state: "unavailable", language: null, languages: [] }));
     expect(p?.title).toBe("Voice typing needs its speech model");
     expect(p?.body).toContain("Download it above");
+    // Basic picked with the model downloaded: switching back is the fix, and it says so.
+    const basic = voiceProblem(status({ state: "unavailable", language: null, engine: "basic", model: READY }));
+    expect(basic?.title).toBe("Basic needs a Windows speech language");
+    expect(basic?.body).toContain("Switch to Accurate");
+    // Listening again (the backend settled it on): no problem shown.
+    expect(voiceProblem(status({ state: "on", language: null, model: READY, activeEngine: "accurate" }))).toBeNull();
     // A processor that can't run it: only Windows' speech can help.
     expect(voiceProblem(status({ state: "unavailable", language: null, accurateSupported: false }))?.title).toBe(
       "This PC has no speech language yet",
@@ -248,6 +255,16 @@ describe("modelLine", () => {
     expect(modelLine(status({ model: READY, language: "407", activeEngine: "basic" }))?.text).toBe(
       "Accurate understands English only, so tug uses Basic for German (Germany).",
     );
+  });
+
+  it("says when the accurate engine couldn't start, or memory was short", () => {
+    const failed = modelLine(status({ model: READY, accurateProblem: "failed", activeEngine: "basic" }));
+    expect(failed?.text).toContain("tug couldn't start the accurate engine on this PC, so it's using Basic");
+    expect(failed?.error).toBe(true);
+    expect(failed?.action).toBeNull();
+    const low = modelLine(status({ model: READY, accurateProblem: "lowMemory", activeEngine: "accurate" }));
+    expect(low?.text).toContain("low on free memory");
+    expect(low?.error).toBe(false);
   });
 
   it("still shows a running download after Basic is picked", () => {

@@ -36,7 +36,7 @@ use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::code_fill::Keys;
-use engine::{EngineChoice, EngineInputs};
+use engine::{AccurateProblem, EngineChoice, EngineInputs};
 use model::{ModelState, ModelStatus};
 
 /// The status event (`VoiceStatus`), sent when it changes.
@@ -307,6 +307,8 @@ pub struct VoiceStatus {
     pub model_offered: bool,
     /// The default microphone is a phone-call headset ([`phone_call_mic`]).
     pub phone_mic: bool,
+    /// Why the accurate engine isn't listening although it could, if it isn't.
+    pub accurate_problem: Option<AccurateProblem>,
 }
 
 /// What the speech thread listens with. Built from the status by [`engine_config`].
@@ -327,6 +329,7 @@ fn engine_inputs(s: &VoiceStatus) -> EngineInputs<'_> {
         model_ready: s.model.state == ModelState::Ready,
         cpu_ok: s.accurate_supported,
         sapi_language: s.language.as_deref(),
+        accurate_failed: s.accurate_problem == Some(AccurateProblem::Failed),
     }
 }
 
@@ -455,6 +458,7 @@ fn default_status() -> VoiceStatus {
         accurate_supported: engine::cpu_supported(),
         model_offered: false,
         phone_mic: false,
+        accurate_problem: None,
     }
 }
 
@@ -480,7 +484,8 @@ pub fn status() -> VoiceStatus {
 
 /// Change the status under its lock (so the download thread, the speech thread and Settings never
 /// undo each other's changes), work out `active_engine` from the rest, emit it if it changed, and
-/// tell the speech thread if what it listens with changed.
+/// tell the speech thread if what it listens with changed. The speech thread is told while the
+/// lock is still held, so two updates' configurations can never reach it in the wrong order.
 fn update(change: impl FnOnce(&mut VoiceStatus)) -> VoiceStatus {
     let (before, after) = {
         let mut cur = STATUS.lock().unwrap_or_else(|e| e.into_inner());
@@ -489,6 +494,10 @@ fn update(change: impl FnOnce(&mut VoiceStatus)) -> VoiceStatus {
         change(&mut next);
         next.active_engine = engine::pick_engine(&engine_inputs(&next));
         *cur = Some(next.clone());
+        let was = before.as_ref().map(|b| engine_config(b, None)).unwrap_or_default();
+        if was != engine_config(&next, None) {
+            set_engine_config(engine_config(&next, model_file().as_deref()));
+        }
         (before, next)
     };
     if before.as_ref() != Some(&after) {
@@ -499,18 +508,54 @@ fn update(change: impl FnOnce(&mut VoiceStatus)) -> VoiceStatus {
             }
         }
     }
-    let was = before.map(|b| engine_config(&b, None)).unwrap_or_default();
-    if was != engine_config(&after, None) {
-        configure(&after);
-    }
     after
 }
 
-/// Tell the speech thread what to listen with, from the status.
-fn configure(s: &VoiceStatus) {
-    set_engine_config(engine_config(s, model_file().as_deref()));
+/// Tell the speech thread what to listen with, from the status as it is now (under the lock, like
+/// `update`).
+fn configure_now() {
+    let cur = STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    let s = cur.clone().unwrap_or_else(default_status);
+    set_engine_config(engine_config(&s, model_file().as_deref()));
 }
 
+/// Whether voice typing is switched on but its state no longer matches whether anything can
+/// listen: the model arrived (or was picked) on a PC with no Windows speech language, so it can
+/// listen now but no shortcut is registered; or Basic was picked (or the model was lost) on such a
+/// PC, so the shortcut is registered but nothing can listen.
+pub fn needs_resettle(s: &VoiceStatus) -> bool {
+    if !s.enabled {
+        return false;
+    }
+    let can_listen = engine::pick_engine(&engine_inputs(s)).is_some();
+    let listening = matches!(s.state, VoiceState::On | VoiceState::InUse);
+    can_listen != listening
+}
+
+/// Turn voice typing on again with its shortcut and language when what can listen changed under
+/// it ([`needs_resettle`]), so the shortcut and Settings match. Waits for the speech thread (it
+/// lists the languages), so never call it from that thread.
+fn resettle() {
+    let s = current();
+    if needs_resettle(&s) {
+        log::info!(
+            "voice typing: what can listen changed while it was {:?}; settling again",
+            s.state
+        );
+        apply(true, &s.keys, s.language.as_deref());
+    }
+}
+
+/// [`resettle`] on a thread of its own, for callers on the speech thread.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn resettle_soon() {
+    if let Err(e) = std::thread::Builder::new()
+        .name("tug-voice-resettle".into())
+        .spawn(resettle)
+    {
+        log::warn!("voice typing: couldn't settle again ({e})");
+    }
+}
 /// Tell the UI what a hold did.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn emit_typed(outcome: VoiceOutcome) {
@@ -593,7 +638,7 @@ pub fn apply(enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
         );
     }
     // Always, so a fresh start (or a changed language) reaches the speech thread.
-    configure(&s);
+    configure_now();
     s
 }
 
@@ -654,6 +699,8 @@ pub fn start(app: &AppHandle, store: &crate::store::Store) {
 /// Save the choice and apply it. Called from the `set_voice_typing` command. What's saved is
 /// where it ended up: turning it on and failing saves it as off, matching the switch.
 pub fn set(store: &crate::store::Store, enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
+    // Switching it on (or off) gives the accurate engine another chance if it failed to start.
+    update(|s| s.accurate_problem = None);
     let s = apply(enabled, keys, language);
     let saves = [
         (SETTING_ENABLED, if s.enabled { "true" } else { "false" }.to_string()),
@@ -675,7 +722,13 @@ pub fn set_engine(store: &crate::store::Store, choice: EngineChoice) -> VoiceSta
         log::warn!("couldn't save {SETTING_ENGINE}: {e}");
     }
     log::info!("voice typing: {} engine picked", choice.as_str());
-    update(|s| s.engine = choice)
+    update(|s| {
+        s.engine = choice;
+        s.accurate_problem = None;
+    });
+    // With no Windows speech language, the engine decides whether anything can listen at all.
+    resettle();
+    current()
 }
 
 /// Settings has offered the model download (the person chose Download or Not now): don't offer it
@@ -732,10 +785,17 @@ pub fn download_model() -> VoiceStatus {
                 Err(e) => log::warn!("voice typing: speech model download stopped: {}", e.detail()),
             }
             DOWNLOADING.store(false, Ordering::SeqCst);
+            let ok = result.is_ok();
             update(|s| {
                 s.model = model::status_on_disk(&dir, &model::MODEL);
                 s.model.error = result.err().and_then(|e| e.message()).map(str::to_string);
+                if ok {
+                    s.accurate_problem = None;
+                }
             });
+            // On a PC with no Windows speech language, the model is what lets voice typing listen:
+            // register the shortcut now rather than leave it unavailable.
+            resettle();
         });
     if let Err(e) = spawned {
         DOWNLOADING.store(false, Ordering::SeqCst);
@@ -770,6 +830,24 @@ fn model_damaged(why: &str) {
         s.model.error =
             Some("The speech model was damaged, so tug deleted it and is using Basic. Download it again.".into());
     });
+    // Without Windows speech, nothing can listen now: say so and let the shortcut go. Off this
+    // (speech) thread, since settling waits for it.
+    resettle_soon();
+}
+
+/// What happened when the speech thread last tried to load the accurate engine: `None` loaded,
+/// or why it didn't. A failure to start keeps Basic listening (and settles again, in case nothing
+/// else can listen); low memory only affects that one hold.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn note_accurate(problem: Option<AccurateProblem>) {
+    let before = current().accurate_problem;
+    if before == problem {
+        return;
+    }
+    update(|s| s.accurate_problem = problem);
+    if problem == Some(AccurateProblem::Failed) || before == Some(AccurateProblem::Failed) {
+        resettle_soon();
+    }
 }
 
 /// Note what the default microphone is (from the speech thread), so Settings can say when it's a
@@ -801,21 +879,21 @@ pub fn refresh_languages() -> VoiceStatus {
         });
     }
     let s = status();
-    if !s.languages.is_empty() {
-        return s;
+    if s.languages.is_empty() {
+        let languages = installed_languages().unwrap_or_else(|e| {
+            log::warn!("voice typing: couldn't list the speech languages: {}", e.detail());
+            Vec::new()
+        });
+        let language = pick_language(s.language.as_deref(), &languages, ui_language());
+        update(|s| {
+            s.languages = languages;
+            s.language = language;
+        });
     }
-    let languages = installed_languages().unwrap_or_else(|e| {
-        log::warn!("voice typing: couldn't list the speech languages: {}", e.detail());
-        Vec::new()
-    });
-    let language = pick_language(s.language.as_deref(), &languages, ui_language());
-    update(|s| {
-        s.languages = languages;
-        s.language = language;
-        if s.enabled && engine::pick_engine(&engine_inputs(s)).is_none() {
-            s.state = VoiceState::Unavailable;
-        }
-    })
+    // If what can listen no longer matches the state (the model was deleted by hand, say), settle
+    // again so the shortcut and Settings agree.
+    resettle();
+    current()
 }
 
 #[cfg(windows)]
@@ -1125,11 +1203,12 @@ mod tests {
             accurate_supported: true,
             model_offered: false,
             phone_mic: true,
+            accurate_problem: Some(AccurateProblem::LowMemory),
         })
         .unwrap();
         assert_eq!(
             json,
-            r#"{"enabled":true,"state":"inUse","keys":"ctrl+alt+space","language":"409","languages":[{"id":"409","name":"English (US)"}],"micBlocked":false,"startError":null,"engine":"accurate","activeEngine":"basic","model":{"state":"downloading","received":10,"total":20,"error":null},"accurateSupported":true,"modelOffered":false,"phoneMic":true}"#
+            r#"{"enabled":true,"state":"inUse","keys":"ctrl+alt+space","language":"409","languages":[{"id":"409","name":"English (US)"}],"micBlocked":false,"startError":null,"engine":"accurate","activeEngine":"basic","model":{"state":"downloading","received":10,"total":20,"error":null},"accurateSupported":true,"modelOffered":false,"phoneMic":true,"accurateProblem":"lowMemory"}"#
         );
     }
 
@@ -1192,6 +1271,64 @@ mod tests {
             engine_config(&busy, Some(file)),
             EngineConfig::default(),
             "no shortcut: nothing loaded"
+        );
+    }
+
+    /// The state `apply(true, …)` settles on for this status (what `resettle` re-runs), with the
+    /// shortcut free to register.
+    fn settled_state(s: &VoiceStatus) -> VoiceState {
+        let can_listen = engine::pick_engine(&engine_inputs(s)).is_some();
+        settle(true, can_listen, Ok(can_listen)).state
+    }
+
+    #[test]
+    fn downloading_the_model_with_no_windows_speech_turns_voice_typing_on() {
+        // No Windows speech language, no model: on, but nothing can listen.
+        let mut s = on_status(EngineChoice::Accurate, ModelState::Missing, None);
+        s.state = settled_state(&s);
+        assert_eq!(s.state, VoiceState::Unavailable);
+        assert!(!needs_resettle(&s), "nothing changed yet");
+        // The download finishes: the model can listen, so it settles again, and comes out on.
+        s.model.state = ModelState::Ready;
+        assert!(needs_resettle(&s), "unavailable, but the model can listen now");
+        s.state = settled_state(&s);
+        assert_eq!(s.state, VoiceState::On);
+        assert!(!needs_resettle(&s), "settled");
+    }
+
+    #[test]
+    fn picking_basic_with_no_windows_speech_says_nothing_can_listen() {
+        let mut s = on_status(EngineChoice::Accurate, ModelState::Ready, None);
+        s.state = settled_state(&s);
+        assert_eq!(s.state, VoiceState::On, "the model listens");
+        // Basic picked: the shortcut mustn't stay registered with nothing behind it.
+        s.engine = EngineChoice::Basic;
+        assert!(needs_resettle(&s));
+        s.state = settled_state(&s);
+        assert_eq!(s.state, VoiceState::Unavailable);
+        // The same when the model is lost instead.
+        let mut s = on_status(EngineChoice::Accurate, ModelState::Ready, None);
+        s.model.state = ModelState::Missing;
+        assert!(needs_resettle(&s), "the model was deleted");
+        assert_eq!(settled_state(&s), VoiceState::Unavailable);
+    }
+
+    #[test]
+    fn nothing_to_settle_when_off_or_when_windows_speech_listens_anyway() {
+        let mut off = on_status(EngineChoice::Accurate, ModelState::Ready, None);
+        off.enabled = false;
+        off.state = VoiceState::Off;
+        assert!(!needs_resettle(&off));
+        // With a Windows speech language, Basic always can: the model arriving changes the engine,
+        // not whether voice typing is on.
+        let mut s = on_status(EngineChoice::Accurate, ModelState::Missing, Some("409"));
+        assert!(!needs_resettle(&s));
+        s.model.state = ModelState::Ready;
+        assert!(!needs_resettle(&s));
+        s.state = VoiceState::InUse;
+        assert!(
+            !needs_resettle(&s),
+            "another app has the shortcut: that's not a settle problem"
         );
     }
 

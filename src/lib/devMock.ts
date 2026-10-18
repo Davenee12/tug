@@ -1081,7 +1081,8 @@ const codeHotkey: CodeHotkeyStatus = { state: params.has("hotkeybusy") ? "inUse"
 // `?voicefail`: turning it on fails and the switch goes back off with the reason.
 // The accurate engine's model: not downloaded by default (the first-time offer shows once it's
 // on); `&model` downloaded, `&modelpaused` a download paused at 40%, `&modelfail` downloads fail
-// part way, `&noavx` a processor that can't run it, `&phonemic` a hands-free headset.
+// part way, `&noavx` a processor that can't run it, `&phonemic` a hands-free headset,
+// `&accuratefail` (with `&model`) whisper.cpp failed to start on this PC.
 const voiceOn = params.has("voice");
 const MODEL_BYTES = 81_781_811;
 const voiceLanguages = params.has("nospeech")
@@ -1116,11 +1117,12 @@ const voice: VoiceStatus = {
   accurateSupported: !params.has("noavx"),
   modelOffered: params.has("model") || params.has("modelpaused"),
   phoneMic: params.has("phonemic"),
+  accurateProblem: params.has("accuratefail") ? "failed" : null,
 };
 /** What a hold would use, as `voice::engine::pick_engine` decides it. */
 function voiceActive(): VoiceStatus["activeEngine"] {
   const english = !voice.language || (Number.parseInt(voice.language, 16) & 0x3ff) === 0x09;
-  const accurate = voice.model.state === "ready" && voice.accurateSupported && english;
+  const accurate = voice.model.state === "ready" && voice.accurateSupported && english && voice.accurateProblem !== "failed";
   if (voice.engine === "accurate" && accurate) return "accurate";
   return voice.language ? "basic" : null;
 }
@@ -1128,6 +1130,8 @@ voice.activeEngine = voiceActive();
 function sendVoice(patch: Partial<VoiceStatus> = {}) {
   Object.assign(voice, patch);
   voice.activeEngine = voiceActive();
+  // Like voice::resettle: on but nothing can listen is unavailable, and back on once something can.
+  if (voice.enabled && voice.state !== "inUse") voice.state = voice.activeEngine ? "on" : "unavailable";
   void emit("voice-status", structuredClone(voice));
   return structuredClone(voice);
 }
@@ -1562,7 +1566,7 @@ mockIPC(
         if (a.languages) voice.languages = voiceLanguages;
         return sendVoice();
       case "set_voice_engine":
-        return sendVoice({ engine: a.engine === "basic" ? "basic" : "accurate" });
+        return sendVoice({ engine: a.engine === "basic" ? "basic" : "accurate", accurateProblem: null });
       case "voice_model_download":
         return mockModelDownload();
       case "voice_model_cancel":

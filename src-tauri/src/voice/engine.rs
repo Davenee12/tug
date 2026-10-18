@@ -65,6 +65,31 @@ impl EngineChoice {
     }
 }
 
+/// Why the accurate engine isn't listening even though it could. Mirrored in
+/// `src/types/protocol.ts` (`VoiceStatus.accurateProblem`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AccurateProblem {
+    /// whisper.cpp couldn't start with the (checked) model on this PC. The file is kept and
+    /// Basic listens until voice typing is switched on again, the engine is picked again or the
+    /// model is downloaded again: it isn't retried on every hold.
+    Failed,
+    /// Too little free memory to load it on the last hold: that hold used Basic, and the next
+    /// one tries again.
+    LowMemory,
+}
+
+/// The free memory tug wants before loading the accurate engine. Loaded, it adds about
+/// 240 MB to tug's working set (measured with the 78 MB model: 30 MB before, 272 MB after a few
+/// holds, 32 MB again once let go; `compares_whisper_with_windows_recognizer` prints it); twice
+/// that leaves room for everything else on the PC.
+pub const MIN_FREE_MEMORY: u64 = 512 * 1024 * 1024;
+
+/// Whether there's memory to load the accurate engine (`None`: Windows didn't say; go ahead).
+pub fn enough_memory(available: Option<u64>) -> bool {
+    available.is_none_or(|a| a >= MIN_FREE_MEMORY)
+}
+
 /// Whether a language id from Windows (hex, "409" is English (US), "809" English (UK)) is English.
 /// The accurate engine's model is English-only.
 pub fn is_english(language: &str) -> bool {
@@ -81,13 +106,15 @@ pub struct EngineInputs<'a> {
     pub cpu_ok: bool,
     /// Windows' recognizer language, if Windows has one ("409").
     pub sapi_language: Option<&'a str>,
+    /// whisper.cpp failed to start with the model on this PC ([`AccurateProblem::Failed`]).
+    pub accurate_failed: bool,
 }
 
 /// Whether the accurate engine can listen here, whatever was picked: the model is downloaded, the
-/// processor can run it, and the language is English (or Windows has no speech language at all,
-/// so there's nothing else to listen in).
+/// processor can run it, it hasn't failed to start here, and the language is English (or Windows
+/// has no speech language at all, so there's nothing else to listen in).
 pub fn accurate_usable(i: &EngineInputs) -> bool {
-    i.model_ready && i.cpu_ok && i.sapi_language.is_none_or(is_english)
+    i.model_ready && i.cpu_ok && !i.accurate_failed && i.sapi_language.is_none_or(is_english)
 }
 
 /// Which engine a hold uses, or `None` when nothing can listen (`VoiceOutcome::Unavailable`):
@@ -138,7 +165,35 @@ mod tests {
             model_ready,
             cpu_ok,
             sapi_language: sapi,
+            accurate_failed: false,
         }
+    }
+
+    #[test]
+    fn basic_after_the_accurate_engine_failed_to_start() {
+        let failed = EngineInputs {
+            accurate_failed: true,
+            ..inputs(Accurate, true, true, Some("409"))
+        };
+        assert_eq!(pick_engine(&failed), Some(Basic));
+        let alone = EngineInputs {
+            accurate_failed: true,
+            ..inputs(Accurate, true, true, None)
+        };
+        assert_eq!(pick_engine(&alone), None, "and nothing, without Windows speech");
+    }
+
+    #[test]
+    fn needs_free_memory_to_load() {
+        assert!(enough_memory(None), "Windows didn't say: go ahead");
+        assert!(enough_memory(Some(4 << 30)));
+        assert!(enough_memory(Some(MIN_FREE_MEMORY)));
+        assert!(!enough_memory(Some(MIN_FREE_MEMORY - 1)));
+        assert!(!enough_memory(Some(100 << 20)));
+        assert_eq!(
+            serde_json::to_string(&AccurateProblem::LowMemory).unwrap(),
+            r#""lowMemory""#
+        );
     }
 
     #[test]

@@ -1086,6 +1086,8 @@ export interface VoiceStatus {
   modelOffered: boolean;
   /** The default microphone is a phone-call (Bluetooth hands-free) headset. */
   phoneMic: boolean;
+  /** Why the accurate engine isn't listening although it could: it failed to start on this PC (Basic listens until it's switched on again), or there was too little free memory on the last hold. */
+  accurateProblem: "failed" | "lowMemory" | null;
 }
 
 /** What one hold did (`voice-typed`). The words themselves are never sent. */

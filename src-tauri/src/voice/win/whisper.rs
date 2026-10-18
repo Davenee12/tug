@@ -13,7 +13,6 @@
 //! - whisper.cpp's own logging is switched off for good: in debug builds it can print the tokens
 //!   it decodes, and voice typing never logs what was said.
 
-use std::path::Path;
 use std::sync::Once;
 
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
@@ -97,29 +96,29 @@ fn failed(what: &str, e: impl std::fmt::Display) -> EngineError {
 }
 
 impl Whisper {
-    /// Load the model at `path` (already checked against its hash by the caller).
-    pub fn load(path: &Path) -> Result<Self, EngineError> {
-        Self::load_tuned(path, Tuning::default())
+    /// Load the model from its bytes (already checked against its hash by the caller, on these
+    /// very bytes, so nothing can change the file between the check and the load).
+    pub fn load(bytes: &[u8]) -> Result<Self, EngineError> {
+        Self::load_tuned(bytes, Tuning::default())
     }
 
-    pub fn load_tuned(path: &Path, tuning: Tuning) -> Result<Self, EngineError> {
+    pub fn load_tuned(bytes: &[u8], tuning: Tuning) -> Result<Self, EngineError> {
         quiet_logs();
-        let path = path
-            .to_str()
-            .ok_or_else(|| EngineError::Failed("the model's path isn't valid Unicode".into()))?;
         let mut params = WhisperContextParameters::default();
         // No GPU backend is compiled in; say so rather than rely on the default.
         params.use_gpu(false);
         params.flash_attn(tuning.flash_attn);
-        let ctx = WhisperContext::new_with_params(path, params).map_err(|e| failed("loading the model", e))?;
+        let ctx =
+            WhisperContext::new_from_buffer_with_params(bytes, params).map_err(|e| failed("loading the model", e))?;
         let state = ctx.create_state().map_err(|e| failed("the model's state", e))?;
         let prompt_tokens = if tuning.prompt {
             let mut t = ctx
                 .tokenize(&vocab::prompt(), MAX_PROMPT_TOKENS * 2)
                 .map_err(|e| failed("the prompt", e))?;
-            // whisper.cpp keeps the end of an overlong prompt; keep the start (the examples and
-            // the commands), which matter most.
-            t.truncate(MAX_PROMPT_TOKENS);
+            // whisper.cpp keeps the end of an overlong prompt, and uses at most one less than
+            // half its text context; keep the start (the examples and the commands), which matter
+            // most. (The prompt is about 135 tokens today: `prompt_len` in the test report.)
+            t.truncate(MAX_PROMPT_TOKENS - 1);
             t
         } else {
             Vec::new()
@@ -145,6 +144,8 @@ impl Engine for Whisper {
     }
 
     fn transcribe(&mut self, pcm: &[i16]) -> Result<String, EngineError> {
+        let speech = audio::trim_silence(pcm);
+        let speech_secs = speech.len() as f32 / SAMPLE_RATE as f32;
         let samples = audio::prepare(pcm);
         let mut p = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         p.set_n_threads(self.tuning.threads);
@@ -176,14 +177,24 @@ impl Engine for Whisper {
                 heard.push(' ');
             }
         }
-        Ok(vocab::clean(&heard))
+        let heard = vocab::clean(&heard);
+        if vocab::is_prompt_echo(&heard, speech_secs) {
+            // Whisper repeated its own prompt (a cough or a click it couldn't make out): nothing
+            // was said that should be typed. Logged without the words.
+            log::info!(
+                "voice typing: dropped {} words that only repeated the prompt",
+                heard.split_whitespace().count()
+            );
+            return Ok(String::new());
+        }
+        Ok(heard)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Instant;
 
     use crate::voice::model;
@@ -425,14 +436,18 @@ mod tests {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
             let mb = std::fs::metadata(path).map(|m| m.len() / 1_000_000).unwrap_or(0);
             for (label, tuning) in &variants {
+                let before = working_set();
                 let t = Instant::now();
-                let mut w = match Whisper::load_tuned(path, *tuning) {
+                let bytes = std::fs::read(path).expect("model readable");
+                let mut w = match Whisper::load_tuned(&bytes, *tuning) {
                     Ok(w) => w,
                     Err(e) => {
                         println!("{name}: didn't load: {e:?}");
                         continue;
                     }
                 };
+                let with_file = working_set();
+                drop(bytes);
                 let load_ms = t.elapsed().as_millis();
                 // A first hold warms whisper.cpp's buffers; it's reported on its own, and the
                 // rows below are the steady state from the second hold on.
@@ -456,6 +471,17 @@ mod tests {
                 }
                 let heard = w.transcribe(&noisy(&vec![0i16; 24_000])).expect("hiss is fine");
                 println!("   hiss only (voice typing doesn't get this far: audio::has_speech) → {heard:?}");
+                let (ws_before, ws_file, ws_loaded) = (before, with_file, working_set());
+                println!(
+                    "   memory: working set {} MB before loading, {} MB while the file and the model were both in memory, {} MB loaded after holds (+{} MB); peak {} MB",
+                    ws_before.0 >> 20,
+                    ws_file.0 >> 20,
+                    ws_loaded.0 >> 20,
+                    ws_loaded.0.saturating_sub(ws_before.0) >> 20,
+                    ws_loaded.1 >> 20
+                );
+                drop(w);
+                println!("   memory: {} MB after letting it go", working_set().0 >> 20);
             }
         }
 
@@ -496,19 +522,32 @@ mod tests {
         }
     }
 
-    /// A model file that's damaged (right size, wrong bytes, or not a model at all) fails to load
-    /// cleanly: an error, never a crash, so tug can fall back to Windows' recognizer.
+    /// This process's working set and its peak, in bytes.
+    fn working_set() -> (u64, u64) {
+        use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+        use windows::Win32::System::Threading::GetCurrentProcess;
+        let mut c = PROCESS_MEMORY_COUNTERS::default();
+        // SAFETY: a read-only query about this process into a correctly sized struct.
+        let ok = unsafe {
+            GetProcessMemoryInfo(
+                GetCurrentProcess(),
+                &mut c,
+                std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            )
+        };
+        if ok.is_err() {
+            return (0, 0);
+        }
+        (c.WorkingSetSize as u64, c.PeakWorkingSetSize as u64)
+    }
+
+    /// Bytes that aren't a model (not one at all, or empty) fail to load cleanly: an error, never
+    /// a crash, so tug can fall back to Windows' recognizer. (A file that is the right size but
+    /// damaged never gets this far: its hash is checked first.)
     #[test]
-    fn a_file_that_isnt_a_model_fails_to_load_without_crashing() {
-        let dir = std::env::temp_dir().join(format!("tug-whisper-bad-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bad = dir.join("ggml-base.en.bin");
-        std::fs::write(&bad, vec![0x5au8; 4096]).unwrap();
-        let r = Whisper::load(&bad);
+    fn bytes_that_arent_a_model_fail_to_load_without_crashing() {
+        let r = Whisper::load(&vec![0x5au8; 4096]);
         assert!(matches!(r, Err(EngineError::Failed(_))), "{:?}", r.as_ref().err());
-        std::fs::write(&bad, b"").unwrap();
-        assert!(Whisper::load(&bad).is_err(), "empty");
-        assert!(Whisper::load(&dir.join("missing.bin")).is_err(), "missing");
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(Whisper::load(&[0u8; 4]).is_err(), "too short to be anything");
     }
 }

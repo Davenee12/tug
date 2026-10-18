@@ -152,6 +152,17 @@ pub fn type_strokes(strokes: &[Stroke]) -> bool {
     send(&inputs)
 }
 
+/// The physical memory free right now, in bytes, or `None` if Windows doesn't say.
+pub fn available_memory() -> Option<u64> {
+    use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut m = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: a read-only query into a struct whose length field is set, as the API requires.
+    unsafe { GlobalMemoryStatusEx(&mut m) }.ok().map(|()| m.ullAvailPhys)
+}
+
 /// The default microphone's name and the sample rate Windows mixes it at, if there is one. Must
 /// run on a COM thread (the voice worker). Read-only: the device isn't opened for recording.
 pub fn default_mic() -> Option<(String, u32)> {

@@ -36,7 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_HOTKEY,
 };
 
-use super::engine::{Engine, EngineChoice, EngineError};
+use super::engine::{AccurateProblem, Engine, EngineChoice, EngineError};
 use super::{
     audio, judge_recording, judge_typing, model, peak, pill_problem, text, EngineConfig, StartError, VoiceLanguage,
     VoiceOutcome, MAX_HOLD, TAIL,
@@ -453,14 +453,34 @@ fn finish(outcome: VoiceOutcome) {
     }
 }
 
-/// Load the accurate engine from `path`, after checking the file is exactly the model (its hash),
-/// so whisper.cpp is never handed a damaged or swapped file. `Err` says why, for the log.
-fn load_accurate(path: &std::path::Path) -> Result<whisper::Whisper, String> {
+/// Why the accurate engine didn't load.
+enum LoadError {
+    /// The file isn't exactly the model (wrong size or hash) or is gone: it's deleted.
+    Damaged(String),
+    /// Not enough free memory right now (bytes available): this hold uses Basic, the next tries again.
+    LowMemory(u64),
+    /// whisper.cpp couldn't start with the checked model: the file is kept, Basic listens.
+    Failed(String),
+}
+
+/// Load the accurate engine: check there's memory for it, read the model file once, check those
+/// very bytes against the model's hash, and hand the same bytes to whisper.cpp. Nothing can change
+/// the file between the check and the load, and whisper.cpp never sees a damaged or swapped file.
+fn load_accurate(path: &std::path::Path) -> Result<whisper::Whisper, LoadError> {
     let t0 = Instant::now();
-    if !model::verify(path, &model::MODEL) {
-        return Err("it doesn't match its SHA-256".into());
+    let available = system::available_memory();
+    if !crate::voice::engine::enough_memory(available) {
+        return Err(LoadError::LowMemory(available.unwrap_or(0)));
     }
-    let w = whisper::Whisper::load(path).map_err(|e| format!("{e:?}"))?;
+    let bytes = std::fs::read(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => LoadError::Damaged("it's gone".into()),
+        _ => LoadError::Failed(format!("couldn't read it: {e}")),
+    })?;
+    if !model::verify_bytes(&bytes, &model::MODEL) {
+        return Err(LoadError::Damaged("it doesn't match its SHA-256".into()));
+    }
+    let w = whisper::Whisper::load(&bytes).map_err(|e| LoadError::Failed(format!("{e:?}")))?;
+    drop(bytes);
     log::info!(
         "voice typing: accurate engine loaded in {} ms ({} threads)",
         t0.elapsed().as_millis(),
@@ -471,7 +491,7 @@ fn load_accurate(path: &std::path::Path) -> Result<whisper::Whisper, String> {
 
 /// Loading the accurate engine on a helper thread while the person talks: the first hold after
 /// switching on waits for the recording, not the recording and then the model.
-type Loading = std::thread::JoinHandle<Result<whisper::Whisper, String>>;
+type Loading = std::thread::JoinHandle<Result<whisper::Whisper, LoadError>>;
 
 fn start_loading(engines: &Engines) -> Option<Loading> {
     if engines.config.engine != Some(EngineChoice::Accurate) || engines.accurate.is_some() {
@@ -485,24 +505,42 @@ fn start_loading(engines: &Engines) -> Option<Loading> {
         .ok()
 }
 
-/// Collect the helper thread's engine (or load it here if there was no helper). A model that
-/// fails its check or doesn't load is deleted and reported (`model_damaged`), and this hold falls
-/// back to Basic.
+/// Collect the helper thread's engine (or load it here if there was no helper). This hold falls
+/// back to Basic if it didn't load: a file that isn't the model is deleted (`model_damaged`); low
+/// memory is noted and tried again next hold; any other failure keeps the file, notes it and stops
+/// trying until voice typing (or the engine) is picked again.
 fn finish_loading(engines: &mut Engines, loading: Option<Loading>) {
     if engines.config.engine != Some(EngineChoice::Accurate) || engines.accurate.is_some() {
         return;
     }
     let result = match loading {
-        Some(handle) => handle.join().unwrap_or_else(|_| Err("loading it panicked".into())),
+        Some(handle) => handle
+            .join()
+            .unwrap_or_else(|_| Err(LoadError::Failed("loading it panicked".into()))),
         None => match engines.config.model.clone() {
             Some(path) => load_accurate(&path),
             None => return,
         },
     };
     match result {
-        Ok(w) => engines.accurate = Some(w),
-        Err(why) => {
+        Ok(w) => {
+            engines.accurate = Some(w);
+            super::note_accurate(None);
+        }
+        Err(LoadError::Damaged(why)) => {
             super::model_damaged(&why);
+            engines.config.model = None;
+        }
+        Err(LoadError::LowMemory(free)) => {
+            log::info!(
+                "voice typing: {} MB of memory free, too little to load the accurate engine; using the basic engine for this hold",
+                free >> 20
+            );
+            super::note_accurate(Some(AccurateProblem::LowMemory));
+        }
+        Err(LoadError::Failed(why)) => {
+            log::warn!("voice typing: the accurate engine couldn't start ({why}); keeping the model and using the basic engine");
+            super::note_accurate(Some(AccurateProblem::Failed));
             engines.config.model = None;
         }
     }

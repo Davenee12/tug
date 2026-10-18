@@ -51,16 +51,29 @@ export function voiceProblem(status: VoiceStatus | null): VoiceProblem | null {
   }
   if (!status?.enabled) return null;
   if (status.state === "unavailable") {
-    const modelWouldDo = status.accurateSupported && status.engine === "accurate";
-    return {
+    const words = (title: string, body: string): VoiceProblem => ({
       kind: "unavailable",
-      title: modelWouldDo ? "Voice typing needs its speech model" : "This PC has no speech language yet",
-      body: modelWouldDo
-        ? "Windows has no speech recognition on this PC, so voice typing needs the accurate engine's speech model. Download it above, or add a language with speech recognition in Windows Settings."
-        : "Basic uses Windows' own speech recognition. Add a language with speech recognition in Windows Settings, then come back here.",
+      title,
+      body,
       page: "language",
       button: "Open language settings",
-    };
+    });
+    if (status.accurateSupported && status.engine === "basic" && status.model.state === "ready") {
+      return words(
+        "Basic needs a Windows speech language",
+        "Windows has no speech recognition on this PC. Switch to Accurate above, which uses the speech model you downloaded, or add a language with speech recognition in Windows Settings.",
+      );
+    }
+    if (status.accurateSupported && status.engine === "accurate") {
+      return words(
+        "Voice typing needs its speech model",
+        "Windows has no speech recognition on this PC, so voice typing needs the accurate engine's speech model. Download it above, or add a language with speech recognition in Windows Settings.",
+      );
+    }
+    return words(
+      "This PC has no speech language yet",
+      "Basic uses Windows' own speech recognition. Add a language with speech recognition in Windows Settings, then come back here.",
+    );
   }
   if (status.micBlocked) {
     return {
@@ -210,6 +223,24 @@ export function modelLine(status: VoiceStatus): ModelLine | null {
     };
   }
   if (m.state === "ready") {
+    if (status.accurateProblem === "failed") {
+      return {
+        text: "tug couldn't start the accurate engine on this PC, so it's using Basic. Turning voice typing off and on tries again.",
+        progress: false,
+        action: null,
+        actionLabel: null,
+        error: true,
+      };
+    }
+    if (status.accurateProblem === "lowMemory") {
+      return {
+        text: "This PC was low on free memory, so tug used Basic for that one. Accurate tries again next time.",
+        progress: false,
+        action: null,
+        actionLabel: null,
+        error: false,
+      };
+    }
     if (!isEnglish(status.language) && status.activeEngine === "basic") {
       const name = languageName(status) ?? "this language";
       return {

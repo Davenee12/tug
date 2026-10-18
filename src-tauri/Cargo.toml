@@ -149,11 +149,16 @@ windows = { version = "0.62", features = [
   "Win32_Media_Audio",
   "Win32_Media_Speech",
   "Win32_System_Com",
+  # Voice typing's accurate engine: free memory before loading it (GlobalMemoryStatusEx), and the
+  # process's working set in its by-hand measurement test.
+  "Win32_System_SystemInformation",
+  "Win32_System_ProcessStatus",
 ] }
 windows-collections = "0.3"
 # Voice typing's accurate engine: whisper.cpp, compiled from source (CMake + MSVC) and linked
-# statically, run on the CPU with a speech model downloaded once on request. Its build settings
-# (prebuilt bindings, a fixed AVX2 instruction set) are in .cargo/config.toml.
+# statically, run on the CPU with a speech model downloaded once on request. Its Rust bindings are
+# generated with bindgen at build time (which needs libclang); its build settings (a fixed AVX2
+# instruction set, the static C/C++ runtime) are in .cargo/config.toml.
 whisper-rs = "0.16"
 # Same version Tauri already pulls in (see Cargo.lock), so the WebView2 controller handed back by
 # `with_webview` is the same type: lets us hook ProcessFailed to log web-content crashes.
