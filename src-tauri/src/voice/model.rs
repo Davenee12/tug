@@ -109,6 +109,9 @@ impl DownloadError {
     pub fn message(&self) -> Option<&'static str> {
         Some(match self {
             DownloadError::Cancelled => return None,
+            DownloadError::Http(code) if source_unavailable(*code) => {
+                "The speech model's download site isn't available right now. Try again later."
+            }
             DownloadError::Network(_) | DownloadError::Http(_) => {
                 "The download stopped. Check your internet connection and try again; it picks up where it left off."
             }
@@ -132,6 +135,21 @@ impl DownloadError {
             DownloadError::Disk(e) => format!("disk: {e}"),
         }
     }
+}
+
+/// Whether an HTTP status means the file isn't being served (gone, refused or rate-limited),
+/// rather than a connection that dropped: trying again straight away won't help, so Settings
+/// doesn't promise to pick up where it left off.
+pub fn source_unavailable(code: u16) -> bool {
+    matches!(code, 401 | 403 | 404 | 410 | 429 | 451)
+}
+
+/// Where the download may be redirected: Hugging Face itself and its download servers
+/// (`*.hf.co`, which includes the `cdn` and `xethub` hosts). Anywhere else is refused, even over
+/// HTTPS, though the hash would catch a wrong file anyway.
+pub fn allowed_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    host == "huggingface.co" || host == "hf.co" || host.ends_with(".hf.co")
 }
 
 /// What the server sent back for a request.
@@ -197,6 +215,16 @@ pub fn sha256_file(path: &Path) -> std::io::Result<String> {
 pub fn verify(path: &Path, spec: &ModelSpec) -> bool {
     fs::metadata(path).is_ok_and(|m| m.len() == spec.size)
         && sha256_file(path).is_ok_and(|h| h.eq_ignore_ascii_case(spec.sha256))
+}
+
+/// Whether `bytes` (the model file, read into memory) are exactly the model: its size and its hash.
+/// Loading checks the very bytes it hands to whisper.cpp, so nothing can change in between.
+pub fn verify_bytes(bytes: &[u8], spec: &ModelSpec) -> bool {
+    if bytes.len() as u64 != spec.size {
+        return false;
+    }
+    let hex: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    hex.eq_ignore_ascii_case(spec.sha256)
 }
 
 /// Delete the model and any paused download (a damaged model, or the person removing it).
@@ -342,7 +370,8 @@ impl HttpFetch {
             .read_timeout(std::time::Duration::from_secs(30))
             .https_only(true)
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= 5 || attempt.url().scheme() != "https" {
+                let host_ok = attempt.url().host_str().is_some_and(allowed_host);
+                if attempt.previous().len() >= 5 || attempt.url().scheme() != "https" || !host_ok {
                     attempt.stop()
                 } else {
                     attempt.follow()
@@ -681,6 +710,11 @@ mod tests {
             .message()
             .unwrap()
             .contains("picks up where it left off"));
+        for code in [403, 404, 429] {
+            let msg = DownloadError::Http(code).message().unwrap();
+            assert!(msg.contains("isn't available right now"), "{code}: {msg}");
+            assert!(!msg.contains("picks up"), "{code}: no promise to resume");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -695,6 +729,9 @@ mod tests {
         fs::write(model_path(&dir, &spec), &damaged).unwrap();
         assert!(installed(&dir, &spec).is_some(), "the right size passes the quick look");
         assert!(!verify(&model_path(&dir, &spec), &spec), "but not the hash");
+        assert!(!verify_bytes(&damaged, &spec), "nor in memory, as loading checks it");
+        assert!(verify_bytes(&data, &spec));
+        assert!(!verify_bytes(&data[..10], &spec), "short");
         let mut fake = server(&data, Server::Ranges);
         let (r, _) = run(&mut fake, &spec, &dir);
         assert_eq!(fs::read(r.unwrap()).unwrap(), data);
@@ -743,6 +780,20 @@ mod tests {
         assert!(verify(&path, &MODEL));
         assert!(!part_path(&dir, &MODEL).exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn redirects_only_to_hugging_face() {
+        assert!(allowed_host("huggingface.co"));
+        assert!(allowed_host("cdn.hf.co"));
+        assert!(allowed_host("us.aws.cdn.hf.co"));
+        assert!(allowed_host("cas-bridge.xethub.hf.co"));
+        assert!(allowed_host("HuggingFace.co."));
+        assert!(!allowed_host("huggingface.co.example.com"));
+        assert!(!allowed_host("evilhf.co"));
+        assert!(!allowed_host("example.com"));
+        assert!(!allowed_host("objects.githubusercontent.com"));
+        assert!(source_unavailable(404) && source_unavailable(429) && !source_unavailable(503));
     }
 
     #[test]
