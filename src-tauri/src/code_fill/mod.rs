@@ -411,10 +411,7 @@ mod tests {
         );
         assert_eq!(judge_typing(false, false), Some(FillOutcome::KeysHeld));
         assert_eq!(judge_typing(true, false), Some(FillOutcome::NoTarget));
-        assert_eq!(
-            serde_json::to_string(&FillOutcome::KeysHeld).unwrap(),
-            r#""keysHeld""#
-        );
+        assert_eq!(serde_json::to_string(&FillOutcome::KeysHeld).unwrap(), r#""keysHeld""#);
     }
 
     #[test]
