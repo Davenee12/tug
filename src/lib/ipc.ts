@@ -49,6 +49,7 @@ import type {
   UpdateApplyAnswer,
   UpdateStatus,
   VoiceEngine,
+  VoiceModelId,
   VoiceStatus,
   VoiceTyped,
 } from "../types/protocol";
@@ -107,14 +108,24 @@ export const api = {
   /** Turn voice typing on (shortcut, language) or off, and save it; says if the shortcut is taken or no language is installed. */
   setVoiceTyping: (enabled: boolean, keys: string, language: string | null) =>
     invoke<VoiceStatus>("set_voice_typing", { enabled, keys, language }),
-  /** Pick voice typing's engine (accurate or basic) and save it. */
+  /** Pick voice typing's engine and save it; a whisper.cpp engine's model starts downloading if it isn't here. */
   setVoiceEngine: (engine: VoiceEngine) => invoke<VoiceStatus>("set_voice_engine", { engine }),
-  /** Download (or resume) the accurate engine's speech model; progress comes as `voice-status` events. */
-  voiceModelDownload: () => invoke<VoiceStatus>("voice_model_download"),
-  /** Cancel the speech model download (what it had is deleted). */
-  voiceModelCancel: () => invoke<VoiceStatus>("voice_model_cancel"),
-  /** The person answered the speech model offer (Download or Not now): don't offer it by itself again. */
-  voiceModelOffered: () => invoke<VoiceStatus>("voice_model_offered"),
+  /** Download (or resume) a speech model; progress comes as `voice-status` events. */
+  voiceModelDownload: (model: VoiceModelId) => invoke<VoiceStatus>("voice_model_download", { model }),
+  /** Cancel a speech model download (what it had is deleted, and it isn't started again by itself). */
+  voiceModelCancel: (model: VoiceModelId) => invoke<VoiceStatus>("voice_model_cancel", { model }),
+  /** Delete every downloaded speech model (and paused downloads); Basic listens until one is downloaded again. */
+  voiceModelsDelete: () => invoke<VoiceStatus>("voice_models_delete"),
+  /** The language Most accurate listens in ("auto" or a code from voiceSpokenLanguages.json). */
+  setVoiceSpokenLanguage: (language: string) => invoke<VoiceStatus>("set_voice_spoken_language", { language }),
+  /** Whether contacts' names help the whisper.cpp engines spell them. */
+  setVoiceContactHints: (on: boolean) => invoke<VoiceStatus>("set_voice_contact_hints", { on }),
+  /** The personal dictionary: words and names voice typing should spell the person's way. */
+  voiceDictionary: () => invoke<string[]>("voice_dictionary"),
+  /** Save the personal dictionary; answers with it as saved (tidied, without duplicates). */
+  setVoiceDictionary: (words: string[]) => invoke<string[]>("set_voice_dictionary", { words }),
+  /** The "Get voice typing ready now?" card has been shown: it never shows by itself again. */
+  voiceReadyPromptShown: () => invoke<VoiceStatus>("voice_ready_prompt_shown"),
   /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */
   copyDiagnostics: () => invoke<string>("copy_diagnostics"),
   /** The Bluetooth inventory: what the iPhone exposes to tug (runs it now; privacy-safe). */

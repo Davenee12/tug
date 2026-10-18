@@ -1079,12 +1079,17 @@ const codeHotkey: CodeHotkeyStatus = { state: params.has("hotkeybusy") ? "inUse"
 // Voice typing (voice/ in Rust): off by default; `/?voice` starts it on (`&micblocked`,
 // `&nospeech` for a PC without a speech language, `&voicebusy` for a taken shortcut).
 // `?voicefail`: turning it on fails and the switch goes back off with the reason.
-// The accurate engine's model: not downloaded by default (the first-time offer shows once it's
-// on); `&model` downloaded, `&modelpaused` a download paused at 40%, `&modelfail` downloads fail
-// part way, `&noavx` a processor that can't run it, `&phonemic` a hands-free headset,
-// `&accuratefail` (with `&model`) whisper.cpp failed to start on this PC.
+// The speech models: not downloaded by default (turning voice typing on starts Accurate's
+// download); `&model` Accurate's downloaded, `&mostmodel` Most accurate's too (and picked),
+// `&modelpaused` a download paused at 40%, `&modelfail` downloads fail part way, `&noavx` a
+// processor that can't run them, `&phonemic` a hands-free headset, `&accuratefail` (with `&model`)
+// whisper.cpp failed to start on this PC, `&lowmem` (with `&mostmodel`) too little memory for Most
+// accurate, so Accurate listened. `?voiceready` (voice typing off, never set up): the one-time
+// "Get voice typing ready now?" card shows on the feed.
 const voiceOn = params.has("voice");
 const MODEL_BYTES = 81_781_811;
+const MOST_MODEL_BYTES = 874_188_075;
+let voiceDictionary = ["Zephyrine", "Kubernetes"];
 const voiceLanguages = params.has("nospeech")
   ? []
   : [
@@ -1106,7 +1111,7 @@ const voice: VoiceStatus = {
   languages: [],
   micBlocked: params.has("micblocked"),
   startError: null,
-  engine: "accurate",
+  engine: params.has("mostmodel") ? "mostAccurate" : "accurate",
   activeEngine: params.has("model") && !params.has("noavx") ? "accurate" : "basic",
   model: {
     state: params.has("model") ? "ready" : "missing",
@@ -1114,17 +1119,36 @@ const voice: VoiceStatus = {
     total: MODEL_BYTES,
     error: null,
   },
+  mostAccurateModel: {
+    state: params.has("mostmodel") ? "ready" : "missing",
+    received: params.has("mostmodel") ? MOST_MODEL_BYTES : 0,
+    total: MOST_MODEL_BYTES,
+    error: null,
+  },
+  spokenLanguage: "auto",
+  contactHints: true,
   accurateSupported: !params.has("noavx"),
-  modelOffered: params.has("model") || params.has("modelpaused"),
+  readyPrompt: params.has("voiceready"),
   phoneMic: params.has("phonemic"),
-  accurateProblem: params.has("accuratefail") ? "failed" : null,
+  accurateProblem: params.has("accuratefail") ? "failed" : params.has("lowmem") ? "lowMemoryUsedAccurate" : null,
 };
 /** What a hold would use, as `voice::engine::pick_engine` decides it. */
 function voiceActive(): VoiceStatus["activeEngine"] {
   const english = !voice.language || (Number.parseInt(voice.language, 16) & 0x3ff) === 0x09;
-  const accurate = voice.model.state === "ready" && voice.accurateSupported && english && voice.accurateProblem !== "failed";
+  const ok = voice.accurateSupported && voice.accurateProblem !== "failed";
+  const accurate = voice.model.state === "ready" && ok && english;
+  const most = voice.mostAccurateModel.state === "ready" && ok;
+  if (voice.engine === "mostAccurate" && most) return "mostAccurate";
+  if (voice.engine === "mostAccurate" && voice.mostAccurateModel.state !== "ready" && accurate) return "accurate";
   if (voice.engine === "accurate" && accurate) return "accurate";
   return voice.language ? "basic" : null;
+}
+type MockModel = "accurate" | "mostAccurate";
+function mockModelOf(id: MockModel) {
+  return id === "accurate" ? voice.model : voice.mostAccurateModel;
+}
+function mockModelPatch(id: MockModel, m: VoiceStatus["model"]): Partial<VoiceStatus> {
+  return id === "accurate" ? { model: m } : { mostAccurateModel: m };
 }
 voice.activeEngine = voiceActive();
 function sendVoice(patch: Partial<VoiceStatus> = {}) {
@@ -1135,30 +1159,39 @@ function sendVoice(patch: Partial<VoiceStatus> = {}) {
   void emit("voice-status", structuredClone(voice));
   return structuredClone(voice);
 }
-let voiceDownload: ReturnType<typeof setInterval> | null = null;
-function mockModelDownload() {
-  if (voiceDownload) return structuredClone(voice);
-  const answer = sendVoice({ model: { ...voice.model, state: "downloading", error: null } });
-  voiceDownload = setInterval(() => {
-    const received = Math.min(MODEL_BYTES, voice.model.received + MODEL_BYTES / 25);
-    if (params.has("modelfail") && received > MODEL_BYTES * 0.6) {
-      if (voiceDownload) clearInterval(voiceDownload);
-      voiceDownload = null;
-      sendVoice({
-        model: {
-          ...voice.model,
+const voiceDownloads: Record<MockModel, ReturnType<typeof setInterval> | null> = { accurate: null, mostAccurate: null };
+function stopMockDownload(id: MockModel) {
+  const t = voiceDownloads[id];
+  if (t) clearInterval(t);
+  voiceDownloads[id] = null;
+}
+function mockModelDownload(id: MockModel) {
+  if (voiceDownloads[id] || mockModelOf(id).state === "ready" || !voice.accurateSupported) return structuredClone(voice);
+  const answer = sendVoice(mockModelPatch(id, { ...mockModelOf(id), state: "downloading", error: null }));
+  voiceDownloads[id] = setInterval(() => {
+    const m = mockModelOf(id);
+    const received = Math.min(m.total, m.received + m.total / 25);
+    if (params.has("modelfail") && received > m.total * 0.6) {
+      stopMockDownload(id);
+      sendVoice(
+        mockModelPatch(id, {
+          ...m,
           state: "missing",
           error: "The download stopped. Check your internet connection and try again; it picks up where it left off.",
-        },
-      });
+        }),
+      );
       return;
     }
-    if (received < MODEL_BYTES) return void sendVoice({ model: { ...voice.model, received } });
-    if (voiceDownload) clearInterval(voiceDownload);
-    voiceDownload = null;
-    sendVoice({ model: { state: "ready", received: MODEL_BYTES, total: MODEL_BYTES, error: null } });
+    if (received < m.total) return void sendVoice(mockModelPatch(id, { ...m, received }));
+    stopMockDownload(id);
+    sendVoice(mockModelPatch(id, { state: "ready", received: m.total, total: m.total, error: null }));
   }, 250);
   return answer;
+}
+/** Like voice::auto_download: turning voice typing on, or picking an engine, fetches its model. */
+function mockAutoDownload() {
+  const id = voice.engine === "basic" ? null : voice.engine;
+  if (id && voice.enabled && mockModelOf(id).state === "missing" && !mockModelOf(id).error) mockModelDownload(id);
 }
 
 // Automatic updates (updater/ in Rust). Without a flag the build isn't set up for updates, like a
@@ -1565,16 +1598,37 @@ mockIPC(
       case "voice_status":
         if (a.languages) voice.languages = voiceLanguages;
         return sendVoice();
-      case "set_voice_engine":
-        return sendVoice({ engine: a.engine === "basic" ? "basic" : "accurate", accurateProblem: null });
+      case "set_voice_engine": {
+        const engine = a.engine === "basic" || a.engine === "mostAccurate" ? a.engine : "accurate";
+        const answer = sendVoice({ engine, accurateProblem: null });
+        mockAutoDownload();
+        return engine === "basic" ? answer : structuredClone(voice);
+      }
       case "voice_model_download":
-        return mockModelDownload();
-      case "voice_model_cancel":
-        if (voiceDownload) clearInterval(voiceDownload);
-        voiceDownload = null;
-        return sendVoice({ model: { state: "missing", received: 0, total: MODEL_BYTES, error: null } });
-      case "voice_model_offered":
-        return sendVoice({ modelOffered: true });
+        return mockModelDownload(a.model === "mostAccurate" ? "mostAccurate" : "accurate");
+      case "voice_model_cancel": {
+        const id: MockModel = a.model === "mostAccurate" ? "mostAccurate" : "accurate";
+        stopMockDownload(id);
+        return sendVoice(mockModelPatch(id, { state: "missing", received: 0, total: mockModelOf(id).total, error: null }));
+      }
+      case "voice_models_delete":
+        stopMockDownload("accurate");
+        stopMockDownload("mostAccurate");
+        return sendVoice({
+          model: { state: "missing", received: 0, total: MODEL_BYTES, error: null },
+          mostAccurateModel: { state: "missing", received: 0, total: MOST_MODEL_BYTES, error: null },
+        });
+      case "set_voice_spoken_language":
+        return sendVoice({ spokenLanguage: String(a.language) });
+      case "set_voice_contact_hints":
+        return sendVoice({ contactHints: Boolean(a.on) });
+      case "voice_dictionary":
+        return [...voiceDictionary];
+      case "set_voice_dictionary":
+        voiceDictionary = [...new Map((a.words as string[]).map((w) => [w.trim().toLowerCase(), w.trim()])).values()].filter(Boolean);
+        return [...voiceDictionary];
+      case "voice_ready_prompt_shown":
+        return sendVoice({ readyPrompt: false });
       case "set_voice_typing": {
         const keys = String(a.keys);
         const lang = voiceLanguages.find((l) => l.id === a.language)?.id ?? voiceLanguages[0]?.id ?? null;
@@ -1586,7 +1640,9 @@ mockIPC(
         voice.language = lang;
         const canListen = voiceActive() !== null;
         const state = !a.enabled ? "off" : !canListen ? "unavailable" : taken ? "inUse" : "on";
-        return sendVoice({ enabled: Boolean(a.enabled), keys, language: lang, languages: voiceLanguages, state, startError: null });
+        const answer = sendVoice({ enabled: Boolean(a.enabled), keys, language: lang, languages: voiceLanguages, state, startError: null });
+        if (a.enabled) mockAutoDownload();
+        return a.enabled ? structuredClone(voice) : answer;
       }
       // Windows pop-ups don't exist in a browser; log what tug would have shown.
       case "show_toast":

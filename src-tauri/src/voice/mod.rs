@@ -7,17 +7,20 @@
 //! typed with SendInput Unicode keystrokes. One hold, one insertion: a second press while one is
 //! being typed is ignored, and every path ends with the microphone closed and the indicator gone.
 //!
-//! Recognition is behind [`engine::Engine`], with two engines that both run on the PC: Accurate
-//! (whisper.cpp with an English speech model downloaded once, on request: `model.rs`,
-//! `win/whisper.rs`) and Basic (Windows' own offline SAPI 5 recognizer, nothing to download:
-//! `win/sapi.rs`). Accurate is the default once its model is there; until then, and wherever it
-//! can't run, Basic listens ([`engine::pick_engine`]). Audio never leaves the PC and is never
-//! written to disk: it lives in memory for one hold and is dropped. The model download is the
-//! only network use, and carries nothing about the person. Logs carry lengths and durations,
-//! never what was said.
+//! Recognition is behind [`engine::Engine`], with three engines that all run on the PC: Accurate
+//! (whisper.cpp with an English speech model), Most accurate (whisper.cpp with the multilingual
+//! large-v3-turbo model; both downloaded once in the background: `model.rs`, `win/whisper.rs`)
+//! and Basic (Windows' own offline SAPI 5 recognizer, nothing to download: `win/sapi.rs`).
+//! Accurate is the default once its model is there; until then, and wherever the picked engine
+//! can't run, something smaller listens ([`engine::pick_engine`]). Audio never leaves the PC and
+//! is never written to disk: it lives in memory for one hold and is dropped. The model downloads
+//! are the only network use, and carry nothing about the person. The whisper.cpp engines are
+//! given the person's own words (their dictionary, and their most frequent contacts' names:
+//! [`vocab::Hints`]) as hints; those stay on the PC. Logs carry lengths, counts and durations,
+//! never what was said or the hints.
 //!
 //! This file is the pure part (shortcuts, settings, what a hold means, the status the UI reads)
-//! plus the bookkeeping (status, the model download); `win/` is the thin Windows I/O.
+//! plus the bookkeeping (status, the model downloads, the hints); `win/` is the thin Windows I/O.
 
 pub mod audio;
 pub mod engine;
@@ -29,15 +32,17 @@ mod win;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::code_fill::Keys;
+use crate::store::Store;
 use engine::{AccurateProblem, EngineChoice, EngineInputs};
-use model::{ModelState, ModelStatus};
+use model::{ModelId, ModelState, ModelStatus};
+use vocab::Hints;
 
 /// The status event (`VoiceStatus`), sent when it changes.
 pub const STATUS_EVENT: &str = "voice-status";
@@ -48,10 +53,25 @@ pub const TYPED_EVENT: &str = "voice-typed";
 pub const SETTING_ENABLED: &str = "ui.voiceTyping";
 pub const SETTING_KEYS: &str = "ui.voiceKeys";
 pub const SETTING_LANGUAGE: &str = "ui.voiceLanguage";
-/// "accurate" (the default) or "basic".
+/// "accurate" (the default), "mostAccurate" or "basic".
 pub const SETTING_ENGINE: &str = "ui.voiceEngine";
-/// "true" once Settings has offered the speech model download (accepted or not).
+/// v0.5.19's Settings offer: "true" once it was answered. A "Not now" there (with nothing
+/// downloaded since) counts as declining Accurate's download ([`declined`]).
 pub const SETTING_MODEL_OFFERED: &str = "ui.voiceModelOffered";
+/// The language Most accurate listens in: "auto" or one of [`engine::SPOKEN_LANGUAGES`]; until
+/// it's picked, Windows' display language ([`engine::default_spoken_language`]).
+pub const SETTING_SPOKEN_LANGUAGE: &str = "ui.voiceSpokenLanguage";
+/// "false" when contacts' names shouldn't be hints (on by default).
+pub const SETTING_CONTACT_HINTS: &str = "ui.voiceContactHints";
+/// The personal dictionary, a JSON array of words. The person's own words: never logged, and not
+/// in the diagnostics' settings list.
+pub const SETTING_DICTIONARY: &str = "ui.voiceDictionary";
+/// "shown" once the "Get voice typing ready now?" card has been on screen: never again.
+pub const SETTING_READY_PROMPT: &str = "ui.voiceReadyPrompt";
+/// Followed by a model's id: "true" after the person cancelled its download (or deleted the
+/// models), so turning voice typing on doesn't fetch it again by itself; "false" once they ask for
+/// it (Download, or picking its engine).
+pub const SETTING_DECLINED_PREFIX: &str = "ui.voiceModelDeclined.";
 
 /// The hold-to-talk shortcuts tug offers, in Settings' order; the first is the default. Mirrors
 /// `src/lib/voiceHotkeys.json` (a test reads it). None clash with tug's own shortcuts, code fill's,
@@ -299,27 +319,54 @@ pub struct VoiceStatus {
     /// The engine a hold would use right now ([`engine::pick_engine`]); `None` when nothing can
     /// listen. Settings uses it to say "Basic until the model is downloaded".
     pub active_engine: Option<EngineChoice>,
-    /// The accurate engine's speech model.
+    /// Accurate's speech model.
     pub model: ModelStatus,
-    /// This processor can run the accurate engine ([`engine::cpu_supported`]).
+    /// Most accurate's speech model.
+    pub most_accurate_model: ModelStatus,
+    /// What Most accurate listens in: "auto" or one of [`engine::SPOKEN_LANGUAGES`].
+    pub spoken_language: String,
+    /// Contacts' names are hints for the whisper.cpp engines.
+    pub contact_hints: bool,
+    /// This processor can run the whisper.cpp engines ([`engine::cpu_supported`]).
     pub accurate_supported: bool,
-    /// Settings has already offered the model download once.
-    pub model_offered: bool,
+    /// Offer the one-time "Get voice typing ready now?" card ([`ready_prompt_due`]).
+    pub ready_prompt: bool,
     /// The default microphone is a phone-call headset ([`phone_call_mic`]).
     pub phone_mic: bool,
-    /// Why the accurate engine isn't listening although it could, if it isn't.
+    /// Why the whisper.cpp engine picked isn't listening although it could, if it isn't.
     pub accurate_problem: Option<AccurateProblem>,
+}
+
+impl VoiceStatus {
+    pub fn model_of(&self, id: ModelId) -> &ModelStatus {
+        match id {
+            ModelId::Accurate => &self.model,
+            ModelId::MostAccurate => &self.most_accurate_model,
+        }
+    }
+
+    pub fn model_of_mut(&mut self, id: ModelId) -> &mut ModelStatus {
+        match id {
+            ModelId::Accurate => &mut self.model,
+            ModelId::MostAccurate => &mut self.most_accurate_model,
+        }
+    }
 }
 
 /// What the speech thread listens with. Built from the status by [`engine_config`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EngineConfig {
-    /// `None` while voice typing is off or nothing can listen: both engines are let go.
+    /// `None` while voice typing is off or nothing can listen: every engine is let go.
     pub engine: Option<EngineChoice>,
-    /// Windows' recognizer language (Basic, and Accurate's fallback).
+    /// Windows' recognizer language (Basic, and the whisper.cpp engines' fallback).
     pub language: Option<String>,
-    /// The model file, when Accurate is the engine.
+    /// The model file, when the engine is Accurate or Most accurate.
     pub model: Option<PathBuf>,
+    /// Accurate's model file, when the engine is Most accurate and Accurate could listen: what
+    /// loads instead when there isn't memory for Most accurate ([`engine::plan_load`]).
+    pub fallback: Option<PathBuf>,
+    /// What the engine listens in: "en" for Accurate, Most accurate's language (or "auto").
+    pub spoken: &'static str,
 }
 
 /// The inputs to [`engine::pick_engine`] from a status.
@@ -327,25 +374,80 @@ fn engine_inputs(s: &VoiceStatus) -> EngineInputs<'_> {
     EngineInputs {
         choice: s.engine,
         model_ready: s.model.state == ModelState::Ready,
+        most_ready: s.most_accurate_model.state == ModelState::Ready,
         cpu_ok: s.accurate_supported,
         sapi_language: s.language.as_deref(),
         accurate_failed: s.accurate_problem == Some(AccurateProblem::Failed),
     }
 }
 
-/// What the speech thread should listen with for this status (`model_file`: where the model is).
-pub fn engine_config(s: &VoiceStatus, model_file: Option<&Path>) -> EngineConfig {
+/// Where each model is on disk, by [`ModelId::index`].
+pub type ModelFiles<'a> = [Option<&'a Path>; 2];
+
+/// What the speech thread should listen with for this status (`files`: where the models are).
+pub fn engine_config(s: &VoiceStatus, files: ModelFiles) -> EngineConfig {
     if s.state != VoiceState::On {
         return EngineConfig::default();
     }
-    let engine = engine::pick_engine(&engine_inputs(s));
+    let inputs = engine_inputs(s);
+    let engine = engine::pick_engine(&inputs);
+    let file = |m: ModelId| files[m.index()].map(Path::to_path_buf);
+    let most = engine == Some(EngineChoice::MostAccurate);
     EngineConfig {
         engine,
         language: s.language.clone(),
-        model: (engine == Some(EngineChoice::Accurate))
-            .then(|| model_file.map(Path::to_path_buf))
+        model: engine.and_then(EngineChoice::model).and_then(file),
+        fallback: (most && engine::accurate_usable(&inputs))
+            .then(|| file(ModelId::Accurate))
             .flatten(),
+        spoken: if most {
+            engine::spoken_language(Some(&s.spoken_language))
+        } else {
+            "en"
+        },
     }
+}
+
+/// Which model to download by itself when voice typing is turned on (or an engine is picked): the
+/// picked whisper.cpp engine's, if it isn't here or on its way, this PC can run it, the person
+/// hasn't declined it ([`declined`]), and (for Accurate, which is English-only) Windows' speech
+/// language is English or there is none. A paused download resumes.
+pub fn auto_download(s: &VoiceStatus, declined: impl Fn(ModelId) -> bool) -> Option<ModelId> {
+    if !s.enabled || !s.accurate_supported {
+        return None;
+    }
+    let id = s.engine.model()?;
+    if id == ModelId::Accurate && !s.language.as_deref().is_none_or(engine::is_english) {
+        return None;
+    }
+    (s.model_of(id).state == ModelState::Missing && !declined(id)).then_some(id)
+}
+
+/// Whether the person declined a model's automatic download: its saved answer ("true" after a
+/// Cancel or deleting the models, "false" once they asked for it), or, with no answer yet, for
+/// Accurate only, "Not now" to v0.5.19's offer (`legacy_offered`) with nothing downloaded since.
+pub fn declined(id: ModelId, saved: Option<&str>, legacy_offered: bool, nothing_on_disk: bool) -> bool {
+    match saved.map(str::trim) {
+        Some("true") => true,
+        Some(_) => false,
+        None => id == ModelId::Accurate && legacy_offered && nothing_on_disk,
+    }
+}
+
+/// Whether to offer the one-time "Get voice typing ready now?" card: voice typing has never been
+/// set up (never switched on or off, no model or part of one on disk), the card has never been
+/// shown, and this PC can run the whisper.cpp engines. Checked at startup, so it's the first launch
+/// after an install, or after the update that brought the card; once it's shown it's saved and
+/// never offered again, whatever the answer.
+pub fn ready_prompt_due(ever_set_up: bool, shown_before: bool, model_on_disk: bool, cpu_ok: bool) -> bool {
+    !ever_set_up && !shown_before && !model_on_disk && cpu_ok
+}
+
+/// The personal dictionary from its saved JSON, tidied ([`vocab::normalize_dictionary`]); empty
+/// when there's none or it can't be read.
+pub fn parse_dictionary(saved: Option<&str>) -> Vec<String> {
+    let words: Vec<String> = saved.and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
+    vocab::normalize_dictionary(&words)
 }
 
 /// The state for a request: off unless asked for, unavailable when no engine can listen.
@@ -429,17 +531,20 @@ pub fn settle(enabled: bool, can_listen: bool, attempt: Result<bool, StartError>
 
 static STATUS: Mutex<Option<VoiceStatus>> = Mutex::new(None);
 static APP: Mutex<Option<AppHandle>> = Mutex::new(None);
-/// Where the speech model lives (`speech\` under tug's local app data), set at startup.
+/// tug's database: the settings voice typing saves and the contacts its hints come from.
+static STORE: OnceLock<Arc<Store>> = OnceLock::new();
+/// Where the speech models live (`speech\` under tug's local app data), set at startup. Local app
+/// data, so they stay through updates (the installer doesn't touch it).
 static MODEL_DIR: OnceLock<PathBuf> = OnceLock::new();
-/// A model download is running.
-static DOWNLOADING: AtomicBool = AtomicBool::new(false);
-/// Set by Cancel; the download stops within one chunk.
-static CANCEL_DOWNLOAD: AtomicBool = AtomicBool::new(false);
+/// A model's download is running (by [`ModelId::index`]).
+static DOWNLOADING: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+/// Set by Cancel; that download stops within one chunk.
+static CANCEL_DOWNLOAD: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
 
-fn model_status_now() -> ModelStatus {
+fn model_status_now(id: ModelId) -> ModelStatus {
     match MODEL_DIR.get() {
-        Some(dir) => model::status_on_disk(dir, &model::MODEL),
-        None => ModelStatus::new(ModelState::Missing, 0, model::MODEL.size),
+        Some(dir) => model::status_on_disk(dir, id.spec()),
+        None => ModelStatus::new(ModelState::Missing, 0, id.spec().size),
     }
 }
 
@@ -454,12 +559,144 @@ fn default_status() -> VoiceStatus {
         start_error: None,
         engine: EngineChoice::Accurate,
         active_engine: None,
-        model: model_status_now(),
+        model: model_status_now(ModelId::Accurate),
+        most_accurate_model: model_status_now(ModelId::MostAccurate),
+        spoken_language: "auto".into(),
+        contact_hints: true,
         accurate_supported: engine::cpu_supported(),
-        model_offered: false,
+        ready_prompt: false,
         phone_mic: false,
         accurate_problem: None,
     }
+}
+
+/// A saved setting, if tug's database is there.
+fn saved(key: &str) -> Option<String> {
+    STORE.get().and_then(|s| s.setting(key).ok().flatten())
+}
+
+/// Save a setting (logged by its key if it fails, never its value).
+fn save(key: &str, value: &str) {
+    match STORE.get() {
+        Some(store) => {
+            if let Err(e) = store.set_setting(key, value) {
+                log::warn!("couldn't save {key}: {e}");
+            }
+        }
+        None => log::warn!("couldn't save {key}: no database yet"),
+    }
+}
+
+/// Whether the person declined this model's automatic download ([`declined`]).
+fn declined_now(id: ModelId, s: &VoiceStatus) -> bool {
+    let m = s.model_of(id);
+    declined(
+        id,
+        saved(&format!("{SETTING_DECLINED_PREFIX}{}", id.as_str())).as_deref(),
+        saved(SETTING_MODEL_OFFERED).as_deref() == Some("true"),
+        m.state == ModelState::Missing && m.received == 0,
+    )
+}
+
+fn set_declined(id: ModelId, declined: bool) {
+    save(
+        &format!("{SETTING_DECLINED_PREFIX}{}", id.as_str()),
+        if declined { "true" } else { "false" },
+    );
+}
+
+// ---- The person's own words for the prompt ----
+
+/// How long the hints are used before they're read again (new texts change who's texted most).
+const HINTS_MAX_AGE: Duration = Duration::from_secs(10 * 60);
+/// Texts in this window count first when ranking contacts.
+const RECENT_TEXTS: Duration = Duration::from_secs(90 * 24 * 60 * 60);
+
+struct HintsCache {
+    hints: Hints,
+    read_at: Option<Instant>,
+    refreshing: bool,
+}
+
+static HINTS: Mutex<HintsCache> = Mutex::new(HintsCache {
+    hints: Hints {
+        words: Vec::new(),
+        names: Vec::new(),
+    },
+    read_at: None,
+    refreshing: false,
+});
+
+/// Read the dictionary and (when switched on) the most frequent contacts' names from the database.
+fn read_hints(contact_hints: bool) -> Hints {
+    let Some(store) = STORE.get() else {
+        return Hints::default();
+    };
+    let words = parse_dictionary(store.setting(SETTING_DICTIONARY).ok().flatten().as_deref());
+    let names = if contact_hints {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        let since = now_ms - RECENT_TEXTS.as_millis() as i64;
+        // A few extra: some names are dropped when they're tidied (`vocab::clean_entry`).
+        store
+            .frequent_contact_names(vocab::MAX_NAMES as u32 + 10, since)
+            .unwrap_or_else(|e| {
+                log::warn!("voice typing: couldn't read contacts for the hints: {e}");
+                Vec::new()
+            })
+    } else {
+        Vec::new()
+    };
+    Hints::new(&words, &names)
+}
+
+/// Read the hints again now (after the dictionary or the contacts switch changed, or at start).
+/// Logs how many, never which.
+fn refresh_hints() {
+    let hints = read_hints(current().contact_hints);
+    log::info!(
+        "voice typing: {} dictionary words and {} contact names for the hints",
+        hints.words.len(),
+        hints.names.len()
+    );
+    let mut cache = HINTS.lock().unwrap_or_else(|e| e.into_inner());
+    cache.hints = hints;
+    cache.read_at = Some(Instant::now());
+    cache.refreshing = false;
+}
+
+/// [`refresh_hints`] on a thread of its own.
+fn refresh_hints_soon() {
+    {
+        let mut cache = HINTS.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.refreshing {
+            return;
+        }
+        cache.refreshing = true;
+    }
+    if let Err(e) = std::thread::Builder::new()
+        .name("tug-voice-hints".into())
+        .spawn(refresh_hints)
+    {
+        log::warn!("voice typing: couldn't read the hints ({e})");
+        HINTS.lock().unwrap_or_else(|e| e.into_inner()).refreshing = false;
+    }
+}
+
+/// The hints for a hold (from the speech thread): what was read last, read again in the background
+/// when it's older than [`HINTS_MAX_AGE`] (the hold doesn't wait for the database).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn hints() -> Hints {
+    let (hints, stale) = {
+        let cache = HINTS.lock().unwrap_or_else(|e| e.into_inner());
+        let stale = cache.read_at.is_none_or(|t| t.elapsed() > HINTS_MAX_AGE);
+        (cache.hints.clone(), stale)
+    };
+    if stale {
+        refresh_hints_soon();
+    }
+    hints
 }
 
 /// The status as last published (or the default), without looking at anything again.
@@ -471,9 +708,15 @@ fn current() -> VoiceStatus {
         .unwrap_or_else(default_status)
 }
 
-/// The model file, if it's downloaded.
-fn model_file() -> Option<PathBuf> {
-    MODEL_DIR.get().and_then(|dir| model::installed(dir, &model::MODEL))
+/// Each model's file, if it's downloaded.
+fn model_files() -> [Option<PathBuf>; 2] {
+    ModelId::ALL.map(|id| MODEL_DIR.get().and_then(|dir| model::installed(dir, id.spec())))
+}
+
+/// The speech thread's configuration for a status, with the models where they are.
+fn config_for(s: &VoiceStatus) -> EngineConfig {
+    let files = model_files();
+    engine_config(s, [files[0].as_deref(), files[1].as_deref()])
 }
 
 /// The current status, with a fresh look at the microphone privacy switch.
@@ -494,9 +737,12 @@ fn update(change: impl FnOnce(&mut VoiceStatus)) -> VoiceStatus {
         change(&mut next);
         next.active_engine = engine::pick_engine(&engine_inputs(&next));
         *cur = Some(next.clone());
-        let was = before.as_ref().map(|b| engine_config(b, None)).unwrap_or_default();
-        if was != engine_config(&next, None) {
-            set_engine_config(engine_config(&next, model_file().as_deref()));
+        let was = before
+            .as_ref()
+            .map(|b| engine_config(b, [None, None]))
+            .unwrap_or_default();
+        if was != engine_config(&next, [None, None]) {
+            set_engine_config(config_for(&next));
         }
         (before, next)
     };
@@ -516,7 +762,7 @@ fn update(change: impl FnOnce(&mut VoiceStatus)) -> VoiceStatus {
 fn configure_now() {
     let cur = STATUS.lock().unwrap_or_else(|e| e.into_inner());
     let s = cur.clone().unwrap_or_else(default_status);
-    set_engine_config(engine_config(&s, model_file().as_deref()));
+    set_engine_config(config_for(&s));
 }
 
 /// Whether voice typing is switched on but its state no longer matches whether anything can
@@ -643,53 +889,70 @@ pub fn apply(enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
 }
 
 /// Start the shortcut thread and turn voice typing on if the owner switched it on.
-pub fn start(app: &AppHandle, store: &crate::store::Store) {
+pub fn start(app: &AppHandle, store: &Arc<Store>) {
     *APP.lock().unwrap_or_else(|e| e.into_inner()) = Some(app.clone());
+    let _ = STORE.set(store.clone());
     {
         use tauri::Manager;
         match app.path().app_local_data_dir() {
             Ok(dir) => {
                 let _ = MODEL_DIR.set(dir.join(model::DIR));
             }
-            Err(e) => log::warn!("voice typing: no local app data folder for the speech model ({e})"),
+            Err(e) => log::warn!("voice typing: no local app data folder for the speech models ({e})"),
         }
     }
-    let saved = |key: &str| store.setting(key).ok().flatten();
     let engine = EngineChoice::parse(saved(SETTING_ENGINE).as_deref());
-    let offered = saved(SETTING_MODEL_OFFERED).as_deref() == Some("true");
+    let spoken = match saved(SETTING_SPOKEN_LANGUAGE) {
+        Some(s) => engine::spoken_language(Some(&s)),
+        None => engine::default_spoken_language(ui_language()),
+    };
+    let contact_hints = saved(SETTING_CONTACT_HINTS).as_deref() != Some("false");
+    let ever_set_up = saved(SETTING_ENABLED).is_some();
+    let prompt_shown = saved(SETTING_READY_PROMPT).is_some();
     let s = update(|s| {
         s.engine = engine;
-        s.model_offered = offered;
-        s.model = model_status_now();
+        s.spoken_language = spoken.into();
+        s.contact_hints = contact_hints;
+        s.model = model_status_now(ModelId::Accurate);
+        s.most_accurate_model = model_status_now(ModelId::MostAccurate);
+        let on_disk = ModelId::ALL
+            .iter()
+            .any(|id| s.model_of(*id).state == ModelState::Ready || s.model_of(*id).received > 0);
+        s.ready_prompt = ready_prompt_due(ever_set_up, prompt_shown, on_disk, s.accurate_supported);
     });
+    let on_disk = |m: &ModelStatus| match m.state {
+        ModelState::Ready => "downloaded",
+        _ => "not downloaded",
+    };
     log::info!(
-        "voice typing: {} engine picked, speech model {}{}",
+        "voice typing: {} engine picked, speech models: accurate {}, most accurate {}{}",
         s.engine.as_str(),
-        match s.model.state {
-            ModelState::Ready => "downloaded",
-            _ => "not downloaded",
-        },
+        on_disk(&s.model),
+        on_disk(&s.most_accurate_model),
         if s.accurate_supported {
             ""
         } else {
-            " (this processor can't run it)"
+            " (this processor can't run them)"
         }
     );
-    let enabled = store.setting(SETTING_ENABLED).ok().flatten().as_deref() == Some("true");
+    let enabled = saved(SETTING_ENABLED).as_deref() == Some("true");
     if !enabled {
         // Nothing to register and no recognizer to load until it's switched on: Settings reads
         // the installed languages when it opens.
         return;
     }
-    let keys = store.setting(SETTING_KEYS).ok().flatten();
-    let language = store.setting(SETTING_LANGUAGE).ok().flatten();
+    let keys = saved(SETTING_KEYS);
+    let language = saved(SETTING_LANGUAGE);
     // Off the setup path: listing recognizers and registering take a moment. If it can't start,
     // Settings shows it off with the reason; the saved choice stays on, so the next start tries
     // again (what failed may have been passing).
     let spawned = std::thread::Builder::new()
         .name("tug-voice-start".into())
         .spawn(move || {
+            refresh_hints();
             apply(true, known_hotkey(keys.as_deref()), language.as_deref());
+            // A download that was paused (tug closed part way) carries on.
+            download_automatically();
         });
     if let Err(e) = spawned {
         log::warn!("voice typing: couldn't start at launch ({e})");
@@ -697,99 +960,163 @@ pub fn start(app: &AppHandle, store: &crate::store::Store) {
 }
 
 /// Save the choice and apply it. Called from the `set_voice_typing` command. What's saved is
-/// where it ended up: turning it on and failing saves it as off, matching the switch.
-pub fn set(store: &crate::store::Store, enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
-    // Switching it on (or off) gives the accurate engine another chance if it failed to start.
+/// where it ended up: turning it on and failing saves it as off, matching the switch. Turning it on
+/// starts the picked engine's model download in the background if it isn't here
+/// ([`auto_download`]).
+pub fn set(enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
+    // Switching it on (or off) gives the whisper.cpp engine another chance if it failed to start.
     update(|s| s.accurate_problem = None);
     let s = apply(enabled, keys, language);
-    let saves = [
-        (SETTING_ENABLED, if s.enabled { "true" } else { "false" }.to_string()),
-        (SETTING_KEYS, s.keys.clone()),
-        (SETTING_LANGUAGE, s.language.clone().unwrap_or_default()),
-    ];
-    for (k, v) in saves {
-        if let Err(e) = store.set_setting(k, &v) {
-            log::warn!("couldn't save {k}: {e}");
-        }
+    save(SETTING_ENABLED, if s.enabled { "true" } else { "false" });
+    save(SETTING_KEYS, &s.keys);
+    save(SETTING_LANGUAGE, &s.language.clone().unwrap_or_default());
+    if s.enabled {
+        refresh_hints_soon();
+        download_automatically();
     }
-    s
+    current()
 }
 
-/// Pick the engine (Settings) and save it. The accurate engine is loaded on the next hold that
-/// uses it; picking Basic lets its model go now.
-pub fn set_engine(store: &crate::store::Store, choice: EngineChoice) -> VoiceStatus {
-    if let Err(e) = store.set_setting(SETTING_ENGINE, choice.as_str()) {
-        log::warn!("couldn't save {SETTING_ENGINE}: {e}");
+/// Start the picked engine's model download if [`auto_download`] says so.
+fn download_automatically() {
+    let s = current();
+    if let Some(id) = auto_download(&s, |id| declined_now(id, &s)) {
+        log::info!("voice typing: fetching the {} engine's speech model", id.as_str());
+        start_download(id);
     }
+}
+
+/// Pick the engine (Settings) and save it. A whisper.cpp engine is loaded on the next hold that
+/// uses it, and its model starts downloading now if it isn't here (picking it is asking for it);
+/// picking Basic lets the loaded model go now.
+pub fn set_engine(choice: EngineChoice) -> VoiceStatus {
+    save(SETTING_ENGINE, choice.as_str());
     log::info!("voice typing: {} engine picked", choice.as_str());
     update(|s| {
         s.engine = choice;
         s.accurate_problem = None;
     });
+    if let Some(id) = choice.model() {
+        set_declined(id, false);
+        if current().enabled {
+            download_automatically();
+        }
+    }
     // With no Windows speech language, the engine decides whether anything can listen at all.
     resettle();
     current()
 }
 
-/// Settings has offered the model download (the person chose Download or Not now): don't offer it
-/// again by itself.
-pub fn model_offered(store: &crate::store::Store) -> VoiceStatus {
-    if let Err(e) = store.set_setting(SETTING_MODEL_OFFERED, "true") {
-        log::warn!("couldn't save {SETTING_MODEL_OFFERED}: {e}");
-    }
-    update(|s| s.model_offered = true)
+/// The language Most accurate listens in ("auto" or one of [`engine::SPOKEN_LANGUAGES`]; anything
+/// else is "auto"), saved. The loaded engine is let go and loads again in the new language.
+pub fn set_spoken_language(language: &str) -> VoiceStatus {
+    let language = engine::spoken_language(Some(language));
+    save(SETTING_SPOKEN_LANGUAGE, language);
+    log::info!("voice typing: most accurate listens in {language}");
+    update(|s| s.spoken_language = language.into())
 }
 
-/// Start downloading the speech model (or resume a paused download) on a thread of its own.
-/// Progress arrives as status events; once the model is checked, the accurate engine takes over
-/// from the next hold. A second call while one runs does nothing.
-pub fn download_model() -> VoiceStatus {
+/// Whether contacts' names are hints, saved; the hints are read again straight away.
+pub fn set_contact_hints(on: bool) -> VoiceStatus {
+    save(SETTING_CONTACT_HINTS, if on { "true" } else { "false" });
+    let s = update(|s| s.contact_hints = on);
+    refresh_hints();
+    s
+}
+
+/// The personal dictionary, as saved.
+pub fn dictionary() -> Vec<String> {
+    parse_dictionary(saved(SETTING_DICTIONARY).as_deref())
+}
+
+/// Save the personal dictionary (tidied: [`vocab::normalize_dictionary`]) and use it from the next
+/// hold. Returns it as saved. The words aren't logged.
+pub fn set_dictionary(words: &[String]) -> Vec<String> {
+    let words = vocab::normalize_dictionary(words);
+    save(
+        SETTING_DICTIONARY,
+        &serde_json::to_string(&words).unwrap_or_else(|_| "[]".into()),
+    );
+    refresh_hints();
+    words
+}
+
+/// The "Get voice typing ready now?" card has been shown: never offer it by itself again.
+pub fn ready_prompt_shown() -> VoiceStatus {
+    save(SETTING_READY_PROMPT, "shown");
+    update(|s| s.ready_prompt = false)
+}
+
+/// Download (or resume) a model because the person asked (Download, Try again, the card): it
+/// counts as wanting it, so it's fetched automatically again later if it's lost.
+pub fn download_model(id: ModelId) -> VoiceStatus {
+    set_declined(id, false);
+    start_download(id)
+}
+
+/// Start downloading a model (or resume a paused download) on a thread of its own. Progress
+/// arrives as status events; once the model is checked, its engine takes over from the next hold.
+/// A second call while that model downloads does nothing; the other model can download at the
+/// same time.
+fn start_download(id: ModelId) -> VoiceStatus {
+    let i = id.index();
+    let spec = id.spec();
     let Some(dir) = MODEL_DIR.get().cloned() else {
         return update(|s| {
-            s.model.error = Some("tug couldn't find its data folder to save the speech model in.".into())
+            s.model_of_mut(id).error = Some("tug couldn't find its data folder to save the speech model in.".into())
         });
     };
-    if DOWNLOADING.swap(true, Ordering::SeqCst) {
+    if !current().accurate_supported {
         return current();
     }
-    CANCEL_DOWNLOAD.store(false, Ordering::SeqCst);
+    if DOWNLOADING[i].swap(true, Ordering::SeqCst) {
+        return current();
+    }
+    CANCEL_DOWNLOAD[i].store(false, Ordering::SeqCst);
     let started = update(|s| {
-        s.model.state = ModelState::Downloading;
-        s.model.received = model::partial(&dir, &model::MODEL);
-        s.model.error = None;
+        let m = s.model_of_mut(id);
+        m.state = ModelState::Downloading;
+        m.received = model::partial(&dir, spec);
+        m.error = None;
     });
     log::info!(
-        "voice typing: downloading the speech model ({} of {} bytes already here)",
-        started.model.received,
-        model::MODEL.size
+        "voice typing: downloading the {} speech model ({} of {} bytes already here)",
+        id.as_str(),
+        started.model_of(id).received,
+        spec.size
     );
     let spawned = std::thread::Builder::new()
         .name("tug-voice-model".into())
         .spawn(move || {
             let t0 = std::time::Instant::now();
             let mut sent = 0u64;
-            let step = model::MODEL.size / 100;
+            let step = spec.size / 100;
             let result = model::HttpFetch::new().and_then(|mut fetch| {
-                model::download(&mut fetch, &model::MODEL, &dir, &CANCEL_DOWNLOAD, &mut |got, total| {
+                model::download(&mut fetch, spec, &dir, &CANCEL_DOWNLOAD[i], &mut |got, total| {
                     if model::progress_due(sent, got, total, step) {
                         sent = got;
-                        update(|s| s.model.received = got);
+                        update(|s| s.model_of_mut(id).received = got);
                     }
                 })
             });
             match &result {
                 Ok(_) => log::info!(
-                    "voice typing: speech model downloaded and checked in {} s",
+                    "voice typing: {} speech model downloaded and checked in {} s",
+                    id.as_str(),
                     t0.elapsed().as_secs()
                 ),
-                Err(e) => log::warn!("voice typing: speech model download stopped: {}", e.detail()),
+                Err(e) => log::warn!(
+                    "voice typing: {} speech model download stopped: {}",
+                    id.as_str(),
+                    e.detail()
+                ),
             }
-            DOWNLOADING.store(false, Ordering::SeqCst);
+            DOWNLOADING[i].store(false, Ordering::SeqCst);
             let ok = result.is_ok();
             update(|s| {
-                s.model = model::status_on_disk(&dir, &model::MODEL);
-                s.model.error = result.err().and_then(|e| e.message()).map(str::to_string);
-                if ok {
+                *s.model_of_mut(id) = model::status_on_disk(&dir, spec);
+                s.model_of_mut(id).error = result.err().and_then(|e| e.message()).map(str::to_string);
+                if ok && s.engine.model() == Some(id) {
                     s.accurate_problem = None;
                 }
             });
@@ -798,37 +1125,72 @@ pub fn download_model() -> VoiceStatus {
             resettle();
         });
     if let Err(e) = spawned {
-        DOWNLOADING.store(false, Ordering::SeqCst);
+        DOWNLOADING[i].store(false, Ordering::SeqCst);
         log::warn!("voice typing: the download thread didn't start ({e})");
         return update(|s| {
-            s.model.state = ModelState::Missing;
-            s.model.error = Some("tug couldn't start the download. Try again.".into());
+            let m = s.model_of_mut(id);
+            m.state = ModelState::Missing;
+            m.error = Some("tug couldn't start the download. Try again.".into());
         });
     }
     current()
 }
 
-/// Stop a running download and delete what it had (Cancel).
-pub fn cancel_download() -> VoiceStatus {
-    if DOWNLOADING.load(Ordering::SeqCst) {
-        log::info!("voice typing: speech model download cancelled");
-        CANCEL_DOWNLOAD.store(true, Ordering::SeqCst);
+/// Stop a model's running download and delete what it had (Cancel). The person said no: it isn't
+/// started again by itself ([`declined`]) until they ask for it.
+pub fn cancel_download(id: ModelId) -> VoiceStatus {
+    set_declined(id, true);
+    if DOWNLOADING[id.index()].load(Ordering::SeqCst) {
+        log::info!("voice typing: {} speech model download cancelled", id.as_str());
+        CANCEL_DOWNLOAD[id.index()].store(true, Ordering::SeqCst);
     }
     current()
 }
 
-/// The model failed its check or didn't load (called from the speech thread): delete it, say so,
-/// and go back to Basic until it's downloaded again.
+/// Delete every downloaded model and paused download (Settings' "Delete downloaded models"):
+/// running downloads are cancelled (they delete their own part files), neither model is fetched
+/// again by itself, and whatever listened with a model goes back to Basic.
+pub fn delete_models() -> VoiceStatus {
+    let Some(dir) = MODEL_DIR.get() else {
+        return current();
+    };
+    for id in ModelId::ALL {
+        set_declined(id, true);
+        CANCEL_DOWNLOAD[id.index()].store(true, Ordering::SeqCst);
+        model::remove(dir, id.spec());
+    }
+    log::info!("voice typing: speech models deleted");
+    update(|s| {
+        for id in ModelId::ALL {
+            let downloading = DOWNLOADING[id.index()].load(Ordering::SeqCst);
+            let m = s.model_of_mut(id);
+            *m = model_status_now(id);
+            if downloading {
+                // Its thread is stopping; it says so when it has.
+                m.state = ModelState::Downloading;
+            }
+        }
+        s.accurate_problem = None;
+    });
+    resettle();
+    current()
+}
+
+/// A model failed its check or didn't load (called from the speech thread): delete it, say so,
+/// and go back to something smaller until it's downloaded again.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn model_damaged(why: &str) {
-    log::warn!("voice typing: the speech model is damaged ({why}); deleting it and using the basic engine");
+fn model_damaged(id: ModelId, why: &str) {
+    log::warn!(
+        "voice typing: the {} speech model is damaged ({why}); deleting it",
+        id.as_str()
+    );
     if let Some(dir) = MODEL_DIR.get() {
-        model::remove(dir, &model::MODEL);
+        model::remove(dir, id.spec());
     }
     update(|s| {
-        s.model = model_status_now();
-        s.model.error =
-            Some("The speech model was damaged, so tug deleted it and is using Basic. Download it again.".into());
+        let m = s.model_of_mut(id);
+        *m = model_status_now(id);
+        m.error = Some("The speech model was damaged, so tug deleted it. Download it again.".into());
     });
     // Without Windows speech, nothing can listen now: say so and let the shortcut go. Off this
     // (speech) thread, since settling waits for it.
@@ -870,13 +1232,16 @@ pub fn refresh_languages() -> VoiceStatus {
     if let Some(phone) = check_phone_mic() {
         note_phone_mic(phone);
     }
-    if !DOWNLOADING.load(Ordering::SeqCst) {
-        // The model on disk now (deleted by hand, or a paused download), keeping any message.
-        let on_disk = model_status_now();
-        update(|s| {
-            s.model.state = on_disk.state;
-            s.model.received = on_disk.received;
-        });
+    for id in ModelId::ALL {
+        if !DOWNLOADING[id.index()].load(Ordering::SeqCst) {
+            // The model on disk now (deleted by hand, or a paused download), keeping any message.
+            let on_disk = model_status_now(id);
+            update(|s| {
+                let m = s.model_of_mut(id);
+                m.state = on_disk.state;
+                m.received = on_disk.received;
+            });
+        }
     }
     let s = status();
     if s.languages.is_empty() {
@@ -1192,7 +1557,7 @@ mod tests {
             }],
             mic_blocked: false,
             start_error: None,
-            engine: EngineChoice::Accurate,
+            engine: EngineChoice::MostAccurate,
             active_engine: Some(EngineChoice::Basic),
             model: ModelStatus {
                 state: ModelState::Downloading,
@@ -1200,15 +1565,18 @@ mod tests {
                 total: 20,
                 error: None,
             },
+            most_accurate_model: ModelStatus::new(ModelState::Missing, 0, 30),
+            spoken_language: "auto".into(),
+            contact_hints: true,
             accurate_supported: true,
-            model_offered: false,
+            ready_prompt: false,
             phone_mic: true,
-            accurate_problem: Some(AccurateProblem::LowMemory),
+            accurate_problem: Some(AccurateProblem::LowMemoryUsedAccurate),
         })
         .unwrap();
         assert_eq!(
             json,
-            r#"{"enabled":true,"state":"inUse","keys":"ctrl+alt+space","language":"409","languages":[{"id":"409","name":"English (US)"}],"micBlocked":false,"startError":null,"engine":"accurate","activeEngine":"basic","model":{"state":"downloading","received":10,"total":20,"error":null},"accurateSupported":true,"modelOffered":false,"phoneMic":true,"accurateProblem":"lowMemory"}"#
+            r#"{"enabled":true,"state":"inUse","keys":"ctrl+alt+space","language":"409","languages":[{"id":"409","name":"English (US)"}],"micBlocked":false,"startError":null,"engine":"mostAccurate","activeEngine":"basic","model":{"state":"downloading","received":10,"total":20,"error":null},"mostAccurateModel":{"state":"missing","received":0,"total":30,"error":null},"spokenLanguage":"auto","contactHints":true,"accurateSupported":true,"readyPrompt":false,"phoneMic":true,"accurateProblem":"lowMemoryUsedAccurate"}"#
         );
     }
 
@@ -1226,12 +1594,15 @@ mod tests {
     #[test]
     fn the_speech_thread_gets_the_engine_the_status_says() {
         let file = Path::new("C:/models/ggml.bin");
+        let files: ModelFiles = [Some(file), None];
         let c = engine_config(
             &on_status(EngineChoice::Accurate, ModelState::Ready, Some("409")),
-            Some(file),
+            files,
         );
         assert_eq!(c.engine, Some(EngineChoice::Accurate));
         assert_eq!(c.model.as_deref(), Some(file));
+        assert_eq!(c.spoken, "en");
+        assert_eq!(c.fallback, None);
         assert_eq!(
             c.language.as_deref(),
             Some("409"),
@@ -1240,38 +1611,151 @@ mod tests {
 
         let c = engine_config(
             &on_status(EngineChoice::Accurate, ModelState::Missing, Some("409")),
-            None,
+            [None, None],
         );
         assert_eq!(c.engine, Some(EngineChoice::Basic), "no model yet");
         assert_eq!(c.model, None);
 
         let c = engine_config(
             &on_status(EngineChoice::Accurate, ModelState::Downloading, Some("409")),
-            None,
+            [None, None],
         );
         assert_eq!(c.engine, Some(EngineChoice::Basic), "still downloading");
 
-        let c = engine_config(
-            &on_status(EngineChoice::Basic, ModelState::Ready, Some("409")),
-            Some(file),
-        );
+        let c = engine_config(&on_status(EngineChoice::Basic, ModelState::Ready, Some("409")), files);
         assert_eq!(c.engine, Some(EngineChoice::Basic));
         assert_eq!(c.model, None, "Basic picked: the model isn't loaded");
 
         let mut off = on_status(EngineChoice::Accurate, ModelState::Ready, Some("409"));
         off.state = VoiceState::Off;
-        assert_eq!(
-            engine_config(&off, Some(file)),
-            EngineConfig::default(),
-            "off: both let go"
-        );
+        assert_eq!(engine_config(&off, files), EngineConfig::default(), "off: all let go");
         let mut busy = on_status(EngineChoice::Accurate, ModelState::Ready, Some("409"));
         busy.state = VoiceState::InUse;
         assert_eq!(
-            engine_config(&busy, Some(file)),
+            engine_config(&busy, files),
             EngineConfig::default(),
             "no shortcut: nothing loaded"
         );
+    }
+
+    #[test]
+    fn most_accurate_gets_its_model_its_language_and_accurate_to_fall_back_on() {
+        let small = Path::new("C:/models/base.bin");
+        let big = Path::new("C:/models/turbo.bin");
+        let mut s = on_status(EngineChoice::MostAccurate, ModelState::Ready, Some("409"));
+        s.most_accurate_model.state = ModelState::Ready;
+        s.spoken_language = "de".into();
+        let c = engine_config(&s, [Some(small), Some(big)]);
+        assert_eq!(c.engine, Some(EngineChoice::MostAccurate));
+        assert_eq!(c.model.as_deref(), Some(big));
+        assert_eq!(c.fallback.as_deref(), Some(small), "Accurate, if memory is short");
+        assert_eq!(c.spoken, "de");
+        // A spoken language tug doesn't offer is "auto".
+        s.spoken_language = "xx".into();
+        assert_eq!(engine_config(&s, [Some(small), Some(big)]).spoken, "auto");
+        // German Windows speech: Accurate (English-only) can't stand in.
+        s.language = Some("407".into());
+        let c = engine_config(&s, [Some(small), Some(big)]);
+        assert_eq!(c.engine, Some(EngineChoice::MostAccurate));
+        assert_eq!(c.fallback, None);
+        // Most accurate's model still downloading: Accurate listens, in English.
+        let mut s = on_status(EngineChoice::MostAccurate, ModelState::Ready, Some("409"));
+        s.most_accurate_model.state = ModelState::Downloading;
+        let c = engine_config(&s, [Some(small), None]);
+        assert_eq!(c.engine, Some(EngineChoice::Accurate));
+        assert_eq!(c.model.as_deref(), Some(small));
+        assert_eq!(c.spoken, "en");
+    }
+
+    #[test]
+    fn turning_it_on_fetches_the_picked_engines_model_unless_declined() {
+        let never = |_| false;
+        let s = on_status(EngineChoice::Accurate, ModelState::Missing, Some("409"));
+        assert_eq!(auto_download(&s, never), Some(ModelId::Accurate));
+        let s = on_status(EngineChoice::MostAccurate, ModelState::Missing, Some("407"));
+        assert_eq!(
+            auto_download(&s, never),
+            Some(ModelId::MostAccurate),
+            "any language: it's multilingual"
+        );
+        // A paused download resumes.
+        let mut paused = on_status(EngineChoice::Accurate, ModelState::Missing, Some("409"));
+        paused.model.received = 1000;
+        assert_eq!(auto_download(&paused, never), Some(ModelId::Accurate));
+        // Not when...
+        let s = on_status(EngineChoice::Accurate, ModelState::Missing, Some("409"));
+        assert_eq!(auto_download(&s, |_| true), None, "the person cancelled it before");
+        let mut off = s.clone();
+        off.enabled = false;
+        assert_eq!(auto_download(&off, never), None, "voice typing is off");
+        let mut slow = s.clone();
+        slow.accurate_supported = false;
+        assert_eq!(auto_download(&slow, never), None, "this PC can't run it");
+        for state in [ModelState::Ready, ModelState::Downloading] {
+            let here = on_status(EngineChoice::Accurate, state, Some("409"));
+            assert_eq!(auto_download(&here, never), None, "{state:?}");
+        }
+        assert_eq!(
+            auto_download(&on_status(EngineChoice::Basic, ModelState::Missing, Some("409")), never),
+            None
+        );
+        assert_eq!(
+            auto_download(
+                &on_status(EngineChoice::Accurate, ModelState::Missing, Some("40c")),
+                never
+            ),
+            None,
+            "Accurate is English-only: no point fetching it for French"
+        );
+        assert_eq!(
+            auto_download(&on_status(EngineChoice::Accurate, ModelState::Missing, None), never),
+            Some(ModelId::Accurate),
+            "no Windows speech at all: the model is what can listen"
+        );
+    }
+
+    #[test]
+    fn a_cancel_or_an_old_not_now_is_remembered() {
+        assert!(declined(ModelId::Accurate, Some("true"), false, true));
+        assert!(
+            !declined(ModelId::Accurate, Some("false"), true, true),
+            "asked for since"
+        );
+        assert!(!declined(ModelId::Accurate, None, false, true));
+        // v0.5.19's "Not now" with nothing downloaded since counts as no.
+        assert!(declined(ModelId::Accurate, None, true, true));
+        assert!(
+            !declined(ModelId::Accurate, None, true, false),
+            "it was downloaded after all"
+        );
+        assert!(
+            !declined(ModelId::MostAccurate, None, true, true),
+            "that offer was Accurate's"
+        );
+        assert!(declined(ModelId::MostAccurate, Some("true"), false, true));
+    }
+
+    #[test]
+    fn the_ready_card_is_offered_once_to_someone_who_never_set_it_up() {
+        assert!(ready_prompt_due(false, false, false, true));
+        assert!(
+            !ready_prompt_due(true, false, false, true),
+            "voice typing was switched on or off before"
+        );
+        assert!(!ready_prompt_due(false, true, false, true), "shown before: never again");
+        assert!(!ready_prompt_due(false, false, true, true), "a model is already here");
+        assert!(!ready_prompt_due(false, false, false, false), "this PC can't run it");
+    }
+
+    #[test]
+    fn the_dictionary_reads_back_tidied() {
+        assert_eq!(
+            parse_dictionary(Some(r#"["Zephyrine"," kubernetes ","zephyrine",""]"#)),
+            ["Zephyrine", "kubernetes"]
+        );
+        assert!(parse_dictionary(None).is_empty());
+        assert!(parse_dictionary(Some("not json")).is_empty());
+        assert!(parse_dictionary(Some("{}")).is_empty());
     }
 
     /// The state `apply(true, …)` settles on for this status (what `resettle` re-runs), with the

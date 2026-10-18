@@ -150,19 +150,25 @@ When hiding starts, the phone's pop-ups already on screen or in Action Center ar
 list and opens the microphone only between that shortcut's press and release (polled with
 GetAsyncKeyState; no keyboard hook, so tug never sees other keys). Audio stays in memory for that
 one hold and goes to an engine on the PC, never to the network or a file: whisper.cpp (the
-accurate engine, compiled into tug from source and run on the CPU) or Windows' offline SAPI
-recognizer. whisper.cpp's model is the one download: only when the person asks, from a fixed
-Hugging Face address pinned to a commit, over HTTPS only (redirects too), size-capped, and checked
-against a SHA-256 compiled into tug before it's renamed into place; the file is checked against
-that hash again every time it's loaded, so whisper.cpp is never handed a damaged or swapped file
-(a mismatch deletes it and Basic takes over). The download is made from Rust (reqwest with
-Windows' TLS): the webview's CSP is unchanged and it has no network permission for it.
+Accurate and Most accurate engines, compiled into tug from source and run on the CPU) or Windows'
+offline SAPI recognizer. whisper.cpp's models are the only downloads, one per engine: when the
+person turns voice typing on, picks that engine or presses Download (never again by itself after a
+Cancel), from fixed Hugging Face addresses pinned to a commit, over HTTPS only (redirects too, and
+only to Hugging Face's own hosts), size-capped, and checked against SHA-256s compiled into tug
+before they're renamed into place; a file is checked against its hash again every time it's
+loaded, so whisper.cpp is never handed a damaged or swapped file (a mismatch deletes it and Basic
+takes over). The download is made from Rust (reqwest with Windows' TLS): the webview's CSP is
+unchanged and it has no network permission for it. Before each phrase, whisper.cpp is given a
+prompt that can hold the person's personal dictionary and the names of their most frequent
+contacts (read from tug's own database); that text goes only to whisper.cpp in the same process,
+is never logged, and a phrase that only plays it back on a cough is dropped rather than typed
+(`vocab::is_prompt_echo`).
 whisper.cpp is built for a fixed instruction set (AVX2, FMA, F16C, BMI2), and tug checks the
 processor has them first: whisper.cpp is never called on a processor without AVX2. (That hasn't
 been tried on such a processor, and the AVX2-built code shares a few inline C++ library functions
 with the rest; see ARCHITECTURE.md.) The model is read once, its bytes are checked against the
-hash and those same bytes are loaded, and tug checks there's at least 512 MB of free memory
-first. The C and C++ runtimes are linked into tug.exe (crt-static), so it needs no Visual C++
+hash and those same bytes are loaded, and tug checks there's enough free memory first (512 MB for
+Accurate, 2.5 GB for Most accurate, which falls back to Accurate and then Basic when there isn't). The C and C++ runtimes are linked into tug.exe (crt-static), so it needs no Visual C++
 redistributable; the release workflow fails if the exe imports any DLL that isn't part of Windows.
 whisper.cpp's own logging is switched off (debug builds can print decoded tokens). The text is typed only into the window that was in
 front when the shortcut was pressed, after the shortcut's keys are let go; a spoken new line is

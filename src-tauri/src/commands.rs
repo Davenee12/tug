@@ -765,53 +765,99 @@ pub async fn voice_status(languages: bool) -> Result<crate::voice::VoiceStatus> 
 /// speech recognizer. Off the main thread: it waits for the voice threads.
 #[tauri::command]
 pub async fn set_voice_typing(
-    state: State<'_, AppState>,
     enabled: bool,
     keys: String,
     language: Option<String>,
 ) -> Result<crate::voice::VoiceStatus> {
-    let shared = state.shared.clone();
-    tauri::async_runtime::spawn_blocking(move || crate::voice::set(&shared.store, enabled, &keys, language.as_deref()))
+    tauri::async_runtime::spawn_blocking(move || crate::voice::set(enabled, &keys, language.as_deref()))
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Pick voice typing's engine: "accurate" (whisper.cpp with the downloaded model, the default)
-/// or "basic" (Windows' own recognizer), and save it.
+/// Pick voice typing's engine: "accurate" (whisper.cpp with the English model, the default),
+/// "mostAccurate" (whisper.cpp with the multilingual model) or "basic" (Windows' own recognizer),
+/// and save it. A whisper.cpp engine's model starts downloading if it isn't here.
 #[tauri::command]
-pub async fn set_voice_engine(state: State<'_, AppState>, engine: String) -> Result<crate::voice::VoiceStatus> {
+pub async fn set_voice_engine(engine: String) -> Result<crate::voice::VoiceStatus> {
+    use crate::voice::engine::EngineChoice;
     let choice = match engine.as_str() {
-        "accurate" => crate::voice::engine::EngineChoice::Accurate,
-        "basic" => crate::voice::engine::EngineChoice::Basic,
+        "accurate" => EngineChoice::Accurate,
+        "mostAccurate" => EngineChoice::MostAccurate,
+        "basic" => EngineChoice::Basic,
         other => return Err(format!("unknown voice engine: {other}")),
     };
-    let shared = state.shared.clone();
-    tauri::async_runtime::spawn_blocking(move || crate::voice::set_engine(&shared.store, choice))
+    tauri::async_runtime::spawn_blocking(move || crate::voice::set_engine(choice))
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Download voice typing's speech model (or resume a paused download). Returns at once; progress
-/// arrives as `voice-status` events.
+fn voice_model(model: &str) -> Result<crate::voice::model::ModelId> {
+    crate::voice::model::ModelId::parse(model).ok_or_else(|| format!("unknown speech model: {model}"))
+}
+
+/// Download one of voice typing's speech models ("accurate" or "mostAccurate"), or resume a paused
+/// download. Returns at once; progress arrives as `voice-status` events.
 #[tauri::command]
-pub async fn voice_model_download() -> Result<crate::voice::VoiceStatus> {
-    tauri::async_runtime::spawn_blocking(crate::voice::download_model)
+pub async fn voice_model_download(model: String) -> Result<crate::voice::VoiceStatus> {
+    let id = voice_model(&model)?;
+    tauri::async_runtime::spawn_blocking(move || crate::voice::download_model(id))
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Cancel the speech model download (what it had is deleted).
+/// Cancel a speech model's download (what it had is deleted, and it isn't started again by itself).
 #[tauri::command]
-pub fn voice_model_cancel() -> crate::voice::VoiceStatus {
-    crate::voice::cancel_download()
+pub async fn voice_model_cancel(model: String) -> Result<crate::voice::VoiceStatus> {
+    let id = voice_model(&model)?;
+    tauri::async_runtime::spawn_blocking(move || crate::voice::cancel_download(id))
+        .await
+        .map_err(|e| e.to_string())
 }
 
-/// Settings offered the speech model download and the person answered (Download or Not now):
-/// it isn't offered by itself again.
+/// Delete every downloaded speech model (Settings' "Delete downloaded models").
 #[tauri::command]
-pub async fn voice_model_offered(state: State<'_, AppState>) -> Result<crate::voice::VoiceStatus> {
-    let shared = state.shared.clone();
-    tauri::async_runtime::spawn_blocking(move || crate::voice::model_offered(&shared.store))
+pub async fn voice_models_delete() -> Result<crate::voice::VoiceStatus> {
+    tauri::async_runtime::spawn_blocking(crate::voice::delete_models)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The language Most accurate listens in ("auto" or a code from voiceSpokenLanguages.json).
+#[tauri::command]
+pub async fn set_voice_spoken_language(language: String) -> Result<crate::voice::VoiceStatus> {
+    tauri::async_runtime::spawn_blocking(move || crate::voice::set_spoken_language(&language))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Whether contacts' names are hints for the whisper.cpp engines.
+#[tauri::command]
+pub async fn set_voice_contact_hints(on: bool) -> Result<crate::voice::VoiceStatus> {
+    tauri::async_runtime::spawn_blocking(move || crate::voice::set_contact_hints(on))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The personal dictionary.
+#[tauri::command]
+pub async fn voice_dictionary() -> Result<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(crate::voice::dictionary)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Save the personal dictionary; answers with it as saved (tidied, without duplicates).
+#[tauri::command]
+pub async fn set_voice_dictionary(words: Vec<String>) -> Result<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(move || crate::voice::set_dictionary(&words))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The "Get voice typing ready now?" card has been on screen: it never shows by itself again.
+#[tauri::command]
+pub async fn voice_ready_prompt_shown() -> Result<crate::voice::VoiceStatus> {
+    tauri::async_runtime::spawn_blocking(crate::voice::ready_prompt_shown)
         .await
         .map_err(|e| e.to_string())
 }
@@ -834,6 +880,9 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.voiceLanguage",
     "ui.voiceEngine",
     "ui.voiceModelOffered",
+    "ui.voiceSpokenLanguage",
+    "ui.voiceContactHints",
+    "ui.voiceReadyPrompt",
     "ui.zoom",
     "ui.onboarded",
     "ui.seenSince",

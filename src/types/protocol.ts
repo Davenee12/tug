@@ -1043,13 +1043,16 @@ export interface VoiceLanguage {
 /** off; on (shortcut registered); inUse (another app holds it); unavailable (nothing can listen: no Windows speech language, and the accurate engine can't stand in). */
 export type VoiceState = "off" | "on" | "inUse" | "unavailable";
 
-/** Voice typing's engine (`voice::engine::EngineChoice`): accurate (whisper.cpp with the downloaded model) or basic (Windows' own recognizer). */
-export type VoiceEngine = "accurate" | "basic";
+/** Voice typing's engine (`voice::engine::EngineChoice`): accurate (whisper.cpp with the English model), mostAccurate (whisper.cpp with the multilingual large-v3-turbo model) or basic (Windows' own recognizer). */
+export type VoiceEngine = "accurate" | "mostAccurate" | "basic";
 
-/** Where the accurate engine's speech model is (`voice::model::ModelState`). */
+/** One of the downloadable speech models (`voice::model::ModelId`), named for the engine that runs it. */
+export type VoiceModelId = "accurate" | "mostAccurate";
+
+/** Where a speech model is (`voice::model::ModelState`). */
 export type VoiceModelState = "missing" | "downloading" | "ready";
 
-/** The accurate engine's speech model (`voice::model::ModelStatus`). */
+/** A whisper.cpp engine's speech model (`voice::model::ModelStatus`). */
 export interface VoiceModel {
   state: VoiceModelState;
   /** Bytes downloaded so far (a paused download counts). */
@@ -1078,16 +1081,22 @@ export interface VoiceStatus {
   engine: VoiceEngine;
   /** The engine a hold would use right now; null when nothing can listen. */
   activeEngine: VoiceEngine | null;
-  /** The accurate engine's speech model. */
+  /** Accurate's speech model. */
   model: VoiceModel;
-  /** This processor can run the accurate engine (AVX2). */
+  /** Most accurate's speech model. */
+  mostAccurateModel: VoiceModel;
+  /** The language Most accurate listens in: "auto" (detected) or a code from `src/lib/voiceSpokenLanguages.json`. */
+  spokenLanguage: string;
+  /** Contacts' names help the whisper.cpp engines spell them (on this PC only). */
+  contactHints: boolean;
+  /** This processor can run the whisper.cpp engines (AVX2). */
   accurateSupported: boolean;
-  /** Settings has already offered the model download once. */
-  modelOffered: boolean;
+  /** Offer the one-time "Get voice typing ready now?" card: the first launch after an install or update, voice typing never set up, never offered before. */
+  readyPrompt: boolean;
   /** The default microphone is a phone-call (Bluetooth hands-free) headset. */
   phoneMic: boolean;
-  /** Why the accurate engine isn't listening although it could: it failed to start on this PC (Basic listens until it's switched on again), or there was too little free memory on the last hold. */
-  accurateProblem: "failed" | "lowMemory" | null;
+  /** Why the whisper.cpp engine picked isn't listening although it could: it failed to start on this PC (Basic listens until it's switched on again), there was too little free memory on the last hold (Basic listened), or too little for Most accurate (Accurate listened). */
+  accurateProblem: "failed" | "lowMemory" | "lowMemoryUsedAccurate" | null;
 }
 
 /** What one hold did (`voice-typed`). The words themselves are never sent. */

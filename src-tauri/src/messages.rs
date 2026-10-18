@@ -551,6 +551,35 @@ impl Store {
         rows.collect()
     }
 
+    /// The names of the people the person texts most, for voice typing's prompt (`voice::vocab`):
+    /// contacts with visible texts (either way), most texts since `recent_since` (ms) first, then
+    /// most texts ever, then the latest. A contact with several numbers counts once, under their
+    /// name; a number that's no known contact counts for nothing. Read on the PC, never sent anywhere.
+    pub fn frequent_contact_names(&self, limit: u32, recent_since: i64) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "WITH per_address AS (
+                 SELECT address, SUM(received_at >= ?2) AS recent, COUNT(*) AS total,
+                        MAX(received_at) AS last
+                 FROM messages WHERE hidden_at IS NULL AND address <> ''
+                 GROUP BY address
+             ),
+             named AS (
+                 SELECT COALESCE(c.name, (
+                            SELECT CASE WHEN COUNT(DISTINCT k.name) = 1 THEN MIN(k.name) END
+                            FROM contacts k WHERE k.match_key = match_key(p.address)
+                        )) AS name, p.recent, p.total, p.last
+                 FROM per_address p LEFT JOIN contacts c ON c.address = p.address
+             )
+             SELECT name FROM named WHERE name IS NOT NULL AND trim(name) <> ''
+             GROUP BY name
+             ORDER BY SUM(recent) DESC, SUM(total) DESC, MAX(last) DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit, recent_since], |r| r.get(0))?;
+        rows.collect()
+    }
+
     /// Store names from the phone's own contacts (PBAP). These win over names learned from
     /// notifications. Each entry is `(address, name)`. Returns how many numbers were saved.
     ///
@@ -807,6 +836,61 @@ mod tests {
             received_at: at,
         })
         .unwrap();
+    }
+
+    #[test]
+    fn the_people_texted_most_come_first_for_voice_typing() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[
+            ("+447700900101".into(), "Priya Raman".into()),
+            ("+447700900102".into(), "Sam Okafor".into()),
+            ("+447700900103".into(), "Jordan Blake".into()),
+            ("+447700900104".into(), "Mei Lin".into()),
+            ("sam@example.com".into(), "Sam Okafor".into()),
+        ])
+        .unwrap();
+        let mut n = 0;
+        let mut text = |address: &str, at: i64| {
+            n += 1;
+            let handle = format!("H{n}");
+            let body = format!("text {n}");
+            let mut m = incoming(&handle, address, &body);
+            m.received_at = at;
+            s.insert_incoming(&m).unwrap();
+        };
+        // Long ago, Jordan texted most; lately, Priya (in another number format) and Sam (on two
+        // addresses) have.
+        for _ in 0..6 {
+            text("+447700900103", 1_000);
+        }
+        for _ in 0..3 {
+            text("07700900101", 50_000);
+        }
+        text("+447700900102", 40_000);
+        text("sam@example.com", 41_000);
+        // A number that isn't a contact counts for nothing.
+        for _ in 0..9 {
+            text("+15550123456", 60_000);
+        }
+        assert_eq!(
+            s.frequent_contact_names(10, 30_000).unwrap(),
+            ["Priya Raman", "Sam Okafor", "Jordan Blake"],
+            "recent texts first, a person counted once, no unknown numbers, no one who never texted"
+        );
+        assert_eq!(
+            s.frequent_contact_names(2, 30_000).unwrap(),
+            ["Priya Raman", "Sam Okafor"]
+        );
+        assert_eq!(
+            s.frequent_contact_names(10, 0).unwrap()[0],
+            "Jordan Blake",
+            "counted over all time, Jordan leads"
+        );
+        assert!(Store::in_memory()
+            .unwrap()
+            .frequent_contact_names(10, 0)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

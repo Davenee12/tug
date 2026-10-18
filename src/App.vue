@@ -25,6 +25,7 @@ import WhatsNew from "./components/WhatsNew.vue";
 import PairingDialog from "./components/PairingDialog.vue";
 import ToolConfirmCard from "./components/ToolConfirmCard.vue";
 import UpdateConfirm from "./components/UpdateConfirm.vue";
+import VoiceReadyCard from "./components/VoiceReadyCard.vue";
 import { nextDownSince, RECONNECT_GRACE_MS, showConnectionPanel } from "./lib/connectionPanel";
 import { showsReconnecting } from "./lib/connectionStatus";
 import { phoneTextMessage, skippedMessage } from "./lib/tugboat";
@@ -77,6 +78,25 @@ const panelInline = computed(() =>
     now: now.value,
   }),
 );
+// "Get voice typing ready now?" (once ever, see stores/voice): only on the feed, once tug's state has
+// loaded, never over setting up a phone, "What's new" or another dialog, so it never interrupts.
+watch(
+  () =>
+    tug.statusKnown &&
+    tug.view !== "settings" &&
+    !tug.showConnect &&
+    !tug.whatsNewOpen &&
+    !tug.searchOpen &&
+    !tug.pickerOpen &&
+    !tug.ringing &&
+    !update.confirm.open &&
+    voice.status?.readyPrompt === true,
+  (due) => {
+    if (due) voice.offerReadyCard();
+  },
+  { immediate: true },
+);
+
 // The toast keeps showing (and acting on) its last message while it fades out, so a
 // click on Undo during the fade still works instead of hitting an emptied message.
 const shown = ref(tug.flash);
@@ -232,6 +252,7 @@ onUnmounted(() => {
     <SearchPalette v-if="tug.searchOpen" />
     <SpotifyPanel v-if="tug.spotifyPanelOpen" />
     <WhatsNew v-if="tug.whatsNewOpen" />
+    <VoiceReadyCard v-if="voice.readyCardOpen && tug.view !== 'settings'" />
     <!-- The games (and their picker) cover the window; a call, a confirmation card or a pairing PIN
          still come up over them (and pause a game). -->
     <GamePicker v-if="game.screen === 'picker'" />
