@@ -19,7 +19,7 @@ use tug_bridge::protocol::{
 };
 
 fn main() -> ExitCode {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let argv = args::lossy(std::env::args_os().skip(1));
     let command = match args::parse(&argv) {
         Ok(c) => c,
         Err(e) => {
