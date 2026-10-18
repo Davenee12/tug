@@ -175,9 +175,10 @@ impl Actor {
                     s.away = false;
                 });
                 // The texts/contacts/calls side sits behind the same phone; a fresh BLE link is a
-                // good moment to retry message access rather than waiting out its own backoff.
+                // good moment to retry message access rather than waiting out its own backoff, with
+                // its quick retries if iOS takes a moment to offer it.
                 if let Some(map) = self.shared.map.get() {
-                    map.refresh();
+                    map.phone_linked();
                 }
                 self.read_model_number();
             }
@@ -630,6 +631,8 @@ impl Actor {
         let control_point = a.control_point.clone();
         let idle = a.requests.inflight().is_none();
         let mut closed = false;
+        // Whether everything checked out as before, for the hourly "all fine" line.
+        let mut unchanged = true;
         for (name, ch) in [
             ("data source", a.data_source.characteristic().clone()),
             ("notification source", a.notification_source.characteristic().clone()),
@@ -639,8 +642,9 @@ impl Actor {
                 return;
             }
             match state {
-                Ok(true) => log::debug!("ANCS {name}: notifications on"),
+                Ok(true) => {}
                 Ok(false) => {
+                    unchanged = false;
                     log::warn!("ANCS {name}: notifications were off on the iPhone; re-enabling");
                     let enabled = winrt::enable_notify(&ch).await;
                     if self.note_gatt(&enabled) {
@@ -650,8 +654,13 @@ impl Actor {
                         log::warn!("ANCS {name}: re-enable failed: {e}");
                     }
                 }
+                // Closed objects are reported once, by the relink below.
+                Err(e) if e.is_closed() => {
+                    closed = true;
+                    log::debug!("ANCS {name}: couldn't read subscription state: {e}");
+                }
                 Err(e) => {
-                    closed |= e.is_closed();
+                    unchanged = false;
                     log::warn!("ANCS {name}: couldn't read subscription state: {e}");
                 }
             }
@@ -665,10 +674,36 @@ impl Actor {
         }
         // Only probe between requests so the probe can't interleave with a real response.
         if idle {
-            self.probe_ancs_authorization(&control_point).await;
-            if self.wedged() {
+            let probe = self.probe_ancs_authorization(&control_point).await;
+            if self.wedged() || self.link.is_none() {
                 return;
             }
+            if probe == link_policy::Probe::Interrupted {
+                // The link dropped or blipped under the probe, and Windows often closes tug's objects
+                // for the phone just after: look again in seconds, not at the next routine check.
+                self.probe_interrupted = self.probe_interrupted.saturating_add(1);
+                let routine = if self.shared.watching() {
+                    CCCD_CHECK_WATCHING_SECS
+                } else {
+                    CCCD_CHECK_SECS
+                };
+                let next = link_policy::next_subscription_check(probe, self.probe_interrupted, routine);
+                // `tick` counts down to zero and then checks, so N here waits N + 1 s.
+                self.cccd_check_in = self.cccd_check_in.min(next.saturating_sub(1));
+            } else {
+                self.probe_interrupted = 0;
+            }
+            unchanged &= probe == link_policy::Probe::Answered;
+        }
+        // Every 15 s this used to write three DEBUG lines: now the first check on a subscription,
+        // then hourly while nothing changes (changes are logged where they're found).
+        if unchanged && link_policy::log_routine_check(self.routine_check_logged.map(|t| t.elapsed())) {
+            self.routine_check_logged = Some(Instant::now());
+            let sharing = self.shared.status().services.notifications;
+            log::debug!(
+                "ANCS subscription check: both sources on, iPhone {} (logged hourly while unchanged)",
+                if sharing { "sharing" } else { "not sharing" }
+            );
         }
         let slow = Duration::from_secs(CCCD_CHECK_SECS.into());
         if self.optional_retry_at.is_none_or(|t| t.elapsed() >= slow) {

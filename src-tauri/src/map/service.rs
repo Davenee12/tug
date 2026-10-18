@@ -47,6 +47,10 @@ pub enum MapCommand {
     /// The user is typing a text: if message access isn't open, open it now, so the send doesn't
     /// pay for the reconnect.
     Warm,
+    /// The iPhone's notifications link just came up (connected and subscribed), so the phone is in
+    /// range and awake: message access starts afresh (an attempt now, then the quick retries)
+    /// instead of waiting out a backoff built up while the phone was away.
+    PhoneLinked,
     /// Experimental: open the iPhone's hands-free link and, given a number, dial it.
     /// Without one it's the check Settings runs before turning Call buttons on.
     Dial {
@@ -74,7 +78,8 @@ impl crate::map::command_queue::Laned for MapCommand {
             | MapCommand::RefreshCalls(_)
             | MapCommand::InventoryFolders { .. }
             | MapCommand::SwitchesOnScreen(_)
-            | MapCommand::Warm => Lane::Normal,
+            | MapCommand::Warm
+            | MapCommand::PhoneLinked => Lane::Normal,
         }
     }
 
@@ -84,6 +89,7 @@ impl crate::map::command_queue::Laned for MapCommand {
             (MapCommand::Refresh, MapCommand::Refresh)
                 | (MapCommand::CheckContacts, MapCommand::CheckContacts)
                 | (MapCommand::Warm, MapCommand::Warm)
+                | (MapCommand::PhoneLinked, MapCommand::PhoneLinked)
         )
     }
 }
@@ -96,6 +102,11 @@ pub struct MapHandle {
 impl MapHandle {
     pub fn refresh(&self) {
         let _ = self.tx.send(MapCommand::Refresh);
+    }
+
+    /// The iPhone's notifications link just came up (see `MapCommand::PhoneLinked`).
+    pub fn phone_linked(&self) {
+        let _ = self.tx.send(MapCommand::PhoneLinked);
     }
 
     /// Check Sync Contacts right away (see `MapCommand::CheckContacts`).
@@ -401,6 +412,14 @@ mod worker {
     /// minute; a quick first try usually finds it back.
     const MAP_QUICK_RETRY: Duration = Duration::from_secs(2);
 
+    /// While the iPhone's notifications link is up, the phone is in range and awake, and message
+    /// access usually follows within seconds; right after tug starts or the phone comes back, iOS
+    /// can take a moment to offer it. Seen live: 76 s once after a restart, with the notifications
+    /// link up from the 4th second; the ordinary backoff (30 s, 60, 120…) can stretch that to
+    /// minutes. So a few quick retries come first, once per time the link comes up. Each is one
+    /// service lookup and connect: three in 14 s isn't hammering.
+    const MAP_EARLY_RETRIES: [Duration; 3] = [Duration::from_secs(2), Duration::from_secs(4), Duration::from_secs(8)];
+
     /// More than this many failed attempts in a row and the UI stops saying "Reconnecting…" and
     /// says plainly that texts can't be reached right now (several minutes into the backoff).
     const TEXTS_UNREACHABLE_AFTER: u32 = 5;
@@ -429,16 +448,29 @@ mod worker {
             && !texts_unreachable(w.connect_failures)
     }
 
-    /// After a failed attempt: the failure count to keep and how long to wait. The first failure
-    /// right after a working session (`session_was_up`, nothing failed before it) retries in
-    /// `MAP_QUICK_RETRY` and doesn't count, so if that misses the usual backoff starts from its
-    /// beginning. Pure, so the schedule is unit-tested.
-    fn after_failure(failures_before: u32, session_was_up: bool) -> (u32, Duration) {
+    /// After a failed attempt: the failures to keep (they drive the ordinary backoff and, past
+    /// `TEXTS_UNREACHABLE_AFTER`, "can't reach texts"), the quick retries used, and how long to
+    /// wait. The first failure right after a working session (`session_was_up`, nothing failed
+    /// before it) retries in `MAP_QUICK_RETRY` and doesn't count. Before the ordinary backoff
+    /// starts, a phone whose notifications link is up (`phone_linked`) gets `MAP_EARLY_RETRIES`,
+    /// which don't count either, so the backoff still starts from its beginning. Pure, so the
+    /// schedule is unit-tested.
+    fn after_failure(
+        failures_before: u32,
+        early_before: u32,
+        session_was_up: bool,
+        phone_linked: bool,
+    ) -> (u32, u32, Duration) {
         if session_was_up && failures_before == 0 {
-            return (0, MAP_QUICK_RETRY);
+            return (0, early_before, MAP_QUICK_RETRY);
+        }
+        if phone_linked && failures_before == 0 {
+            if let Some(&wait) = MAP_EARLY_RETRIES.get(early_before as usize) {
+                return (0, early_before + 1, wait);
+            }
         }
         let failures = failures_before.saturating_add(1);
-        (failures, map_retry_delay(failures))
+        (failures, early_before, map_retry_delay(failures))
     }
 
     fn now_ms() -> i64 {
@@ -502,6 +534,9 @@ mod worker {
         /// and when to try again. Drives a progressive backoff so tug isn't retrying every 30 s all
         /// night; reset on success and bypassed on a real change (see the poll loop and `map.refresh`).
         connect_failures: u32,
+        /// Quick retries used (`MAP_EARLY_RETRIES`) since message access last worked or the
+        /// phone's notifications link last came up.
+        early_retries: u32,
         next_retry: Option<Instant>,
         /// A quick retry after the phone closed a working session, which wakes the loop sooner than
         /// the ordinary poll would (taken once by the loop).
@@ -601,6 +636,7 @@ mod worker {
             photo_retry_at: None,
             last_type_counts: None,
             connect_failures: 0,
+            early_retries: 0,
             next_retry: None,
             quick_retry: None,
             session_synced: false,
@@ -727,6 +763,7 @@ mod worker {
                     let _ = reply.send(self.inventory_folders().await);
                 }
                 MapCommand::Warm => self.warm().await,
+                MapCommand::PhoneLinked => self.phone_linked().await,
                 cmd @ (MapCommand::Deliver { .. } | MapCommand::Dial { .. } | MapCommand::Forget) => {
                     self.run_priority(cmd).await
                 }
@@ -842,6 +879,22 @@ mod worker {
             self.refresh().await;
         }
 
+        /// The iPhone's notifications link just came up: whatever backoff built up while the phone
+        /// was away (up to 5 minutes) says nothing now, so try at once and, if iOS isn't offering
+        /// message access yet, take the quick retries again.
+        async fn phone_linked(&mut self) {
+            if self.session.is_none() && (self.connect_failures > 0 || self.early_retries > 0) {
+                log::info!(
+                    "the iPhone's notifications link is up; retrying message access now ({} failed before)",
+                    self.connect_failures + self.early_retries
+                );
+            }
+            self.connect_failures = 0;
+            self.early_retries = 0;
+            self.next_retry = None;
+            self.refresh().await;
+        }
+
         /// Track whether the texts pairing works, so a broken one is shown instead of only logged.
         fn record_health(&mut self, result: &Result<usize, MapError>) {
             // WSAENETUNREACH: what a connection to a phone that no longer accepts the pairing gives.
@@ -850,7 +903,7 @@ mod worker {
                 Ok(_) => Attempt::Connected,
                 Err(MapError::NoDevice) => Attempt::NoDevice,
                 Err(MapError::Consent) => Attempt::Answered,
-                Err(MapError::NoService) => Attempt::Unreachable,
+                Err(MapError::NoService | MapError::LookupFailed(_)) => Attempt::Unreachable,
                 Err(MapError::Win(e)) if e.code() == NET_UNREACHABLE => Attempt::Unreachable,
                 Err(_) => Attempt::Other,
             };
@@ -895,7 +948,7 @@ mod worker {
             // send would otherwise wait on. Only while nothing is failing: after a failed attempt
             // the full look runs, so a phone unpaired in Windows still shows as missing.
             if let (Some(id), Some(name)) = (self.device_id.as_ref(), self.texts_device.as_ref()) {
-                if self.connect_failures == 0 && stored.as_deref() == Some(id.as_str()) {
+                if self.connect_failures == 0 && self.early_retries == 0 && stored.as_deref() == Some(id.as_str()) {
                     return Ok(MapDevice {
                         id: id.clone(),
                         name: name.clone(),
@@ -1119,6 +1172,7 @@ mod worker {
             self.backfilled = false;
             self.fetch_tries = FetchTries::default();
             self.connect_failures = 0;
+            self.early_retries = 0;
             self.next_retry = None;
             self.quick_retry = None;
             self.session_synced = false;
@@ -1623,6 +1677,7 @@ mod worker {
                 }
                 // Nothing about the old phone's texts carries over to the next one.
                 self.connect_failures = 0;
+                self.early_retries = 0;
                 self.session_synced = false;
                 self.shared.update_status(|s| {
                     s.texts_were_connected = false;
@@ -1683,6 +1738,7 @@ mod worker {
         /// Message access is up: clear the backoff so the next change retries promptly.
         fn note_sync_ok(&mut self) {
             self.connect_failures = 0;
+            self.early_retries = 0;
             self.next_retry = None;
             self.session_synced = self.session.is_some();
             self.shared.update_status(|s| s.texts_unreachable = false);
@@ -1696,15 +1752,28 @@ mod worker {
             // working: one that connected but failed its first listing gets the ordinary backoff,
             // or a phone that accepts the connection and then fails could be retried every 2 s.
             let synced = self.session.is_some() && self.session_synced;
-            let (failures, wait) = after_failure(self.connect_failures, synced);
+            // The notifications link is up: the phone is in range and awake.
+            let linked = self.shared.status().connection == ConnectionState::Connected;
+            let early_before = self.early_retries;
+            let (failures, early, wait) = after_failure(self.connect_failures, early_before, synced, linked);
             self.connect_failures = failures;
+            self.early_retries = early;
             let unreachable = texts_unreachable(failures);
             self.shared.update_status(|s| s.texts_unreachable = unreachable);
             if failures == 0 {
-                log::info!(
-                    "message access closed by the iPhone ({e}); retrying in {}s",
-                    wait.as_secs()
-                );
+                if early == early_before {
+                    log::info!(
+                        "message access closed by the iPhone ({e}); retrying in {}s",
+                        wait.as_secs()
+                    );
+                } else {
+                    log::info!(
+                        "message access retry failed (quick retry {early} of {}; next in {}s): {e}",
+                        MAP_EARLY_RETRIES.len(),
+                        wait.as_secs()
+                    );
+                }
+                // Sooner than the next poll: wake for it.
                 self.quick_retry = Some(Instant::now() + wait);
             } else if failures <= 3 || failures.is_multiple_of(10) {
                 log::info!("message access retry failed ({failures} in a row): {e}");
@@ -2374,19 +2443,65 @@ mod worker {
         #[test]
         fn a_working_session_the_phone_closes_is_retried_quickly_then_backs_off_as_usual() {
             // Seen live: iOS closed MAP and tug waited the full 30 s. Now: 2 s, then 30, 60, ...
+            // (With the notifications link down: the phone walked off.)
             let mut failures = 0;
             let mut session_up = true;
             let mut waits = Vec::new();
             for _ in 0..4 {
-                let (f, wait) = after_failure(failures, session_up);
+                let (f, early, wait) = after_failure(failures, 0, session_up, false);
+                assert_eq!(early, 0);
                 failures = f;
                 session_up = false; // the session is gone after the first failure
                 waits.push(wait.as_secs());
             }
             assert_eq!(waits, vec![2, 30, 60, 120]);
             // A phone that was never connected (or already failing) gets no quick retry.
-            assert_eq!(after_failure(0, false), (1, Duration::from_secs(30)));
-            assert_eq!(after_failure(3, true), (4, Duration::from_secs(240)));
+            assert_eq!(after_failure(0, 0, false, false), (1, 0, Duration::from_secs(30)));
+            assert_eq!(after_failure(3, 0, true, false), (4, 0, Duration::from_secs(240)));
+        }
+
+        /// `attempts` failed attempts in a row, as the worker feeds them through the schedule: the
+        /// waits, and the failures and quick retries counted at the end.
+        fn schedule(attempts: usize, mut session_up: bool, linked: bool) -> (Vec<u64>, u32, u32) {
+            let (mut failures, mut early) = (0, 0);
+            let mut waits = Vec::new();
+            for _ in 0..attempts {
+                let (f, e, wait) = after_failure(failures, early, session_up, linked);
+                (failures, early) = (f, e);
+                session_up = false;
+                waits.push(wait.as_secs());
+            }
+            (waits, failures, early)
+        }
+
+        #[test]
+        fn with_the_notifications_link_up_texts_retry_at_2_4_8_s_then_back_off_from_the_start() {
+            // Seen live: after a restart iOS didn't offer message access for ~76 s while the
+            // notifications link was up. Quick retries first, then the ordinary 30, 60, 120...
+            let (waits, failures, early) = schedule(8, false, true);
+            assert_eq!(waits, vec![2, 4, 8, 30, 60, 120, 240, 300]);
+            assert_eq!(early, 3, "the quick retries are used once");
+            assert_eq!(
+                failures, 5,
+                "and don't count toward the backoff or \"can't reach texts\""
+            );
+            assert!(
+                !texts_unreachable(failures),
+                "\"can't reach texts\" still waits for six ordinary failures, minutes in"
+            );
+            // The phone isn't linked (away, or locked after a restart): the old backoff, unchanged.
+            assert_eq!(schedule(5, false, false).0, vec![30, 60, 120, 240, 300]);
+            // A working session the phone closed: its own 2 s retry, then the quick retries.
+            assert_eq!(schedule(5, true, true).0, vec![2, 2, 4, 8, 30]);
+        }
+
+        #[test]
+        fn the_quick_retries_come_only_before_the_backoff_starts() {
+            // Already backing off (the link wasn't up then): the link being up now doesn't restart
+            // the quick retries by itself; the link coming up (`PhoneLinked`) resets the count.
+            assert_eq!(after_failure(2, 0, false, true), (3, 0, Duration::from_secs(120)));
+            // Used up: the backoff, starting from its beginning.
+            assert_eq!(after_failure(0, 3, false, true), (1, 3, Duration::from_secs(30)));
         }
 
         #[test]
@@ -2397,11 +2512,14 @@ mod worker {
             let mut waits = Vec::new();
             for _ in 0..4 {
                 let synced = false;
-                let (f, wait) = after_failure(failures, synced);
+                let (f, _, wait) = after_failure(failures, 0, synced, false);
                 failures = f;
                 waits.push(wait.as_secs());
             }
             assert_eq!(waits, vec![30, 60, 120, 240]);
+            // With the notifications link up it gets the three quick retries first, never a 2 s
+            // loop: 2, 4, 8, then 30, 60...
+            assert_eq!(schedule(5, false, true).0, vec![2, 4, 8, 30, 60]);
         }
 
         #[test]
@@ -2519,6 +2637,7 @@ mod lane_tests {
             MapCommand::Dial { .. } => "dial".into(),
             MapCommand::InventoryFolders { .. } => "inventory".into(),
             MapCommand::Warm => "warm".into(),
+            MapCommand::PhoneLinked => "linked".into(),
         }
     }
 

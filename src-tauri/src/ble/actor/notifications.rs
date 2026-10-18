@@ -90,6 +90,9 @@ impl Actor {
         );
         // First authorization probe shortly after connecting, then every CCCD_CHECK_SECS.
         self.cccd_check_in = 2;
+        self.probe_interrupted = 0;
+        // The first check on this subscription says how it found things.
+        self.routine_check_logged = None;
         Ok(Ancs {
             _service: svc,
             control_point,
@@ -137,17 +140,15 @@ impl Actor {
         }
     }
 
-    /// Ask iOS whether it is actually sharing notifications with this PC.
-    pub(super) async fn probe_ancs_authorization(&mut self, control_point: &GattCharacteristic) {
+    /// Ask iOS whether it is actually sharing notifications with this PC. iOS sends nothing when
+    /// Share System Notifications is turned off, so asking is the only way to know.
+    pub(super) async fn probe_ancs_authorization(&mut self, control_point: &GattCharacteristic) -> link_policy::Probe {
         let result = winrt::write(control_point, &ancs::probe()).await;
         self.note_gatt(&result);
         let shared = match result {
             Err(BleError::Protocol(Some(ancs::ERR_INVALID_PARAMETER))) | Ok(()) => true,
             Err(BleError::Protocol(Some(ancs::ATT_WRITE_NOT_PERMITTED))) => false,
-            Err(e) => {
-                log::warn!("ANCS authorization probe failed: {e}");
-                return;
-            }
+            Err(e) => return self.probe_failed(&e),
         };
         let before = self.shared.status().services.notifications;
         if shared != before {
@@ -155,8 +156,6 @@ impl Actor {
                 "ANCS authorization probe: iPhone {} notifications",
                 if shared { "is sharing" } else { "is NOT sharing" }
             );
-        } else {
-            log::debug!("ANCS authorization probe: sharing={shared}");
         }
         self.shared.update_status(|s| {
             s.services.notifications = shared;
@@ -166,6 +165,24 @@ impl Actor {
                 s.last_error = None;
             }
         });
+        link_policy::Probe::Answered
+    }
+
+    /// A probe that got no answer from the phone. Sharing is left as it was: the probe says nothing
+    /// about it, and the status follows the link (which has its own handling) until a probe does.
+    fn probe_failed(&mut self, e: &BleError) -> link_policy::Probe {
+        // Windows closed tug's objects: nothing on this link works any more.
+        if self.on_closed(e) {
+            return link_policy::Probe::Interrupted;
+        }
+        if e.link_is_dead() {
+            // The link dropping (or Windows rebuilding it) is logged where it's handled; this is
+            // only what it did to the probe.
+            log::debug!("ANCS authorization probe cut off by the link ({e}); checking again shortly");
+            return link_policy::Probe::Interrupted;
+        }
+        log::warn!("ANCS authorization probe failed: {e}");
+        link_policy::Probe::Failed
     }
 
     pub(super) async fn on_notification_source(&mut self, data: &[u8]) {
