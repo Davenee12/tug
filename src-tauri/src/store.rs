@@ -411,6 +411,30 @@ pub struct NewNotification<'a> {
     pub received_at: i64,
 }
 
+/// How many rows deleting (or undoing the delete of) a conversation changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HiddenCounts {
+    pub texts: usize,
+    pub notifications: usize,
+}
+
+impl HiddenCounts {
+    /// tug.log's line for a delete (`hidden`) or its undo: counts only, never who or what.
+    pub fn log_line(self, hidden: bool) -> String {
+        let what = if hidden {
+            "deleted a conversation"
+        } else {
+            "undid deleting a conversation"
+        };
+        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        format!(
+            "{what} ({}, {})",
+            plural(self.texts, "text", "texts"),
+            plural(self.notifications, "notification", "notifications")
+        )
+    }
+}
+
 pub struct Store {
     conn: Mutex<Connection>,
     /// How the phone's zoneless text times are read as UTC when comparing Bluetooth texts with
@@ -642,13 +666,15 @@ impl Store {
     /// just those let the older part of a deleted conversation come back in Feed scroll and
     /// search. Hiding stamps rows stored up to `at` that weren't already hidden; undo clears
     /// exactly the rows stamped `at`, so an earlier delete of the same person stays deleted.
+    ///
+    /// Returns how many rows it changed, for the log line ([`HiddenCounts`]).
     pub fn set_conversation_hidden(
         &self,
         senders: &[(String, String)],
         addresses: &[String],
         at: i64,
         hidden: bool,
-    ) -> Result<()> {
+    ) -> Result<HiddenCounts> {
         let senders = serde_json::to_string(senders).expect("senders serialize");
         let addresses = serde_json::to_string(addresses).expect("addresses serialize");
         let (set, which) = if hidden {
@@ -658,7 +684,7 @@ impl Store {
         };
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        tx.execute(
+        let notifications = tx.execute(
             &format!(
                 "UPDATE notifications SET hidden_at = {set}
                  WHERE {which} AND EXISTS (
@@ -668,14 +694,15 @@ impl Store {
             ),
             params![senders, at],
         )?;
-        tx.execute(
+        let texts = tx.execute(
             &format!(
                 "UPDATE messages SET hidden_at = {set}
                  WHERE {which} AND address IN (SELECT value FROM json_each(?1))"
             ),
             params![addresses, at],
         )?;
-        tx.commit()
+        tx.commit()?;
+        Ok(HiddenCounts { texts, notifications })
     }
 
     pub fn set_app_name(&self, app_id: &str, name: &str) -> Result<()> {
@@ -1035,6 +1062,28 @@ mod tests {
         assert_eq!(hits, 1);
         // Running again is a no-op.
         migrate(&mut conn).unwrap();
+    }
+
+    #[test]
+    fn deleting_a_conversation_logs_counts_only() {
+        let c = HiddenCounts {
+            texts: 12,
+            notifications: 5,
+        };
+        assert_eq!(c.log_line(true), "deleted a conversation (12 texts, 5 notifications)");
+        assert_eq!(
+            c.log_line(false),
+            "undid deleting a conversation (12 texts, 5 notifications)"
+        );
+        let one = HiddenCounts {
+            texts: 1,
+            notifications: 1,
+        };
+        assert_eq!(one.log_line(true), "deleted a conversation (1 text, 1 notification)");
+        assert_eq!(
+            HiddenCounts::default().log_line(true),
+            "deleted a conversation (0 texts, 0 notifications)"
+        );
     }
 
     #[test]

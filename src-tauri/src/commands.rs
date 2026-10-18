@@ -577,11 +577,13 @@ pub fn set_conversation_hidden(
             true,
         ),
     };
-    state
+    let counts = state
         .shared
         .store
         .set_conversation_hidden(&senders, &addresses, at, hidden)
         .map_err(|e| e.to_string())?;
+    // Counts only: no names, numbers or words.
+    log::info!("{}", counts.log_line(hidden));
     Ok(at)
 }
 
