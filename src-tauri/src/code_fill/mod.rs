@@ -145,6 +145,9 @@ pub enum FillOutcome {
     NoCode,
     /// tug's own window (or nothing) is in front: there's nowhere to type it.
     NoTarget,
+    /// Ctrl, Alt, Shift or Windows was still held after the wait, so nothing was typed: the
+    /// digits would have been shortcuts (Ctrl+4, Alt+8) in the app instead.
+    KeysHeld,
     /// Windows didn't take all the keystrokes.
     Failed,
 }
@@ -176,6 +179,21 @@ pub fn decide(fresh: Option<(String, String)>, target_ok: bool) -> Plan {
     match fresh {
         Some((code, from)) if is_code(&code) => Plan::Type { code, from },
         _ => Plan::Report(FillOutcome::NoCode),
+    }
+}
+
+/// After waiting for the shortcut's keys to come up: type only once Ctrl, Alt, Shift and Windows
+/// are all up (`keys_released`; typed under a held modifier, each digit is a shortcut in the app),
+/// and only into the window the shortcut was pressed in (`same_window`). `None`: go ahead and type.
+/// The same rule voice typing follows (`voice::judge_typing`).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn judge_typing(keys_released: bool, same_window: bool) -> Option<FillOutcome> {
+    if !keys_released {
+        Some(FillOutcome::KeysHeld)
+    } else if !same_window {
+        Some(FillOutcome::NoTarget)
+    } else {
+        None
     }
 }
 
@@ -380,6 +398,22 @@ mod tests {
         assert_eq!(
             decide(Some(("not a code".into(), "x".into())), true),
             Plan::Report(FillOutcome::NoCode)
+        );
+    }
+
+    #[test]
+    fn types_only_once_the_keys_are_up_in_the_same_window() {
+        assert_eq!(judge_typing(true, true), None, "let go, same window: type");
+        assert_eq!(
+            judge_typing(false, true),
+            Some(FillOutcome::KeysHeld),
+            "Ctrl or Shift still down: the digits would be shortcuts"
+        );
+        assert_eq!(judge_typing(false, false), Some(FillOutcome::KeysHeld));
+        assert_eq!(judge_typing(true, false), Some(FillOutcome::NoTarget));
+        assert_eq!(
+            serde_json::to_string(&FillOutcome::KeysHeld).unwrap(),
+            r#""keysHeld""#
         );
     }
 

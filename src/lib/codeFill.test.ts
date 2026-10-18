@@ -139,5 +139,9 @@ describe("fillFeedback", () => {
     expect(fillFeedback({ outcome: "noCode", from: null }, "ctrl+shift+v").title).toBe("No recent code");
     expect(fillFeedback({ outcome: "noTarget", from: null }, "ctrl+alt+c").body).toBe("Then press Ctrl+Alt+C again.");
     expect(fillFeedback({ outcome: "failed", from: null }, "ctrl+shift+v").title).toBe("Couldn't type the code");
+    expect(fillFeedback({ outcome: "keysHeld", from: null }, "ctrl+shift+v")).toEqual({
+      title: "Let go of the keys",
+      body: "Press Ctrl+Shift+V, then let go to type the code.",
+    });
   });
 });
