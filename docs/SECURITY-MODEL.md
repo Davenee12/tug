@@ -158,7 +158,12 @@ that hash again every time it's loaded, so whisper.cpp is never handed a damaged
 (a mismatch deletes it and Basic takes over). The download is made from Rust (reqwest with
 Windows' TLS): the webview's CSP is unchanged and it has no network permission for it.
 whisper.cpp is built for a fixed instruction set (AVX2, FMA, F16C, BMI2), and tug checks the
-processor has them before ever calling into it, so it can't crash with an illegal instruction.
+processor has them first: whisper.cpp is never called on a processor without AVX2. (That hasn't
+been tried on such a processor, and the AVX2-built code shares a few inline C++ library functions
+with the rest; see ARCHITECTURE.md.) The model is read once, its bytes are checked against the
+hash and those same bytes are loaded, and tug checks there's at least 512 MB of free memory
+first. The C and C++ runtimes are linked into tug.exe (crt-static), so it needs no Visual C++
+redistributable; the release workflow fails if the exe imports any DLL that isn't part of Windows.
 whisper.cpp's own logging is switched off (debug builds can print decoded tokens). The text is typed only into the window that was in
 front when the shortcut was pressed, after the shortcut's keys are let go; a spoken new line is
 Shift+Enter only in a short list of prose and chat apps where that never sends (Notepad, WordPad,

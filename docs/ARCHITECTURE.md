@@ -396,6 +396,14 @@ language is English; otherwise Basic, if Windows has a speech language; otherwis
 (`unavailable`). `VoiceStatus.activeEngine` carries that decision to Settings, so it can say "tug
 uses Basic until the speech model is downloaded" rather than imply Accurate is listening.
 
+What can listen changes while voice typing is on: the model finishes downloading, the other
+engine is picked, the model turns out damaged or fails to start. On a PC with no Windows speech
+language that decides whether voice typing can listen at all, so `voice::resettle` re-runs the
+start (`apply`) whenever the switch is on but the state and "can anything listen"
+(`needs_resettle`) disagree: the shortcut is registered once the model arrives, and let go (with
+Settings saying why) when nothing is left to listen. Status changes go through one `update` that
+holds the status lock while it tells the speech thread, so two changes can't reach it out of order.
+
 - **Accurate: whisper.cpp** through `whisper-rs` (`voice/win/whisper.rs`), compiled from source
   and linked statically, on the CPU (no GPU backend). Its model is `ggml-base.en-q8_0.bin` (78 MB),
   picked by measuring on the test phrases, clean, with room noise and band-limited like a
@@ -407,7 +415,12 @@ uses Basic until the speech model is downloaded" rather than imply Accurate is l
   spoken commands and coding words, lower case with no punctuation) matters: without it the
   same model got none of the code phrases right. The encoder window is 768 positions (15 s)
   rather than 30 s: about half the time, and windows sized to just the audio made the model
-  repeat itself. Load takes about 0.1 s and happens while the first hold records.
+  repeat itself. Load takes about 0.1 s and happens while the first hold records; loaded, it
+  adds about 240 MB to tug's working set (measured: 30 MB before, 272 MB loaded after several holds, back to 32 MB once let go). Before loading, tug wants 512 MB of free memory
+  (`GlobalMemoryStatusEx`); with less, that hold uses Basic and Settings says so. On unclear audio
+  (a cough) Whisper sometimes plays its prompt back; `vocab::is_prompt_echo` drops output that is
+  an example line or four words in a row of the prompt, when the hold was too short to have said
+  it.
 - **Basic: Windows' desktop SAPI recognizer** (`voice/win/sapi.rs`): offline, ships with Windows,
   any language Windows has speech for. `Windows.Media.SpeechRecognition` was ruled out: its
   free-dictation grammar is recognized by Microsoft's online service and it needs package
@@ -419,19 +432,30 @@ by Rust (reqwest with Windows' TLS, HTTPS only, redirects too; no CSP change). I
 `%LOCALAPPDATA%\dev.davejames.tug\speech\<file>.part`; a dropped connection keeps the `.part` and
 the next download resumes it with a Range request (starting over if the server ignores the range);
 Cancel deletes it; more bytes than the model's size stop it. Only a file whose SHA-256 matches is
-renamed into place, and it's checked again on every load, so whisper.cpp never sees a damaged or
-swapped file: a mismatch (or a load failure) deletes it, says so in Settings and Basic takes over.
+renamed into place. Loading reads the file once, checks those bytes against the hash and hands
+the same bytes to whisper.cpp (`new_from_buffer`), so whisper.cpp never sees a damaged or swapped
+file: a mismatch deletes it, says so in Settings and Basic takes over. Any other load failure keeps
+the file, says "tug couldn't start the accurate engine on this PC" and leaves Basic listening
+until voice typing is switched on again (not retried every hold). Redirects are followed only to
+`huggingface.co` and `*.hf.co`; a 403, 404 or 429 says the download site isn't available right now
+instead of promising to resume.
 The download is written against a `Fetch` trait, so its tests run against a fake server.
 
 **Building it.** `whisper-rs-sys` runs CMake (MSVC) on whisper.cpp's sources and generates Rust
 bindings with bindgen, which loads libclang (the bindings it ships were generated on Linux and
-don't compile for Windows). `.cargo/config.toml` fixes ggml's instruction set at AVX2 + FMA + F16C +
+don't compile for Windows). tug builds with `+crt-static` (`.cargo/config.toml`, and
+`scripts/remap-paths.mjs` for release builds, whose `CARGO_ENCODED_RUSTFLAGS` replaces it) and
+`CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`, so whisper.cpp's C++ is compiled `/MT` and its standard
+library is linked in: without that tug.exe imported `msvcp140.dll` and wouldn't start on a PC
+without the Visual C++ redistributable. tauri-build keeps the C runtime itself on Windows' own
+Universal CRT. The release workflow checks the exes' import tables (`release-assets.mjs imports`)
+and fails on any DLL that isn't part of Windows. `.cargo/config.toml` fixes ggml's instruction set at AVX2 + FMA + F16C +
 BMI2 (`GGML_NATIVE=OFF`), so a release built on a CI runner with AVX-512 still runs everywhere;
 `voice::engine::cpu_supported` checks for those before whisper.cpp is ever called, and keeps Basic
 on a processor without them. Only ggml's CPU backend (`ggml-cpu`) is compiled with `/arch:AVX2`, and
 it has no static initializers; the inline STL and CRT functions it shares with the plain-x64
 libraries are the copies from whisper.cpp's objects, which the linker meets first. (Not tried on a
-processor without AVX.) `scripts/remap-paths.mjs` passes MSVC's `/d1trimfile:<target folder>` so
+processor without AVX2: whisper.cpp is never called there, and that's all tug can promise.) `scripts/remap-paths.mjs` passes MSVC's `/d1trimfile:<target folder>` so
 `__FILE__` strings in ggml's asserts don't carry the build machine's path into the release exe
 (the release workflow's leak check fails otherwise). whisper.cpp's log output is switched off
 (`whisper_rs::install_logging_hooks` with no backend): debug builds can print decoded tokens.
