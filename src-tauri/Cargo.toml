@@ -154,7 +154,7 @@ windows = { version = "0.62", features = [
   "Win32_System_SystemInformation",
   "Win32_System_ProcessStatus",
 ] }
-windows-collections = "0.3"
+windows-collections = "0.100"
 # Voice typing's accurate engine: whisper.cpp, compiled from source (CMake + MSVC) and linked
 # statically, run on the CPU with a speech model downloaded once on request. Its Rust bindings are
 # generated with bindgen at build time (which needs libclang); its build settings (a fixed AVX2
