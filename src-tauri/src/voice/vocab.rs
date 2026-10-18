@@ -148,6 +148,39 @@ pub fn prompt() -> String {
     out
 }
 
+/// Lower-case words with punctuation dropped, for comparing text with the prompt.
+fn plain_words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// The most words someone can say in `secs` of speech, generously: about four a second (spoken
+/// commands are short words), plus one.
+fn most_words(secs: f32) -> usize {
+    (secs.max(0.0) * 4.0) as usize + 1
+}
+
+/// Whether what Whisper heard is really its prompt played back. On a cough, a click or a breath
+/// it can't make out, Whisper sometimes "continues" its prompt instead of transcribing: an
+/// EXAMPLES line, or a run of the command list. That's dropped, but only when the hold was too
+/// short to have said it (`speech_secs`, the trimmed recording): the issue's own test phrases
+/// are EXAMPLES lines, and "open paren close paren open bracket" is a run of the prompt, and
+/// someone saying them must still get them typed.
+pub fn is_prompt_echo(heard: &str, speech_secs: f32) -> bool {
+    let words = plain_words(heard);
+    if words.len() <= most_words(speech_secs) {
+        return false;
+    }
+    if EXAMPLES.iter().any(|e| plain_words(e) == words) {
+        return true;
+    }
+    // Four or more words in a row exactly as they are in the prompt.
+    let prompt = plain_words(&prompt());
+    words.windows(4).any(|run| prompt.windows(4).any(|p| p == run))
+}
+
 /// Bracketed words Whisper writes for sounds that aren't speech, when in round brackets.
 /// (Square brackets are always a note, never dictation; round ones can be "open paren".)
 const NOT_SPEECH: &[&str] = &[
@@ -270,6 +303,34 @@ mod tests {
         // Whatever it ends with is a whole phrase from the lists.
         assert!(all.iter().any(|w| p.ends_with(w)), "ends mid-phrase: {p:?}");
         assert_eq!(prompt(), p, "the same every time");
+    }
+
+    #[test]
+    fn the_prompt_played_back_on_a_cough_is_dropped() {
+        // An example line from a 0.4 s click: far more words than that could hold.
+        assert!(is_prompt_echo("Const camel case user ID equals five semicolon.", 0.4));
+        assert!(is_prompt_echo("hello, comma how are you question mark", 0.6));
+        // A run of the command list.
+        assert!(is_prompt_echo(
+            "open bracket close bracket open brace close brace new line",
+            0.5
+        ));
+        assert!(is_prompt_echo("camel case snake case pascal case", 0.3));
+    }
+
+    #[test]
+    fn saying_the_same_words_still_types_them() {
+        // The issue's test phrases are EXAMPLES lines: said over a couple of seconds, they stay.
+        assert!(!is_prompt_echo("const camel case user id equals five semicolon", 2.6));
+        assert!(!is_prompt_echo("hello comma how are you question mark", 2.0));
+        // A run of commands, said.
+        assert!(!is_prompt_echo("open paren close paren open bracket", 1.5));
+        // Short and real, even from a short hold.
+        assert!(!is_prompt_echo("check logs", 0.4));
+        assert!(!is_prompt_echo("git push", 0.2));
+        // Not from the prompt at all, however fast.
+        assert!(!is_prompt_echo("the quick brown fox jumps over the lazy dog", 0.5));
+        assert!(!is_prompt_echo("", 0.0));
     }
 
     #[test]
