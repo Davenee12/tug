@@ -58,7 +58,7 @@ env:
   # A real release: a tag push, or a manual run with dry run off.
   RELEASING: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
   # The Tauri CLI the sign job runs (the version package-lock.json has), installed without scripts.
-  TAURI_CLI: "@tauri-apps/cli@2.12.1"
+  TAURI_CLI: "@tauri-apps/cli@2.12.3"
 
 jobs:
   build:
