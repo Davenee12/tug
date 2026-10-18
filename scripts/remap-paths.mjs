@@ -33,6 +33,10 @@ const remaps = [
 if (process.env.CARGO_TARGET_DIR) remaps.push([path.resolve(process.env.CARGO_TARGET_DIR), "/target"]);
 
 const flags = remaps.map(([from, to]) => `--remap-path-prefix=${from}=${to}`);
+// CARGO_ENCODED_RUSTFLAGS replaces the rustflags in .cargo/config.toml, so the static C/C++ runtime
+// it asks for is asked for here too: without it tug.exe would import msvcp140.dll (whisper.cpp's
+// C++ standard library) and need the Visual C++ redistributable. See .cargo/config.toml.
+if (process.platform === "win32") flags.push("-Ctarget-feature=+crt-static");
 
 // Keep any flags the caller already set. CARGO_ENCODED_RUSTFLAGS (0x1f-separated) wins over
 // RUSTFLAGS in Cargo and copes with spaces in paths, so the result goes there.

@@ -42,7 +42,8 @@ with an `RC.EXE` error, install the Windows SDK from the Build Tools installer, 
 `cargo clean -p tug --manifest-path src-tauri/Cargo.toml` and try again. If `whisper-rs-sys`
 fails with "is `cmake` not installed?" or "Unable to find libclang", see step 4. The first build
 compiles whisper.cpp, which takes a few minutes; later builds reuse it. Its build settings (a fixed
-AVX2 instruction set, so a release runs on any PC that has it) are in `.cargo/config.toml`.
+AVX2 instruction set, so a release runs on any PC that has it, and the C/C++ runtime linked in, so
+tug needs no Visual C++ redistributable) are in `.cargo/config.toml`.
 
 Releases are built in GitHub Actions (`.github/workflows/release.yml`), so you don't need a local
 release build; `npm run check` is what a pull request must pass.

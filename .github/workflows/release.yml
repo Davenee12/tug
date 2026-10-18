@@ -137,6 +137,12 @@ jobs:
         shell: bash
         run: node scripts/release-assets.mjs leaks src-tauri/target/release/tug.exe src-tauri/binaries/tug-cli.exe
 
+      # Only Windows' own DLLs: an import of msvcp140.dll or vcruntime140.dll would stop tug starting
+      # on a PC without the Visual C++ redistributable (the runtimes are linked in: crt-static).
+      - name: No DLLs beyond Windows' own
+        shell: bash
+        run: node scripts/release-assets.mjs imports src-tauri/target/release/tug.exe src-tauri/binaries/tug-cli.exe
+
       - name: Stage the downloads
         shell: bash
         env:

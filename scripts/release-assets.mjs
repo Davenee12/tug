@@ -8,6 +8,8 @@
 //                                                      <out>/tug-<v>-setup.exe and -portable.exe
 //   node scripts/release-assets.mjs leaks <file>...    fails if a built exe still carries this
 //                                                      machine's home or checkout path
+//   node scripts/release-assets.mjs imports <file>...  fails if a built exe imports a DLL that
+//                                                      isn't part of Windows (msvcp140, vcruntime140…)
 //   node scripts/release-assets.mjs keycheck <setup.exe.sig>   fails if the updater signature was
 //                                                      made with a key other than the one whose
 //                                                      public half tauri.conf.json ships
@@ -164,6 +166,104 @@ export function findLeaks(bytes, paths) {
   return paths.filter((p) => p && p.length > 3 && variants(p).some((v) => bytes.includes(v)));
 }
 
+/**
+ * The DLLs a Windows exe (PE32+) imports, from its import table and its delay-load table,
+ * lowercase, in table order. Throws on something that isn't a 64-bit PE.
+ */
+export function peImports(bytes) {
+  const buf = Buffer.from(bytes);
+  if (buf.length < 0x40 || buf.readUInt16LE(0) !== 0x5a4d) throw new Error("not an exe (no MZ header)");
+  const pe = buf.readUInt32LE(0x3c);
+  if (buf.readUInt32LE(pe) !== 0x00004550) throw new Error("not a PE file");
+  const sections = buf.readUInt16LE(pe + 6);
+  const optSize = buf.readUInt16LE(pe + 20);
+  const opt = pe + 24;
+  if (buf.readUInt16LE(opt) !== 0x20b) throw new Error("not a 64-bit (PE32+) exe");
+  const dirs = opt + 112;
+  const table = [];
+  for (let i = 0, s = opt + optSize; i < sections; i++, s += 40) {
+    table.push({ va: buf.readUInt32LE(s + 12), size: Math.max(buf.readUInt32LE(s + 8), buf.readUInt32LE(s + 16)), raw: buf.readUInt32LE(s + 20) });
+  }
+  const offset = (rva) => {
+    const sec = table.find((t) => rva >= t.va && rva < t.va + t.size);
+    if (!sec) throw new Error(`RVA 0x${rva.toString(16)} is in no section`);
+    return rva - sec.va + sec.raw;
+  };
+  const cstring = (rva) => {
+    const at = offset(rva);
+    const end = buf.indexOf(0, at);
+    return buf.toString("latin1", at, end).toLowerCase();
+  };
+  const names = [];
+  // [directory index, descriptor size, offset of the DLL name's RVA in the descriptor]
+  for (const [index, size, nameAt] of [
+    [1, 20, 12], // IMAGE_IMPORT_DESCRIPTOR
+    [13, 32, 4], // IMAGE_DELAYLOAD_DESCRIPTOR
+  ]) {
+    const rva = buf.readUInt32LE(dirs + index * 8);
+    if (!rva) continue;
+    for (let d = offset(rva); ; d += size) {
+      const name = buf.readUInt32LE(d + nameAt);
+      if (!name) break;
+      names.push(cstring(name));
+    }
+  }
+  return names;
+}
+
+/**
+ * DLLs a release exe may import: parts of Windows itself (every supported Windows 10 and 11 has
+ * them, including the Universal CRT's api-ms-win-crt-* forwarders). Anything else, above all the
+ * Visual C++ runtime (msvcp140, vcruntime140), would make tug fail to start on a PC without the
+ * matching redistributable.
+ */
+export const SYSTEM_DLLS = new Set([
+  "advapi32.dll",
+  "bcrypt.dll",
+  "bcryptprimitives.dll",
+  "combase.dll",
+  "comctl32.dll",
+  "comdlg32.dll",
+  "crypt32.dll",
+  "d3d11.dll",
+  "dbghelp.dll",
+  "dwmapi.dll",
+  "dxgi.dll",
+  "gdi32.dll",
+  "gdiplus.dll",
+  "imm32.dll",
+  "iphlpapi.dll",
+  "kernel32.dll",
+  "mpr.dll",
+  "msimg32.dll",
+  "ncrypt.dll",
+  "netapi32.dll",
+  "ntdll.dll",
+  "ole32.dll",
+  "oleaut32.dll",
+  "powrprof.dll",
+  "propsys.dll",
+  "rpcrt4.dll",
+  "secur32.dll",
+  "setupapi.dll",
+  "shell32.dll",
+  "shlwapi.dll",
+  "ucrtbase.dll",
+  "user32.dll",
+  "userenv.dll",
+  "uxtheme.dll",
+  "version.dll",
+  "winhttp.dll",
+  "winmm.dll",
+  "ws2_32.dll",
+  "wtsapi32.dll",
+]);
+
+/** The imports a release exe mustn't have: anything not part of Windows. */
+export function unexpectedImports(dlls) {
+  return [...new Set(dlls)].filter((d) => !SYSTEM_DLLS.has(d) && !/^(api|ext)-ms-win-[a-z0-9-]+\.dll$/.test(d));
+}
+
 function writeOutput(name, value) {
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
 }
@@ -206,6 +306,22 @@ function main([cmd, ...args]) {
           bad = true;
           console.error(`${path.basename(f)} still contains ${found.length} local path(s); path remapping didn't apply`);
         } else console.log(`${path.basename(f)}: no local paths`);
+      }
+      if (bad) process.exit(1);
+      return;
+    }
+    case "imports": {
+      let bad = false;
+      for (const f of args) {
+        const dlls = peImports(fs.readFileSync(f));
+        const extra = unexpectedImports(dlls);
+        console.log(`${path.basename(f)} imports: ${[...new Set(dlls)].join(", ")}`);
+        if (extra.length) {
+          bad = true;
+          console.error(
+            `::error::${path.basename(f)} imports ${extra.join(", ")}, which aren't part of Windows: it wouldn't start on a PC without them (the Visual C++ runtime is linked statically; see .cargo/config.toml)`,
+          );
+        }
       }
       if (bad) process.exit(1);
       return;
@@ -261,7 +377,7 @@ function main([cmd, ...args]) {
       return;
     }
     default:
-      console.error("usage: node scripts/release-assets.mjs version|stage|leaks|checksums|latest|notes …");
+      console.error("usage: node scripts/release-assets.mjs version|stage|leaks|imports|keycheck|checksums|latest|notes …");
       process.exit(2);
   }
 }
