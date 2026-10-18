@@ -21,8 +21,10 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use chacha20poly1305::aead::rand_core::RngCore;
-use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
+// chacha20poly1305 0.11 (aead 0.6, crypto-common 0.2): the same RustCrypto trait generation as
+// hmac 0.13 / hkdf 0.13 / sha2 0.11, so one `KeyInit` serves the cipher and the MAC. Randomness
+// comes from `Generate`, which reads the OS generator through getrandom (as `OsRng` did before).
+use chacha20poly1305::aead::{Aead, Generate, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -71,16 +73,17 @@ impl Keys {
         XChaCha20Poly1305::new(&self.enc)
     }
 
-    /// Seal with a fresh random nonce from the OS: `nonce || ciphertext || tag`.
+    /// Seal with a fresh random nonce from the OS: `nonce || ciphertext || tag`. Panics only if
+    /// the OS random number generator fails, as `OsRng` did: never seal under a guessable nonce.
     pub fn seal(&self, ad: &[u8], plaintext: &[u8]) -> Vec<u8> {
-        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let nonce = XNonce::generate();
         self.seal_under(&nonce, ad, plaintext)
     }
 
     /// Seal with a given nonce. Only for the shared test vector; real messages use `seal`.
     #[cfg(test)]
     pub fn seal_with_nonce(&self, nonce: &[u8; NONCE_LEN], ad: &[u8], plaintext: &[u8]) -> Vec<u8> {
-        self.seal_under(XNonce::from_slice(nonce), ad, plaintext)
+        self.seal_under(&XNonce::from(*nonce), ad, plaintext)
     }
 
     fn seal_under(&self, nonce: &XNonce, ad: &[u8], plaintext: &[u8]) -> Vec<u8> {
@@ -107,16 +110,16 @@ impl Keys {
         if sealed.len() < OVERHEAD {
             return None;
         }
-        let (nonce, ct) = sealed.split_at(NONCE_LEN);
+        let (nonce, ct) = sealed.split_first_chunk::<NONCE_LEN>()?;
         self.cipher()
-            .decrypt(XNonce::from_slice(nonce), Payload { msg: ct, aad: ad })
+            .decrypt(&XNonce::from(*nonce), Payload { msg: ct, aad: ad })
             .ok()
     }
 
     fn mac(&self) -> Hmac<Sha256> {
-        // hmac 0.13 (digest 0.11) moved the constructor from `Mac` to `KeyInit`. Spelled out in
-        // full because `KeyInit` in scope here is the AEAD's (crypto-common 0.1) trait.
-        <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(&self.auth).expect("HMAC takes any key length")
+        // hmac 0.13 (digest 0.11) takes its constructor from `KeyInit`, the same crypto-common 0.2
+        // trait the cipher uses.
+        Hmac::<Sha256>::new_from_slice(&self.auth).expect("HMAC takes any key length")
     }
 
     /// The MAC the phone sends with a request (see `auth_message`). The server only verifies;
@@ -184,16 +187,12 @@ pub fn guest_secret(secret: &[u8]) -> [u8; SECRET_LEN] {
 
 /// A fresh session secret for the QR code.
 pub fn new_secret() -> [u8; SECRET_LEN] {
-    let mut s = [0u8; SECRET_LEN];
-    OsRng.fill_bytes(&mut s);
-    s
+    <[u8; SECRET_LEN]>::generate()
 }
 
 /// A random 128-bit id (offers, text ids), base64url.
 pub fn new_id() -> String {
-    let mut b = [0u8; 16];
-    OsRng.fill_bytes(&mut b);
-    b64(&b)
+    b64(&<[u8; 16]>::generate())
 }
 
 pub fn b64(bytes: &[u8]) -> String {
@@ -321,6 +320,56 @@ mod tests {
         assert_ne!(to_hex(&session.enc), v.enc_key);
         assert_ne!(to_hex(&session.auth), v.auth_key);
         assert!(!session.verify_request_mac(&v.mac.client, v.mac.seq, &v.mac.method, &v.mac.path, &mac));
+    }
+
+    /// What chacha20poly1305 0.10.1 sealed, captured before the move to 0.11 (also asserted by
+    /// vitest). A Tugboat session's two ends are one tug build and the page it serves, but this
+    /// pins the library itself: an upgrade must neither change a sealed byte nor refuse old output.
+    const AEAD_0_10_VECTOR: &str = include_str!("../../../src/tugboat-page/aead010Vector.json");
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Aead010Vector {
+        secret: String,
+        fixed_nonce: Vec<Aead010Fixed>,
+        random_nonce: Vec<Aead010Random>,
+    }
+
+    #[derive(Deserialize)]
+    struct Aead010Fixed {
+        nonce: String,
+        ad: String,
+        plaintext: String,
+        sealed: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Aead010Random {
+        ad: String,
+        plaintext: String,
+        sealed: String,
+    }
+
+    #[test]
+    fn chacha20poly1305_0_10_output_still_matches() {
+        let v: Aead010Vector = serde_json::from_str(AEAD_0_10_VECTOR).unwrap();
+        let keys = Keys::derive(&hex(&v.secret));
+        assert!(!v.fixed_nonce.is_empty() && !v.random_nonce.is_empty());
+        for c in &v.fixed_nonce {
+            let nonce: [u8; NONCE_LEN] = hex(&c.nonce).try_into().unwrap();
+            let (ad, pt) = (hex(&c.ad), hex(&c.plaintext));
+            // 0.10 -> today: what 0.10 sealed still opens, to the same plaintext.
+            assert_eq!(keys.open(&ad, &hex(&c.sealed)).unwrap(), pt);
+            // Today -> 0.10: under the same key, nonce and associated data, today's seal is the
+            // identical byte string 0.10 produced, so 0.10 (and the page) opens it.
+            assert_eq!(to_hex(&keys.seal_with_nonce(&nonce, &ad, &pt)), c.sealed);
+        }
+        // `seal`'s own output under 0.10 (a nonce from the OS) opens too.
+        for c in &v.random_nonce {
+            let sealed = hex(&c.sealed);
+            assert_eq!(sealed.len(), hex(&c.plaintext).len() + OVERHEAD);
+            assert_eq!(keys.open(&hex(&c.ad), &sealed).unwrap(), hex(&c.plaintext));
+        }
     }
 
     #[test]
