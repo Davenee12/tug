@@ -113,7 +113,7 @@ pub struct Target {
 }
 
 /// The file name, lowercase, from a path or a file name ("C:\…\Code.exe" or "Code.exe").
-fn exe_name(exe: &str) -> String {
+pub(crate) fn exe_name(exe: &str) -> String {
     exe.rsplit(['\\', '/'])
         .next()
         .unwrap_or(exe)

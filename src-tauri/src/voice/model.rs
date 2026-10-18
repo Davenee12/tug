@@ -1,5 +1,6 @@
-//! The accurate engine's speech model: one file, downloaded once when the person asks, from a
-//! fixed address, checked against a fixed SHA-256 before it's ever used.
+//! The speech models for voice typing's whisper.cpp engines: one file per engine ([`ModelId`]),
+//! each downloaded once (in the background, when the engine is picked or voice typing is turned
+//! on), from a fixed address, checked against a fixed SHA-256 before it's ever used.
 //!
 //! - **Where from.** The official whisper.cpp models on Hugging Face, at a pinned commit, so the
 //!   address always serves the same bytes. Redirects (Hugging Face hands the file to its CDN) are
@@ -49,7 +50,58 @@ pub const MODEL: ModelSpec = ModelSpec {
     sha256: "a4d4a0768075e13cfd7e19df3ae2dbc4a68d37d36a7dad45e8410c9a34f8c87e",
 };
 
-/// The folder under tug's local app data that holds the model.
+/// whisper.cpp's multilingual "large-v3-turbo" model, 8-bit quantized (ggml q8_0, 834 MB), from
+/// the same commit. The Most accurate engine: multilingual, at ten
+/// times the size and many times the time of [`MODEL`]. Measured against the 5-bit
+/// quantization (q5_0, 547 MB) on the test phrases (`win/whisper.rs`): exactly as accurate, and
+/// about 30% faster on the CPU (q5's unpacking costs more than its smaller size saves), so the
+/// extra 287 MB of one-time download buys quicker phrases every time. See docs/ARCHITECTURE.md
+/// (Voice typing).
+pub const MOST_ACCURATE_MODEL: ModelSpec = ModelSpec {
+    file: "ggml-large-v3-turbo-q8_0.bin",
+    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q8_0.bin",
+    size: 874_188_075,
+    sha256: "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1",
+};
+
+/// Which model: one per whisper.cpp engine. Mirrored in `src/types/protocol.ts` (`VoiceModelId`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelId {
+    /// [`MODEL`]: English, 78 MB.
+    Accurate,
+    /// [`MOST_ACCURATE_MODEL`]: multilingual, 834 MB.
+    MostAccurate,
+}
+
+impl ModelId {
+    pub const ALL: [ModelId; 2] = [ModelId::Accurate, ModelId::MostAccurate];
+
+    pub fn spec(self) -> &'static ModelSpec {
+        match self {
+            ModelId::Accurate => &MODEL,
+            ModelId::MostAccurate => &MOST_ACCURATE_MODEL,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModelId::Accurate => "accurate",
+            ModelId::MostAccurate => "mostAccurate",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<ModelId> {
+        ModelId::ALL.into_iter().find(|m| m.as_str() == s.trim())
+    }
+
+    /// The array slot for per-model bookkeeping.
+    pub fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// The folder under tug's local app data that holds the models.
 pub const DIR: &str = "speech";
 
 /// Where the model is. Mirrored in `src/types/protocol.ts` (`VoiceModelState`).
@@ -756,18 +808,24 @@ mod tests {
     #[test]
     #[ignore]
     fn downloads_the_real_model_and_resumes() {
+        // `TUG_WHISPER_MODEL=mostAccurate` downloads the Most accurate engine's model instead.
+        let spec = std::env::var("TUG_WHISPER_MODEL")
+            .ok()
+            .and_then(|m| ModelId::parse(&m))
+            .unwrap_or(ModelId::Accurate)
+            .spec();
         let dir = temp_dir("real");
         fs::create_dir_all(&dir).unwrap();
         if let Ok(have) = std::env::var("TUG_WHISPER_MODELS") {
-            if let Ok(bytes) = fs::read(Path::new(&have).join(MODEL.file)) {
-                fs::write(part_path(&dir, &MODEL), &bytes[..5_000_000]).unwrap();
+            if let Ok(bytes) = fs::read(Path::new(&have).join(spec.file)) {
+                fs::write(part_path(&dir, spec), &bytes[..5_000_000]).unwrap();
                 println!("resuming from 5,000,000 bytes");
             }
         }
         let mut fetch = HttpFetch::new().expect("client");
         let started = std::time::Instant::now();
         let mut first = None;
-        let r = download(&mut fetch, &MODEL, &dir, &AtomicBool::new(false), &mut |got, _| {
+        let r = download(&mut fetch, spec, &dir, &AtomicBool::new(false), &mut |got, _| {
             first.get_or_insert(got);
         });
         let path = r.expect("downloaded and checked");
@@ -777,8 +835,8 @@ mod tests {
             started.elapsed().as_secs(),
             first
         );
-        assert!(verify(&path, &MODEL));
-        assert!(!part_path(&dir, &MODEL).exists());
+        assert!(verify(&path, spec));
+        assert!(!part_path(&dir, spec).exists());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -797,20 +855,59 @@ mod tests {
     }
 
     #[test]
-    fn the_pinned_model_is_well_formed() {
-        assert_eq!(MODEL.sha256.len(), 64);
-        assert!(MODEL
-            .sha256
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
-        assert!(MODEL
-            .url
-            .starts_with("https://huggingface.co/ggerganov/whisper.cpp/resolve/"));
-        assert!(MODEL.url.ends_with(MODEL.file));
-        // Pinned to a commit, never a branch that can move.
-        let rev = MODEL.url.split('/').nth(6).unwrap();
-        assert_eq!(rev.len(), 40, "{rev}");
-        assert!(rev.chars().all(|c| c.is_ascii_hexdigit()));
-        const { assert!(MODEL.size > 50_000_000) };
+    fn the_pinned_models_are_well_formed() {
+        for id in ModelId::ALL {
+            let m = id.spec();
+            assert_eq!(m.sha256.len(), 64);
+            assert!(m
+                .sha256
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+            assert!(m
+                .url
+                .starts_with("https://huggingface.co/ggerganov/whisper.cpp/resolve/"));
+            assert!(m.url.ends_with(m.file));
+            // Pinned to a commit, never a branch that can move.
+            let rev = m.url.split('/').nth(6).unwrap();
+            assert_eq!(rev.len(), 40, "{rev}");
+            assert!(rev.chars().all(|c| c.is_ascii_hexdigit()));
+            assert!(m.size > 50_000_000);
+            assert_eq!(ModelId::parse(id.as_str()), Some(id));
+            assert_eq!(serde_json::to_string(&id).unwrap(), format!("\"{}\"", id.as_str()));
+        }
+        assert_ne!(MODEL.file, MOST_ACCURATE_MODEL.file, "two files side by side");
+        assert_eq!(ModelId::parse("large"), None);
+        assert_eq!(ModelId::Accurate.index(), 0);
+        assert_eq!(ModelId::MostAccurate.index(), 1);
+        const { assert!(MOST_ACCURATE_MODEL.size > MODEL.size) };
+    }
+
+    #[test]
+    fn two_models_download_side_by_side_without_touching_each_other() {
+        let a = bytes();
+        let b: Vec<u8> = a.iter().rev().copied().collect();
+        let spec_a = spec_for(&a);
+        let spec_b = ModelSpec {
+            file: "other-model.bin",
+            ..spec_for(&b)
+        };
+        let dir = temp_dir("twomodels");
+        assert_eq!(
+            run(&mut server(&a, Server::Ranges), &spec_a, &dir).0.unwrap(),
+            model_path(&dir, &spec_a)
+        );
+        // The second one drops part way: the first stays whole.
+        let (r, _) = run(&mut server(&b, Server::DropsAt(50_000)), &spec_b, &dir);
+        assert!(r.is_err());
+        assert_eq!(status_on_disk(&dir, &spec_a).state, ModelState::Ready);
+        assert_eq!(partial(&dir, &spec_b), 50_000);
+        remove(&dir, &spec_b);
+        assert_eq!(
+            status_on_disk(&dir, &spec_a).state,
+            ModelState::Ready,
+            "removing one leaves the other"
+        );
+        assert_eq!(partial(&dir, &spec_b), 0);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

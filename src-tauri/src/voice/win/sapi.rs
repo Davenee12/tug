@@ -252,15 +252,40 @@ impl Engine for Sapi {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use windows::Win32::Media::Speech::{ISpVoice, SpVoice};
+    use windows::Win32::Media::Speech::{ISpVoice, SpVoice, SPCAT_VOICES};
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED, STREAM_SEEK_SET};
 
     /// Speak `text` with Windows' text-to-speech into 16 kHz PCM, as a stand-in for a microphone.
     /// (The Whisper comparison in `whisper.rs` uses it too.)
     pub(crate) fn speak(text: &str) -> Vec<i16> {
+        speak_with(text, None)
+    }
+
+    /// Speak `text` with a voice for `language` (an id like "40c", French), or `None` when this PC
+    /// has no voice for it (Windows' English voices would read it with English sounds, which is a
+    /// test of nothing).
+    pub(crate) fn speak_in(text: &str, language: &str) -> Option<Vec<i16>> {
+        // SAFETY: COM calls on a COM thread with valid arguments.
+        let token = unsafe {
+            let category: ISpObjectTokenCategory = CoCreateInstance(&SpObjectTokenCategory, None, CLSCTX_ALL).ok()?;
+            category.SetId(SPCAT_VOICES, false).ok()?;
+            let wanted: Vec<u16> = format!("Language={language}").encode_utf16().chain([0]).collect();
+            let tokens: IEnumSpObjectTokens = category.EnumTokens(PCWSTR(wanted.as_ptr()), PCWSTR::null()).ok()?;
+            let mut token: [Option<ISpObjectToken>; 1] = [None];
+            let mut fetched = 0u32;
+            tokens.Next(1, token.as_mut_ptr(), Some(&mut fetched)).ok()?;
+            token[0].take()?
+        };
+        Some(speak_with(text, Some(&token)))
+    }
+
+    fn speak_with(text: &str, voice_token: Option<&ISpObjectToken>) -> Vec<i16> {
         unsafe {
             let (stream, base) = memory_stream(&[]).unwrap();
             let voice: ISpVoice = CoCreateInstance(&SpVoice, None, CLSCTX_ALL).unwrap();
+            if let Some(t) = voice_token {
+                voice.SetVoice(t).unwrap();
+            }
             voice.SetOutput(&stream, true).unwrap();
             let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
             voice.Speak(PCWSTR(wide.as_ptr()), 0, None).unwrap();

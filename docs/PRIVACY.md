@@ -28,7 +28,8 @@ in your Windows user profile, readable by your Windows account:
 | Photos and videos brought in from an iPhone backup, and their small previews | `%LOCALAPPDATA%\dev.davejames.tug\attachments` |
 | While a backup is being read: its decrypted message database and each photo on its way in | `%LOCALAPPDATA%\dev.davejames.tug\backup-tmp`, deleted as soon as it's done (and at the next start if tug was closed mid-way) |
 | Your Spotify sign-in (if you connect Spotify) | Windows Credential Manager (`tug/spotify-refresh-token`) |
-| Voice typing's speech model (if you download it), a public file with nothing of yours in it | `%LOCALAPPDATA%\dev.davejames.tug\speech` |
+| Voice typing's speech models (once downloaded), public files with nothing of yours in them; they stay through updates until you press **Delete downloaded models** | `%LOCALAPPDATA%\dev.davejames.tug\speech` |
+| Voice typing's personal dictionary (the words you add) | In `tug.db`, with the rest of your settings |
 
 tug's logs record connection events and errors, never message text or contact names (album art
 lookups are logged as found, no match or failed, with how long they took: never the artist or
@@ -48,7 +49,7 @@ it goes nowhere unless you paste it somewhere yourself.
 | **Spotify** | Spotify (`accounts.spotify.com`, `api.spotify.com`, Spotify's image servers) | Your Spotify sign-in, and the requests you make (search, play, queue, like) | Only after you connect Spotify in Settings › Connectors |
 | **Open on the web** | The website, in your browser | Whatever your browser sends | Only when you click it |
 | **Automatic updates** | GitHub (`github.com` and GitHub's download servers, `objects.githubusercontent.com`) | An ordinary web request for tug's `latest.json`, then the installer if there's a new version; nothing about you, your phone or your data | In release builds set up for updates: shortly after tug starts and then every 6 hours, while **Download updates automatically** is on (Settings › About; on by default); otherwise only when you press **Check for updates**. Builds without an update key never check |
-| **Voice typing's speech model** (the accurate engine) | Hugging Face (`huggingface.co`, and its download servers such as `cdn.hf.co`) | An ordinary request for one public file, the official whisper.cpp English model; nothing about you, your voice, your phone or your data | Once, only when you press **Download** in Settings › General › Voice typing (and again only if the file is deleted or damaged). Recognition never goes online |
+| **Voice typing's speech models** (the Accurate and Most accurate engines) | Hugging Face (`huggingface.co`, and its download servers such as `cdn.hf.co`) | An ordinary request for one public file, the official whisper.cpp model for that engine (English, 78 MB; or multilingual, 834 MB); nothing about you, your voice, your words, your contacts, your phone or your data | Once per engine, in the background, when you turn voice typing on or pick that engine in Settings › General › Voice typing, or press **Download** (including on the one-time "Get voice typing ready now?" card); again only if the file is deleted or damaged. Never after you cancel it, until you ask again. Recognition never goes online |
 | **Get it** (HEIF Image Extensions or HEVC Video Extensions, when iPhone photos can't be shown) | The Microsoft Store page, in your browser | Whatever your browser sends | Only when you click it |
 
 **Spotify** asks for permission to: read your private and collaborative playlists; read and
@@ -88,11 +89,17 @@ when you click **Update** (or quit from the tray).
   your microphone only while the keys are down, and speech recognition **on this PC** turns it
   into text: the recording is never sent anywhere, never saved to disk, and dropped as soon as the
   words are typed. tug's logs note how long you spoke, how many characters were typed and which
-  engine listened, never what you said. There are two engines, and both run on your PC:
-  **Accurate** (whisper.cpp) needs a speech model, **a one-time download; your voice never leaves
-  the PC**. tug only downloads it when you press **Download**, from the address listed above, and
-  checks it against a fixed fingerprint (SHA-256) before using it. **Basic** is Windows' own
-  speech recognizer and downloads nothing. Until the model is downloaded, Basic listens.
+  engine listened, never what you said. There are three engines, and all run on your PC:
+  **Accurate** and **Most accurate** (whisper.cpp) each need a speech model, **a one-time
+  download; your voice never leaves the PC**. tug downloads one when you turn voice typing on, pick
+  that engine, or press **Download**, from the address listed above, and checks it against a fixed
+  fingerprint (SHA-256) before using it. **Basic** is Windows' own speech recognizer and downloads
+  nothing. Until a model is downloaded, Basic listens.
+  To spell your words your way, Accurate and Most accurate are given a short list of hints before
+  each phrase: the words in your **personal dictionary** and, while **Use your contacts' names** is
+  on (it is by default), the names of up to 30 of the people you text most, from tug's own
+  contacts. The hints only ever go to the speech engine on your PC: they're never sent anywhere and
+  never written to tug's logs. Turning the switch off stops using the names straight away.
 - **Developer tools** are **off by default**. When you turn them on, AI tools and the `tug` command
   on your PC can connect through a local channel (a Windows named pipe) that only your Windows
   account can open; there's no network port. AI tools you connect can read only what you allow
