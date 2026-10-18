@@ -21,6 +21,15 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.20",
+    title: "Faster voice typing, and fixes",
+    highlights: [
+      "Voice typing's Accurate engine is about 12 times faster: a short phrase is typed in about a quarter of a second.",
+      "Ctrl+Shift+V waits for you to let go of the keys before it types a code.",
+      "App icons and a few other small fixes.",
+    ],
+  },
+  {
     version: "0.5.19",
     title: "Accurate voice typing, still on your PC",
     highlights: [
