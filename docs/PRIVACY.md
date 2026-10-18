@@ -1,6 +1,6 @@
 # tug privacy policy
 
-*Last updated: 2026-10-17 (tug v0.5.18)*
+*Last updated: 2026-10-18 (tug v0.5.19)*
 
 **In short: tug has no servers and no accounts, and it collects nothing.** It talks to your iPhone
 over Bluetooth and keeps what it receives on your PC. Nothing is sent to the people who make tug.
