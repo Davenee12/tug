@@ -6,7 +6,7 @@ import { computed, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
 import { DEFAULT_VOICE_HOTKEY, knownVoiceHotkey, voiceProblem, voiceStartProblem } from "../lib/voice";
-import type { VoiceStatus } from "../types/protocol";
+import type { VoiceEngine, VoiceStatus } from "../types/protocol";
 import { useTugStore } from "./tug";
 
 export const useVoiceStore = defineStore("voice", () => {
@@ -71,6 +71,27 @@ export const useVoiceStore = defineStore("voice", () => {
     }
   }
 
+  /** Run one of the engine/model commands, keeping the status it returns; errors become a notice. */
+  async function act(call: () => Promise<VoiceStatus>) {
+    try {
+      status.value = await call();
+    } catch (e) {
+      tug.notify("error", errorMessage(e));
+    }
+  }
+
+  /** Pick the accurate or the basic engine. */
+  const setEngine = (engine: VoiceEngine) => act(() => api.setVoiceEngine(engine));
+  /** Download (or resume) the speech model; progress arrives as status events. */
+  const downloadModel = () => act(() => api.voiceModelDownload());
+  const cancelDownload = () => act(() => api.voiceModelCancel());
+
+  /** The first-time offer was answered: Download starts it, Not now just stops offering. */
+  async function answerOffer(download: boolean) {
+    await act(() => api.voiceModelOffered());
+    if (download) await downloadModel();
+  }
+
   async function openFix() {
     const page = problem.value?.page;
     if (!page) return;
@@ -81,5 +102,20 @@ export const useVoiceStore = defineStore("voice", () => {
     }
   }
 
-  return { status, enabled, keys, problem, init, dispose, refresh, set, toggleFromPalette, openFix };
+  return {
+    status,
+    enabled,
+    keys,
+    problem,
+    init,
+    dispose,
+    refresh,
+    set,
+    toggleFromPalette,
+    setEngine,
+    downloadModel,
+    cancelDownload,
+    answerOffer,
+    openFix,
+  };
 });

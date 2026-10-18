@@ -1,0 +1,35 @@
+# Build settings that apply however cargo is started: `npm run check` (from the root, with
+# --manifest-path), `tauri build` (from src-tauri) and CI. Here, at the repository root, so cargo
+# finds them from either place.
+
+# The C and C++ runtimes are linked into tug.exe, never loaded from the Visual C++ redistributable
+# (msvcp140.dll, vcruntime140.dll), which a PC may not have, or may have in a version too old for
+# code built with today's compiler. Rust code doesn't need it, but whisper.cpp (voice typing's
+# accurate engine) is C++, and without this the cc and cmake crates compile it with /MD, so tug.exe
+# would import msvcp140.dll and not start without the redistributable. With crt-static they use
+# /MT (the static STL); tauri-build still points the C runtime at Windows' own Universal CRT.
+# The release gate `node scripts/release-assets.mjs imports` checks the result.
+# scripts/remap-paths.mjs sets CARGO_ENCODED_RUSTFLAGS for release builds, which replaces this, so
+# it adds the same flag.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# For whisper.cpp, which `whisper-rs-sys` compiles from source with CMake + MSVC. Only its build
+# script reads these (it passes CMAKE_* and GGML_* on to CMake). A value already set in the
+# environment wins. (whisper-rs-sys also generates its Rust bindings with bindgen, which needs
+# libclang: the bindings it ships were made on Linux and don't compile for Windows.)
+[env]
+# The static runtime for whisper.cpp's own CMake targets too (CMake's default is /MD whatever the
+# flags say), matching crt-static above.
+CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
+# A fixed instruction set instead of "whatever the build machine has": a release built on a CI
+# runner with AVX-512 must still run on a laptop without it. AVX2 + FMA + F16C (+ BMI2) is every
+# Intel CPU since Haswell (2013) and every AMD Ryzen; tug checks for them at run time and keeps the
+# basic engine on a PC that lacks them (voice::engine::cpu_supported), never calling whisper.cpp.
+GGML_NATIVE = "OFF"
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+GGML_BMI2 = "ON"
+GGML_AVX512 = "OFF"

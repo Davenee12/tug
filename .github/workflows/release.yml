@@ -110,6 +110,16 @@ jobs:
           # Its own cache, so release builds don't evict check.yml's debug cache.
           shared-key: release
 
+      # whisper.cpp (voice typing's accurate engine) is compiled from source: CMake and MSVC for
+      # the C++, libclang for bindgen. All three are on the runner; this points bindgen at LLVM.
+      - name: Point bindgen at the runner's libclang
+        shell: pwsh
+        run: |
+          $dir = 'C:\Program Files\LLVM\bin'
+          if (-not (Test-Path "$dir\libclang.dll")) { Write-Error "libclang.dll isn't in $dir on this runner"; exit 1 }
+          "LIBCLANG_PATH=$dir" >> $env:GITHUB_ENV
+          cmake --version | Select-Object -First 1
+
       - run: npm ci
 
       # Tauri embeds the built frontend at compile time, so clippy/tests need dist/.
@@ -119,12 +129,19 @@ jobs:
       - run: npm run check
 
       # The app and the `tug` command, with this runner's paths remapped out of the exes
-      # (scripts/remap-paths.mjs), then the NSIS installer.
+      # (scripts/remap-paths.mjs: rustc's paths, and the target folder trimmed from the C/C++
+      # whisper.cpp's __FILE__ strings), then the NSIS installer.
       - run: npm run build:release
 
       - name: No local paths in the exes
         shell: bash
         run: node scripts/release-assets.mjs leaks src-tauri/target/release/tug.exe src-tauri/binaries/tug-cli.exe
+
+      # Only Windows' own DLLs: an import of msvcp140.dll or vcruntime140.dll would stop tug starting
+      # on a PC without the Visual C++ redistributable (the runtimes are linked in: crt-static).
+      - name: No DLLs beyond Windows' own
+        shell: bash
+        run: node scripts/release-assets.mjs imports src-tauri/target/release/tug.exe src-tauri/binaries/tug-cli.exe
 
       - name: Stage the downloads
         shell: bash

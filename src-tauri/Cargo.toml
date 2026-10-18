@@ -1,6 +1,6 @@
 [package]
 name = "tug"
-version = "0.5.18"
+version = "0.5.19"
 description = "Bluetooth LE companion that mirrors iPhone notifications and media controls to Windows"
 authors = ["tug contributors"]
 license = "MIT"
@@ -61,6 +61,9 @@ fancy-regex = "0.19"
 tauri-plugin-updater = { version = "2.14", default-features = false, features = ["native-tls"] }
 # Version comparison for updates (never a downgrade); already in the tree through Tauri.
 semver = "1"
+# Voice typing's speech model download (voice/model.rs): the HTTP client tauri-plugin-updater
+# already brings in, with Windows' TLS (schannel), so this adds no new crate.
+reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
 # Bring in your full message history (v0.5.18): reading a local iPhone backup. Its Info.plist and
 # Manifest.plist (`plist`, already in the tree through Tauri), and, for an encrypted backup, the
 # keybag's PBKDF2-SHA256 + PBKDF2-SHA1 derivation, the AES key unwrap of the class and file keys
@@ -146,8 +149,17 @@ windows = { version = "0.62", features = [
   "Win32_Media_Audio",
   "Win32_Media_Speech",
   "Win32_System_Com",
+  # Voice typing's accurate engine: free memory before loading it (GlobalMemoryStatusEx), and the
+  # process's working set in its by-hand measurement test.
+  "Win32_System_SystemInformation",
+  "Win32_System_ProcessStatus",
 ] }
 windows-collections = "0.3"
+# Voice typing's accurate engine: whisper.cpp, compiled from source (CMake + MSVC) and linked
+# statically, run on the CPU with a speech model downloaded once on request. Its Rust bindings are
+# generated with bindgen at build time (which needs libclang); its build settings (a fixed AVX2
+# instruction set, the static C/C++ runtime) are in .cargo/config.toml.
+whisper-rs = "0.16"
 # Same version Tauri already pulls in (see Cargo.lock), so the WebView2 controller handed back by
 # `with_webview` is the same type: lets us hook ProcessFailed to log web-content crashes.
 webview2-com = "0.39"

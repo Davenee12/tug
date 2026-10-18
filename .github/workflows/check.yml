@@ -38,6 +38,17 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
+      # Voice typing's accurate engine builds whisper.cpp from source: CMake and MSVC (both on the
+      # runner) for the C++, and libclang for bindgen, which generates its Rust bindings. LLVM is
+      # on the runner too; this points bindgen at it rather than relying on where it searches.
+      - name: Point bindgen at the runner's libclang
+        shell: pwsh
+        run: |
+          $dir = 'C:\Program Files\LLVM\bin'
+          if (-not (Test-Path "$dir\libclang.dll")) { Write-Error "libclang.dll isn't in $dir on this runner"; exit 1 }
+          "LIBCLANG_PATH=$dir" >> $env:GITHUB_ENV
+          cmake --version | Select-Object -First 1
+
       - run: npm ci
 
       # Tauri embeds the built frontend at compile time, so clippy/tests need dist/.

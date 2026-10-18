@@ -1,6 +1,6 @@
 # tug privacy policy
 
-*Last updated: 2026-10-17 (tug v0.5.18)*
+*Last updated: 2026-10-18 (tug v0.5.19)*
 
 **In short: tug has no servers and no accounts, and it collects nothing.** It talks to your iPhone
 over Bluetooth and keeps what it receives on your PC. Nothing is sent to the people who make tug.
@@ -28,6 +28,7 @@ in your Windows user profile, readable by your Windows account:
 | Photos and videos brought in from an iPhone backup, and their small previews | `%LOCALAPPDATA%\dev.davejames.tug\attachments` |
 | While a backup is being read: its decrypted message database and each photo on its way in | `%LOCALAPPDATA%\dev.davejames.tug\backup-tmp`, deleted as soon as it's done (and at the next start if tug was closed mid-way) |
 | Your Spotify sign-in (if you connect Spotify) | Windows Credential Manager (`tug/spotify-refresh-token`) |
+| Voice typing's speech model (if you download it), a public file with nothing of yours in it | `%LOCALAPPDATA%\dev.davejames.tug\speech` |
 
 tug's logs record connection events and errors, never message text or contact names (album art
 lookups are logged as found, no match or failed, with how long they took: never the artist or
@@ -47,6 +48,7 @@ it goes nowhere unless you paste it somewhere yourself.
 | **Spotify** | Spotify (`accounts.spotify.com`, `api.spotify.com`, Spotify's image servers) | Your Spotify sign-in, and the requests you make (search, play, queue, like) | Only after you connect Spotify in Settings › Connectors |
 | **Open on the web** | The website, in your browser | Whatever your browser sends | Only when you click it |
 | **Automatic updates** | GitHub (`github.com` and GitHub's download servers, `objects.githubusercontent.com`) | An ordinary web request for tug's `latest.json`, then the installer if there's a new version; nothing about you, your phone or your data | In release builds set up for updates: shortly after tug starts and then every 6 hours, while **Download updates automatically** is on (Settings › About; on by default); otherwise only when you press **Check for updates**. Builds without an update key never check |
+| **Voice typing's speech model** (the accurate engine) | Hugging Face (`huggingface.co`, and its download servers such as `cdn.hf.co`) | An ordinary request for one public file, the official whisper.cpp English model; nothing about you, your voice, your phone or your data | Once, only when you press **Download** in Settings › General › Voice typing (and again only if the file is deleted or damaged). Recognition never goes online |
 | **Get it** (HEIF Image Extensions or HEVC Video Extensions, when iPhone photos can't be shown) | The Microsoft Store page, in your browser | Whatever your browser sends | Only when you click it |
 
 **Spotify** asks for permission to: read your private and collaborative playlists; read and
@@ -83,10 +85,14 @@ when you click **Update** (or quit from the tray).
   search your texts (Developer tools), that search includes them. **Remove imported history** in
   the same place deletes everything it brought in.
 - **Voice typing** is **off by default**. When you turn it on and hold its shortcut, tug listens to
-  your microphone only while the keys are down, and Windows' own speech recognizer turns it into
-  text **on this PC**: the recording is never sent anywhere, never saved to disk, and dropped as
-  soon as the words are typed. tug's logs note how long you spoke and how many characters were
-  typed, never what you said. It downloads nothing.
+  your microphone only while the keys are down, and speech recognition **on this PC** turns it
+  into text: the recording is never sent anywhere, never saved to disk, and dropped as soon as the
+  words are typed. tug's logs note how long you spoke, how many characters were typed and which
+  engine listened, never what you said. There are two engines, and both run on your PC:
+  **Accurate** (whisper.cpp) needs a speech model, **a one-time download; your voice never leaves
+  the PC**. tug only downloads it when you press **Download**, from the address listed above, and
+  checks it against a fixed fingerprint (SHA-256) before using it. **Basic** is Windows' own
+  speech recognizer and downloads nothing. Until the model is downloaded, Basic listens.
 - **Developer tools** are **off by default**. When you turn them on, AI tools and the `tug` command
   on your PC can connect through a local channel (a Windows named pipe) that only your Windows
   account can open; there's no network port. AI tools you connect can read only what you allow
@@ -124,8 +130,8 @@ when you click **Update** (or quit from the tray).
 
 tug only receives what iOS shares with Bluetooth accessories and what you allow with the iPhone's
 switches (Share System Notifications, Show Notifications, Sync Contacts). You can turn any of them
-off on the iPhone at any time. Apple, Microsoft, Spotify, Open-Meteo, BigDataCloud and GitHub have
-their own privacy policies for what they receive.
+off on the iPhone at any time. Apple, Microsoft, Spotify, Open-Meteo, BigDataCloud, GitHub and
+Hugging Face have their own privacy policies for what they receive.
 
 ## Changes and contact
 

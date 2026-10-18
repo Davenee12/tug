@@ -1040,8 +1040,25 @@ export interface VoiceLanguage {
   name: string;
 }
 
-/** off; on (shortcut registered); inUse (another app holds it); unavailable (no speech language on this PC). */
+/** off; on (shortcut registered); inUse (another app holds it); unavailable (nothing can listen: no Windows speech language, and the accurate engine can't stand in). */
 export type VoiceState = "off" | "on" | "inUse" | "unavailable";
+
+/** Voice typing's engine (`voice::engine::EngineChoice`): accurate (whisper.cpp with the downloaded model) or basic (Windows' own recognizer). */
+export type VoiceEngine = "accurate" | "basic";
+
+/** Where the accurate engine's speech model is (`voice::model::ModelState`). */
+export type VoiceModelState = "missing" | "downloading" | "ready";
+
+/** The accurate engine's speech model (`voice::model::ModelStatus`). */
+export interface VoiceModel {
+  state: VoiceModelState;
+  /** Bytes downloaded so far (a paused download counts). */
+  received: number;
+  /** The model's size in bytes. */
+  total: number;
+  /** What went wrong with the last download, or with the model, for the person. */
+  error: string | null;
+}
 
 /** Voice typing for Settings (`voice_status`, `set_voice_typing`, the `voice-status` event). */
 export interface VoiceStatus {
@@ -1057,6 +1074,20 @@ export interface VoiceStatus {
   micBlocked: boolean;
   /** Turning it on failed, so it was switched back off: "Voice typing couldn't start: …". */
   startError: string | null;
+  /** The engine picked in Settings. */
+  engine: VoiceEngine;
+  /** The engine a hold would use right now; null when nothing can listen. */
+  activeEngine: VoiceEngine | null;
+  /** The accurate engine's speech model. */
+  model: VoiceModel;
+  /** This processor can run the accurate engine (AVX2). */
+  accurateSupported: boolean;
+  /** Settings has already offered the model download once. */
+  modelOffered: boolean;
+  /** The default microphone is a phone-call (Bluetooth hands-free) headset. */
+  phoneMic: boolean;
+  /** Why the accurate engine isn't listening although it could: it failed to start on this PC (Basic listens until it's switched on again), or there was too little free memory on the last hold. */
+  accurateProblem: "failed" | "lowMemory" | null;
 }
 
 /** What one hold did (`voice-typed`). The words themselves are never sent. */

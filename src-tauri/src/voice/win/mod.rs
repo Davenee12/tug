@@ -4,7 +4,9 @@
 //!   registered them) and the indicator window, and pumps their messages. A press only notes
 //!   which window is in front and hands the hold to the worker, so the queue never waits.
 //! - `tug-voice` is a COM thread that runs each hold: microphone open while the key is down,
-//!   recognize, shape the text, type it. It also owns the recognizer between holds.
+//!   recognize, shape the text, type it. It also owns the engines between holds: the accurate
+//!   one (whisper.cpp, loaded on a helper thread while the first hold records) and Windows'
+//!   recognizer (Basic, and Accurate's fallback). Both are let go when voice typing goes off.
 //!
 //! RegisterHotKey only reports the press, so the worker watches the shortcut's key with
 //! GetAsyncKeyState to know when it's let go: no keyboard hook, nothing else is seen.
@@ -19,6 +21,7 @@ mod capture;
 mod overlay;
 mod sapi;
 mod system;
+mod whisper;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -33,9 +36,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_HOTKEY,
 };
 
-use super::engine::{Engine, EngineError};
+use super::engine::{AccurateProblem, Engine, EngineChoice, EngineError};
 use super::{
-    judge_recording, judge_typing, peak, pill_problem, text, StartError, VoiceLanguage, VoiceOutcome, MAX_HOLD, TAIL,
+    audio, judge_recording, judge_typing, model, peak, pill_problem, text, EngineConfig, StartError, VoiceLanguage,
+    VoiceOutcome, MAX_HOLD, TAIL,
 };
 use crate::callback::guarded;
 use crate::code_fill::Keys;
@@ -52,6 +56,8 @@ const PROBLEM_MS: u32 = 2600;
 const KEY_WAIT: Duration = Duration::from_secs(2);
 /// How long to wait for speech recognition to list its languages.
 const LANGUAGES_WAIT: Duration = Duration::from_secs(10);
+/// How long to wait for the speech thread to look at the default microphone.
+const MIC_WAIT: Duration = Duration::from_secs(3);
 
 /// A registration for the key thread. The answer: `Ok(true)` registered, `Ok(false)` another app
 /// has the shortcut (or there was nothing to register), `Err` anything else Windows said.
@@ -75,7 +81,35 @@ struct Press {
 enum Job {
     Hold(Press),
     Languages(mpsc::Sender<Result<Vec<VoiceLanguage>, String>>),
-    Language(Option<String>),
+    /// What to listen with from now on.
+    Configure(EngineConfig),
+    /// Is the default microphone a phone-call headset?
+    Mic(mpsc::Sender<bool>),
+}
+
+/// The speech thread's engines and what they're for.
+#[derive(Default)]
+struct Engines {
+    config: EngineConfig,
+    basic: Option<sapi::Sapi>,
+    accurate: Option<whisper::Whisper>,
+}
+
+impl Engines {
+    /// Take a new configuration, letting go of any engine it no longer uses.
+    fn configure(&mut self, config: EngineConfig) {
+        if config.engine != Some(EngineChoice::Accurate) || config.model != self.config.model {
+            self.accurate = None;
+        }
+        // Basic is let go when it isn't the engine (it's loaded again if Accurate ever needs to
+        // fall back) or when the language changes.
+        if config.engine != Some(EngineChoice::Basic)
+            || self.basic.as_ref().map(|e| e.language()) != config.language.as_deref()
+        {
+            self.basic = None;
+        }
+        self.config = config;
+    }
 }
 
 static KEY_THREAD: OnceLock<KeyThread> = OnceLock::new();
@@ -222,14 +256,27 @@ pub fn languages() -> Result<Vec<VoiceLanguage>, StartError> {
     }
 }
 
-/// The language to listen in from now on (`None` when voice typing is off: the recognizer is let go).
-pub fn set_language(language: Option<String>) {
-    if language.is_none() && WORKER.get().is_none() {
+/// What to listen with from now on (nothing when voice typing is off: both engines are let go).
+pub fn configure(config: EngineConfig) {
+    if config.engine.is_none() && WORKER.get().is_none() {
         return;
     }
-    if let Err(e) = send_job(Job::Language(language)) {
+    if let Err(e) = send_job(Job::Configure(config)) {
         log::warn!("voice typing: {}", e.detail());
     }
+}
+
+/// Whether the default microphone is a phone-call headset (asked on the speech thread, which has
+/// COM), or `None` if it didn't answer in time (it may be in the middle of a hold).
+pub fn phone_mic() -> Option<bool> {
+    let (reply, answer) = mpsc::channel();
+    send_job(Job::Mic(reply)).ok()?;
+    answer.recv_timeout(MIC_WAIT).ok()
+}
+
+/// Ask Windows about the default microphone (on a COM thread).
+fn default_mic_is_phone() -> bool {
+    system::default_mic().is_some_and(|(name, rate)| super::phone_call_mic(&name, rate))
 }
 
 pub fn mic_blocked() -> bool {
@@ -332,19 +379,23 @@ fn run_worker(jobs: mpsc::Receiver<Job>) {
     if let Err(why) = &com {
         log::warn!("voice typing: {why}");
     }
-    let mut engine: Option<sapi::Sapi> = None;
-    let mut language: Option<String> = None;
+    let mut engines = Engines::default();
     while let Ok(job) = jobs.recv() {
         match job {
             Job::Hold(press) => {
                 let outcome = guarded(
                     "voice typing hold",
-                    || hold(&press, &mut engine, language.as_deref()),
+                    || hold(&press, &mut engines),
                     || VoiceOutcome::Failed,
                 );
                 finish(outcome);
                 BUSY.store(false, Ordering::SeqCst);
                 super::emit_typed(outcome);
+                // After the typing, so it never delays it: Settings says when the microphone is
+                // a phone-call headset.
+                if com.is_ok() {
+                    super::note_phone_mic(guarded("voice typing microphone", default_mic_is_phone, || false));
+                }
             }
             Job::Languages(reply) => {
                 let listed = match &com {
@@ -355,11 +406,10 @@ fn run_worker(jobs: mpsc::Receiver<Job>) {
                 };
                 let _ = reply.send(listed);
             }
-            Job::Language(l) => {
-                if engine.as_ref().map(|e| e.language()) != l.as_deref() {
-                    engine = None;
-                }
-                language = l;
+            Job::Configure(config) => engines.configure(config),
+            Job::Mic(reply) => {
+                let phone = com.is_ok() && guarded("voice typing microphone", default_mic_is_phone, || false);
+                let _ = reply.send(phone);
             }
         }
     }
@@ -403,8 +453,158 @@ fn finish(outcome: VoiceOutcome) {
     }
 }
 
+/// Why the accurate engine didn't load.
+enum LoadError {
+    /// The file isn't exactly the model (wrong size or hash) or is gone: it's deleted.
+    Damaged(String),
+    /// Not enough free memory right now (bytes available): this hold uses Basic, the next tries again.
+    LowMemory(u64),
+    /// whisper.cpp couldn't start with the checked model: the file is kept, Basic listens.
+    Failed(String),
+}
+
+/// Load the accurate engine: check there's memory for it, read the model file once, check those
+/// very bytes against the model's hash, and hand the same bytes to whisper.cpp. Nothing can change
+/// the file between the check and the load, and whisper.cpp never sees a damaged or swapped file.
+fn load_accurate(path: &std::path::Path) -> Result<whisper::Whisper, LoadError> {
+    let t0 = Instant::now();
+    let available = system::available_memory();
+    if !crate::voice::engine::enough_memory(available) {
+        return Err(LoadError::LowMemory(available.unwrap_or(0)));
+    }
+    let bytes = std::fs::read(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => LoadError::Damaged("it's gone".into()),
+        _ => LoadError::Failed(format!("couldn't read it: {e}")),
+    })?;
+    if !model::verify_bytes(&bytes, &model::MODEL) {
+        return Err(LoadError::Damaged("it doesn't match its SHA-256".into()));
+    }
+    let w = whisper::Whisper::load(&bytes).map_err(|e| LoadError::Failed(format!("{e:?}")))?;
+    drop(bytes);
+    log::info!(
+        "voice typing: accurate engine loaded in {} ms ({} threads)",
+        t0.elapsed().as_millis(),
+        whisper::threads()
+    );
+    Ok(w)
+}
+
+/// Loading the accurate engine on a helper thread while the person talks: the first hold after
+/// switching on waits for the recording, not the recording and then the model.
+type Loading = std::thread::JoinHandle<Result<whisper::Whisper, LoadError>>;
+
+fn start_loading(engines: &Engines) -> Option<Loading> {
+    if engines.config.engine != Some(EngineChoice::Accurate) || engines.accurate.is_some() {
+        return None;
+    }
+    let path = engines.config.model.clone()?;
+    std::thread::Builder::new()
+        .name("tug-voice-load".into())
+        .spawn(move || load_accurate(&path))
+        .map_err(|e| log::warn!("voice typing: couldn't start loading the accurate engine ({e})"))
+        .ok()
+}
+
+/// Collect the helper thread's engine (or load it here if there was no helper). This hold falls
+/// back to Basic if it didn't load: a file that isn't the model is deleted (`model_damaged`); low
+/// memory is noted and tried again next hold; any other failure keeps the file, notes it and stops
+/// trying until voice typing (or the engine) is picked again.
+fn finish_loading(engines: &mut Engines, loading: Option<Loading>) {
+    if engines.config.engine != Some(EngineChoice::Accurate) || engines.accurate.is_some() {
+        return;
+    }
+    let result = match loading {
+        Some(handle) => handle
+            .join()
+            .unwrap_or_else(|_| Err(LoadError::Failed("loading it panicked".into()))),
+        None => match engines.config.model.clone() {
+            Some(path) => load_accurate(&path),
+            None => return,
+        },
+    };
+    match result {
+        Ok(w) => {
+            engines.accurate = Some(w);
+            super::note_accurate(None);
+        }
+        Err(LoadError::Damaged(why)) => {
+            super::model_damaged(&why);
+            engines.config.model = None;
+        }
+        Err(LoadError::LowMemory(free)) => {
+            log::info!(
+                "voice typing: {} MB of memory free, too little to load the accurate engine; using the basic engine for this hold",
+                free >> 20
+            );
+            super::note_accurate(Some(AccurateProblem::LowMemory));
+        }
+        Err(LoadError::Failed(why)) => {
+            log::warn!("voice typing: the accurate engine couldn't start ({why}); keeping the model and using the basic engine");
+            super::note_accurate(Some(AccurateProblem::Failed));
+            engines.config.model = None;
+        }
+    }
+}
+
+/// Recognize one recording with the configured engine. Accurate falls back to Basic (when Windows
+/// has a speech language) if it isn't loaded or fails. `Ok((heard, engine used))`.
+fn recognize(engines: &mut Engines, pcm: &[i16]) -> Result<(String, &'static str), VoiceOutcome> {
+    if engines.config.engine == Some(EngineChoice::Accurate) {
+        if let Some(accurate) = engines.accurate.as_mut() {
+            match accurate.transcribe(pcm) {
+                Ok(heard) => return Ok((heard, "accurate")),
+                Err(e) => {
+                    // Start fresh next time; this hold goes to Basic.
+                    log::warn!(
+                        "voice typing: the accurate engine failed ({e:?}); using the basic engine for this hold"
+                    );
+                    engines.accurate = None;
+                }
+            }
+        } else {
+            log::info!("voice typing: the accurate engine isn't ready; using the basic engine for this hold");
+        }
+    }
+    let Some(language) = engines
+        .config
+        .language
+        .clone()
+        .filter(|_| engines.config.engine.is_some())
+    else {
+        return Err(VoiceOutcome::Unavailable);
+    };
+    if engines.basic.as_ref().is_some_and(|e| e.language() != language) {
+        engines.basic = None;
+    }
+    if engines.basic.is_none() {
+        match sapi::Sapi::new(&language) {
+            Ok(s) => engines.basic = Some(s),
+            Err(EngineError::Unavailable) => return Err(VoiceOutcome::Unavailable),
+            Err(EngineError::Failed(why)) => {
+                log::warn!("voice typing: the recognizer didn't start: {why}");
+                return Err(VoiceOutcome::Failed);
+            }
+        }
+    }
+    let Some(basic) = engines.basic.as_mut() else {
+        return Err(VoiceOutcome::Failed);
+    };
+    match basic.transcribe(pcm) {
+        Ok(heard) => Ok((heard, "basic")),
+        Err(e) => {
+            // Start fresh next time.
+            engines.basic = None;
+            log::warn!("voice typing: recognition failed: {e:?}");
+            Err(match e {
+                EngineError::Unavailable => VoiceOutcome::Unavailable,
+                EngineError::Failed(_) => VoiceOutcome::Failed,
+            })
+        }
+    }
+}
+
 /// One hold, from the press to the typed text. Always ends with the microphone closed.
-fn hold(press: &Press, engine: &mut Option<sapi::Sapi>, language: Option<&str>) -> VoiceOutcome {
+fn hold(press: &Press, engines: &mut Engines) -> VoiceOutcome {
     let Some(target) = press.target.clone() else {
         log::info!("voice typing: nothing in front to type into");
         return VoiceOutcome::NoTarget;
@@ -415,9 +615,9 @@ fn hold(press: &Press, engine: &mut Option<sapi::Sapi>, language: Option<&str>) 
         log::info!("voice typing: the microphone is blocked in Windows' privacy settings");
         return VoiceOutcome::MicBlocked;
     }
-    let Some(language) = language else {
+    if engines.config.engine.is_none() {
         return VoiceOutcome::Unavailable;
-    };
+    }
     if !capture::has_device() {
         log::info!("voice typing: no microphone");
         return VoiceOutcome::NoMic;
@@ -437,6 +637,7 @@ fn hold(press: &Press, engine: &mut Option<sapi::Sapi>, language: Option<&str>) 
         }
     };
     overlay::show("Listening…", Look::Listening, 0);
+    let loading = start_loading(engines);
     let started = Instant::now();
     while still_held(&press.keys) && started.elapsed() < MAX_HOLD {
         rec.poll();
@@ -449,40 +650,31 @@ fn hold(press: &Press, engine: &mut Option<sapi::Sapi>, language: Option<&str>) 
         std::thread::sleep(TICK);
     }
     let pcm = rec.finish();
+    if loading.is_some() {
+        overlay::show("Typing…", Look::Working, 0);
+    }
+    // Collected even when this hold ends early, so the engine is ready for the next one and no
+    // helper thread outlives the hold.
+    finish_loading(engines, loading);
     if let Some(outcome) = judge_recording(held, peak(&pcm)) {
         log::info!("voice typing: {outcome:?} after {} ms", held.as_millis());
         return outcome;
     }
+    if !audio::has_speech(&pcm) {
+        // Steady noise (a fan, hiss) and nothing that rises above it: recognizers invent words
+        // from that, so nothing is typed.
+        log::info!(
+            "voice typing: NothingHeard (no speech above the noise) after {} ms",
+            held.as_millis()
+        );
+        return VoiceOutcome::NothingHeard;
+    }
 
     overlay::show("Typing…", Look::Working, 0);
-    if engine.as_ref().is_some_and(|e| e.language() != language) {
-        *engine = None;
-    }
-    if engine.is_none() {
-        match sapi::Sapi::new(language) {
-            Ok(s) => *engine = Some(s),
-            Err(EngineError::Unavailable) => return VoiceOutcome::Unavailable,
-            Err(EngineError::Failed(why)) => {
-                log::warn!("voice typing: the recognizer didn't start: {why}");
-                return VoiceOutcome::Failed;
-            }
-        }
-    }
-    let Some(recognizer) = engine.as_mut() else {
-        return VoiceOutcome::Failed;
-    };
     let t0 = Instant::now();
-    let heard = match recognizer.transcribe(&pcm) {
-        Ok(heard) => heard,
-        Err(e) => {
-            // Start fresh next time.
-            *engine = None;
-            log::warn!("voice typing: recognition failed: {e:?}");
-            return match e {
-                EngineError::Unavailable => VoiceOutcome::Unavailable,
-                EngineError::Failed(_) => VoiceOutcome::Failed,
-            };
-        }
+    let (heard, engine) = match recognize(engines, &pcm) {
+        Ok(r) => r,
+        Err(outcome) => return outcome,
     };
     let recognized_ms = t0.elapsed().as_millis();
     let typed = text::format(&heard, text::target_for_process(&target.exe));
@@ -493,14 +685,14 @@ fn hold(press: &Press, engine: &mut Option<sapi::Sapi>, language: Option<&str>) 
     let same = system::foreground().is_some_and(|f| f.hwnd == target.hwnd);
     if let Some(outcome) = judge_typing(&typed, released, same) {
         log::info!(
-            "voice typing: {outcome:?} ({} ms of speech, recognized in {recognized_ms} ms)",
+            "voice typing: {outcome:?} ({} ms of speech, recognized by the {engine} engine in {recognized_ms} ms)",
             held.as_millis()
         );
         return outcome;
     }
     if system::type_strokes(&text::strokes(&typed)) {
         log::info!(
-            "voice typing: typed {} characters ({} ms of speech, recognized in {recognized_ms} ms)",
+            "voice typing: typed {} characters ({} ms of speech, recognized by the {engine} engine in {recognized_ms} ms)",
             typed.chars().count(),
             held.as_millis()
         );

@@ -21,6 +21,16 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.19",
+    title: "Accurate voice typing, still on your PC",
+    highlights: [
+      "Voice typing gets an Accurate engine: far better with code words and short commands.",
+      "It's a one-time 78 MB download you start in Settings › General › Voice typing. Your voice never leaves your PC.",
+      "Windows' own recognizer stays as Basic, for other languages or if you'd rather not download.",
+      "Turning voice typing on no longer closes tug.",
+    ],
+  },
+  {
     version: "0.5.18",
     title: "Your whole message history, album art and a new game",
     highlights: [

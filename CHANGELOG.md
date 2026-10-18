@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.5.19 — 2026-10-18
+
+Accurate voice typing that still runs entirely on your PC. From #153, plus #152 and the fixes from
+the release review. The first release delivered by the automatic updater.
+
+### New
+- **Accurate voice typing (Whisper), on your PC.** Settings › General › Voice typing › Speech
+  engine: **Accurate** uses whisper.cpp with an English speech model, a **one-time 78 MB download**
+  you start yourself (progress, Cancel, and an interrupted download picks up where it left off).
+  It's far better with short commands and code words ("check logs", "camel case user id"): on the
+  test phrases it typed 23 of 24 exactly right, against 7 of 24 for Windows' recognizer, in about
+  a quarter of a second on a recent laptop. Your voice never leaves the PC; the download is the
+  only thing that goes online, and it's checked against a fixed fingerprint before it's used.
+  **Basic** (Windows' own recognizer, no download) listens until the model is there, for other
+  languages, and on processors that can't run Accurate. (#153)
+- Settings says when your microphone is a Bluetooth headset in phone-call mode, which lowers
+  accuracy. (#153)
+
+### Fixed
+- **Turning voice typing on no longer closes tug.** (#152)
+- **From the release review:** (#153)
+  - tug.exe links the C and C++ runtimes in again, so it starts on a PC without the Visual C++
+    redistributable; the release build now fails if the exe needs any DLL that isn't part of
+    Windows.
+  - On a PC with no Windows speech language, voice typing turns on by itself once the model has
+    downloaded, and says so (and lets go of its shortcut) when nothing is left to listen, for
+    example after picking Basic.
+  - A speech model that fails its check is deleted and downloaded again; one that just won't start
+    on this PC is kept, Settings says so, and Basic listens without retrying on every hold.
+  - With too little free memory, a hold uses Basic and Settings says why.
+  - Whisper playing its own prompt back on a cough is no longer typed.
+  - The model downloads only from Hugging Face's servers, and a download site that refuses says so
+    instead of promising to resume.
+
+### Known limits
+- **Accurate is English only.** Other languages use Basic.
+- Building tug locally now needs **CMake and LLVM** (libclang) as well as Visual Studio's C++
+  tools; see CONTRIBUTING.md. Releases are built in GitHub Actions.
+- Accurate needs a processor with AVX2 (every Intel CPU since 2013 and every AMD Ryzen) and about
+  250 MB of memory while voice typing is on.
+
 ## v0.5.18 — 2026-10-17
 
 Your whole message history, album art, automatic updates, files to your iPhone from the command

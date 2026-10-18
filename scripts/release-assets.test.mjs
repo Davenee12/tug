@@ -7,10 +7,12 @@ import {
   keyCheck,
   latestJson,
   minisignKeyId,
+  peImports,
   readVersions,
   releaseNotes,
   releaseVersion,
   sha256Line,
+  unexpectedImports,
   versionFromTag,
 } from "./release-assets.mjs";
 
@@ -130,4 +132,61 @@ test("a local path left in an exe is found in either slash style and in UTF-16",
   assert.deepEqual(findLeaks(exe("C:\\Users\\example\\x", "utf16le"), [home]), [home]);
   assert.deepEqual(findLeaks(exe("panicked at /cargo/registry/x.rs and ~/x"), [home]), []);
   assert.deepEqual(findLeaks(exe("anything"), ["", "C:"]), [], "empty or too-short paths never match");
+});
+
+/** A minimal 64-bit PE with these imported and delay-loaded DLLs (one section at RVA 0x1000). */
+function fakeExe(imports, delayed = [], magic = 0x20b) {
+  const buf = Buffer.alloc(0x1000);
+  buf.write("MZ", 0, "latin1");
+  buf.writeUInt32LE(0x40, 0x3c);
+  buf.writeUInt32LE(0x00004550, 0x40);
+  buf.writeUInt16LE(0x8664, 0x44);
+  buf.writeUInt16LE(1, 0x46); // one section
+  buf.writeUInt16LE(240, 0x54); // optional header size
+  const opt = 0x58;
+  buf.writeUInt16LE(magic, opt);
+  const sec = opt + 240;
+  buf.writeUInt32LE(0x800, sec + 8); // virtual size
+  buf.writeUInt32LE(0x1000, sec + 12); // virtual address
+  buf.writeUInt32LE(0x800, sec + 16); // raw size
+  buf.writeUInt32LE(0x400, sec + 20); // raw offset
+  const rva = (off) => off - 0x400 + 0x1000;
+  let strings = 0x700;
+  const name = (s) => {
+    const at = strings;
+    buf.write(`${s}\0`, at, "latin1");
+    strings += s.length + 1;
+    return rva(at);
+  };
+  const importTable = 0x400;
+  imports.forEach((d, i) => buf.writeUInt32LE(name(d), importTable + i * 20 + 12));
+  if (imports.length) buf.writeUInt32LE(rva(importTable), opt + 112 + 8);
+  const delayTable = 0x500;
+  delayed.forEach((d, i) => buf.writeUInt32LE(name(d), delayTable + i * 32 + 4));
+  if (delayed.length) buf.writeUInt32LE(rva(delayTable), opt + 112 + 13 * 8);
+  return buf;
+}
+
+test("an exe's imported and delay-loaded DLLs are read from its tables", () => {
+  assert.deepEqual(peImports(fakeExe(["KERNEL32.dll", "msvcp140.dll"], ["comctl32.dll"])), [
+    "kernel32.dll",
+    "msvcp140.dll",
+    "comctl32.dll",
+  ]);
+  assert.deepEqual(peImports(fakeExe([])), []);
+  assert.throws(() => peImports(Buffer.from("not an exe at all, just text, long enough for a header....")), /MZ/);
+  assert.throws(() => peImports(fakeExe(["kernel32.dll"], [], 0x10b)), /64-bit/, "a 32-bit exe (like the NSIS installer)");
+});
+
+test("a release exe may import only Windows' own DLLs", () => {
+  assert.deepEqual(
+    unexpectedImports(["kernel32.dll", "api-ms-win-crt-heap-l1-1-0.dll", "api-ms-win-core-winrt-l1-1-0.dll", "combase.dll"]),
+    [],
+  );
+  assert.deepEqual(unexpectedImports(["kernel32.dll", "msvcp140.dll", "msvcp140.dll"]), ["msvcp140.dll"], "the C++ runtime");
+  assert.deepEqual(unexpectedImports(["vcruntime140.dll", "vcruntime140_1.dll"]), ["vcruntime140.dll", "vcruntime140_1.dll"]);
+  assert.deepEqual(unexpectedImports(["webview2loader.dll", "libclang.dll"]), ["webview2loader.dll", "libclang.dll"]);
+  assert.deepEqual(unexpectedImports(peImports(fakeExe(["user32.dll"], ["msvcp140_atomic_wait.dll"]))), [
+    "msvcp140_atomic_wait.dll",
+  ]);
 });

@@ -9,7 +9,8 @@
 //
 // Usage: node scripts/remap-paths.mjs <command> [args...]
 //        (npm run build:release wraps `tauri build`; extra args pass through)
-//        node scripts/remap-paths.mjs --print   shows the flags without running anything
+//        node scripts/remap-paths.mjs --print   shows the rustc flags without running anything
+// It also trims the target folder from C/C++ __FILE__ paths (MSVC's /d1trimfile, see below).
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,10 @@ const remaps = [
 if (process.env.CARGO_TARGET_DIR) remaps.push([path.resolve(process.env.CARGO_TARGET_DIR), "/target"]);
 
 const flags = remaps.map(([from, to]) => `--remap-path-prefix=${from}=${to}`);
+// CARGO_ENCODED_RUSTFLAGS replaces the rustflags in .cargo/config.toml, so the static C/C++ runtime
+// it asks for is asked for here too: without it tug.exe would import msvcp140.dll (whisper.cpp's
+// C++ standard library) and need the Visual C++ redistributable. See .cargo/config.toml.
+if (process.platform === "win32") flags.push("-Ctarget-feature=+crt-static");
 
 // Keep any flags the caller already set. CARGO_ENCODED_RUSTFLAGS (0x1f-separated) wins over
 // RUSTFLAGS in Cargo and copes with spaces in paths, so the result goes there.
@@ -48,6 +53,19 @@ if (!cmd || cmd === "--print") {
 
 const env = { ...process.env, CARGO_ENCODED_RUSTFLAGS: encoded };
 delete env.RUSTFLAGS;
+
+// C and C++ that build scripts compile with MSVC (whisper.cpp for voice typing, SQLite) is out of
+// rustc's reach: cl.exe writes __FILE__ (ggml's and whisper.cpp's assert messages) as a full path
+// under the target folder. /d1trimfile cuts that prefix off. cl.exe applies only one, so it's the
+// target folder, where build scripts put the sources they compile. The cc crate splits CFLAGS on
+// spaces, so a target path with a space can't be passed; the leak check after the build would say.
+const target = process.env.CARGO_TARGET_DIR ? path.resolve(process.env.CARGO_TARGET_DIR) : path.join(repo, "src-tauri", "target");
+if (process.platform === "win32" && !/\s/.test(target)) {
+  const trim = `/d1trimfile:${target}${path.sep}`;
+  for (const name of ["CFLAGS", "CXXFLAGS"]) env[name] = [process.env[name], trim].filter(Boolean).join(" ");
+} else if (process.platform === "win32") {
+  console.warn(`remap-paths: the target folder has a space in it, so C/C++ __FILE__ paths can't be trimmed: ${target}`);
+}
 // shell: true so npm's .cmd shims (tauri.cmd) resolve on Windows; quoteArg keeps each argument
 // whole through cmd.exe and refuses ones it can't pass on unchanged.
 let line;

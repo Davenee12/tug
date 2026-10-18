@@ -38,7 +38,8 @@ const whatGoesOnline = computed(
     "Weather, only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name. App icons: each app's ID (like com.google.Gmail, never what it sent you) goes to Apple's App Store once. Album art: the artist and album name of what's playing go to Apple's music catalog when tug doesn't have that album's cover yet." +
     (update.status && update.status.phase !== "notConfigured"
       ? " Updates: tug asks GitHub whether there's a new version, and downloads it from there (Settings › About)."
-      : ""),
+      : "") +
+    " Voice typing's speech model, only if you download it: a one-time download of a public file from Hugging Face, with nothing about you.",
 );
 
 const SECTIONS: Array<{ id: SettingsSection; label: string; icon: Component }> = [
@@ -866,7 +867,7 @@ async function clearHistory() {
             />
             <SettingsRow
               label="Voice typing"
-              description="Only while you hold its shortcut: Windows' own speech recognition turns your voice into text on this PC. The recording is never sent anywhere or saved."
+              description="Only while you hold its shortcut: speech recognition on this PC turns your voice into text. The recording is never sent anywhere or saved. The accurate engine's speech model is downloaded once from Hugging Face, only if you ask for it; your voice never goes with it."
             />
             <SettingsRow
               label="iPhone backup"
