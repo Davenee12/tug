@@ -7,6 +7,7 @@ import {
   keyCheck,
   latestJson,
   minisignKeyId,
+  parseCMakeCache,
   peImports,
   readVersions,
   releaseNotes,
@@ -14,6 +15,7 @@ import {
   sha256Line,
   unexpectedImports,
   versionFromTag,
+  whisperBuildProblems,
 } from "./release-assets.mjs";
 
 const files = (v) => ({ "package.json": v, "src-tauri/tauri.conf.json": v, "src-tauri/Cargo.toml": v });
@@ -188,5 +190,80 @@ test("a release exe may import only Windows' own DLLs", () => {
   assert.deepEqual(unexpectedImports(["webview2loader.dll", "libclang.dll"]), ["webview2loader.dll", "libclang.dll"]);
   assert.deepEqual(unexpectedImports(peImports(fakeExe(["user32.dll"], ["msvcp140_atomic_wait.dll"]))), [
     "msvcp140_atomic_wait.dll",
+  ]);
+});
+
+// The CMake cache lines that matter, as the v0.5.19 release had them (the cmake crate's flags in
+// place of CMake's Release defaults) and as they must be.
+const GGML_OK = [
+  "GGML_NATIVE:BOOL=OFF",
+  "GGML_AVX:BOOL=ON",
+  "GGML_AVX2:BOOL=ON",
+  "GGML_FMA:UNINITIALIZED=ON",
+  "GGML_F16C:UNINITIALIZED=ON",
+  "GGML_BMI2:BOOL=ON",
+  "GGML_AVX512:BOOL=OFF",
+];
+const cacheWith = (c, cxx, ggml = GGML_OK) =>
+  ["# This is the CMakeCache file.", "//Flags used by the C compiler", `CMAKE_C_FLAGS_RELEASE:STRING=${c}`, `CMAKE_CXX_FLAGS_RELEASE:STRING=${cxx}`, ...ggml, ""].join("\r\n");
+const OPTIMISED = "/MT /O2 /Ob2 /DNDEBUG";
+const V0519 = " -nologo -MT -Brepro -W0 /d1trimfile:C:\t\\";
+const vcxproj = (release) => `<Project>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile><Optimization>Disabled</Optimization></ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>${release}</ClCompile>
+  </ItemDefinitionGroup>
+</Project>`;
+const RELEASE_OK = `<EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+      <Optimization>MaxSpeed</Optimization>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);NDEBUG;GGML_AVX2;CMAKE_INTDIR="Release"</PreprocessorDefinitions>`;
+
+test("a CMake cache is read as name = value", () => {
+  const c = parseCMakeCache(cacheWith(OPTIMISED, "/utf-8 " + OPTIMISED));
+  assert.equal(c.get("CMAKE_CXX_FLAGS_RELEASE"), "/utf-8 /MT /O2 /Ob2 /DNDEBUG");
+  assert.equal(c.get("GGML_FMA"), "ON");
+  assert.equal(c.get("GGML_NOPE"), undefined);
+  assert.equal(parseCMakeCache("X:PATH=C:/a=b\n").get("X"), "C:/a=b", "only the first = splits");
+});
+
+test("whisper.cpp must be compiled optimised, without asserts, for AVX2", () => {
+  assert.deepEqual(whisperBuildProblems(cacheWith(OPTIMISED, "/utf-8 " + OPTIMISED), vcxproj(RELEASE_OK)), []);
+  assert.deepEqual(whisperBuildProblems(cacheWith(OPTIMISED, OPTIMISED), null), [], "no vcxproj (another generator)");
+  assert.deepEqual(whisperBuildProblems(cacheWith("-MT -O2 -DNDEBUG", "-MT -O2 -DNDEBUG"), null), [], "dash spellings");
+
+  // What v0.5.19 shipped: no /O2 and no /DNDEBUG in either language, and an empty Optimization.
+  const v0519 = whisperBuildProblems(
+    cacheWith(V0519, "/utf-8" + V0519),
+    vcxproj(`<EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+      <Optimization></Optimization>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);GGML_AVX2;CMAKE_INTDIR="Release"</PreprocessorDefinitions>`),
+  );
+  assert.equal(v0519.length, 6, v0519.join("\n"));
+  assert.ok(v0519.some((p) => /CMAKE_C_FLAGS_RELEASE has no \/O2/.test(p)));
+  assert.ok(v0519.some((p) => /CMAKE_CXX_FLAGS_RELEASE has no \/DNDEBUG/.test(p)));
+  assert.ok(v0519.some((p) => /Optimization "", not MaxSpeed/.test(p)));
+  assert.ok(v0519.some((p) => /without NDEBUG/.test(p)));
+
+  assert.ok(whisperBuildProblems(cacheWith("/MT /Od /O2 /DNDEBUG", OPTIMISED), null).some((p) => /\/Od/.test(p)));
+  assert.ok(whisperBuildProblems(cacheWith("/MD /O2 /DNDEBUG", OPTIMISED), null).some((p) => /\/MT/.test(p)), "the DLL runtime");
+});
+
+test("whisper.cpp's instruction set stays the fixed AVX2 one", () => {
+  const native = GGML_OK.map((l) => (l.startsWith("GGML_NATIVE") ? "GGML_NATIVE:BOOL=ON" : l));
+  assert.deepEqual(whisperBuildProblems(cacheWith(OPTIMISED, OPTIMISED, native), null), [
+    "GGML_NATIVE is ON, not OFF (see .cargo/config.toml)",
+  ]);
+  const noFma = GGML_OK.filter((l) => !l.startsWith("GGML_FMA"));
+  assert.deepEqual(whisperBuildProblems(cacheWith(OPTIMISED, OPTIMISED, noFma), null), [
+    "GGML_FMA is unset, not ON (see .cargo/config.toml)",
+  ]);
+  const sse = vcxproj(RELEASE_OK.replace("AdvancedVectorExtensions2", "StreamingSIMDExtensions2"));
+  assert.deepEqual(whisperBuildProblems(cacheWith(OPTIMISED, OPTIMISED), sse), [
+    'ggml-cpu is compiled for "StreamingSIMDExtensions2", not AVX2',
+  ]);
+  assert.deepEqual(whisperBuildProblems(cacheWith(OPTIMISED, OPTIMISED), "<Project/>"), [
+    "ggml-cpu.vcxproj has no Release|x64 configuration",
   ]);
 });

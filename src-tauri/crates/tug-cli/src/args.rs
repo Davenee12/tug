@@ -61,6 +61,14 @@ tug: your iPhone, from the terminal (tug must be running)
 
 AI tools need Settings › Developer tools › Let AI tools use tug switched on, and so does this command.";
 
+/// The command line as text, never panicking: `std::env::args()` panics on an argument that isn't
+/// valid Unicode (a lone UTF-16 surrogate another program passed), and the release build aborts on
+/// a panic. Such an argument is read lossily (U+FFFD for what can't be decoded), so it's simply an
+/// unknown argument and gets the usage.
+pub fn lossy(args: impl IntoIterator<Item = std::ffi::OsString>) -> Vec<String> {
+    args.into_iter().map(|a| a.to_string_lossy().into_owned()).collect()
+}
+
 /// Parse the arguments after the program name. `Err` is a sentence to print with the usage.
 pub fn parse(args: &[String]) -> Result<Command, String> {
     let mut it = args.iter().map(String::as_str);
@@ -177,6 +185,26 @@ mod tests {
 
     fn p(args: &[&str]) -> Result<Command, String> {
         parse(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn a_non_unicode_argument_is_read_lossily_not_a_panic() {
+        use std::ffi::OsString;
+        #[cfg(windows)]
+        let odd = {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[0x0041, 0xD800, 0x0042])
+        };
+        #[cfg(unix)]
+        let odd = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(vec![b'A', 0xFF, b'B'])
+        };
+        assert!(odd.to_str().is_none(), "the test argument really isn't Unicode");
+        let argv = lossy([OsString::from("status"), odd]);
+        assert_eq!(argv, vec!["status".to_string(), "A\u{FFFD}B".to_string()]);
+        assert!(parse(&argv).is_err(), "an unknown argument, not a crash");
+        assert_eq!(parse(&lossy([OsString::from("status")])), Ok(Command::Status));
     }
 
     #[test]

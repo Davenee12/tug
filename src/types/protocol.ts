@@ -471,8 +471,9 @@ export interface ToastPressed {
 
 /** What a press of the type-the-code shortcut did (`code-filled`). The code itself is never sent. */
 export interface CodeFilled {
-  /** typed; noCode (none in the last 10 minutes); noTarget (tug's own window, or nothing, in front); failed. */
-  outcome: "typed" | "noCode" | "noTarget" | "failed";
+  /** typed; noCode (none in the last 10 minutes); noTarget (tug's own window, or nothing, in front);
+   *  keysHeld (Ctrl, Alt, Shift or Windows still down after the wait, so nothing was typed); failed. */
+  outcome: "typed" | "noCode" | "noTarget" | "keysHeld" | "failed";
   /** Who the typed code came from; null unless typed. */
   from: string | null;
 }

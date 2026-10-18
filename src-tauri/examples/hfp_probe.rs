@@ -29,7 +29,8 @@ fn main() {
     static LOGGER: StderrLog = StderrLog;
     let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Debug));
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Lossily, never a panic on an argument that isn't valid Unicode (tug_lib::launch_args).
+    let args: Vec<String> = tug_lib::launch_args().skip(1).collect();
     let value = |flag: &str| {
         args.iter()
             .position(|a| a == flag)

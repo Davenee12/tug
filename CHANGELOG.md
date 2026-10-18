@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.5.20 — 2026-10-18
+
+A bug-fix release (every fifth version is fixes only). It arrives through automatic updates.
+
+### Fixed
+- **Voice typing's accurate engine is now about 12× faster.** In v0.5.19 it took about 3 seconds
+  to type a short phrase; it now takes about a quarter of a second, with the same accuracy. The
+  v0.5.19 download had its speech engine built without its speed settings, and every release is
+  now checked for them.
+- **Ctrl+Shift+V (type the code) no longer types while you're still holding Ctrl, Alt or Shift.**
+  Typed under a held key, the digits turned into shortcuts in the app. tug now waits for you to
+  let go, and if a key is still down it types nothing and says "Let go of the keys".
+- Apps the App Store has no icon for are asked about once a week again, rather than on every
+  notification once the first week had passed.
+- Deleting a conversation, and undoing it, is now noted in tug's log, with counts only (how many
+  texts and notifications), never who or what.
+- The `tug` command no longer crashes when another program hands it an unusual argument; it shows
+  its usage instead.
+- Routine updates to the libraries tug is built on (Tauri, Vue and others; minor and patch
+  versions only).
+
 ## v0.5.19 — 2026-10-18
 
 Accurate voice typing that still runs entirely on your PC. From #153, plus #152 and the fixes from

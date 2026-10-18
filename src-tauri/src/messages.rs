@@ -1295,7 +1295,12 @@ mod tests {
         let jane = [(MESSAGES_APP.to_string(), "Jane Doe".to_string())];
         let address = ["+13025550100".to_string()];
 
-        s.set_conversation_hidden(&jane, &address, 5_000, true).unwrap();
+        let deleted = s.set_conversation_hidden(&jane, &address, 5_000, true).unwrap();
+        assert_eq!(
+            (deleted.texts, deleted.notifications),
+            (1, 3),
+            "the counts tug.log gets"
+        );
         assert_eq!(titles(&s), vec!["Sam"]);
         assert_eq!(bodies(&s), vec!["hello"]);
         assert!(s.search("lunch", 10, None).unwrap().is_empty(), "not in search either");
@@ -1306,7 +1311,8 @@ mod tests {
         assert_eq!(titles(&s), vec!["Jane Doe", "Sam"]);
 
         // Undo brings back exactly what that delete hid, and leaves the new one alone.
-        s.set_conversation_hidden(&jane, &address, 5_000, false).unwrap();
+        let undone = s.set_conversation_hidden(&jane, &address, 5_000, false).unwrap();
+        assert_eq!(undone, deleted, "undo brings back the same rows");
         assert_eq!(titles(&s).len(), 5);
         assert_eq!(bodies(&s).len(), 2);
     }

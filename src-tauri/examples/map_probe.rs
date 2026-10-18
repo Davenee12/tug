@@ -27,7 +27,8 @@ fn main() {
     static LOGGER: StderrLog = StderrLog;
     let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Info));
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Lossily, never a panic on an argument that isn't valid Unicode (tug_lib::launch_args).
+    let args: Vec<String> = tug_lib::launch_args().skip(1).collect();
     let show = args.iter().any(|a| a == "--show");
     let pbap_only = args.iter().any(|a| a == "--pbap");
     let send = args

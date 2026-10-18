@@ -55,3 +55,9 @@ jobs:
       - run: npm run build
 
       - run: npm run check
+
+      # The tests' whisper.cpp (voice typing's accurate engine) is compiled optimised for AVX2, like
+      # a release's (release.yml checks the release build itself). See .cargo/config.toml.
+      - name: whisper.cpp is compiled optimised
+        shell: bash
+        run: node scripts/release-assets.mjs whisper debug
