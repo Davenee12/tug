@@ -175,9 +175,10 @@ impl Actor {
                     s.away = false;
                 });
                 // The texts/contacts/calls side sits behind the same phone; a fresh BLE link is a
-                // good moment to retry message access rather than waiting out its own backoff.
+                // good moment to retry message access rather than waiting out its own backoff, with
+                // its quick retries if iOS takes a moment to offer it.
                 if let Some(map) = self.shared.map.get() {
-                    map.refresh();
+                    map.phone_linked();
                 }
                 self.read_model_number();
             }
