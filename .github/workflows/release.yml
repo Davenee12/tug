@@ -133,6 +133,13 @@ jobs:
       # whisper.cpp's __FILE__ strings), then the NSIS installer.
       - run: npm run build:release
 
+      # whisper.cpp must be compiled optimised (/O2, NDEBUG) for AVX2: v0.5.19 shipped it unoptimised
+      # (the cmake crate's flags replaced CMake's Release ones) and voice typing's accurate engine
+      # took about 3 s a phrase instead of 0.25 s. Reads the build's CMake cache; see .cargo/config.toml.
+      - name: whisper.cpp is compiled optimised
+        shell: bash
+        run: node scripts/release-assets.mjs whisper release
+
       - name: No local paths in the exes
         shell: bash
         run: node scripts/release-assets.mjs leaks src-tauri/target/release/tug.exe src-tauri/binaries/tug-cli.exe

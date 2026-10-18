@@ -10,6 +10,10 @@
 //                                                      machine's home or checkout path
 //   node scripts/release-assets.mjs imports <file>...  fails if a built exe imports a DLL that
 //                                                      isn't part of Windows (msvcp140, vcruntime140…)
+//   node scripts/release-assets.mjs whisper <profile>  fails if whisper.cpp (voice typing's accurate
+//                                                      engine) was compiled without optimisation or
+//                                                      without its fixed AVX2 instruction set, from
+//                                                      the CMake cache of <target>/<profile>'s build
 //   node scripts/release-assets.mjs keycheck <setup.exe.sig>   fails if the updater signature was
 //                                                      made with a key other than the one whose
 //                                                      public half tauri.conf.json ships
@@ -148,6 +152,68 @@ export function keyCheck(pubkey, signature) {
   if (!pub) return "bad-pubkey";
   if (!sig) return "bad-signature";
   return pub === sig ? "match" : "mismatch";
+}
+
+/** A CMakeCache.txt as a map of `NAME` → value (`NAME:TYPE=value` lines; comments skipped). */
+export function parseCMakeCache(text) {
+  const vars = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    if (!line || line.startsWith("#") || line.startsWith("//")) continue;
+    const m = /^([^:=]+)(?::[A-Z]+)?=(.*)$/.exec(line);
+    if (m) vars.set(m[1], m[2]);
+  }
+  return vars;
+}
+
+/** The ggml options .cargo/config.toml fixes, and what each must be. */
+export const WHISPER_GGML = {
+  GGML_NATIVE: "OFF",
+  GGML_AVX: "ON",
+  GGML_AVX2: "ON",
+  GGML_FMA: "ON",
+  GGML_F16C: "ON",
+  GGML_BMI2: "ON",
+  GGML_AVX512: "OFF",
+};
+
+/**
+ * What's wrong with how whisper.cpp was compiled, from its CMakeCache.txt and (with the Visual Studio
+ * generator) ggml-cpu.vcxproj; empty when it's right. whisper-rs-sys always builds CMake's Release
+ * configuration, and the cmake crate replaces CMAKE_<LANG>_FLAGS_RELEASE with its own flags (no /O2,
+ * no /DNDEBUG) unless they're given, so the v0.5.19 release compiled whisper.cpp unoptimised, with
+ * asserts on: about 12 times slower. .cargo/config.toml sets them; this checks they arrived.
+ */
+export function whisperBuildProblems(cacheText, vcxprojText) {
+  const problems = [];
+  const cache = parseCMakeCache(cacheText);
+  for (const name of ["CMAKE_C_FLAGS_RELEASE", "CMAKE_CXX_FLAGS_RELEASE"]) {
+    const flags = (cache.get(name) ?? "").split(/\s+/).filter(Boolean);
+    const has = (f) => flags.some((x) => x.replace(/^-/, "/") === f);
+    if (!has("/O2")) problems.push(`${name} has no /O2 (whisper.cpp is compiled unoptimised): "${flags.join(" ")}"`);
+    if (!has("/DNDEBUG")) problems.push(`${name} has no /DNDEBUG (whisper.cpp's asserts are on): "${flags.join(" ")}"`);
+    if (has("/Od")) problems.push(`${name} turns optimisation off (/Od)`);
+    if (!has("/MT")) problems.push(`${name} has no /MT (tug.exe would need the Visual C++ runtime DLLs)`);
+  }
+  for (const [name, want] of Object.entries(WHISPER_GGML)) {
+    const got = cache.get(name);
+    if (got !== want) problems.push(`${name} is ${got ?? "unset"}, not ${want} (see .cargo/config.toml)`);
+  }
+  if (vcxprojText != null) {
+    // The Release block of the project MSBuild compiled ggml's CPU code from: what cl.exe was given.
+    const block = /<ItemDefinitionGroup Condition="'\$\(Configuration\)\|\$\(Platform\)'=='Release\|x64'">([\s\S]*?)<\/ItemDefinitionGroup>/.exec(
+      vcxprojText,
+    )?.[1];
+    if (!block) problems.push("ggml-cpu.vcxproj has no Release|x64 configuration");
+    else {
+      const tag = (t) => new RegExp(`<${t}>([^<]*)</${t}>`).exec(block)?.[1];
+      if (tag("Optimization") !== "MaxSpeed")
+        problems.push(`ggml-cpu is compiled with Optimization "${tag("Optimization") ?? ""}", not MaxSpeed (/O2)`);
+      if (tag("EnableEnhancedInstructionSet") !== "AdvancedVectorExtensions2")
+        problems.push(`ggml-cpu is compiled for "${tag("EnableEnhancedInstructionSet") ?? ""}", not AVX2`);
+      if (!/(^|;)NDEBUG(;|$)/.test(tag("PreprocessorDefinitions") ?? "")) problems.push("ggml-cpu is compiled without NDEBUG");
+    }
+  }
+  return problems;
 }
 
 /** One line of `sha256sum` output. */
@@ -326,6 +392,32 @@ function main([cmd, ...args]) {
       if (bad) process.exit(1);
       return;
     }
+    case "whisper": {
+      // The newest whisper.cpp build in <target>/<profile> (an old one can linger in a cache).
+      const [profile = "release"] = args;
+      const build = path.join(targetDir(), profile, "build");
+      const caches = (fs.existsSync(build) ? fs.readdirSync(build) : [])
+        .filter((d) => d.startsWith("whisper-rs-sys-"))
+        .map((d) => path.join(build, d, "out", "build", "CMakeCache.txt"))
+        .filter((f) => fs.existsSync(f))
+        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+      if (!caches.length) throw new Error(`no whisper.cpp build under ${build}: build tug (${profile}) first`);
+      const cachePath = caches[0];
+      const cacheText = fs.readFileSync(cachePath, "utf8");
+      const vcxproj = path.join(path.dirname(cachePath), "ggml", "src", "ggml-cpu.vcxproj");
+      const vcxprojText = fs.existsSync(vcxproj) ? fs.readFileSync(vcxproj, "utf8") : null;
+      const cache = parseCMakeCache(cacheText);
+      console.log(`whisper.cpp build: ${path.relative(targetDir(), path.dirname(cachePath))}`);
+      for (const name of ["CMAKE_BUILD_TYPE", "CMAKE_GENERATOR", "CMAKE_C_FLAGS_RELEASE", "CMAKE_CXX_FLAGS_RELEASE", ...Object.keys(WHISPER_GGML)])
+        console.log(`  ${name} = ${cache.get(name) ?? "(unset)"}`);
+      const problems = whisperBuildProblems(cacheText, vcxprojText);
+      if (problems.length) {
+        for (const p of problems) console.error(`::error::${p}`);
+        process.exit(1);
+      }
+      console.log(`whisper.cpp is compiled optimised (/O2, NDEBUG) for AVX2${vcxprojText == null ? "" : "; ggml-cpu.vcxproj agrees"}`);
+      return;
+    }
     case "keycheck": {
       const [sigFile] = args;
       const conf = JSON.parse(fs.readFileSync(path.join(repo, "src-tauri/tauri.conf.json"), "utf8"));
@@ -377,7 +469,7 @@ function main([cmd, ...args]) {
       return;
     }
     default:
-      console.error("usage: node scripts/release-assets.mjs version|stage|leaks|imports|keycheck|checksums|latest|notes …");
+      console.error("usage: node scripts/release-assets.mjs version|stage|leaks|imports|whisper|keycheck|checksums|latest|notes …");
       process.exit(2);
   }
 }
