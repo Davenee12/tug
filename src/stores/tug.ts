@@ -2346,6 +2346,7 @@ export const useTugStore = defineStore("tug", () => {
     markSeen,
     openThread,
     startConversation,
+    openLatestConversation,
     clearItems,
     readConversation,
     warmTexts,

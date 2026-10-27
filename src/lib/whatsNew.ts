@@ -24,7 +24,7 @@ export const RELEASE_NOTES: ReleaseNote[] = [
     version: "0.5.22",
     title: "A live harbor, Send later and Remind me",
     highlights: [
-      "The weather card opens on a live harbor: the real sun, moon and wind where you are, and rain to the quarter-hour.",
+      "The weather card opens on a live harbor: the real sun, moon and wind, rain to the quarter-hour, and your new texts floating by in bottles.",
       "With rain on the way and your phone low, the weather card tells you to charge it before you head out.",
       "Send later: write a text now and pick when tug sends it through your iPhone.",
       "Remind me: put a text or notification aside and have it come back later.",

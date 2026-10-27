@@ -2,13 +2,15 @@
 // moon (in its real phase) where they really are, stars on a clear night, clouds drifting with
 // the wind, the far shore with its lighthouse, the water in waves from the Beaufort force, and
 // tug's own tugboat riding them with its pennant and smoke going the way the real wind blows.
-// Rain, snow, fog and a storm's lightning on top. tug's palette, read from theme classes by the
+// Rain, snow, fog and a storm's lightning on top. And your phone (lib/harborLife): new texts float
+// by as bottles, a missed call sets the lighthouse blinking, music drifts up from the tug as notes. tug's palette, read from theme classes by the
 // component, so no colour is written here. Pure drawing: no state, no timers.
 //
 // The harbor faces the equator, as you would to watch the sun cross the sky: in the north east is
 // on the left (the sun rises left and sets right), in the south it's the other way round, and the
 // moon's lit side turns with it.
 
+import { BOTTLE_AT, QUIET, type HarborLife } from "../lib/harborLife";
 import type { HarborScene } from "../lib/weatherHarbor";
 
 export interface HarborPalette {
@@ -45,6 +47,13 @@ export interface HarborPalette {
   flash: string;
   beam: string;
   lamp: string;
+  glass: string;
+  cork: string;
+  paper: string;
+  alert: string;
+  alertHalo: string;
+  alertFade: string;
+  note: string;
 }
 
 export interface HarborView {
@@ -58,6 +67,8 @@ export interface HarborView {
   /** South of the equator: east on the right, the moon lit the other way. */
   south: boolean;
   reducedMotion: boolean;
+  /** What's waiting on the phone (nothing when left out). */
+  life?: HarborLife;
 }
 
 const TAU = Math.PI * 2;
@@ -83,6 +94,7 @@ interface Frame {
   force: number;
   p: HarborPalette;
   s: HarborScene;
+  life: HarborLife;
   still: boolean;
 }
 
@@ -102,6 +114,7 @@ export function drawHarbor(ctx: CanvasRenderingContext2D, v: HarborView) {
     force: s.wind.force,
     p,
     s,
+    life: v.life ?? QUIET,
     still: v.reducedMotion,
   };
   sky(fr);
@@ -111,7 +124,9 @@ export function drawHarbor(ctx: CanvasRenderingContext2D, v: HarborView) {
   shore(fr);
   water(fr);
   fog(fr, 0);
+  bottles(fr);
   tug(fr);
+  notes(fr);
   front(fr);
   fog(fr, 1);
   rain(fr);
@@ -304,8 +319,20 @@ function shore(f: Frame) {
   ctx.lineTo(lx + 3.5, horizon);
   ctx.fill();
   ctx.fillRect(lx - 3, horizon - 23, 6, 3);
-  ctx.fillStyle = p.lamp;
-  ctx.fillRect(lx - 1.5, horizon - 22.5, 3, 2);
+  // A missed call: the lamp blinks in tug's coral, with a glow, about once a second.
+  const blink = f.life.missedCall && (f.still || Math.sin(t * 6) > -0.2);
+  if (blink) {
+    const g = ctx.createRadialGradient(lx, horizon - 21.5, 1, lx, horizon - 21.5, 22);
+    g.addColorStop(0, p.alertHalo);
+    g.addColorStop(1, p.alertFade);
+    ctx.fillStyle = g;
+    ctx.fillRect(lx - 22, horizon - 43.5, 44, 44);
+    ctx.fillStyle = p.alert;
+    ctx.fillRect(lx - 2.5, horizon - 24, 5, 4);
+  } else {
+    ctx.fillStyle = p.lamp;
+    ctx.fillRect(lx - 1.5, horizon - 22.5, 3, 2);
+  }
   if (night || s.fog) {
     const a = f.still ? 2.6 : t * 0.9;
     const reach = Math.cos(a) * W * 0.45;
@@ -492,6 +519,76 @@ function tug(f: Frame) {
   ctx.lineTo(L * 0.44, 0);
   ctx.stroke();
   ctx.restore();
+}
+
+/** Where a bottle floats, for the drawing and the button over it. */
+export function bottleAt(width: number, height: number, i: number): { x: number; y: number } {
+  return { x: width * BOTTLE_AT[i], y: Math.round(height * 0.62) + (height - Math.round(height * 0.62)) * 0.5 };
+}
+
+/** New texts: a bottle each (up to three) bobbing beside the tug, a note rolled up inside. */
+function bottles(f: Frame) {
+  const { ctx, W, H, t, p } = f;
+  for (let i = 0; i < f.life.bottles; i++) {
+    const at = bottleAt(W, H, i);
+    const x = at.x + (f.still ? 0 : Math.sin(t * 0.4 + i * 2) * 2);
+    const y = at.y + waveY(f, x, 2) * 0.9;
+    const tilt = -0.35 + (f.still ? 0 : Math.sin(t * 1.3 + i * 1.7) * 0.3);
+    const len = Math.max(11, H * 0.15);
+    const r = len * 0.22;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(tilt);
+    // Glass: a body with a neck, the paper inside, and the cork.
+    ctx.fillStyle = p.glass;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, len * 0.38, r, 0, 0, TAU);
+    ctx.fill();
+    ctx.fillRect(len * 0.3, -r * 0.45, len * 0.25, r * 0.9);
+    ctx.fillStyle = p.paper;
+    ctx.fillRect(-len * 0.22, -r * 0.35, len * 0.38, r * 0.7);
+    ctx.fillStyle = p.cork;
+    ctx.fillRect(len * 0.55, -r * 0.5, len * 0.1, r);
+    ctx.restore();
+    // A glint now and then, to catch the eye.
+    if (!f.still && wrap(t * 0.35 + i * 0.33, 1) < 0.06) {
+      ctx.fillStyle = p.flash;
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.arc(x - len * 0.15, y - r * 0.6, 1.3, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+/** Music on the phone: notes drift up from the tug's wheelhouse and away on the wind. */
+function notes(f: Frame) {
+  const { ctx, W, H, t, p } = f;
+  if (!f.life.music) return;
+  const L = Math.min(H * 0.78, 76);
+  const x0 = W * 0.3 + L * 0.02;
+  const y0 = H * 0.8 - L * 0.2 * 2.1;
+  const drift = f.windX === 0 ? 0.4 : f.windX;
+  ctx.fillStyle = p.note;
+  ctx.strokeStyle = p.note;
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 3; i++) {
+    const a = f.still ? 0.25 + i * 0.25 : wrap(t * 0.28 + i / 3, 1);
+    const x = x0 + drift * a * 30 + Math.sin(a * 9 + i) * 3;
+    const y = y0 - a * 26;
+    ctx.globalAlpha = Math.sin(a * Math.PI) * 0.85;
+    // A quaver: the head, its stem, and the flag.
+    ctx.beginPath();
+    ctx.ellipse(x, y, 2.2, 1.6, -0.4, 0, TAU);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + 1.9, y);
+    ctx.lineTo(x + 1.9, y - 7);
+    ctx.quadraticCurveTo(x + 4.5, y - 5.5, x + 4.2, y - 3);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
 }
 
 /** A pennant at the masthead: hangs in a calm, flies out as the wind rises, and flutters. */

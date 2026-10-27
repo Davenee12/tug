@@ -986,8 +986,8 @@ if (harborKind !== null) {
   const t = Date.now();
   // When the sun rises and sets around now, for each kind: [hours to sunrise, hours to sunset].
   const sunAt: Record<string, [number, number]> = {
-    day: [-4, 6], dawn: [-0.25, 11], dusk: [-11, 0.25], night: [6, 18],
-    rain: [-3, 7], showers: [-8.7, 2.1], snow: [-2, 6], fog: [-1.5, 8], storm: [8, 20], gale: [-6, 4],
+    day: [-4, 6], dawn: [-0.25, 11], dusk: [-11, 0.25], night: [-15, -3],
+    rain: [-3, 7], showers: [-8.7, 2.1], snow: [-2, 6], fog: [-1.5, 8], storm: [-16, -2], gale: [-6, 4],
   };
   const kinds: Record<string, { code: number; wind: number; gusts: number; windDir: number; clouds: number; precip: number; temp: number; feels: number; q: number[] }> = {
     day: { code: 1, wind: 14, gusts: 22, windDir: 250, clouds: 20, precip: 0, temp: 18, feels: 18, q: [] },

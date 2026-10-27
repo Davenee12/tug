@@ -5,6 +5,7 @@ import {
   beaufort,
   beforeYouGo,
   compass,
+  daylightLine,
   harborScene,
   localMinutes,
   moonName,
@@ -168,6 +169,22 @@ describe("the harbor's caption", () => {
     const evening = skyCaption(harborScene(f, at("2026-10-05T22:00")), f, "2026-10-05T22:00");
     expect(evening).toMatch(new RegExp(`^(New|Waxing|First|Full|Waning|Last).* · Sunrise ${clock(7, 0)}$`));
     expect(skyCaption(harborScene(f, at("2026-10-05T03:00")), f, "2026-10-05T03:00")).toMatch(/Sunrise/);
+  });
+});
+
+describe("daylight and the golden hour", () => {
+  it("says how long the day is, how tomorrow compares, and when the golden hour starts", () => {
+    const f = forecast({}, [{}, { sunrise: "2026-10-06T07:01", sunset: "2026-10-06T18:59" }]);
+    expect(daylightLine(f)).toBe(`Daylight 12 h, 2 min less tomorrow · Golden hour from about ${clock(18, 0)}`);
+    const same = forecast({}, [{}, {}]);
+    expect(daylightLine(same)).toBe(`Daylight 12 h · Golden hour from about ${clock(18, 0)}`);
+    expect(daylightLine(forecast({}, [{ sunrise: undefined }]))).toBeNull();
+  });
+
+  it("marks the last hour of sunlight in the caption", () => {
+    const f = forecast({}, [{}, {}]);
+    expect(skyCaption(harborScene(f, at("2026-10-05T18:20")), f, "2026-10-05T18:20")).toBe(`Golden hour · Sunset ${clock(19, 0)}`);
+    expect(skyCaption(harborScene(f, at("2026-10-05T17:20")), f, "2026-10-05T17:20")).toBe(`Sunset ${clock(19, 0)}`);
   });
 });
 

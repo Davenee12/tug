@@ -2,10 +2,12 @@
 // The weather card's harbor: a live little scene of the weather where you are (lib/weatherHarbor
 // works it out, weatherHarborDraw draws it). It moves only while you can see it: paused while tug
 // is hidden or the card is scrolled away, and one still frame with reduced motion. About 30 frames
-// a second, which is plenty for waves and keeps it light.
+// a second, which is plenty for waves and keeps it light. It shows your phone too (lib/harborLife):
+// a press on the bottles opens the newest text, on the blinking lighthouse your calls.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { Forecast } from "../lib/weather";
 import { describe as describeSky } from "../lib/weather";
+import { BOTTLE_AT, lifeLabel, QUIET, type HarborLife } from "../lib/harborLife";
 import { harborScene, placeNow, seaLine, skyCaption } from "../lib/weatherHarbor";
 import { drawHarbor, type HarborPalette } from "./weatherHarborDraw";
 import { readSwatches } from "./gamePalette";
@@ -17,14 +19,27 @@ const props = defineProps<{
   now: Date;
   /** The place is south of the equator (the sky turns round). */
   south: boolean;
+  /** What's waiting on the phone. */
+  life?: HarborLife;
 }>();
+const emit = defineEmits<{ "open-texts": []; "open-calls": [] }>();
+const life = computed(() => props.life ?? QUIET);
 
 const scene = computed(() => harborScene(props.forecast, props.now.getTime()));
 const caption = computed(() => skyCaption(scene.value, props.forecast, placeNow(props.now.getTime(), props.forecast.timezone)));
 const sea = computed(() => seaLine(scene.value.wind));
 const label = computed(() =>
-  [describeSky(props.forecast.now.code).label, caption.value, sea.value].filter(Boolean).join(". "),
+  [describeSky(props.forecast.now.code).label, caption.value, sea.value, lifeLabel(life.value)].filter(Boolean).join(". "),
 );
+// The buttons over the bottles and the lighthouse: the bottles' span, as fractions of the width.
+const bottleSpan = computed(() => {
+  const n = life.value.bottles;
+  if (!n) return null;
+  const from = BOTTLE_AT[0] - 0.025;
+  const to = BOTTLE_AT[n - 1] + 0.035;
+  return { left: `${from * 100}%`, width: `${(to - from) * 100}%` };
+});
+const textsLabel = computed(() => (life.value.texts === 1 ? "1 new text: open it" : `${life.value.texts} new texts: open the newest`));
 const night = computed(() => !scene.value.sun);
 
 const stage = ref<HTMLElement | null>(null);
@@ -74,6 +89,13 @@ const NAMES = [
   "flash",
   "beam",
   "lamp",
+  "glass",
+  "cork",
+  "paper",
+  "alert",
+  "alertHalo",
+  "alertFade",
+  "note",
 ] as const;
 
 function draw(ms: number) {
@@ -87,6 +109,7 @@ function draw(ms: number) {
     palette: night.value ? dark : day,
     south: props.south,
     reducedMotion: reducedMotion.value,
+    life: life.value,
   });
 }
 
@@ -171,7 +194,7 @@ onUnmounted(() => {
 });
 
 // A new forecast or minute: the loop picks it up; a still harbor needs its frame redrawn.
-watch([scene, () => props.south], () => {
+watch([scene, () => props.south, life], () => {
   if (!raf) draw(performance.now());
 });
 </script>
@@ -187,6 +210,25 @@ watch([scene, () => props.south], () => {
       <span class="truncate">{{ caption }}</span>
       <span class="truncate text-right">{{ sea }}</span>
     </div>
+    <!-- The phone in the harbor: real buttons over the bottles and the lighthouse -->
+    <button
+      v-if="bottleSpan"
+      type="button"
+      class="absolute bottom-1 h-9 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ink/30"
+      :style="bottleSpan"
+      :title="textsLabel"
+      :aria-label="textsLabel"
+      @click.stop="emit('open-texts')"
+    />
+    <button
+      v-if="life.missedCall"
+      type="button"
+      class="absolute top-6 h-9 w-7 -translate-x-1/2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ink/30"
+      style="left: min(calc(86% + 18px), calc(100% - 10px))"
+      title="A missed call: open your calls"
+      aria-label="A missed call: open your calls"
+      @click.stop="emit('open-calls')"
+    />
 
     <!-- tug's colours for the canvas (theme tokens only, no colour in code). Night swatches replace
          the day ones they name; the rest are shared. -->
@@ -224,6 +266,13 @@ watch([scene, () => props.south], () => {
       <span data-swatch="day:flash" class="bg-canvas" />
       <span data-swatch="day:beam" class="bg-accent-amber/20" />
       <span data-swatch="day:lamp" class="bg-accent-amber" />
+      <span data-swatch="day:glass" class="bg-accent-teal/80" />
+      <span data-swatch="day:cork" class="bg-primary-active" />
+      <span data-swatch="day:paper" class="bg-canvas" />
+      <span data-swatch="day:alert" class="bg-primary" />
+      <span data-swatch="day:alertHalo" class="bg-primary/50" />
+      <span data-swatch="day:alertFade" class="bg-primary/0" />
+      <span data-swatch="day:note" class="bg-ink" />
       <span data-swatch="night:base" class="bg-surface-dark" />
       <span data-swatch="night:skyTop" class="bg-surface-dark" />
       <span data-swatch="night:skyLow" class="bg-surface-dark-elevated" />
@@ -245,6 +294,9 @@ watch([scene, () => props.south], () => {
       <span data-swatch="night:rain" class="bg-on-dark/40" />
       <span data-swatch="night:flake" class="bg-on-dark/85" />
       <span data-swatch="night:flash" class="bg-on-dark/80" />
+      <span data-swatch="night:glass" class="bg-accent-teal/60" />
+      <span data-swatch="night:paper" class="bg-on-dark-soft" />
+      <span data-swatch="night:note" class="bg-on-dark-soft" />
     </div>
   </div>
 </template>

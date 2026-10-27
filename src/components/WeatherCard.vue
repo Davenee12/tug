@@ -18,7 +18,8 @@ import {
 } from "lucide-vue-next";
 import { useWeatherStore } from "../stores/weather";
 import { dayLabel, describe, hourLabel, localTime, outlook, temp, wet, wind, withCurrentHour, type Place, type Sky } from "../lib/weather";
-import { beforeYouGo, nextRain, placeNow, rainBars } from "../lib/weatherHarbor";
+import { beforeYouGo, daylightLine, nextRain, placeNow, rainBars } from "../lib/weatherHarbor";
+import { harborLife } from "../lib/harborLife";
 import { useTugStore } from "../stores/tug";
 import WeatherHarbor from "./WeatherHarbor.vue";
 import { useCitySearch } from "../lib/useCitySearch";
@@ -62,6 +63,21 @@ const soon = computed(() =>
 const bars = computed(() => (soon.value?.line ? rainBars(soon.value.quarters.slice(0, 8)) : []));
 // The 12-hour outlook in the summary; the next two hours get their own row under it.
 const line = computed(() => (soon.value?.line ? null : f.value ? outlook(f.value) : null));
+// The phone in the harbor: new texts, a missed call, music (counts only, never names or words).
+const life = computed(() =>
+  harborLife({
+    unreadTexts: tug.unreadTexts,
+    notifications: tug.notifications,
+    nowPlaying: tug.nowPlaying,
+    connected: tug.connected,
+    now: now.value.getTime(),
+  }),
+);
+const daylight = computed(() => (f.value ? daylightLine(f.value) : null));
+function openCalls() {
+  tug.view = "calls";
+}
+
 // "Before you head out": the weather about to happen and the phone's battery, together.
 const battery = computed(() =>
   tug.status.connection === "connected" && tug.status.services.battery ? tug.status.battery : null,
@@ -293,7 +309,16 @@ async function change() {
     @pointercancel="cancel"
   >
     <!-- The harbor: the weather where you are, live. A press on it opens the card like the top. -->
-    <WeatherHarbor v-if="f" :forecast="f" :now="now" :south="place.latitude < 0" class="cursor-pointer" />
+    <WeatherHarbor
+      v-if="f"
+      :forecast="f"
+      :now="now"
+      :south="place.latitude < 0"
+      :life="life"
+      class="cursor-pointer"
+      @open-texts="tug.openLatestConversation()"
+      @open-calls="openCalls"
+    />
     <div
       ref="header"
       role="button"
@@ -415,6 +440,7 @@ async function change() {
             <button class="text-muted active:text-ink" @click="w.hide()">Hide</button>
           </span>
         </div>
+        <p v-if="daylight" class="mt-1 text-[12px] text-muted-soft">{{ daylight }}</p>
         <p class="mt-1 text-[11px] text-muted-soft">Forecast by Open-Meteo</p>
       </div>
     </div>

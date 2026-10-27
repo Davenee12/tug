@@ -322,6 +322,11 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   with tug's tugboat riding them, its pennant and smoke going the way the real wind blows. A caption
   gives the sunset, or the moon and the next sunrise, and the sea state. It moves only while it's on
   screen and holds still with reduced motion.
+- The harbor shows **your phone** too: new texts as messages in bottles (click to open the newest),
+  a missed call as the lighthouse blinking coral (click for Calls), and music as notes rising from the
+  tug. Counts only, never names or words.
+- **Daylight:** how long the day is, how tomorrow compares, and when the golden hour starts; the
+  caption marks the golden hour itself.
 - **Rain to the quarter-hour** for the next two hours ("Rain from about 5:45 PM, for about 30
   minutes"), with a small strip of bars.
 - **Before you head out:** rain or snow due within two hours, or a freezing feels-like, with the

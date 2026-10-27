@@ -232,11 +232,43 @@ export function harborScene(f: Forecast, nowMs: number): HarborScene {
 export function skyCaption(s: HarborScene, f: Forecast, nowLocal: string): string | null {
   const [today, tomorrow] = f.days;
   const real = (d: Day | undefined) => (sunTimes(d) ? d : undefined);
-  if (s.sun) return real(today)?.sunset ? `Sunset ${wallClock(today.sunset!)}` : null;
+  if (s.sun) {
+    const sun = sunTimes(today);
+    if (!sun) return null;
+    const now = localMinutes(nowLocal) ?? 0;
+    const golden = now >= sun.set - GOLDEN_MIN && now <= sun.set;
+    return `${golden ? "Golden hour · " : ""}Sunset ${wallClock(today.sunset!)}`;
+  }
   const moon = s.moon ? moonName(s.moon.phase) : null;
   const next = real(today) && nowLocal < today.sunrise! ? today.sunrise : real(tomorrow)?.sunrise;
   const rise = next ? `Sunrise ${wallClock(next)}` : null;
   return [moon, rise].filter(Boolean).join(" · ") || null;
+}
+
+/** The golden hour, near enough: the last hour of sunlight. */
+const GOLDEN_MIN = 60;
+
+function hoursAndMinutes(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return h ? `${h} h${m ? ` ${m} min` : ""}` : `${m} min`;
+}
+
+/**
+ * For the card's details: "Daylight 10 h 48 min, 2 min less tomorrow · Golden hour from about
+ * 5:06 PM". Null without real sunrise and sunset (an older forecast, or a polar day or night).
+ */
+export function daylightLine(f: Forecast): string | null {
+  const today = sunTimes(f.days[0]);
+  if (!today) return null;
+  const length = today.set - today.rise;
+  let daylight = `Daylight ${hoursAndMinutes(length)}`;
+  const tomorrow = sunTimes(f.days[1]);
+  if (tomorrow) {
+    const change = tomorrow.set - tomorrow.rise - length;
+    if (change !== 0) daylight += `, ${Math.abs(change)} min ${change > 0 ? "more" : "less"} tomorrow`;
+  }
+  return `${daylight} · Golden hour from about ${clockOf(today.set - GOLDEN_MIN)}`;
 }
 
 // ---- Rain to the quarter-hour ----
@@ -261,9 +293,12 @@ let clockFormat: Intl.DateTimeFormat | null = null;
  */
 function wallClock(local: string): string {
   const m = localMinutes(local);
-  if (m === null) return "";
+  return m === null ? "" : clockOf(m);
+}
+
+function clockOf(localMin: number): string {
   clockFormat ??= new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit", timeZone: "UTC" });
-  return clockFormat.format(new Date(m * MINUTE));
+  return clockFormat.format(new Date(localMin * MINUTE));
 }
 
 /** The harbor reads this far ahead: two hours, a quarter at a time. */

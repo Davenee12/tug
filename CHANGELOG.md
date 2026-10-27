@@ -14,6 +14,11 @@ arrives through automatic updates.
   its pennant and smoke going the way the real wind blows. A caption gives the sunset by day, the
   moon and the next sunrise by night, and the sea state ("Force 4 · moderate breeze from the
   southwest"). It moves only while you can see it, and holds still with reduced motion.
+- **The harbor shows your phone too:** new texts float by as messages in bottles (click them to
+  open the newest), a missed call sets the lighthouse blinking coral (click it for your calls), and
+  music playing on your iPhone drifts up from the tug as notes. Counts only, never names or words.
+- **Daylight and the golden hour:** the caption marks the last hour of sunlight, and the card's
+  details say how long the day is, how tomorrow compares, and when the golden hour starts.
 - **Rain to the quarter-hour:** "Rain from about 5:45 PM, for about 30 minutes", with a small strip
   for the next two hours, in place of the 12-hour outlook when the forecast has it.
 - **Before you head out:** with rain or snow due in the next two hours, or a freezing feels-like,
