@@ -168,13 +168,21 @@ pub fn seconds_in_words(secs: u32) -> String {
     }
 }
 
-/// What `tug text` says on stderr once tug is showing its card.
-pub const TEXT_CONFIRMING: &str = "Check tug: Send or Don't send (it won't send by itself; 2 minutes)…";
+/// What `tug text` says on stderr as it goes: once tug shows its card, and once it's sending.
+pub fn text_progress(p: &Progress) -> Option<&'static str> {
+    match p {
+        Progress::Confirming => Some("Check tug: Send or Don't send (it won't send by itself; 2 minutes)…"),
+        Progress::Sending => Some("Sending…"),
+        Progress::Waiting { .. } => None,
+    }
+}
 
 /// `tug boat`'s progress, one line on stderr each time it changes.
 pub fn boat_progress(p: &Progress) -> String {
     match p {
         Progress::Confirming => "Check tug: Send or Don't send (nothing is sent by itself; 2 minutes)…".into(),
+        // Only texts are told this; said plainly if it ever comes.
+        Progress::Sending => "Sending…".into(),
         Progress::Waiting {
             names,
             phone_open,
@@ -436,6 +444,10 @@ mod tests {
             total: names.len(),
         };
         assert!(boat_progress(&Progress::Confirming).starts_with("Check tug: Send or Don't send"));
+        assert!(text_progress(&Progress::Confirming)
+            .unwrap()
+            .starts_with("Check tug: Send or Don't send"));
+        assert_eq!(text_progress(&Progress::Sending), Some("Sending…"));
         assert_eq!(
             boat_progress(&waiting(&["report.pdf"], false, 0)),
             "Scan the code in tug to receive report.pdf on your iPhone…"

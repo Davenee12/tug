@@ -106,37 +106,23 @@ async fn run(command: Command) -> i32 {
 }
 
 /// `tug text`: ask tug to send it. Typed in a terminal, it says so, and with "Send `tug text`
-/// without asking" on tug sends it straight away; otherwise tug shows its card, and this says to
-/// look once it does. The outcome goes to stdout.
+/// without asking" on tug sends it straight away; otherwise tug shows its card. tug says which
+/// (`Progress`), and this passes it on on stderr; the outcome goes to stdout.
 async fn text(c: &Client, to: String, message: String) -> i32 {
     use std::io::IsTerminal;
-    use std::sync::atomic::{AtomicBool, Ordering};
     let call = Call::SendText {
         to,
         message,
         progress: true,
         typed: std::io::stdin().is_terminal(),
     };
-    let asked = AtomicBool::new(false);
     let mut say = |p: Progress| {
-        if p == Progress::Confirming && !asked.swap(true, Ordering::SeqCst) {
-            eprintln!("{}", format::TEXT_CONFIRMING);
+        if let Some(line) = format::text_progress(&p) {
+            eprintln!("{line}");
             let _ = std::io::stderr().flush();
         }
     };
-    let answer = c.call_with_progress(c.info(), &call, time_limit(&call), &mut say);
-    tokio::pin!(answer);
-    // Sent without the card, the phone usually answers at once; if it's slow, say what's happening.
-    let answer = tokio::select! {
-        r = &mut answer => r,
-        _ = tokio::time::sleep(std::time::Duration::from_millis(1500)) => {
-            if !asked.load(Ordering::SeqCst) {
-                eprintln!("Sending…");
-                let _ = std::io::stderr().flush();
-            }
-            answer.await
-        }
-    };
+    let answer = c.call_with_progress(c.info(), &call, time_limit(&call), &mut say).await;
     match answer.and_then(|v| {
         serde_json::from_value::<SendResult>(v).map_err(|e| ClientError::Other(format!("unexpected answer: {e}")))
     }) {

@@ -200,6 +200,9 @@ pub enum ServerMsg {
 pub enum Progress {
     /// tug is showing its card: Send or Don't send.
     Confirming,
+    /// A text is approved (or needed no card) and tug is sending it through the phone now. Only
+    /// to `send_text` calls that asked for progress.
+    Sending,
     /// Sent with Send: on offer in Tugboat, waiting for the phone to download it.
     Waiting {
         /// What the phone sees the files called.
@@ -300,7 +303,8 @@ pub enum Call {
     SendText {
         to: String,
         message: String,
-        /// Send `Progress::Confirming` if tug shows its card, so the command can say to look.
+        /// Send `Progress::Confirming` if tug shows its card and `Progress::Sending` once it sends,
+        /// so the command can say what's happening.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         progress: bool,
         /// `tug text` typed by a person: the command's stdin is a terminal. With "Send `tug text`

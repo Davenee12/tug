@@ -20,11 +20,12 @@ pub fn parse_enabled(v: Option<&str>) -> bool {
     v == Some("true")
 }
 
-/// Whether a text goes without the card: only with the switch on, and only for `tug text` typed
-/// in a terminal. An AI tool over MCP, or a script running `tug text` with no terminal, is always
-/// asked (the "Send texts" switch and the rate limit apply either way).
-pub fn skips_card(without_asking: bool, client: &ClientInfo, typed: bool) -> bool {
-    without_asking && typed && client.kind == ClientKind::Cli
+/// Whether a text goes without the card: only with the switch on, only for `tug text` typed in a
+/// terminal, and only to someone named exactly or by the start of their name (or a number). An AI
+/// tool over MCP, a script running `tug text` with no terminal, and a `loose` match ("ann" →
+/// "Joanne") are always asked (the "Send texts" switch and the rate limit apply either way).
+pub fn skips_card(without_asking: bool, client: &ClientInfo, typed: bool, loose: bool) -> bool {
+    without_asking && typed && !loose && client.kind == ClientKind::Cli
 }
 
 pub fn parse_permissions(v: Option<&str>) -> BTreeMap<String, bool> {
@@ -86,11 +87,15 @@ mod tests {
     fn only_a_typed_tug_text_skips_the_card_and_only_when_switched_on() {
         let cli = info("tug command", ClientKind::Cli);
         let mcp = info("claude-code", ClientKind::Mcp);
-        assert!(skips_card(true, &cli, true));
-        assert!(!skips_card(false, &cli, true), "off by default: always asked");
-        assert!(!skips_card(true, &cli, false), "a script with no terminal is asked");
-        assert!(!skips_card(true, &mcp, true), "an AI tool is always asked");
-        assert!(!skips_card(true, &mcp, false));
+        assert!(skips_card(true, &cli, true, false));
+        assert!(!skips_card(false, &cli, true, false), "off by default: always asked");
+        assert!(
+            !skips_card(true, &cli, false, false),
+            "a script with no terminal is asked"
+        );
+        assert!(!skips_card(true, &mcp, true, false), "an AI tool is always asked");
+        assert!(!skips_card(true, &mcp, false, false));
+        assert!(!skips_card(true, &cli, true, true), "a loose name match is asked");
     }
 
     #[test]
