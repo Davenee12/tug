@@ -21,6 +21,14 @@ updates:
     groups:
       cargo-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # The windows-rs crates move together: windows-collections must share its windows-core with
+      # `windows` and with Tauri's own (tao, wry, webview2-com), 0.62 today, because tug passes its
+      # collections to the Bluetooth APIs. Upgrade them in one change once Tauri moves (#112).
+      - dependency-name: windows
+        versions: [">= 0.63"]
+      - dependency-name: windows-collections
+        versions: [">= 0.4"]
 
   - package-ecosystem: npm
     directory: /
@@ -30,3 +38,8 @@ updates:
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # TypeScript 7 is the Go rewrite, and vue-tsc 3 can't run on it (it loads typescript/lib/tsc,
+      # which 7 doesn't ship). Revisit when vue-tsc supports it (#109).
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
