@@ -536,7 +536,7 @@ answers never land), `layout` (sidebar density and "wide", from sizes that follo
 `pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `seen` (when each Feed entry was last looked at, with other chat apps' old per-person
 times folded onto their stack once), `senders`
-(unknown-sender filter), `sharePrivacy` (hiding previews while sharing: the banner, Show anyway, a pop-up's kind), `singleFlight` (one press, one action), `smartReplies` (suggested replies: the rules, and when there are none), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
+(unknown-sender filter), `sharePrivacy` (hiding previews while sharing: the banner, Show anyway, a pop-up's kind), `singleFlight` (one press, one action), `smartActions` (links, email addresses, phone numbers, street addresses and parcel numbers in a text made one click: what counts, and what never does), `smartReplies` (suggested replies: the rules, and when there are none), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `startup` (startup reads that fail are retried, never block), `threadWindow` (long conversations render their newest texts first),
 `quickActions` (routing a taskbar task, one take at a time), `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
 scoring, the speed curve, inertia, the weather's handling, merging the controls), `tugboatDaily` (the

@@ -18,6 +18,7 @@ import ConversationRow from "./ConversationRow.vue";
 import MediaChip from "./MediaChip.vue";
 import MessageComposer from "./MessageComposer.vue";
 import SmartReplyChips from "./SmartReplyChips.vue";
+import SmartText from "./SmartText.vue";
 import { findCode } from "../lib/codes";
 import { conversationReplies } from "../lib/smartReplies";
 import type { SmsMessage } from "../types/protocol";
@@ -236,6 +237,8 @@ function bubbleClass(i: ConversationItem): string {
 }
 const codeIn = (i: ConversationItem) => findCode(i.body);
 // What each bubble shows: words, a photo chip ("Attachment: 1 Photo"), or both (lib/messageType).
+// The words go through SmartText, so links, numbers, addresses and parcel numbers in them are one
+// click (lib/smartActions); a code keeps its own chip underneath.
 const contents = computed(() => new Map(shownItems.value.map((i) => [i.id, itemContent(i)])));
 const contentOf = (i: ConversationItem): Shown => contents.value.get(i.id) ?? itemContent(i);
 // A backup's real photos and videos, shown in place of a chip.
@@ -461,7 +464,7 @@ async function retry(m: SmsMessage) {
                 {{ item.n.subtitle }}
               </span>
               <span v-if="unsent(item)" class="italic opacity-70">{{ contentOf(item).text }}</span>
-              <template v-else-if="contentOf(item).text">{{ contentOf(item).text }}</template>
+              <SmartText v-else-if="contentOf(item).text" :text="contentOf(item).text" />
               <MessageAttachments
                 v-if="attachmentsOf(item).length"
                 :attachments="attachmentsOf(item)"
