@@ -21,6 +21,15 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.21",
+    title: "Texts from the terminal, and voice typing fixes",
+    highlights: [
+      "Turn on Send tug text without asking (Settings › Developer tools) and tug text sends straight away, no click.",
+      "Voice typing no longer types made-up words after a cough or a mumble.",
+      "Fixes for voice typing's switch and speech model download.",
+    ],
+  },
+  {
     version: "0.5.20",
     title: "Faster voice typing, and fixes",
     highlights: [

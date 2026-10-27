@@ -164,6 +164,10 @@ impl Engine for Whisper {
         // No "[BLANK_AUDIO]" or "(music)" tokens.
         p.set_suppress_nst(true);
         p.set_temperature(0.0);
+        // Greedy for real: whisper.cpp's default fallback re-decodes a hard hold (a cough, a
+        // mumble, a repetition loop) up to 5 more times with random sampling and types the last
+        // try, so it would type made-up words, and slowly.
+        p.set_temperature_inc(0.0);
         p.set_audio_ctx(self.tuning.window.unwrap_or_else(|| audio_ctx(samples.len())));
         p.set_max_tokens(max_tokens(samples.len()));
         if !self.prompt_tokens.is_empty() {

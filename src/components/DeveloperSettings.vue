@@ -74,7 +74,10 @@ const withoutAsking = computed({
 const COMMANDS = computed<Array<[string, string]>>(() => [
   ["tug code", "Print the newest verification code (add --copy to put it on the clipboard)"],
   ["tug boat report.pdf", "Send files to your iPhone with Tugboat (tug asks you first)"],
-  ['tug text Sam "On my way"', withoutAsking.value ? "Text someone (sends right away)" : "Text someone (tug asks you first)"],
+  [
+    'tug text Sam "On my way"',
+    withoutAsking.value && textsOn.value && s.value?.enabled ? "Text someone (sends right away)" : "Text someone (tug asks you first)",
+  ],
   ["tug status", "Is tug running, and how's the phone"],
 ]);
 </script>
@@ -180,7 +183,7 @@ const COMMANDS = computed<Array<[string, string]>>(() => [
           label="Send tug text without asking"
           :description="
             textsOn
-              ? 'Texts you type with tug text in a terminal send right away, without the Send card. AI tools connected to tug still ask you first. Anything that can type in your terminals could then text as you.'
+              ? 'Texts you type with tug text in a terminal send right away, without the Send card, when the name matches one person. AI tools connected to tug still ask, but an AI agent that runs commands in a terminal (like Cursor or Copilot) could text without asking.'
               : 'Turn on Send texts above first.'
           "
         >

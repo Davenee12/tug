@@ -13,7 +13,7 @@ use tug_bridge::server::ProgressSink;
 use tug_bridge::time::iso_utc;
 
 use super::recipient::{resolve, Recipient};
-use super::{dev_apps, files, outgoing, phone_model, DevTools};
+use super::{dev_apps, files, outgoing, phone_model, settings, DevTools};
 use crate::ams::{PlaybackState, RemoteCommand};
 use crate::ble::Command;
 use crate::messages::{Direction, StoredMessage};
@@ -368,8 +368,8 @@ async fn send_text(
         Ok(resolve(&query, &contacts, &recent))
     })
     .await?;
-    let (name, address) = match resolved {
-        Recipient::One { name, address } => (name, address),
+    let (name, address, loose) = match resolved {
+        Recipient::One { name, address, loose } => (name, address, loose),
         Recipient::Several(names) => {
             return Err(BridgeError::new(
                 ErrorCode::Invalid,
@@ -387,8 +387,15 @@ async fn send_text(
         }
     };
     json(
-        dt.confirm_and_send(client, name, address, message, typed, progress)
-            .await?,
+        dt.confirm_and_send(
+            client,
+            name,
+            address,
+            message,
+            settings::skips_card(dt.texts_without_asking(), client, typed, loose),
+            progress,
+        )
+        .await?,
     )
 }
 

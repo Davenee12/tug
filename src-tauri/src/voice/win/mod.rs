@@ -607,7 +607,7 @@ fn recognize(engines: &mut Engines, pcm: &[i16]) -> Result<(String, &'static str
 fn hold(press: &Press, engines: &mut Engines) -> VoiceOutcome {
     let Some(target) = press.target.clone() else {
         log::info!("voice typing: nothing in front to type into");
-        return VoiceOutcome::NoTarget;
+        return VoiceOutcome::NoWindow;
     };
     let blocked = system::mic_blocked();
     super::note_mic_blocked(blocked);

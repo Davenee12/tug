@@ -1095,7 +1095,7 @@ export interface VoiceStatus {
 
 /** What one hold did (`voice-typed`). The words themselves are never sent. */
 export interface VoiceTyped {
-  outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "micBusy" | "noTarget" | "keysHeld" | "unavailable" | "failed";
+  outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "micBusy" | "noTarget" | "noWindow" | "keysHeld" | "unavailable" | "failed";
 }
 
 /** Where automatic updates are (`updater::policy::Phase`). */

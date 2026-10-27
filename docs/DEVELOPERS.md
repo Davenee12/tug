@@ -102,10 +102,13 @@ ever sent from tug's own card (the one exception is below):
 **Send `tug text` without asking** (Settings › Developer tools › The tug command, off until you
 turn it on, and only while **Send texts** is on) skips the card for `tug text` typed in a
 terminal: tug sends it straight away. Everything else still gets the card: AI tools over MCP
-always, and `tug text` run by a script or program with no terminal (its stdin isn't a console).
-That check is a hint, not proof: anything that can type in your terminals, including an AI tool
-that drives a real terminal window, looks the same as you, so only turn it on if that's fine with
-you. The rate limit (5 texts per 10 minutes) still applies.
+always, `tug text` run by a script or program with no terminal (its stdin isn't a console), and a
+name that only *contains* what you typed (`ann` for "Joanne"; a full name, the start of one like
+`tay` for "Taylor", or a number is fine). It goes off by itself when Send texts, the master switch
+or Revoke access turns things off.
+That check is a hint, not proof: anything that can type in your terminals, including an AI agent
+that runs commands in a real terminal window (Cursor, Copilot and others do), looks the same as
+you, so only turn it on if that's fine with you. The rate limit (5 texts per 10 minutes) still applies.
 - One card at a time, and an answer only counts for the card it was given on.
 - A message longer than the box says so, so you can scroll through all of it before you send.
 - The **Send texts** (or **Send files to your iPhone**) switch must be on; with it off the tool is

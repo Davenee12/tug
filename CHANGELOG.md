@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.5.21 — 2026-10-27
+
+Texts from the terminal without a click, and fixes from a review of voice typing. From #162 and
+the release review. It arrives through automatic updates.
+
+### New
+- **Send `tug text` without asking** (Settings › Developer tools › The tug command, off until you
+  turn it on, and only while Send texts is on). `tug text Sam "On my way"` typed in a terminal
+  sends straight away instead of waiting for Send on tug's card, and says "Sending…" then who it
+  went to. AI tools connected to tug, `tug text` run by a script with no terminal, and a name
+  that only *contains* what you typed ("ann" for Joanne) still get the card; the start of a
+  name ("tay" for Taylor) or a number is fine. It goes off by itself when Send texts, Let AI tools
+  use tug or Revoke access turns things off. Anything that can type in your terminals, including
+  AI agents that run commands in a real terminal window, looks like you to it. (#162)
+
+### Fixed
+- **Accurate voice typing no longer types made-up words after a cough or mumble.** On a hold it
+  couldn't make out, the speech engine tried again up to five more times with random guesses and
+  typed the last one, slowly. It now types nothing ("Didn't catch that").
+- Words between two stars (`x * y * z`, `a ** b`) are no longer removed as if they were a sound
+  note like `*coughs*`.
+- On a PC where Windows' speech languages can't be listed, voice typing no longer switches itself
+  off when the speech model can listen on its own.
+- Turning voice typing off while the speech model is just arriving no longer leaves its shortcut
+  working (Settings, a finished download and startup now take turns).
+- Clicking Resume right as a download ends no longer shows it as paused while it runs.
+- A download site that redirects somewhere tug won't follow now says the site is unavailable,
+  not "check your internet connection".
+- Voice typing with no window in front says "Click where the text should go" instead of "The
+  window changed".
+- In Settings, a voice typing change that fails no longer leaves the control showing it, and
+  Ctrl+K no longer says "Voice typing is off" right after an error.
+- `tug text` and `tug boat` only say "Check tug: Send or Don't send" once tug's card is really up,
+  not before a "tug is already asking you about something else".
+- Security: `ctutils` updated to 0.4.6 for a RustSec advisory (a constant-time comparison could
+  compile to a branch on secret values). It's used through the hashing in tug's local connections.
+
 ## v0.5.20 — 2026-10-18
 
 A bug-fix release (every fifth version is fixes only). It arrives through automatic updates.
