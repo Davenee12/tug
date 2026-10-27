@@ -141,7 +141,9 @@ impl DownloadError {
 /// rather than a connection that dropped: trying again straight away won't help, so Settings
 /// doesn't promise to pick up where it left off.
 pub fn source_unavailable(code: u16) -> bool {
-    matches!(code, 401 | 403 | 404 | 410 | 429 | 451)
+    // A 3xx only ends up here when a redirect was refused (off Hugging Face, not HTTPS, or too
+    // many), which resuming won't fix either.
+    matches!(code, 300..=399 | 401 | 403 | 404 | 410 | 429 | 451)
 }
 
 /// Where the download may be redirected: Hugging Face itself and its download servers
@@ -794,6 +796,7 @@ mod tests {
         assert!(!allowed_host("example.com"));
         assert!(!allowed_host("objects.githubusercontent.com"));
         assert!(source_unavailable(404) && source_unavailable(429) && !source_unavailable(503));
+        assert!(source_unavailable(302), "a refused redirect");
     }
 
     #[test]

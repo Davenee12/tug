@@ -206,6 +206,12 @@ const NOT_SPEECH: &[&str] = &[
     "no speech",
 ];
 
+/// `*coughs*`, `*keyboard clicking*`: letters (and spaces between words) hugging both stars.
+/// Not `x * y * z` or `a ** b`, which are dictation.
+fn is_star_note(inner: &str) -> bool {
+    !inner.is_empty() && inner.trim() == inner && inner.chars().all(|c| c.is_alphabetic() || c == ' ')
+}
+
 fn is_note(inner: &str, square: bool) -> bool {
     let words = inner.trim().to_lowercase();
     square || NOT_SPEECH.contains(&words.as_str())
@@ -227,7 +233,7 @@ pub fn clean(raw: &str) -> String {
         let after = &rest[start + 1..];
         match after.find(close) {
             Some(end)
-                if (open != '*' || after[..end].chars().all(|c| c.is_alphabetic() || c == ' '))
+                if (open != '*' || is_star_note(&after[..end]))
                     && (open == '*' || is_note(&after[..end], open == '[')) =>
             {
                 out.push_str(&rest[..start]);
@@ -348,6 +354,12 @@ mod tests {
         assert_eq!(clean("print(x)"), "print(x)", "round brackets that aren't a note");
         assert_eq!(clean("open paren x close paren"), "open paren x close paren");
         assert_eq!(clean("a * b"), "a * b");
+        assert_eq!(
+            clean("x * y * z"),
+            "x * y * z",
+            "stars around spaced words are dictation"
+        );
+        assert_eq!(clean("a ** b"), "a ** b");
         assert_eq!(clean("a *b2* c"), "a *b2* c", "not a note: has a digit");
         assert_eq!(clean("( unclosed"), "( unclosed");
         assert_eq!(clean("x [ unclosed"), "x [ unclosed");
