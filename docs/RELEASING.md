@@ -196,8 +196,48 @@ README.
    `tug-0.5.19-portable.exe`, `SHA256SUMS.txt` and, with the updater key set up,
    `tug-0.5.19-setup.exe.sig` and `latest.json`. The notes are the CHANGELOG section followed by the
    checksums. Edit the notes if you like.
-5. **Publish it.** Installed copies with automatic downloads on find it within 6 hours (or at once
-   from Settings › About › Check for updates), download it quietly and show the **Update** button.
+5. **Publish it.** It starts as a **staged rollout** at 10% (below): installed copies whose
+   rollout number is under 10 find it within 6 hours, download it quietly and show the **Update**
+   button; Settings › About › Check for updates always takes it at once, so update your own PC that
+   way first.
+6. **Roll it out.** Watch it, then widen it (see Staged rollouts).
+
+## Staged rollouts
+
+Each installed copy keeps a number from 0 to 99, picked at random once and never sent anywhere.
+`latest.json` says how far a release has rolled out (`"rollout": 10`), and the background check
+only takes it once that's above the copy's number. **Check for updates** always takes the newest
+release, so you (or anyone who wants it now) aren't held back. New releases start at 10%
+(`INITIAL_ROLLOUT` in `scripts/release-assets.mjs`). Copies older than the version that brought
+this in ignore it and update straight away.
+
+From your PC, with the GitHub CLI signed in as you:
+
+```powershell
+node scripts/rollout.mjs status            # the newest release: its %, downloads and reported problems
+node scripts/rollout.mjs status 0.5.22     # a given release
+node scripts/rollout.mjs set 0.5.22 50     # roll it out to half of tug
+node scripts/rollout.mjs set 0.5.22 100    # everyone
+node scripts/rollout.mjs set 0.5.22 0      # pause: nobody new gets it
+```
+
+`set` rewrites the release's `latest.json` (only the `rollout` field; the signature is kept), which
+isn't signed or in the checksums, so changing it never breaks a download. For a moment while it's
+replaced there's no `latest.json`; a check then just tries again later.
+
+**What to watch** (tug has no telemetry, so these are the signals):
+
+- `status` shows GitHub's download counts and the issues filed against the version since it went
+  out. **Report a problem** in tug (Settings › About) opens GitHub's bug report form titled
+  `[v0.5.22] …` with the version filled in and the diagnostics on the clipboard, so those are
+  counted; so are issues that just mention `v0.5.22`.
+- When a version's last run didn't close normally (a crash, but also a power cut or End task), tug
+  offers that report once ("tug didn't close normally last time"), titled `[v0.5.22] tug closed
+  unexpectedly`; `status` counts these as crashes.
+- Your own PC on the new version, and tug's log there.
+
+**A rhythm that works:** 10% for a day or two, 50% for a day, then 100%. A hotfix can go straight
+to 100%. If anything looks wrong, `set … 0` and ship the fix forward.
 
 **A manual run** (Actions › release › Run workflow) takes the version (as in `package.json`) and a
 **dry run** switch, on by default. A dry run runs only `build`: it builds and checks everything and
@@ -235,7 +275,9 @@ shipping a fixed, newer version.
 - **A draft you haven't published:** delete the draft on the Releases page, then the tag:
   `git push --delete origin v0.5.19` and `git tag -d v0.5.19`. Fix, and tag again.
 - **A published release that's bad:**
-  1. Stop new downloads at once: edit the release and tick **Set as a pre-release** (GitHub's
+  1. Stop new downloads at once: `node scripts/rollout.mjs set 0.5.22 0` pauses it for every copy
+     that understands rollouts. Older copies don't, so also (or instead) edit the release and tick
+     **Set as a pre-release** (GitHub's
      "latest" then points back at the previous release, which installed copies see as "not newer"),
      or delete its `latest.json` asset (checks then fail quietly and retry later). Copies that already
      downloaded it but haven't restarted can still install it when someone clicks Update.
