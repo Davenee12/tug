@@ -38,6 +38,9 @@
 //   http://localhost:1420/?model=iPhone12,8   the phone reports that model identifier (default iPhone16,2)
 //   http://localhost:1420/?nomodel    the phone hasn't reported its model (generic picture, no model line)
 //   http://localhost:1420/?away       the phone is out of range: disconnected, last known model kept
+//   http://localhost:1420/?welcomeback   back at the PC after 1 h 20 min away: the Feed opens with its
+//                                     "Welcome back" card summing up what arrived meanwhile (texts by
+//                                     person, missed calls, a fresh and an old code, other apps)
 //   http://localhost:1420/?tugboat    the Tugboat panel open with a phone connected: a video arriving,
 //                                     saved files, a text from the phone, files on offer (?drop works too;
 //                                     add &android for an Android phone)
@@ -168,6 +171,25 @@ const history: PhoneNotification[] = noPhone
       n("com.apple.MobileSMS", "Messages", "‪+1 (555) 013-2244‬", "Congrats! You've been selected for a $500 gift card. Reply YES to claim before midnight.", 7),
       n("com.apple.MobileSMS", "Messages", "72975", "Your Acme verification code is 731904. It expires in 10 minutes.", 12),
     ];
+
+// ?welcomeback: back after 1 h 20 min away. The sample history's last hour (Zoe, Jane, Mum's missed
+// call, a fresh and an old code, WhatsApp, Slack, Calendar...) plus a little more is what arrived
+// meanwhile, so the Feed opens with the "Welcome back" card on top.
+if (params.has("welcomeback") && !noPhone) {
+  history.push(
+    n("com.apple.MobileSMS", "Messages", "Priya", "Lunch tomorrow? The new place on Elm opens at 11:30", 47),
+    n("com.apple.MobileSMS", "Messages", "Priya", "Or Friday works too", 46),
+    n("com.apple.mobilephone", "Phone", "Chris Smith", "Missed Call", 58, { category: "missedCall", flags: flags({ positiveAction: true }), positiveLabel: "Dial" }),
+    n("com.apple.Fitness", "Fitness", "Activity", "You're halfway to closing your Move ring.", 33, { category: "healthAndFitness" }),
+  );
+  // As if the person had just come back: once the history has loaded, the card for the last 80 min.
+  const showCard = async (tries: number) => {
+    const { useWelcomeBackStore } = await import("../stores/welcomeBack");
+    const at = Date.now();
+    if (!useWelcomeBackStore().cameBack({ since: at - 80 * min, until: at }) && tries > 0) setTimeout(() => void showCard(tries - 1), 300);
+  };
+  setTimeout(() => void showCard(10), 500);
+}
 
 // Mirrors the backend's reconnect sweep: anything no longer on the phone is cleared.
 for (const x of history) if (!x.live && x.removedAt == null) x.removedAt = x.receivedAt + min;

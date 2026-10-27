@@ -605,6 +605,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?nudge` | Texts and contacts off: the Feed's "Get more from tug" nudge |
 | `/?lasterror`, `/?textsbroken`, `/?livetexts` | Connection health states |
 | `/?away` | The phone out of range, last model kept |
+| `/?welcomeback` | Back after 1 h 20 min away: the Feed's "Welcome back" card summing up what arrived meanwhile |
 | `/?model=iPhone12,8`, `/?nomodel` | A specific phone model / none reported |
 | `/?pairing` | The PIN confirmation dialog |
 | `/?call` | A call rings after 1.5 s (and becomes a missed call) |

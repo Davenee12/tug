@@ -8,6 +8,7 @@ import { usePcAudioStore } from "./stores/pcAudio";
 import { useVoiceStore } from "./stores/voice";
 import { useGameStore } from "./stores/game";
 import { useUpdateStore } from "./stores/update";
+import { useWelcomeBackStore } from "./stores/welcomeBack";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import ConnectPanel from "./components/ConnectPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
@@ -41,6 +42,7 @@ const pcAudio = usePcAudioStore();
 const voice = useVoiceStore();
 const game = useGameStore();
 const update = useUpdateStore();
+const welcomeBack = useWelcomeBackStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
 // show the Connection panel beside the feed; everything else (and narrow windows) uses
@@ -183,6 +185,9 @@ onMounted(async () => {
     console.error("tug init failed", e);
     tug.notify("error", START_FAILED);
   }
+  // "Welcome back": the Feed's summary on coming back after a while away from the window (once
+  // history has loaded, so there's something to sum up).
+  welcomeBack.init();
   // Automatic updates: the Update button and Settings › About; after an update restart, this also
   // reopens the screen the person left (so it runs once tug's own state has loaded).
   void update.init();
@@ -209,6 +214,7 @@ onUnmounted(() => {
   pcAudio.dispose();
   voice.dispose();
   update.dispose();
+  welcomeBack.dispose();
 });
 </script>
 
