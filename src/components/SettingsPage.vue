@@ -11,6 +11,7 @@ import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { usePcAudioStore } from "../stores/pcAudio";
 import { useUpdateStore } from "../stores/update";
+import { usePickupsStore } from "../stores/pickups";
 import { connectionHealth, errorAge, type HealthLink, type LinkState } from "../lib/health";
 import { stepZoom } from "../lib/zoom";
 import { escClosesSettings } from "../lib/escape";
@@ -34,6 +35,8 @@ const pcAudio = usePcAudioStore();
 const pcView = computed(() => pcAudio.view);
 // Data & privacy › What goes online: update checks are listed only when this build makes them.
 const update = useUpdateStore();
+const pickups = usePickupsStore();
+void pickups.load();
 const whatGoesOnline = computed(
   () =>
     "Weather, only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name. App icons: each app's ID (like com.google.Gmail, never what it sent you) goes to Apple's App Store once. Album art: the artist and album name of what's playing go to Apple's music catalog when tug doesn't have that album's cover yet." +
@@ -906,6 +909,11 @@ async function clearHistory() {
         <template v-else>
           <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow label="tug" :description="version ? `Version ${version}` : 'Version unavailable'" />
+            <SettingsRow
+              v-if="pickups.aboutLine"
+              label="Pickups saved"
+              :description="`${pickups.aboutLine} Replies, codes, calls and music handled from this PC, counted here and never sent anywhere.`"
+            />
             <UpdateSettings />
             <SettingsRow label="What's new" description="See what changed in this and earlier updates.">
               <button class="btn-secondary btn-sm" @click="tug.openWhatsNew()">

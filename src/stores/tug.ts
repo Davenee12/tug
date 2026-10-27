@@ -107,6 +107,8 @@ import {
 } from "../lib/sharePrivacy";
 import { useTugboatStore } from "./tugboat";
 import { useDevToolsStore } from "./devtools";
+import { usePickupsStore } from "./pickups";
+import type { PickupKind } from "../lib/pickups";
 
 /** The Spotify panel's tabs. */
 export type SpotifyTab = "search" | "playlists" | "recent" | "top" | "queue";
@@ -193,6 +195,11 @@ const EMPTY_NOW_PLAYING: NowPlaying = {
 
 /** A send the iPhone didn't take; the message stays in the conversation with Retry. */
 const NOT_SENT = "Your iPhone didn't send that text. Use Retry when it's nearby.";
+
+/** Something was done from the PC instead of the phone: Pickups saved (stores/pickups). */
+function savedPickup(kind: PickupKind) {
+  void usePickupsStore().count(kind);
+}
 
 export const useTugStore = defineStore("tug", () => {
   const status = ref<DeviceStatus>(EMPTY_STATUS);
@@ -835,6 +842,7 @@ export const useTugStore = defineStore("tug", () => {
 
   /** The type-the-code shortcut was pressed: a small pop-up says what happened (never the code). */
   function onCodeFilled(e: CodeFilled) {
+    if (e.outcome === "typed") savedPickup("code");
     // Feedback for a key the person just pressed, so Do not disturb doesn't hold it; turning
     // Windows pop-ups off does.
     if (!settings.value.toasts) return;
@@ -1012,6 +1020,9 @@ export const useTugStore = defineStore("tug", () => {
     if (message) addMissingMessages([message], "pop-up reply");
     // A reply the phone didn't take (failed, or not confirmed) leaves the conversation unread.
     if (kind === "replied" && !replyReadsConversation(message)) return;
+    if (kind === "replied") savedPickup("reply");
+    else if (kind === "copied") savedPickup("code");
+    else if (kind === "calledBack") savedPickup("call");
     const n = notifications.value.find((x) => x.id === id);
     if (!n) return;
     if (kind === "open") {
@@ -1139,6 +1150,7 @@ export const useTugStore = defineStore("tug", () => {
       return false;
     }
     notify("info", `Copied ${code}`);
+    savedPickup("code");
     void clearItems(from, { quiet: true });
     return true;
   }
@@ -1216,6 +1228,7 @@ export const useTugStore = defineStore("tug", () => {
     const ok = await attempt(() => api.performAction(n.id, answer).then(() => true));
     if (!ok) return false;
     hideCall(n.id);
+    savedPickup("call");
     if (answer) notify("info", "Answered. Talk on your iPhone.");
     return true;
   }
@@ -1245,6 +1258,7 @@ export const useTugStore = defineStore("tug", () => {
     try {
       await api.dial(number);
       notify("info", `Calling ${name}. Talk on your iPhone.`);
+      savedPickup("call");
       return true;
     } catch (e) {
       notify("error", `Couldn't call ${name}: ${errorMessage(e)}`);
@@ -1278,6 +1292,7 @@ export const useTugStore = defineStore("tug", () => {
       const ok = await attempt(() => api.performAction(missed.id, true).then(() => true));
       if (!ok) return false;
       notify("info", `Calling ${cleanName(name)} back on your iPhone.`);
+      savedPickup("call");
       // The phone logs the call a moment later; show it in Calls without waiting.
       window.setTimeout(() => void api.refreshCalls().catch(() => undefined), 6000);
       return true;
@@ -2275,6 +2290,7 @@ export const useTugStore = defineStore("tug", () => {
       try {
         const outcome = sendOutcome(await api.sendMessage(address, text));
         if (outcome === "failed") notify("error", NOT_SENT);
+        else savedPickup("reply");
         return outcome;
       } catch (e) {
         notify("error", errorMessage(e));
@@ -2300,7 +2316,9 @@ export const useTugStore = defineStore("tug", () => {
     openUrl: (url: string) => attempt(() => api.openUrl(url)),
     /** True once the phone accepted the write (which isn't the player acting on it). */
     async media(command: MediaCommand): Promise<boolean> {
-      return (await attempt(() => api.mediaCommand(command).then(() => true))) === true;
+      const ok = (await attempt(() => api.mediaCommand(command).then(() => true))) === true;
+      if (ok) savedPickup("music");
+      return ok;
     },
     startDiscovery: () => attempt(api.startDiscovery),
     stopDiscovery: () => {
