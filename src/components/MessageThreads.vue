@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { ChevronRight, History, Image, Info, Phone, Plus, RotateCcw, ShieldQuestionMark, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { useScheduledTextsStore } from "../stores/scheduledTexts";
 import { useBackupStore } from "../stores/backup";
 import { backupLabel, isImported, photoHint } from "../lib/backupImport";
 import { api } from "../lib/ipc";
@@ -18,11 +19,13 @@ import ConversationRow from "./ConversationRow.vue";
 import MediaChip from "./MediaChip.vue";
 import MessageComposer from "./MessageComposer.vue";
 import SmartReplyChips from "./SmartReplyChips.vue";
+import ScheduledTexts from "./ScheduledTexts.vue";
 import { findCode } from "../lib/codes";
 import { conversationReplies } from "../lib/smartReplies";
 import type { SmsMessage } from "../types/protocol";
 
 const tug = useTugStore();
+const scheduled = useScheduledTextsStore();
 // History brought in from an iPhone backup: conversations older than the recent page, and each
 // conversation's whole history when it's opened (stores/backup).
 const backup = useBackupStore();
@@ -332,6 +335,21 @@ async function send(text = draft.value) {
   sending.value = false;
 }
 
+// Send later: the draft goes into the conversation's scheduled texts (stores/scheduledTexts) and
+// the box empties, as if it had been sent.
+async function sendLater(at: number, label: string) {
+  const conv = selected.value;
+  const to = replyTo.value;
+  const text = draft.value;
+  if (!conv || !to || !text.trim()) return;
+  if (!(await scheduled.schedule({ address: to, name: conv.contact, threadKey: conv.key }, text, at))) {
+    tug.notify("error", "Too many texts are waiting to be sent. Send or cancel one first.");
+    return;
+  }
+  if (draftFor(conv.key) === text) setDraftFor(conv.key, "");
+  tug.notify("info", `Your text will send ${label.charAt(0).toLowerCase()}${label.slice(1)}.`);
+}
+
 // Retry resends that same message to the number it was meant for (not a new copy to whichever
 // number the conversation shows now); on success the "Not sent" state goes away.
 const retrying = ref<number | null>(null);
@@ -511,6 +529,7 @@ async function retry(m: SmsMessage) {
           </select>
           <span v-if="selected.addresses.length > 1">· {{ selected.addresses.length }} numbers under this name</span>
         </label>
+        <ScheduledTexts :thread-key="selected.key" />
         <SmartReplyChips
           v-if="canReply"
           :replies="suggestions"
@@ -527,6 +546,7 @@ async function retry(m: SmsMessage) {
           :blocked="sending || !replyTo"
           @update="(text) => setDraftFor(selected!.key, text)"
           @send="send()"
+          @schedule="sendLater"
         />
         <p v-else class="flex items-center gap-2 py-1 text-[13px] text-muted">
           <Info :size="14" class="shrink-0" />
