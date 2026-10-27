@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { Bell, Bug, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, History, Info, MessageSquare, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
+import { Bell, Bug, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, Heart, History, Info, MessageSquare, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
 import { useBackupStore } from "../stores/backup";
 import { importedLine } from "../lib/backupImport";
 import BackupImport from "./BackupImport.vue";
@@ -309,6 +309,12 @@ async function clearHistory() {
   // Empties the lists and says "History cleared" only if it worked; a failure says why.
   // History brought in from an iPhone backup goes with it.
   if (await tug.clearHistory()) backup.historyCleared();
+}
+
+/** GitHub Sponsors for tug's maintainer, opened in the browser. */
+const SPONSOR_URL = "https://github.com/sponsors/Davenee12";
+function openSponsor() {
+  void api.openUrl(SPONSOR_URL).catch((e) => tug.notify("error", errorMessage(e)));
 }
 </script>
 
@@ -918,6 +924,14 @@ async function clearHistory() {
             <SettingsRow label="What's new" description="See what changed in this and earlier updates.">
               <button class="btn-secondary btn-sm" @click="tug.openWhatsNew()">
                 <Sparkles :size="14" /> What's new
+              </button>
+            </SettingsRow>
+            <SettingsRow
+              label="Support tug"
+              description="tug is free and open source. Sponsoring helps pay for code signing and keeps it going."
+            >
+              <button class="btn-secondary btn-sm" @click="openSponsor">
+                <Heart :size="14" /> Sponsor
               </button>
             </SettingsRow>
             <SettingsRow
