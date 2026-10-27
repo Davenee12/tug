@@ -101,9 +101,11 @@ describe("search (Ctrl+K) while previews are hidden", () => {
     expect(paletteVue).toContain("tug.previewsHidden && 'previews-hidden'");
   });
 
-  it("marks people, texts and notifications private, and leaves tug's own actions alone", () => {
-    const person = section("<!-- Person -->", "<!-- Text message -->");
+  it("marks people, calls, texts and notifications private, and leaves tug's own actions alone", () => {
+    const person = section("<!-- Person -->", "<!-- Recent call -->");
     expect(person.match(/preview-private/g)?.length, "name and number").toBe(2);
+    const call = section("<!-- Recent call -->", "<!-- Text message -->");
+    expect(call.match(/preview-private/g)?.length, "caller and number").toBe(2);
     const text = section("<!-- Text message -->", "<!-- Notification -->");
     expect(text.match(/preview-private/g)?.length, "sender and text").toBe(2);
     // The sender's avatar is theirs (photo or initials), so it blurs like the Feed's.

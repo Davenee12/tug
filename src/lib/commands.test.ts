@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { afterPaletteSend, notificationPick, parseActions, type ActionContext, type Person } from "./commands";
+import {
+  afterPaletteSend,
+  callPick,
+  matchCalls,
+  notificationPick,
+  parseActions,
+  type ActionContext,
+  type Person,
+} from "./commands";
 import { threadKey } from "./format";
-import type { PhoneNotification } from "../types/protocol";
+import type { CallDirection, CallRecord, PhoneNotification } from "../types/protocol";
 
 const people: Person[] = [
   { name: "zoe 💜", address: "+13025550173" },
@@ -316,5 +324,106 @@ describe("notificationPick (Ctrl+K)", () => {
       // Cleared from the Feed: shown in full in the results, still not in Messages.
       expect(notificationPick(n(appId, "Zoe", 1))).toEqual({ open: "here" });
     }
+  });
+});
+
+describe("matchCalls (Ctrl+K)", () => {
+  const call = (direction: CallDirection, name: string | null, number: string | null, at: string | null): CallRecord => ({
+    direction,
+    name,
+    number,
+    at,
+  });
+  const SAM = "+15550100142";
+  // Newest first, as the phone sends them; one untimed call, as the phone can list.
+  const calls: CallRecord[] = [
+    call("missed", null, SAM, "2026-10-27T09:30:00"),
+    call("outgoing", "Priya Shah", "+12145550186", "2026-10-27T08:00:00"),
+    call("missed", null, null, "2026-10-26T22:10:00"),
+    call("incoming", "Sam", SAM, "2026-10-26T18:00:00"),
+    call("incoming", null, "+447700900123", "2026-10-25T12:00:00"),
+    call("missed", "Rosamund", "+19725550111", "2026-10-24T07:45:00"),
+    call("outgoing", "Sam", SAM, null),
+  ];
+  // Contacts by number: Sam is saved, so his call the phone listed without a name is his too.
+  const nameFor = new Map([[SAM, "Sam 💜"]]);
+  const at = (found: CallRecord[]) => found.map((c) => c.at);
+
+  it("finds a contact's calls by name, newest first, the untimed one last", () => {
+    expect(at(matchCalls("Sam", calls, nameFor))).toEqual(["2026-10-27T09:30:00", "2026-10-26T18:00:00", null]);
+    expect(at(matchCalls("  sa ", calls, nameFor))).toHaveLength(3);
+    // A word's start, like texts and notifications: "sam" isn't inside Rosamund.
+    expect(matchCalls("sam", calls, nameFor).some((c) => c.name === "Rosamund")).toBe(false);
+  });
+
+  it("matches the name the phone gave, and every word typed", () => {
+    expect(matchCalls("priya", calls, new Map())).toEqual([calls[1]]);
+    expect(matchCalls("pri sh", calls, new Map())).toEqual([calls[1]]);
+    expect(matchCalls("priya jones", calls, new Map())).toEqual([]);
+  });
+
+  it("finds part of a number however it's typed", () => {
+    expect(at(matchCalls("0142", calls, nameFor))).toEqual(["2026-10-27T09:30:00", "2026-10-26T18:00:00", null]);
+    expect(matchCalls("(555) 010-0142", calls, nameFor)).toHaveLength(3);
+    expect(matchCalls("+1 555 010 0142", calls, nameFor)).toHaveLength(3);
+    // A local number for an international one: the same last 10 digits.
+    expect(matchCalls("07700 900123", calls, nameFor)).toEqual([calls[4]]);
+  });
+
+  it("needs 3 digits before a number matches, and never matches a withheld one", () => {
+    expect(matchCalls("01", calls, nameFor)).toEqual([]);
+    expect(matchCalls("555", calls, nameFor).some((c) => c.number === null)).toBe(false);
+  });
+
+  it("caps the list", () => {
+    const many = Array.from({ length: 12 }, (_, i) => call("incoming", "Sam", SAM, `2026-10-${String(i + 10)}T10:00:00`));
+    const found = matchCalls("sam", many, nameFor);
+    expect(found).toHaveLength(5);
+    expect(found[0].at).toBe("2026-10-21T10:00:00");
+    expect(matchCalls("sam", many, nameFor, 2)).toHaveLength(2);
+  });
+
+  it("'missed' lists missed calls, of anyone or of whoever follows", () => {
+    expect(at(matchCalls("missed", calls, nameFor))).toEqual([
+      "2026-10-27T09:30:00",
+      "2026-10-26T22:10:00",
+      "2026-10-24T07:45:00",
+    ]);
+    expect(matchCalls("Missed calls", calls, nameFor)).toHaveLength(3);
+    expect(matchCalls("missed sam", calls, nameFor)).toEqual([calls[0]]);
+    expect(matchCalls("missed calls from 0142", calls, nameFor)).toEqual([calls[0]]);
+    expect(matchCalls("missed priya", calls, nameFor)).toEqual([]);
+  });
+
+  it("finds nothing for nothing typed, or a name nobody has", () => {
+    expect(matchCalls("", calls, nameFor)).toEqual([]);
+    expect(matchCalls("   ", calls, nameFor)).toEqual([]);
+    expect(matchCalls("zoe", calls, nameFor)).toEqual([]);
+    expect(matchCalls("💜", calls, nameFor)).toEqual([]);
+  });
+
+  it("leaves the list it was given as it was", () => {
+    const copy = [...calls];
+    matchCalls("sam", calls, nameFor);
+    expect(calls).toEqual(copy);
+  });
+});
+
+describe("callPick (Ctrl+K)", () => {
+  const number = "+15550100142";
+
+  it("calls them back or dials when tug can, worded like the Calls list's button", () => {
+    expect(callPick({ direction: "missed", number }, "back")).toEqual({ open: "call", label: "Call back" });
+    expect(callPick({ direction: "missed", number }, "dial")).toEqual({ open: "call", label: "Call back" });
+    expect(callPick({ direction: "outgoing", number }, "dial")).toEqual({ open: "call", label: "Call" });
+  });
+
+  it("opens their conversation when tug can't call them", () => {
+    expect(callPick({ direction: "incoming", number }, null)).toEqual({ open: "message", label: "Message" });
+    expect(callPick({ direction: "missed", number }, null)).toEqual({ open: "message", label: "Message" });
+  });
+
+  it("shows a withheld number's call in Calls: there's no one to call or text", () => {
+    expect(callPick({ direction: "missed", number: null }, null)).toEqual({ open: "calls", label: "Show in Calls" });
   });
 });

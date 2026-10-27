@@ -1265,8 +1265,11 @@ mockIPC(
         const q = String(a.query).toLowerCase().trim();
         const words = q.split(/\s+/).filter(Boolean);
         const hit = (t: string) => words.every((w) => t.toLowerCase().split(/\W+/).some((x) => x.startsWith(w)));
+        // Like store search_contacts: part of the name, or 3+ digits of the number ("0142" finds Zoe).
+        // Recent calls aren't searched here: the window matches them itself (lib/commands matchCalls).
+        const digits = q.replace(/\D/g, "");
         return {
-          people: contacts.filter((c) => c.name.toLowerCase().includes(q)),
+          people: contacts.filter((c) => c.name.toLowerCase().includes(q) || (digits.length >= 3 && c.address.includes(digits))),
           messages: messages.filter((m) => hit(m.body)).reverse(),
           notifications: history.filter((x) => hit(`${x.title} ${x.message}`)),
         };
