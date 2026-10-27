@@ -61,6 +61,8 @@ Why you can trust the download anyway:
 - **Music:** Now Playing with controls, Windows media keys, and an optional Spotify panel.
 - **Tugboat:** photos, files and text between your phone and PC over Wi-Fi, no app needed.
 - **Ctrl+K** search across people, texts and notifications, plus quick actions.
+- **Weather as a live harbor:** the real sun, moon phase and wind where you are, rain to the
+  quarter-hour, and a heads-up to charge your phone when rain is coming and it's low.
 - **For developers:** your AI tools (Claude Code, Codex, Cursor, VS Code) and a `tug` command can
   use your phone, always with you in charge.
 
@@ -68,6 +70,10 @@ Why you can trust the download anyway:
   <img src="docs/media/messages.png" alt="A text conversation in tug" width="32%">
   <img src="docs/media/search.png" alt="Ctrl+K search finding verification codes" width="32%">
   <img src="docs/media/ai-tools.png" alt="tug asking before an AI tool sends a text" width="32%">
+</p>
+
+<p align="center">
+  <img src="docs/media/weather.png" alt="tug's weather card: a little harbor with the afternoon sun low in the west and a tugboat on the water, rain due at 4:45 PM for about 45 minutes, and a reminder to charge the phone, at 22%, before the rain" width="720">
 </p>
 
 [What's changed](CHANGELOG.md) · [Everything tug can do, in detail](docs/FEATURES.md) · [Roadmap](ROADMAP.md)

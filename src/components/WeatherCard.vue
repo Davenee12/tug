@@ -60,7 +60,8 @@ const soon = computed(() =>
   f.value ? nextRain(f.value.quarters, placeNow(now.value.getTime(), f.value.timezone), fallWord.value) : null,
 );
 const bars = computed(() => (soon.value?.line ? rainBars(soon.value.quarters.slice(0, 8)) : []));
-const line = computed(() => soon.value?.line ?? (f.value ? outlook(f.value) : null));
+// The 12-hour outlook in the summary; the next two hours get their own row under it.
+const line = computed(() => (soon.value?.line ? null : f.value ? outlook(f.value) : null));
 // "Before you head out": the weather about to happen and the phone's battery, together.
 const battery = computed(() =>
   tug.status.connection === "connected" && tug.status.services.battery ? tug.status.battery : null,
@@ -338,28 +339,30 @@ async function change() {
           <p class="text-[13px] text-muted">
             <template v-if="today">H {{ t(today.high) }} · L {{ t(today.low) }} · </template>Feels {{ t(f.now.feels) }}
           </p>
-          <p v-if="line" class="flex min-w-0 items-center gap-2 text-[13px] font-medium text-body-strong">
-            <!-- The next two hours, a quarter at a time -->
-            <span v-if="bars.length" class="flex h-3 shrink-0 items-end gap-px" aria-hidden="true">
-              <span
-                v-for="(b, i) in bars"
-                :key="i"
-                class="w-[3px] rounded-[1px]"
-                :class="b ? 'bg-accent-teal' : 'bg-hairline'"
-                :style="{ height: `${b ? Math.max(25, b * 100) : 15}%` }"
-              />
-            </span>
-            <span class="truncate">{{ line }}</span>
-          </p>
+          <p v-if="line" class="truncate text-[13px] font-medium text-body-strong">{{ line }}</p>
         </div>
         <div class="ml-auto min-w-0 text-right">
-          <p class="flex items-center justify-end gap-1 truncate text-[13px] text-muted">
-            <MapPin :size="12" class="shrink-0" /> {{ place.name }}
+          <p class="flex items-center justify-end gap-1 text-[13px] text-muted">
+            <MapPin :size="12" class="shrink-0" />
+            <span class="truncate">{{ place.name }}</span>
           </p>
           <p class="mt-0.5 text-[13px] font-medium text-body-strong tabular-nums">{{ localTime(now, f.timezone) }}</p>
         </div>
       </div>
-      <p v-if="f && headsUp" class="mt-3 flex items-start gap-2 rounded-lg bg-canvas px-3 py-2 text-[13px] text-ink">
+      <!-- The next two hours, a quarter at a time -->
+      <p v-if="f && soon?.line" class="mt-3 flex items-center gap-2.5 text-[13px] font-medium text-body-strong">
+        <span class="flex h-3.5 shrink-0 items-end gap-0.5" aria-hidden="true">
+          <span
+            v-for="(b, i) in bars"
+            :key="i"
+            class="w-1 rounded-[1px]"
+            :class="b ? 'bg-accent-teal' : 'bg-hairline'"
+            :style="{ height: `${b ? Math.max(25, b * 100) : 15}%` }"
+          />
+        </span>
+        <span>{{ soon.line }}</span>
+      </p>
+      <p v-if="f && headsUp" class="mt-2 flex items-start gap-2 rounded-lg bg-canvas px-3 py-2 text-[13px] text-ink">
         <BatteryLow :size="15" class="mt-px shrink-0 text-primary" />
         <span>{{ headsUp }}</span>
       </p>

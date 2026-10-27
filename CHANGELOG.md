@@ -17,8 +17,8 @@ arrives through automatic updates.
 - **Rain to the quarter-hour:** "Rain from about 5:45 PM, for about 30 minutes", with a small strip
   for the next two hours, in place of the 12-hour outlook when the forecast has it.
 - **Before you head out:** with rain or snow due in the next two hours, or a freezing feels-like,
-  and your iPhone at 30% or less, the weather card puts the two together: "Rain from about 5:45 PM
-  and your phone's at 18%. Charge it before you head out."
+  and your iPhone at 30% or less, the weather card puts the two together: "Your phone's at 18%.
+  Charge it before the rain at 5:45 PM."
 - **Send later:** the clock beside Send schedules a text (in 20 minutes up to tomorrow morning). It
   waits above the box with Send now and Cancel and goes through your iPhone when it's due. A text
   more than 30 minutes late (tug was closed, the phone was away) is never sent by itself: it's held

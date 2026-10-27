@@ -281,8 +281,8 @@ export const LOW_FOR_OUTSIDE = 30;
 
 /**
  * The one thing only tug can say: the weather about to happen and your phone's battery, together.
- * Rain or snow in the next two hours (`start`, from `nextRain`), or a freezing feels-like, with
- * the phone at 30% or less. Null otherwise: the card's other lines cover the weather alone.
+ * Rain or snow in the next two hours (`start`, from `nextRain`; the card shows that line too), or
+ * a freezing feels-like, with the phone at 30% or less. Null otherwise.
  */
 export function beforeYouGo(opts: {
   battery: number | null;
@@ -293,8 +293,10 @@ export function beforeYouGo(opts: {
 }): string | null {
   const { battery, start, what = "Rain", feelsC, feelsLabel } = opts;
   if (battery === null || battery > LOW_FOR_OUTSIDE) return null;
-  if (start === "now") return `It's ${what === "Snow" ? "snowing" : "raining"} and your phone's at ${battery}%. Charge it before you head out.`;
-  if (start) return `${what} from about ${start} and your phone's at ${battery}%. Charge it before you head out.`;
+  const fall = what === "Snow" ? "snow" : "rain";
+  // The rain line sits just above this one, so it isn't said twice.
+  if (start === "now") return `Your phone's at ${battery}%. Charge it before you head out in the ${fall}.`;
+  if (start) return `Your phone's at ${battery}%. Charge it before the ${fall} at ${start}.`;
   if (feelsC <= 0) {
     return `It feels like ${feelsLabel} out and your phone's at ${battery}%. Cold drains batteries faster, so charge it before you go.`;
   }

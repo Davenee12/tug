@@ -196,8 +196,8 @@ describe("before you head out", () => {
   const base = { feelsC: 10, feelsLabel: "50°" };
 
   it("puts rain on the way and a low phone together", () => {
-    expect(beforeYouGo({ ...base, battery: 18, start: "5:45 PM" })).toBe("Rain from about 5:45 PM and your phone's at 18%. Charge it before you head out.");
-    expect(beforeYouGo({ ...base, battery: 30, start: "now", what: "Snow" })).toBe("It's snowing and your phone's at 30%. Charge it before you head out.");
+    expect(beforeYouGo({ ...base, battery: 18, start: "5:45 PM" })).toBe("Your phone's at 18%. Charge it before the rain at 5:45 PM.");
+    expect(beforeYouGo({ ...base, battery: 30, start: "now", what: "Snow" })).toBe("Your phone's at 30%. Charge it before you head out in the snow.");
   });
 
   it("warns about the cold, which drains batteries", () => {
