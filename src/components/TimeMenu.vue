@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // A small button with a menu of times (lib/reminders `choices`): Remind me on a row, Send later in
 // the composer. Keyboard friendly (arrows move, Escape closes and returns focus), closes on a press
-// outside, and stops every press so it never also acts on the row around it.
+// outside, and stops every press so it never also acts on the row around it. A choice's time is
+// worked out when it's picked, not when the menu opened: "In 20 minutes" means from the click.
 import { nextTick, onUnmounted, ref } from "vue";
 import { choices, type Choice } from "../lib/reminders";
 
@@ -60,8 +61,11 @@ function onMenuKey(e: KeyboardEvent) {
 }
 
 function pick(o: Choice) {
+  const fresh = choices(new Date()).find((c) => c.key === o.key);
+  // "This evening" can stop being offered while the menu sits open: show what's on offer now.
+  if (!fresh) return void (options.value = choices(new Date()));
   close();
-  emit("pick", o.at, o.label);
+  emit("pick", fresh.at, fresh.label);
 }
 
 defineExpose({ close });
@@ -95,7 +99,7 @@ onUnmounted(() => document.removeEventListener("pointerdown", onOutside, true));
       <p class="px-3 pt-1.5 pb-1 text-[11px] font-semibold tracking-wide text-muted-soft uppercase">{{ heading }}</p>
       <button
         v-for="o in options"
-        :key="o.label"
+        :key="o.key"
         type="button"
         role="menuitem"
         class="block w-full rounded-lg px-3 py-1.5 text-left text-[13px] text-ink hover:bg-surface-soft focus:bg-surface-soft focus:outline-none"

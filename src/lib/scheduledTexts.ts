@@ -39,16 +39,24 @@ export function plan(list: ScheduledText[], now: number, canSend: boolean): Plan
   const hold: ScheduledText[] = [];
   for (const t of list) {
     if (t.state !== "waiting" || t.at > now) continue;
-    if (now - t.at > LATE_MS) hold.push(t);
+    if (tooLate(t, now)) hold.push(t);
     else if (canSend) send.push(t);
   }
   return { send, hold };
 }
 
-/** The list with `t` added, soonest first (refused beyond MAX_SCHEDULED: null). */
-export function addScheduled(list: ScheduledText[], t: ScheduledText): ScheduledText[] | null {
-  if (list.length >= MAX_SCHEDULED) return null;
-  return [...list, t].sort((a, b) => a.at - b.at);
+/**
+ * The list with `t` added, soonest first (refused beyond MAX_SCHEDULED: null). `back` is a text
+ * coming back to the list (held after a send that recorded nothing): never refused, never lost.
+ */
+export function addScheduled(list: ScheduledText[], t: ScheduledText, back = false): ScheduledText[] | null {
+  if (list.length >= MAX_SCHEDULED && !back) return null;
+  return [...list.filter((x) => x.id !== t.id), t].sort((a, b) => a.at - b.at);
+}
+
+/** Too late to send by itself at `now` (more than LATE_MS after it was due). */
+export function tooLate(t: ScheduledText, now: number): boolean {
+  return now - t.at > LATE_MS;
 }
 
 export function withoutScheduled(list: ScheduledText[], id: string): ScheduledText[] {
@@ -62,6 +70,16 @@ export function held(list: ScheduledText[], ids: string[]): ScheduledText[] {
 /** A conversation's scheduled texts, soonest first. */
 export function forThread(list: ScheduledText[], threadKey: string): ScheduledText[] {
   return list.filter((t) => t.threadKey === threadKey);
+}
+
+/**
+ * A conversation's scheduled texts, by its key or any of its numbers: a conversation's key follows
+ * the contact's name, so saving or renaming the contact changes it, and the texts must still show.
+ */
+export function forConversation(list: ScheduledText[], conv: { key: string; addresses: string[] }): ScheduledText[] {
+  const digits = (a: string) => a.replace(/\D/g, "").slice(-10);
+  const numbers = new Set(conv.addresses.map(digits).filter((d) => d.length >= 7));
+  return list.filter((t) => t.threadKey === conv.key || conv.addresses.includes(t.address) || numbers.has(digits(t.address)));
 }
 
 /** The saved list, whatever shape it's in: anything odd is left out. */

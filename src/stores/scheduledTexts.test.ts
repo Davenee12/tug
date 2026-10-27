@@ -104,6 +104,55 @@ describe("send later store", () => {
     await s.schedule(zoe, "Running late", Date.now() + 60_000);
     s.discard(s.list[0].id);
     expect(s.list).toEqual([]);
-    expect(s.inThread("zoe")).toEqual([]);
+    expect(s.inConversation({ key: "zoe", addresses: [] })).toEqual([]);
+  });
+
+  it("sends due texts one at a time, so a crash mid-send loses at most the one in flight", async () => {
+    const s = useScheduledTextsStore();
+    const now = Date.now();
+    await s.schedule(zoe, "First", now);
+    await s.schedule({ ...zoe, threadKey: "sam", name: "Sam", address: "+15550100143" }, "Second", now);
+    release = () => undefined;
+    void s.check(now + 1000);
+    await new Promise((r) => setTimeout(r, 0));
+    // The first is on its way; the second is still saved, so a restart now would still send it.
+    expect(sends).toHaveLength(1);
+    expect(JSON.parse(saved[SCHEDULED_SETTING]).map((t: { text: string }) => t.text)).toEqual(["Second"]);
+  });
+
+  it("holds a text that became too late while an earlier one was sending", async () => {
+    const s = useScheduledTextsStore();
+    const now = Date.now();
+    await s.schedule(zoe, "First", now);
+    await s.schedule({ ...zoe, address: "+15550100143" }, "Second", now - 29 * 60_000 - 59_000);
+    // Due on time at the look, but by the time its turn comes it's past the 30 minutes.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now + 2 * 60_000);
+    await s.check(now);
+    vi.useRealTimers();
+    expect(sends.map((x) => x[1])).toEqual(["First"]);
+    expect(s.list.map((t) => [t.text, t.state])).toEqual([["Second", "held"]]);
+  });
+
+  it("never loses a text that comes back held, even with the list full", async () => {
+    const s = useScheduledTextsStore();
+    const now = Date.now();
+    await s.schedule(zoe, "Due", now);
+    outcome = "error";
+    release = () => undefined;
+    const sending = s.check(now + 1000);
+    await new Promise((r) => setTimeout(r, 0));
+    for (let i = 0; i < 50; i++) await s.schedule(zoe, `Later ${i}`, now + 3_600_000);
+    release!();
+    await sending;
+    expect(s.list).toHaveLength(51);
+    expect(s.list.find((t) => t.text === "Due")?.state).toBe("held");
+  });
+
+  it("still shows a conversation's texts after its contact is saved or renamed", async () => {
+    const s = useScheduledTextsStore();
+    await s.schedule(zoe, "Running late", Date.now() + 60_000);
+    expect(s.inConversation({ key: "zoe-renamed", addresses: ["(555) 010-0142"] })).toHaveLength(1);
+    expect(s.inConversation({ key: "sam", addresses: ["+15550100143"] })).toHaveLength(0);
   });
 });

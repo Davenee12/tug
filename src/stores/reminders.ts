@@ -12,6 +12,7 @@ import {
   reminderFor,
   reminderId,
   removeReminder,
+  setReminder,
   splitDue,
   type Reminder,
 } from "../lib/reminders";
@@ -43,7 +44,10 @@ export const useRemindersStore = defineStore("reminders", () => {
         list.value = list.value.reduce(addReminder, parseReminders(raw[REMINDERS_SETTING]));
         canSave = true;
       })
-      .catch(() => undefined);
+      .catch(() => {
+        // Ask again next time rather than never saving for the rest of the session.
+        loaded = null;
+      });
     return loaded;
   }
 
@@ -54,6 +58,7 @@ export const useRemindersStore = defineStore("reminders", () => {
 
   /** Bring back everything that's due, each once. */
   function check(now = Date.now()) {
+    if (!canSave) void load(); // the first read failed: the saved ones still need bringing in
     const { due, pending } = splitDue(list.value, now);
     if (due.length === 0) return;
     list.value = pending;
@@ -74,12 +79,16 @@ export const useRemindersStore = defineStore("reminders", () => {
     timer = undefined;
   }
 
-  /** Remind me about this row at `at`; replaces a reminder it already had. */
-  async function remind(target: RemindTarget, at: number) {
+  /**
+   * Remind me about this row at `at`; replaces a reminder it already had. "full" when 50 are
+   * already waiting, "unsaved" when tug's settings can't be read (it wouldn't survive a restart).
+   */
+  async function remind(target: RemindTarget, at: number): Promise<"ok" | "full" | "unsaved"> {
     await load();
+    if (!canSave) return "unsaved";
     const now = Date.now();
     const latestId = target.notificationIds.length ? Math.max(...target.notificationIds) : null;
-    list.value = addReminder(list.value, {
+    const next = setReminder(list.value, target, {
       id: reminderId(now),
       at,
       title: target.title,
@@ -88,7 +97,10 @@ export const useRemindersStore = defineStore("reminders", () => {
       threadKey: target.threadKey,
       createdAt: now,
     });
+    if (!next) return "full";
+    list.value = next;
     save();
+    return "ok";
   }
 
   function cancel(id: string) {

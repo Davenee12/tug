@@ -8,6 +8,7 @@ import {
   reminderId,
   reminderTitle,
   removeReminder,
+  setReminder,
   splitDue,
   whenLabel,
   type Reminder,
@@ -98,5 +99,20 @@ describe("reminders", () => {
     expect(parseReminders(JSON.stringify({ id: "x" }))).toEqual([]);
     const odd = [{ id: "n", at: "soon", title: "x", body: "", notificationId: 1 }, { id: "t", at: 5, title: "x", body: "" }, null];
     expect(parseReminders(JSON.stringify(odd))).toEqual([]);
+  });
+
+  it("sets one reminder per row, and refuses past the cap instead of dropping one", () => {
+    const stack = { threadKey: null, notificationIds: [10, 11] };
+    let list = setReminder([], { threadKey: null, notificationIds: [10] }, r({ id: "a", notificationId: 10, threadKey: null }))!;
+    list = setReminder(list, stack, r({ id: "b", notificationId: 11, threadKey: null }))!;
+    expect(list.map((x) => x.id)).toEqual(["b"]);
+    const full = Array.from({ length: MAX_REMINDERS }, (_, i) => r({ id: `${i}`, threadKey: `t${i}`, notificationId: null }));
+    expect(setReminder(full, { threadKey: "new", notificationIds: [] }, r({ id: "new", threadKey: "new" }))).toBeNull();
+    // Changing the time of one already set is fine when full.
+    expect(setReminder(full, { threadKey: "t3", notificationIds: [] }, r({ id: "t3b", threadKey: "t3" }))).toHaveLength(MAX_REMINDERS);
+  });
+
+  it("names each choice, so the menu can work its time out when it's picked", () => {
+    expect(choices(new Date(2026, 9, 27, 10, 0)).map((c) => c.key)).toEqual(["20m", "1h", "3h", "evening", "morning"]);
   });
 });

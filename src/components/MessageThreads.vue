@@ -349,8 +349,12 @@ async function sendLater(at: number, label: string) {
   const to = replyTo.value;
   const text = draft.value;
   if (!conv || !to || !text.trim()) return;
-  if (!(await scheduled.schedule({ address: to, name: conv.contact, threadKey: conv.key }, text, at))) {
-    tug.notify("error", "Too many texts are waiting to be sent. Send or cancel one first.");
+  const outcome = await scheduled.schedule({ address: to, name: conv.contact, threadKey: conv.key }, text, at);
+  if (outcome !== "ok") {
+    tug.notify(
+      "error",
+      outcome === "full" ? "50 texts are already waiting to be sent. Send or cancel one first." : "Couldn't save the scheduled text. Try again in a moment.",
+    );
     return;
   }
   if (draftFor(conv.key) === text) setDraftFor(conv.key, "");
@@ -536,7 +540,7 @@ async function retry(m: SmsMessage) {
           </select>
           <span v-if="selected.addresses.length > 1">· {{ selected.addresses.length }} numbers under this name</span>
         </label>
-        <ScheduledTexts :thread-key="selected.key" />
+        <ScheduledTexts :conversation="selected" />
         <SmartReplyChips
           v-if="canReply"
           :replies="suggestions"

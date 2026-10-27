@@ -16,7 +16,9 @@ const pending = computed(() => reminders.forTarget(props.target));
 const pendingLabel = computed(() => (pending.value ? whenLabel(pending.value.at, Date.now()) : null));
 
 async function pick(at: number, label: string) {
-  await reminders.remind(props.target, at);
+  const outcome = await reminders.remind(props.target, at);
+  if (outcome === "full") return tug.notify("error", "50 reminders are already waiting. Cancel one first.");
+  if (outcome === "unsaved") return tug.notify("error", "Couldn't save the reminder. Try again in a moment.");
   tug.notify("info", `tug will remind you ${label.charAt(0).toLowerCase()}${label.slice(1)}.`);
 }
 

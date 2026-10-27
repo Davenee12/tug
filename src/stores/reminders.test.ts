@@ -65,12 +65,25 @@ describe("reminders store", () => {
     expect(s.list).toEqual([]);
   });
 
-  it("never wipes the saved reminders when it couldn't read them", async () => {
+  it("never wipes the saved reminders when it couldn't read them, and reads again next time", async () => {
     readFails = true;
     const s = useRemindersStore();
-    await s.remind(target, Date.now() + 60_000);
-    s.cancel(s.list[0].id);
+    // Not taken when it couldn't be kept: it wouldn't survive a restart.
+    expect(await s.remind(target, Date.now() + 60_000)).toBe("unsaved");
+    expect(s.list).toEqual([]);
     expect(writes).toHaveLength(0);
+    readFails = false;
+    expect(await s.remind(target, Date.now() + 60_000)).toBe("ok");
+    expect(writes).toEqual([REMINDERS_SETTING]);
+  });
+
+  it("keeps one reminder for an app's stack after it gains a notification", async () => {
+    const s = useRemindersStore();
+    const gmail = { title: "Gmail", body: "Your order", notificationIds: [10], threadKey: null };
+    await s.remind(gmail, Date.now() + 60_000);
+    await s.remind({ ...gmail, notificationIds: [10, 11] }, Date.now() + 120_000);
+    expect(s.list).toHaveLength(1);
+    expect(s.list[0].notificationId).toBe(11);
   });
 
   it("cancelling removes it", async () => {

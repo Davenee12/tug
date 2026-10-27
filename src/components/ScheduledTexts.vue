@@ -8,10 +8,10 @@ import { whenLabel } from "../lib/reminders";
 import { useScheduledTextsStore } from "../stores/scheduledTexts";
 import { useTugStore } from "../stores/tug";
 
-const props = defineProps<{ threadKey: string }>();
+const props = defineProps<{ conversation: { key: string; addresses: string[] } }>();
 const scheduled = useScheduledTextsStore();
 const tug = useTugStore();
-const items = computed(() => scheduled.inThread(props.threadKey));
+const items = computed(() => scheduled.inConversation(props.conversation));
 const canSend = computed(() => tug.status.services.messages);
 
 /** "Sends at 6:00 PM", "Sends tomorrow 9:00 AM", "Sends Thu 9:00 AM". */

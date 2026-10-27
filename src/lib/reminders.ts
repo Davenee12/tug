@@ -22,8 +22,9 @@ export interface Reminder {
   createdAt: number;
 }
 
-/** What the row's Remind me menu offers. */
+/** What the row's Remind me menu offers. `key` says which choice, whenever it's worked out. */
 export interface Choice {
+  key: "20m" | "1h" | "3h" | "evening" | "morning";
   label: string;
   at: number;
 }
@@ -45,14 +46,14 @@ function at(now: Date, dayOffset: number, hour: number): number {
 export function choices(now: Date): Choice[] {
   const t = now.getTime();
   const out: Choice[] = [
-    { label: "In 20 minutes", at: t + 20 * MINUTE },
-    { label: "In 1 hour", at: t + 60 * MINUTE },
-    { label: "In 3 hours", at: t + 180 * MINUTE },
+    { key: "20m", label: "In 20 minutes", at: t + 20 * MINUTE },
+    { key: "1h", label: "In 1 hour", at: t + 60 * MINUTE },
+    { key: "3h", label: "In 3 hours", at: t + 180 * MINUTE },
   ];
   const evening = at(now, 0, 18);
-  if (evening - t >= 90 * MINUTE) out.push({ label: `This evening (${clockTime(new Date(evening))})`, at: evening });
+  if (evening - t >= 90 * MINUTE) out.push({ key: "evening", label: `This evening (${clockTime(new Date(evening))})`, at: evening });
   const morning = at(now, 1, 9);
-  out.push({ label: `Tomorrow morning (${clockTime(new Date(morning))})`, at: morning });
+  out.push({ key: "morning", label: `Tomorrow morning (${clockTime(new Date(morning))})`, at: morning });
   return out;
 }
 
@@ -74,6 +75,22 @@ export function whenLabel(when: number, now: number): string {
 export function addReminder(list: Reminder[], r: Reminder): Reminder[] {
   const rest = list.filter((x) => !sameTarget(x, r));
   return [...rest, r].sort((a, b) => a.at - b.at).slice(0, MAX_REMINDERS);
+}
+
+/**
+ * Set the reminder for a row, replacing the one it had (matched the way the row finds it: its
+ * conversation, or any of its notifications, so a stack that gained a notification since still
+ * has just one). Null when MAX_REMINDERS are already waiting: refused, never dropped silently.
+ */
+export function setReminder(
+  list: Reminder[],
+  target: { threadKey: string | null; notificationIds: number[] },
+  r: Reminder,
+): Reminder[] | null {
+  const had = reminderFor(list, target);
+  const rest = had ? removeReminder(list, had.id) : list;
+  if (rest.length >= MAX_REMINDERS) return null;
+  return [...rest, r].sort((a, b) => a.at - b.at);
 }
 
 export function removeReminder(list: Reminder[], id: string): Reminder[] {
