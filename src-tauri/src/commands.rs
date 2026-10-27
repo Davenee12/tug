@@ -841,6 +841,37 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.seenSince",
 ];
 
+/// Settings › About › Report a problem (and the "didn't close normally" notice): GitHub's bug
+/// report form in the browser, filled in with the version and Windows version. The window copies
+/// the diagnostics to the clipboard first, for the person to read through and paste. Nothing is
+/// sent by tug.
+#[tauri::command]
+pub fn report_problem(app: tauri::AppHandle, unclean: bool) -> Result<()> {
+    let version = app.package_info().version.to_string();
+    let url = crate::report::issue_url(&version, &crate::diagnostics::os_version(), unclean);
+    log::info!(
+        "report: opening the bug report form{}",
+        if unclean { " (didn't close normally)" } else { "" }
+    );
+    open_in_browser(&url)
+}
+
+/// At startup, from the window: this version's last run didn't close normally and tug hasn't
+/// offered a report for it yet. Answers the version once (and remembers it offered); `None` after.
+#[tauri::command]
+pub fn unclean_exit(app: tauri::AppHandle, state: State<'_, AppState>) -> Option<String> {
+    use crate::report;
+    let current = app.package_info().version.to_string();
+    let offered = state.shared.store.setting(report::OFFERED_SETTING).ok().flatten();
+    if !report::offer_unclean(report::last_run(), &current, offered.as_deref()) {
+        return None;
+    }
+    if let Err(e) = state.shared.store.set_setting(report::OFFERED_SETTING, &current) {
+        log::warn!("report: couldn't remember offering: {e}");
+    }
+    Some(current)
+}
+
 /// Build the "Copy diagnostics" report and put it on the clipboard, returning it too so the UI
 /// can confirm. Sync for the same STA reason as `copy_text`. Message bodies, phone numbers,
 /// contact names and emails never reach it: the status snapshot carries none, the settings are

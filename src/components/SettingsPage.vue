@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, History, Info, MessageSquare, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
+import { Bell, Bug, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, History, Info, MessageSquare, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
 import { useBackupStore } from "../stores/backup";
 import { importedLine } from "../lib/backupImport";
 import BackupImport from "./BackupImport.vue";
 import { api, errorMessage } from "../lib/ipc";
+import { reportProblem, REPORT_OPENED } from "../lib/report";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { usePcAudioStore } from "../stores/pcAudio";
@@ -108,6 +109,14 @@ async function copyDiagnostics() {
     window.setTimeout(() => (diagnostics.value = "idle"), 2500);
   } catch (e) {
     diagnostics.value = "idle";
+    tug.notify("error", errorMessage(e));
+  }
+}
+async function report() {
+  try {
+    await reportProblem(false);
+    tug.notify("info", REPORT_OPENED);
+  } catch (e) {
     tug.notify("error", errorMessage(e));
   }
 }
@@ -913,6 +922,14 @@ async function clearHistory() {
             >
               <button class="btn-secondary btn-sm" :disabled="diagnostics === 'copying'" @click="copyDiagnostics">
                 <ClipboardList :size="14" /> {{ diagnostics === "done" ? "Copied" : "Copy diagnostics" }}
+              </button>
+            </SettingsRow>
+            <SettingsRow
+              label="Report a problem"
+              description="Opens a bug report on GitHub with your version filled in, and copies the diagnostics for you to read through and paste. tug sends nothing itself."
+            >
+              <button class="btn-secondary btn-sm" @click="report">
+                <Bug :size="14" /> Report a problem
               </button>
             </SettingsRow>
           </div>

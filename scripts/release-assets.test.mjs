@@ -6,6 +6,7 @@ import {
   findLeaks,
   keyCheck,
   latestJson,
+  INITIAL_ROLLOUT,
   minisignKeyId,
   parseCMakeCache,
   peImports,
@@ -82,6 +83,7 @@ test("latest.json is what the updater reads, for the NSIS installer", () => {
     version: "0.5.19",
     notes: "n",
     pub_date: "2026-10-24T10:00:00Z",
+    rollout: INITIAL_ROLLOUT,
     platforms: {
       "windows-x86_64-nsis": { signature: "c2ln", url },
       "windows-x86_64": { signature: "c2ln", url },
@@ -91,6 +93,17 @@ test("latest.json is what the updater reads, for the NSIS installer", () => {
   assert.throws(() => latestJson({ version: "0.5.19", pubDate: "x", url, signature: "  " }), /signature is empty/);
   assert.throws(() => latestJson({ version: "0.5.19", pubDate: "x", url: "http://example.com/a.exe", signature: "s" }), /https/);
   assert.throws(() => latestJson({ version: "next", pubDate: "x", url, signature: "s" }), /bad version/);
+});
+
+test("a new release starts as a staged rollout, and only a real percentage is accepted", () => {
+  const url = `${DOWNLOAD_BASE}/v0.5.22/tug-0.5.22-setup.exe`;
+  const base = { version: "0.5.22", pubDate: "x", url, signature: "s" };
+  assert.ok(INITIAL_ROLLOUT > 0 && INITIAL_ROLLOUT < 100);
+  assert.equal(latestJson({ ...base, rollout: 100 }).rollout, 100);
+  assert.equal(latestJson({ ...base, rollout: 0 }).rollout, 0);
+  for (const bad of [-1, 101, 12.5, "10", null]) {
+    assert.throws(() => latestJson({ ...base, rollout: bad }), /whole number from 0 to 100/, String(bad));
+  }
 });
 
 test("the release notes carry the checksums, and say when the build isn't code-signed", () => {

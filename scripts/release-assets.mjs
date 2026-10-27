@@ -19,7 +19,9 @@
 //                                                      public half tauri.conf.json ships
 //   node scripts/release-assets.mjs checksums <out> <file>...   SHA256SUMS.txt (sha256sum format)
 //   node scripts/release-assets.mjs latest <v> <setup.exe> <out>   latest.json for the updater, from
-//                                                      <setup.exe>.sig and the CHANGELOG section
+//                                                      <setup.exe>.sig and the CHANGELOG section,
+//                                                      starting a staged rollout at INITIAL_ROLLOUT%
+//                                                      (scripts/rollout.mjs widens it)
 //   node scripts/release-assets.mjs notes <v> <sums> <out>   the draft release's notes: the CHANGELOG
 //                                                      section, then the checksums
 //
@@ -85,11 +87,28 @@ export function changelogSection(changelog, version) {
 }
 
 /**
+ * How much of tug a new release reaches at first, in percent: each install keeps a random number
+ * from 0 to 99 and its background check only takes a release whose `rollout` is above it (Check
+ * for updates always takes it). Widen, pause or finish it with `node scripts/rollout.mjs`; see
+ * docs/RELEASING.md. Copies older than v0.5.22 ignore it and update as before.
+ */
+export const INITIAL_ROLLOUT = 10;
+
+/** A rollout percentage: a whole number from 0 (paused) to 100 (everyone). */
+export function checkRollout(percent) {
+  if (!Number.isInteger(percent) || percent < 0 || percent > 100) {
+    throw new Error(`a rollout is a whole number from 0 to 100, not ${percent}`);
+  }
+  return percent;
+}
+
+/**
  * latest.json as tauri-plugin-updater reads it: the version, notes, date and, for Windows x64, the
  * NSIS installer's address and its minisign signature (the `.sig` file's text). The updater looks
  * for `windows-x86_64-nsis` first, then `windows-x86_64`; both point at the same installer.
+ * `rollout` is tug's own field (the plugin ignores it); see INITIAL_ROLLOUT.
  */
-export function latestJson({ version, notes, pubDate, url, signature }) {
+export function latestJson({ version, notes, pubDate, url, signature, rollout = INITIAL_ROLLOUT }) {
   if (!SEMVER.test(version)) throw new Error(`bad version ${version}`);
   if (!/^https:\/\//.test(url)) throw new Error("the installer's address must be https");
   const sig = signature.trim();
@@ -99,6 +118,7 @@ export function latestJson({ version, notes, pubDate, url, signature }) {
     version,
     notes: notes ?? "",
     pub_date: pubDate,
+    rollout: checkRollout(rollout),
     platforms: { "windows-x86_64-nsis": platform, "windows-x86_64": platform },
   };
 }
@@ -455,7 +475,7 @@ function main([cmd, ...args]) {
         signature: fs.readFileSync(`${setup}.sig`, "utf8"),
       });
       fs.writeFileSync(out, JSON.stringify(json, null, 2) + "\n");
-      console.log(`latest.json for ${version} → ${json.platforms["windows-x86_64"].url}`);
+      console.log(`latest.json for ${version} → ${json.platforms["windows-x86_64"].url} (rollout ${json.rollout}%)`);
       return;
     }
     case "notes": {

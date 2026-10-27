@@ -150,6 +150,40 @@ pub fn after_check(found: bool, auto: bool, portable: bool) -> AfterCheck {
     }
 }
 
+/// Staged rollouts: each install keeps a number from 0 to 99, picked at random once and never sent
+/// anywhere (`ROLLOUT_BUCKET_SETTING`). A release's latest.json can say how far it has rolled out
+/// (`"rollout": 10` is 10%); the background check only takes a release when this PC's number is
+/// below that, so a bad release reaches a few PCs first and can be paused (set it to 0). Check for
+/// updates always takes the newest release. No `rollout` (every release before this) means 100%.
+pub const ROLLOUT_BUCKET_SETTING: &str = "update.bucket";
+
+/// This install's number from the setting, if it's a real one (0–99).
+pub fn parse_bucket(v: Option<&str>) -> Option<u8> {
+    v.and_then(|s| s.trim().parse::<u8>().ok()).filter(|b| *b < 100)
+}
+
+/// A number from 0 to 99 from random bytes, close enough to even (65,536 is 36 short of a
+/// multiple of 100, so a few numbers are 0.05% likelier).
+pub fn bucket_from(random: [u8; 2]) -> u8 {
+    (u16::from_le_bytes(random) % 100) as u8
+}
+
+/// How far a release has rolled out, in percent, from its latest.json. Missing, not a whole
+/// number or out of range means everyone (100): an odd value never holds an update back by
+/// accident, and holding one back is all a wrong value could do.
+pub fn rollout_percent(latest: &serde_json::Value) -> u8 {
+    match latest.get("rollout") {
+        Some(v) => v.as_u64().filter(|p| *p <= 100).map_or(100, |p| p as u8),
+        None => 100,
+    }
+}
+
+/// Whether this PC takes a release now: always when the person asked (Check for updates), else
+/// only once the rollout has reached its number.
+pub fn in_rollout(bucket: u8, percent: u8, manual: bool) -> bool {
+    manual || bucket < percent
+}
+
 /// Whether the background schedule should run a check now. Never while one is already running,
 /// a download is going or an update waits to be applied (it would only fetch the same thing), and
 /// only with automatic updates on.
@@ -647,5 +681,42 @@ mod tests {
             assert!(!trusted_download(bad), "{bad}");
         }
         assert!(ENDPOINT.starts_with("https://github.com/Davenee12/tug/releases/"));
+    }
+
+    #[test]
+    fn a_release_without_a_rollout_goes_to_everyone() {
+        use serde_json::json;
+        assert_eq!(rollout_percent(&json!({"version": "0.5.21"})), 100);
+        assert_eq!(rollout_percent(&json!({"rollout": 10})), 10);
+        assert_eq!(rollout_percent(&json!({"rollout": 0})), 0, "paused");
+        assert_eq!(rollout_percent(&json!({"rollout": 100})), 100);
+        // Odd values never hold an update back by accident.
+        for odd in [json!(101), json!(-5), json!(12.5), json!("10"), json!(null)] {
+            assert_eq!(rollout_percent(&json!({ "rollout": odd })), 100, "{odd}");
+        }
+    }
+
+    #[test]
+    fn the_schedule_waits_for_this_pcs_turn_but_check_for_updates_never_does() {
+        assert!(in_rollout(9, 10, false), "0–9 are the first 10%");
+        assert!(!in_rollout(10, 10, false));
+        assert!(!in_rollout(0, 0, false), "paused: nobody new gets it");
+        assert!(in_rollout(99, 100, false), "100% is everyone");
+        assert!(in_rollout(99, 0, true), "Check for updates always takes it");
+    }
+
+    #[test]
+    fn the_bucket_is_0_to_99_and_kept() {
+        assert_eq!(bucket_from([0, 0]), 0);
+        assert_eq!(bucket_from([99, 0]), 99);
+        assert_eq!(bucket_from([100, 0]), 0);
+        assert_eq!(bucket_from([255, 255]), (65_535 % 100) as u8);
+        assert!((0..=255u8).all(|a| (0..=255u8).all(|b| bucket_from([a, b]) < 100)));
+        assert_eq!(parse_bucket(Some("42")), Some(42));
+        assert_eq!(parse_bucket(Some(" 7 ")), Some(7));
+        assert_eq!(parse_bucket(Some("100")), None);
+        assert_eq!(parse_bucket(Some("-1")), None);
+        assert_eq!(parse_bucket(Some("x")), None);
+        assert_eq!(parse_bucket(None), None);
     }
 }

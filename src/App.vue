@@ -31,7 +31,8 @@ import { phoneTextMessage, skippedMessage } from "./lib/tugboat";
 import { START_FAILED } from "./lib/startup";
 import { isWide } from "./lib/layout";
 import { useElementSize } from "./lib/useElementSize";
-import { api, on } from "./lib/ipc";
+import { api, errorMessage, on } from "./lib/ipc";
+import { reportProblem, REPORT_OPENED, UNCLEAN_EXIT } from "./lib/report";
 import { quickActionRunner, runQuickAction } from "./lib/quickActions";
 
 const tug = useTugStore();
@@ -183,6 +184,25 @@ onMounted(async () => {
     console.error("tug init failed", e);
     tug.notify("error", START_FAILED);
   }
+  // This version's last run didn't close normally (a crash, or the power went): offer a report,
+  // once per version. Nothing is sent unless the person files it.
+  void api
+    .uncleanExit()
+    .then((version) => {
+      if (version) {
+        tug.notify("info", UNCLEAN_EXIT, {
+          label: "Report it",
+          run: () =>
+            void reportProblem(true).then(
+              () => tug.notify("info", REPORT_OPENED),
+              (e) => tug.notify("error", errorMessage(e)),
+            ),
+        });
+      }
+    })
+    .catch(() => {
+      /* nothing to offer */
+    });
   // Automatic updates: the Update button and Settings › About; after an update restart, this also
   // reopens the screen the person left (so it runs once tug's own state has loaded).
   void update.init();

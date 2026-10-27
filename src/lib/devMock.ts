@@ -1304,6 +1304,12 @@ mockIPC(
         setTimeout(() => void emit("message", Object.assign(m, { status: "accepted" })), 700);
         return { ...m };
       }
+      case "report_problem":
+        console.log("[devMock] would open GitHub's bug report form", a.unclean ? "(didn't close normally)" : "");
+        return null;
+      // `?unclean` shows the "didn't close normally" notice at startup.
+      case "unclean_exit":
+        return params.has("unclean") ? appVersion : null;
       // A stand-in report so Settings › Copy diagnostics works in the browser. The real one is
       // built and redacted in Rust (src-tauri/src/diagnostics.rs).
       case "copy_diagnostics": {
