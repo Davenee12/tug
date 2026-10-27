@@ -27,8 +27,8 @@ arrives through automatic updates.
   minutes up to tomorrow morning) as a Windows pop-up with its own buttons. Reminders survive a
   restart.
 - **Links, numbers, addresses and parcels are one click** in texts and notifications: Open link,
-  Copy number or email, Open in Maps, Track parcel. Web links are one click only in texts from people
-  you know; from a stranger they stay plain text.
+  Copy number or email, Open in Maps, Track parcel. Web links are one click only in texts from your
+  contacts or numbers you've texted; from strangers and in other apps they stay plain text.
 - **Welcome back:** after 20 minutes or more away from your PC, a card at the top of the Feed sums
   up what arrived meanwhile: texts by person, missed calls, a fresh code, other apps.
 - **Calls in Ctrl+K:** search recent calls by name or number. A result never places a call by

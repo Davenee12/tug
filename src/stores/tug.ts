@@ -46,7 +46,7 @@ import { canSeeWindow } from "../lib/attention";
 import { grantedOnceCache } from "../lib/permission";
 import { arrivedDuringGap, GAP_COLLECT_MS, gapSummaryText, planGapPopups } from "../lib/reconnectPopups";
 import type { ToastSpec } from "../types/protocol";
-import { isKnownConversation, outgoingAddresses, senderIndex, senderMayToast, threadCounts } from "../lib/senders";
+import { isKnownConversation, linksTrusted, outgoingAddresses, senderIndex, senderMayToast, threadCounts } from "../lib/senders";
 import type {
   CallRecord,
   CodeFilled,
@@ -293,11 +293,12 @@ export const useTugStore = defineStore("tug", () => {
     return !settings.value.filterUnknown || isKnownConversation(c, senders.value);
   }
   /**
-   * Whether a Messages conversation is from someone you know (a contact, a number you've texted, one
-   * you moved), whatever Filter unknown senders says: a stranger's text gets no one-click web links.
+   * Whether web links in this conversation or notification may be one click (lib/senders
+   * `linksTrusted`): Messages from a contact, a number you've texted or one you moved, whatever
+   * Filter unknown senders says. Everything else keeps its links as plain text.
    */
-  function isKnownSender(c: Pick<Conversation, "appId" | "contact" | "addresses">): boolean {
-    return isKnownConversation(c, senders.value);
+  function trustsLinksFrom(c: Pick<Conversation, "appId" | "contact" | "addresses">): boolean {
+    return linksTrusted(c, senders.value);
   }
   const countsTowardUnread = (t: Thread) => !settings.value.filterUnknown || threadCounts(t, senders.value);
 
@@ -2353,7 +2354,7 @@ export const useTugStore = defineStore("tug", () => {
     copyLatestCode,
     showReminder,
     openReminder,
-    isKnownSender,
+    trustsLinksFrom,
     latestCode,
     codeFeed,
     clearedCodes,

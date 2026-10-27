@@ -55,8 +55,8 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   The row shows when; the menu changes or cancels it. Reminders survive a restart, and one that
   came due while tug was closed comes back when it starts.
 - **Links, numbers, addresses and parcels** in texts and notifications are one click: Open link,
-  Copy number or email, Open in Maps, Track parcel. Web links are one click only from people you
-  know; from a stranger they stay plain text.
+  Copy number or email, Open in Maps, Track parcel. Web links are one click only in texts from your
+  contacts or numbers you've texted; from strangers and in other apps they stay plain text.
 - **Welcome back:** after 20 minutes or more away, a card at the top of the Feed sums up what
   arrived meanwhile (texts by person, missed calls, a fresh code, other apps).
 - **Open on the web** opens a notification's web page (for example your inbox for Gmail), or the

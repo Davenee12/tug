@@ -43,7 +43,7 @@ const smart = computed(() =>
     limit: 2,
     skipUrls: [webLink.value?.url],
     // No web link chip on a stranger's text: one-click links are how scam texts work.
-    links: tug.isKnownSender({ appId: props.n.appId, contact: props.n.title, addresses: [] }),
+    links: tug.trustsLinksFrom({ appId: props.n.appId, contact: props.n.title, addresses: [] }),
   }),
 );
 const expanded = ref(false);

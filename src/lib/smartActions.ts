@@ -35,8 +35,11 @@ export type SmartSegment = { kind: "text"; text: string } | { kind: "action"; te
 // ---------------------------------------------------------------------------------------------
 // Links
 
-/** What a link can't contain: spaces, quotes or <angle brackets> around it, emoji or CJK punctuation after it. */
-const URL_CHARS = "[^\\s<>\"'`\\p{Extended_Pictographic}\\uFE0F\\u200D\\u3000-\\u303F\\uFF01-\\uFF0F]";
+/**
+ * What a link can't contain: spaces, quotes or <angle brackets> around it, emoji or CJK punctuation
+ * after it, and control or invisible characters (which the backend won't open anyway).
+ */
+const URL_CHARS = "[^\\s<>\"'`\\p{Extended_Pictographic}\\p{C}\\uFE0F\\u3000-\\u303F\\uFF01-\\uFF0F]";
 /** A link, up to the next one when two are joined by a comma ("…/a,https://…/b"). */
 const SCHEME_URL = new RegExp(`(?<![\\p{L}\\p{N}])https?:\\/\\/(?:(?![,;]https?:\\/\\/)${URL_CHARS})+`, "giu");
 
@@ -78,22 +81,30 @@ const BARE_URL = new RegExp(
 const TRAILING = /[.,;:!?'"’”…]$/u;
 const CLOSERS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
 
-/** A link without the sentence's punctuation after it; a closing bracket stays if it's the link's own. */
+/**
+ * A link without the sentence's punctuation after it; a closing bracket stays if it's the link's
+ * own. Brackets are counted once, not per character trimmed: a text ending in thousands of ")"
+ * mustn't freeze the window.
+ */
 function trimLink(raw: string): string {
-  let s = raw;
-  for (;;) {
-    const last = s.slice(-1);
+  const count: Record<string, number> = {};
+  for (const ch of raw) if (ch in CLOSERS || Object.values(CLOSERS).includes(ch)) count[ch] = (count[ch] ?? 0) + 1;
+  let end = raw.length;
+  while (end > 0) {
+    const last = raw[end - 1];
     if (TRAILING.test(last)) {
-      s = s.slice(0, -1);
+      end--;
       continue;
     }
     const open = CLOSERS[last];
-    if (open && s.split(open).length < s.split(last).length) {
-      s = s.slice(0, -1);
+    if (open && (count[open] ?? 0) < (count[last] ?? 0)) {
+      count[last]--;
+      end--;
       continue;
     }
-    return s;
+    break;
   }
+  return raw.slice(0, end);
 }
 
 /** A host a browser can go to: dotted names (any language) or an IPv4 address. */
@@ -147,8 +158,11 @@ const UPS_NUMBER = /(?<![A-Za-z0-9])1Z(?:[0-9A-Z]{16}| [0-9A-Z]{3} [0-9A-Z]{3} [
 const USPS_NUMBER = /(?<![\p{L}\p{N}+$£€.,-])9[1-5](?:\d{18}(?:\d{2})?|\d{2}(?: \d{4}){4}(?: \d{2})?)(?![\p{L}\p{N}]|[.,-]\d)/gu;
 /** International mail handed to USPS (EC 123 456 785 US): S10 shape with its check digit. */
 const S10_NUMBER = /(?<![A-Za-z0-9])([CELRUV][A-Z]) ?(\d{3}) ?(\d{3}) ?(\d{3}) ?US(?![A-Za-z0-9])/g;
-/** FedEx: 12 or 15 digits (or 1234 5678 9012), only in a text that says FedEx. */
-const FEDEX_NUMBER = /(?<![\p{L}\p{N}+$£€.,-])(?:\d{15}|\d{12}|\d{4} \d{4} \d{4})(?![\p{L}\p{N}]|[.,-]\d)/gu;
+/**
+ * FedEx: 12 or 15 digits (or 1234 5678 9012), only in a text that says FedEx. Never part of a
+ * longer run of digit groups: the first twelve digits of a card number aren't a parcel.
+ */
+const FEDEX_NUMBER = /(?<![\p{L}\p{N}+$£€.,-]|\d )(?:\d{15}|\d{12}|\d{4} \d{4} \d{4})(?![\p{L}\p{N}]|[.,-]\d| \d)/gu;
 const MENTIONS_FEDEX = /(?<![\p{L}\p{N}])fed[ -]?ex(?![\p{L}\p{N}])/iu;
 
 /** UPU S10 check digit: weights 8 6 4 2 3 5 9 7 over the first eight digits. */
@@ -183,7 +197,8 @@ const STREET_TYPES = [
   "Way", "Court", "Ct", "Place", "Pl", "Parkway", "Pkwy",
 ];
 const STREET_TYPE = [...STREET_TYPES, ...STREET_TYPES.map((t) => t.toUpperCase())].sort((a, b) => b.length - a.length).join("|");
-const SMALL_WORDS = "The|A|An|And|Or|Of|To|In|On|At|For|By|With|From|Into|My|Your|Our|Their|His|Her|Its|This|That|These|Down|Up|Is|Are|Was|Be|I|We|You|It";
+// AM and PM too: "at 3 PM Dr Patel" is a time and a doctor, not "3 PM Dr".
+const SMALL_WORDS = "The|A|An|And|Or|Of|To|In|On|At|For|By|With|From|Into|My|Your|Our|Their|His|Her|Its|This|That|These|Down|Up|Is|Are|Was|Be|I|We|You|It|AM|PM";
 const NAME_WORD = `(?!(?:${SMALL_WORDS})(?![\\p{L}]))(?:[A-Z][A-Za-z'’-]*\\.?|\\d{1,3}(?:st|nd|rd|th|ST|ND|RD|TH))`;
 const US_STATES =
   "AL|AK|AZ|AR|CA|CO|CT|DE|DC|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY";
@@ -272,7 +287,8 @@ export function findSmartActions(body: string | null | undefined): SmartAction[]
 
   for (const m of body.matchAll(SCHEME_URL)) {
     const text = trimLink(m[0]);
-    claim(linkAction(text, m.index, text));
+    // Always opened over https, whatever the text says ("HTTP://…", "http://…").
+    claim(linkAction(text, m.index, `https://${text.replace(/^https?:\/\//i, "")}`));
   }
   for (const m of body.matchAll(EMAIL)) {
     claim({ kind: "email", text: m[0], start: m.index, end: m.index + m[0].length, label: "Copy email", title: `Copy ${m[0]}`, copy: m[0] });

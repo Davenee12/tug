@@ -338,3 +338,33 @@ describe("texts from someone you don't know", () => {
     expect(segments.some((s) => s.kind === "action" && s.action.kind === "tracking")).toBe(true);
   });
 });
+
+describe("smart actions: review fixes", () => {
+  const kinds = (body: string) => findSmartActions(body).map((a) => [a.kind, a.text]);
+
+  it("stays quick on a link followed by thousands of brackets", () => {
+    const body = `https://a.com/${")".repeat(20_000)}`;
+    const t0 = performance.now();
+    const [link] = findSmartActions(body);
+    expect(performance.now() - t0).toBeLessThan(200);
+    expect(link.text).toBe("https://a.com/");
+  });
+
+  it("opens every link over https, and leaves out control characters", () => {
+    expect(findSmartActions("see HTTP://Example.com/a")[0].url).toBe("https://Example.com/a");
+    expect(findSmartActions("see http://example.com/a")[0].url).toBe("https://example.com/a");
+    expect(findSmartActions("go https://good.com/a\u0007b")[0].url).toBe("https://good.com/a");
+    expect(findSmartActions("go https://good.com/a\u0085b")[0].url).toBe("https://good.com/a");
+  });
+
+  it("doesn't read a clock time as a street address", () => {
+    expect(kinds("See you at 3 PM Dr Patel's office")).toEqual([]);
+    expect(kinds("Mass at 10 AM St Mary's")).toEqual([]);
+    expect(kinds("Meet at 12 Oak Street")).toEqual([["address", "12 Oak Street"]]);
+  });
+
+  it("doesn't take part of a card number for a FedEx parcel", () => {
+    expect(kinds("FedEx: card 4111 1111 1111 1111 on file")).toEqual([]);
+    expect(kinds("Your FedEx parcel 1234 5678 9012 is on its way")).toEqual([["tracking", "1234 5678 9012"]]);
+  });
+});

@@ -340,7 +340,7 @@ async function send(text = draft.value) {
 
 // A stranger's texts keep their web links as plain words (lib/smartActions): one-click links are how
 // scam texts work. Everything else in them still acts.
-const linksOk = computed(() => !selected.value || tug.isKnownSender(selected.value));
+const linksOk = computed(() => !selected.value || tug.trustsLinksFrom(selected.value));
 
 // Send later: the draft goes into the conversation's scheduled texts (stores/scheduledTexts) and
 // the box empties, as if it had been sent.

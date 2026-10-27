@@ -155,6 +155,9 @@ async fn text(c: &Client, to: String, message: String) -> i32 {
 /// `tug next` and friends: ask the phone's player, say it was done, and after a skip what's playing
 /// now (once the phone has moved on; only with the Phone status switch on, otherwise just the skip).
 async fn music(c: &Client, m: args::Music) -> i32 {
+    let skip = matches!(m, args::Music::Next | args::Music::Previous);
+    // The song before the skip, so the one after is only printed once it really is another.
+    let before = if skip { playing_line(c).await } else { None };
     let answer = call_as::<serde_json::Value>(
         c,
         Call::MediaControl {
@@ -165,18 +168,30 @@ async fn music(c: &Client, m: args::Music) -> i32 {
     match answer {
         Ok(v) => {
             println!("{}", format::music_done(m, &v));
-            if matches!(m, args::Music::Next | args::Music::Previous) {
-                // The phone takes a moment to tell tug the new song.
-                tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-                if let Ok(p) = call_as::<PhoneStatus>(c, Call::PhoneStatus).await {
-                    if let (line, true) = format::now_playing_line(&p) {
-                        println!("{line}");
+            if skip {
+                // The phone takes a moment to tell tug the new song: up to 3 s, never the old one.
+                for _ in 0..10 {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    if let Some(line) = playing_line(c).await {
+                        if before.as_deref() != Some(line.as_str()) {
+                            println!("{line}");
+                            break;
+                        }
                     }
                 }
             }
             format::OK
         }
         Err(e) => fail(&e),
+    }
+}
+
+/// What the phone says is playing, as `tug now` prints it, when something is.
+async fn playing_line(c: &Client) -> Option<String> {
+    let p = call_as::<PhoneStatus>(c, Call::PhoneStatus).await.ok()?;
+    match format::now_playing_line(&p) {
+        (line, true) => Some(line),
+        _ => None,
     }
 }
 

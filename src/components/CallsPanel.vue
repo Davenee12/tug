@@ -100,7 +100,17 @@ const name = (c: CallRecord) => names.value.get(c) ?? callName(c, nameFor.value)
 const route = (c: CallRecord) => (routes.value.has(c) ? routes.value.get(c)! : tug.callRoute(name(c), c.number));
 // Every row with a number can be clicked: it calls when tug can, and says why when it can't
 // (rows that look tappable but do nothing were confusing).
-function callFrom(c: CallRecord) {
+// A row places a call with one click, so a stray click mustn't: not the second click of a
+// double-click (a Ctrl+K result double-clicked lands its second click on whatever row is under the
+// pointer here), and not one in the moment after Calls opens or a search jumps into it.
+const SETTLE_MS = 700;
+let shownAt = Date.now();
+watch(
+  () => [tug.view, tug.focusItem],
+  () => (shownAt = Date.now()),
+);
+function callFrom(c: CallRecord, e?: MouseEvent) {
+  if ((e && e.detail > 1) || Date.now() - shownAt < SETTLE_MS) return;
   if (c.number) void tug.callPerson(name(c), c.number);
 }
 // The number goes under the name only when the name isn't the number already.
@@ -142,7 +152,7 @@ const emptyHint = computed(() => callsEmptyHint(tug.status, tug.switchContext));
               flashed === keyOf(c) ? 'ring-2 ring-inset ring-accent-amber' : '',
             ]"
             :title="c.number ? `Call ${name(c)}${route(c) === 'back' ? ' back' : ''} on your iPhone` : undefined"
-            @click="callFrom(c)"
+            @click="callFrom(c, $event)"
           >
             <AppAvatar
               v-if="photo(c)"
