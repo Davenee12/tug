@@ -42,7 +42,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 # Tugboat's own accept loop: header timeouts and a connection cap, which axum::serve lacks.
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 hkdf = "0.13"
 hmac = "0.13"
 sha2 = "0.11"

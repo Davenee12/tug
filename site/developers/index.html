@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>tug for developers: MCP server and the tug command</title>
+  <meta name="description" content="Give Claude Code, Codex, Cursor and VS Code your iPhone through tug's local MCP server and the tug command: 2FA codes, message search, CI notifications, Tugboat files, and texts that wait for your click.">
+  <link rel="canonical" href="https://davenee12.github.io/tug/developers/">
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/site.css">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="tug for developers">
+  <meta property="og:description" content="A local MCP server and a CLI that let your AI coding tools use your iPhone, with every send confirmed by you.">
+  <meta property="og:url" content="https://davenee12.github.io/tug/developers/">
+  <meta property="og:image" content="https://davenee12.github.io/tug/assets/img/og.jpg">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../"><img src="../assets/logo.svg" alt="" width="34" height="34">tug</a>
+    <nav class="nav" aria-label="Main">
+      <a href="../#features">Features</a>
+      <a href="../setup/">Setup</a>
+      <a href="../privacy/">Privacy</a>
+      <a href="./" aria-current="page">Developers</a>
+      <a href="https://github.com/Davenee12/tug">GitHub</a>
+    </nav>
+    <a class="btn btn-primary" href="https://github.com/Davenee12/tug/releases/latest">Download</a>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow page-head">
+    <span class="kicker">Developers</span>
+    <h1>Your phone, in your AI tools.</h1>
+    <p class="lede">tug's local MCP server and the <code>tug</code> command hand your coding tools the newest 2FA code, a search of your texts and notifications, CI and deploy notifications, a phone screenshot sent with Tugboat, and what's playing. Texts and files go out only when you click Send.</p>
+    <p>Works with <strong>Claude Code, Codex, Cursor and VS Code</strong>. The full reference is <a href="https://github.com/Davenee12/tug/blob/main/docs/DEVELOPERS.md">docs/DEVELOPERS.md</a>.</p>
+  </div>
+
+  <div class="wrap narrow prose">
+
+    <h2 id="quickstart">Quickstart</h2>
+    <ol class="walk">
+      <li>In tug, turn on <strong>Settings › Developer tools › Let AI tools use tug</strong>. It's off until you do.</li>
+      <li>Add tug to your AI tool. Settings › Developer tools shows each snippet with your real path filled in and a Copy button. tug installs per user, so the command is normally at <code>%LOCALAPPDATA%\tug\bin\tug.exe</code>.</li>
+      <li>Restart the AI tool, and ask it for your latest verification code, or what CI just told you.</li>
+    </ol>
+
+    <h3 class="small">Claude Code</h3>
+<pre><code>claude mcp add --scope user tug -- "C:\Users\&lt;you&gt;\AppData\Local\tug\bin\tug.exe" mcp</code></pre>
+
+    <h3 class="small">Codex, in <code>~/.codex/config.toml</code></h3>
+<pre><code>[mcp_servers.tug]
+command = 'C:\Users\&lt;you&gt;\AppData\Local\tug\bin\tug.exe'
+args = ["mcp"]</code></pre>
+
+    <h3 class="small">Cursor, in <code>~/.cursor/mcp.json</code></h3>
+<pre><code>{
+  "mcpServers": {
+    "tug": { "command": "C:\\Users\\&lt;you&gt;\\AppData\\Local\\tug\\bin\\tug.exe", "args": ["mcp"] }
+  }
+}</code></pre>
+
+    <h3 class="small">VS Code, in <code>mcp.json</code> (MCP: Open User Configuration)</h3>
+<pre><code>{
+  "servers": {
+    "tug": { "type": "stdio", "command": "C:\\Users\\&lt;you&gt;\\AppData\\Local\\tug\\bin\\tug.exe", "args": ["mcp"] }
+  }
+}</code></pre>
+    <p class="muted">ChatGPT's desktop app can't use tug yet: it only connects to MCP servers on the internet, not local ones.</p>
+
+    <figure>
+      <div class="window"><img src="../assets/img/devtools.webp" width="1600" height="1000" loading="lazy" decoding="async"
+        alt="tug's Settings, Developer tools page: Let AI tools use tug switched on, and a switch for each ability. Verification codes, music controls, sending texts and sending files are off."></div>
+      <figcaption>Each ability has its own switch. Codes, music controls, sending texts and sending files start off.</figcaption>
+    </figure>
+
+    <h2 id="tools">What AI tools can do</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Starts</th></tr></thead>
+        <tbody>
+          <tr><td><code>get_latest_code</code></td><td>The newest verification code from the last 10 minutes</td><td>Off</td></tr>
+          <tr><td><code>search_messages</code></td><td>Search your texts and notifications</td><td>On</td></tr>
+          <tr><td><code>recent_dev_notifications</code></td><td>Notifications from GitHub, Slack, Linear, Jira, Sentry, PagerDuty, Vercel and Netlify</td><td>On</td></tr>
+          <tr><td><code>list_tugboat_files</code>, <code>get_tugboat_file</code></td><td>Files you sent from the phone with Tugboat; small images come back as images</td><td>On</td></tr>
+          <tr><td><code>phone_status</code></td><td>Connected or not, model, battery, what's playing</td><td>On</td></tr>
+          <tr><td><code>media_control</code></td><td>Play, pause, next, previous</td><td>Off</td></tr>
+          <tr><td><code>send_text</code></td><td>Asks to send a text; tug shows a card and sends only if you click Send</td><td>Off</td></tr>
+          <tr><td><code>send_file_to_phone</code></td><td>Asks to send files to your iPhone with Tugboat, after your click</td><td>Off</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="cli">The <code>tug</code> command</h2>
+    <p>The same switches apply in your terminal. Settings › Developer tools › <strong>Add tug to PATH</strong> puts it in new terminals for your account only.</p>
+<pre><code>tug code --copy                  the newest code, also on the clipboard (kept out of history)
+tug boat report.pdf              send a file to your iPhone with Tugboat: tug asks you first
+git diff | tug boat - --name changes.diff
+tug text Sam "On my way"         text someone: tug asks you first
+tug status                       is tug running, the phone, what's switched on
+tug mcp                          the MCP server (your AI tool starts this)</code></pre>
+
+    <h2 id="confirm">Every send is yours to confirm</h2>
+    <figure>
+      <div class="window"><img src="../assets/img/devconfirm.webp" width="1600" height="1000" loading="lazy" decoding="async"
+        alt="A confirmation card: Claude Code wants to text Zoe, with her number, the exact message, a countdown, and Don't send and Send buttons."></div>
+      <figcaption>An AI tool can only ask. The card shows who it's to and the exact message.</figcaption>
+    </figure>
+    <ul class="checks">
+      <li>Nothing is sent unless you click <strong>Send</strong> within 2 minutes. Focus starts on Don't send, and Esc means Don't send.</li>
+      <li>Send stays disabled for a moment after the card appears, and whenever tug isn't in front, so a stray click or Enter can't land on it.</li>
+      <li>For files, the card lists each file's name, size and folder, so you can see it's <em>that</em> <code>notes.txt</code>.</li>
+      <li><strong>Local only.</strong> A Windows named pipe that only your account can open; no network port.</li>
+      <li><strong>Other people's words are data.</strong> Texts and notifications come back marked as untrusted, so a message saying "ignore your instructions" is reported, not obeyed.</li>
+      <li>Rate limits on every tool, and tug's log records which tool was used, never what it read.</li>
+    </ul>
+
+    <div class="page-nav">
+      <a class="btn btn-primary" href="https://github.com/Davenee12/tug/blob/main/docs/DEVELOPERS.md">Read docs/DEVELOPERS.md</a>
+      <a class="btn btn-secondary" href="https://github.com/Davenee12/tug">Source on GitHub</a>
+    </div>
+  </div>
+  <section class="tight"></section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul class="footer-links">
+      <li><a href="https://github.com/Davenee12/tug">GitHub</a></li>
+      <li><a href="https://github.com/Davenee12/tug/releases">Releases</a></li>
+      <li><a href="../privacy/">Privacy</a></li>
+      <li><a href="https://github.com/Davenee12/tug/blob/main/SECURITY.md">Security</a></li>
+      <li><a href="https://github.com/Davenee12/tug/blob/main/LICENSE">MIT license</a></li>
+      <li><a href="https://github.com/Davenee12/tug">Support tug</a></li>
+    </ul>
+    <p>This site uses no cookies or tracking.</p>
+    <p>tug isn't affiliated with or endorsed by Apple, Microsoft or Spotify. iPhone is a trademark of Apple Inc.</p>
+  </div>
+</footer>
+</body>
+</html>

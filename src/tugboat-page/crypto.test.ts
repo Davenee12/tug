@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { hexToBytes, bytesToHex } from "@noble/ciphers/utils.js";
 import vector from "./testVector.json";
 import guestVector from "./guestVector.json";
+import aead010 from "./aead010Vector.json";
 import { GUEST_LABEL, GUEST_PREFIX, ad, authHeader, b64, deriveKeys, fileId, guestSecret, open, requestMac, seal, unb64, OVERHEAD } from "./crypto";
 import { keyFromHash } from "./secret";
 
@@ -74,6 +75,24 @@ describe("guest key vector (also asserted by cargo test in src-tauri/src/tugboat
     const key = keyFromHash(guestVector.fragment);
     expect(key?.guest).toBe(true);
     expect(bytesToHex(key!.secret)).toBe(guestVector.guestSecret);
+  });
+});
+
+describe("RustCrypto chacha20poly1305 0.10 output (also asserted by cargo test in src-tauri/src/tugboat/crypto.rs)", () => {
+  const keys = deriveKeys(hexToBytes(aead010.secret));
+
+  it("seals to the same bytes the old Rust library did, and opens them", () => {
+    for (const c of aead010.fixedNonce) {
+      const sealed = seal(keys, hexToBytes(c.ad), hexToBytes(c.plaintext), hexToBytes(c.nonce));
+      expect(bytesToHex(sealed)).toBe(c.sealed);
+      expect(bytesToHex(open(keys, hexToBytes(c.ad), hexToBytes(c.sealed)))).toBe(c.plaintext);
+    }
+  });
+
+  it("opens what the old Rust library sealed with a random nonce", () => {
+    for (const c of aead010.randomNonce) {
+      expect(bytesToHex(open(keys, hexToBytes(c.ad), hexToBytes(c.sealed)))).toBe(c.plaintext);
+    }
   });
 });
 

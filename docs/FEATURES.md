@@ -370,17 +370,32 @@ Play a game (the games picker) is left out while Show games is off.
   editor, a terminal, a browser, Claude Code). **Off until you turn it on** in Settings › General.
 - The shortcut is **Ctrl+Alt+Space** by default, or Ctrl+Shift+Alt+Space, Ctrl+Alt+F12 or
   Ctrl+Shift+F11; Settings says if another app already holds it and offers the others.
-- Recognition runs **on this PC**, and your voice is **never sent anywhere or saved**. Two engines
+- Recognition runs **on this PC**, and your voice is **never sent anywhere or saved**. Three engines
   (Settings › General › Voice typing › Speech engine):
-  - **Accurate** (the default once it's downloaded): whisper.cpp with a 78 MB English speech
-    model, downloaded once when you press **Download** (with progress and Cancel; an interrupted
-    download picks up where it left off). Far better with short commands and code words ("check
-    logs", "camel case user id"), and still quick: about a quarter to half a second for a short
-    phrase on a recent laptop. The first time you turn voice typing on, Settings offers it.
   - **Basic**: Windows' own offline speech recognizer, built in, nothing to download, in any
-    language Windows has speech for. It listens until the model is downloaded, for languages
-    other than English, and on the few processors that can't run Accurate. Settings says when
-    it's the one listening.
+    language Windows has speech for. It listens until a model is downloaded, and on the few
+    processors that can't run the others. Settings says when it's the one listening.
+  - **Accurate** (the default): whisper.cpp with a 78 MB English speech model. Far better with
+    short commands and code words ("check logs", "camel case user id"), and quick: about a quarter
+    to half a second for a short phrase on a recent laptop.
+  - **Most accurate**: whisper.cpp with the 834 MB multilingual large-v3-turbo model. It understands
+    other languages too (pick one, or let it detect
+    the language). It's much slower, several seconds a phrase (about 9 s on a fast 8-core laptop), and needs more memory: with too little free memory
+    a phrase uses Accurate (or Basic) instead, and Settings says so. While its model downloads,
+    Accurate listens if it's there.
+  - **Downloads are automatic and one-time**: turning voice typing on, or picking an engine,
+    fetches its model in the background (progress and Cancel in Settings; an interrupted download
+    picks up where it left off; after a Cancel it isn't fetched again until you ask). Models are
+    kept in tug's local app data, so updates don't download them again; **Delete downloaded
+    models** shows the space they take and removes them.
+  - The first time tug starts after an install or update, if voice typing has never been set up,
+    a small card asks once: **Get voice typing ready now?** (Download or Not now). It never asks
+    again.
+- **Your own words:** Accurate and Most accurate spell the names of the people you text most the
+  way your contacts do (**Use your contacts' names**, on by default) and the words in your
+  **personal dictionary** (Settings › General › Voice typing: add, change or remove words and
+  names). In code editors and terminals they lean on coding words; in chat and mail apps and
+  browsers, on names and everyday phrases. All of it stays on this PC.
 - Pick the language if Windows has more than one installed.
 - If your microphone is a Bluetooth headset in its phone-call (hands-free) mode, Settings says
   accuracy will be lower.

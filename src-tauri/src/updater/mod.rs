@@ -286,10 +286,9 @@ impl Updater {
         if let Some(b) = policy::parse_bucket(saved.as_deref()) {
             return b;
         }
-        use chacha20poly1305::aead::rand_core::RngCore;
-        let mut random = [0u8; 2];
-        chacha20poly1305::aead::OsRng.fill_bytes(&mut random);
-        let b = policy::bucket_from(random);
+        // The OS generator, through aead's `Generate` (as Tugboat's nonces and secrets).
+        use chacha20poly1305::aead::Generate;
+        let b = policy::bucket_from(<[u8; 2]>::generate());
         if let Err(e) = store.set_setting(policy::ROLLOUT_BUCKET_SETTING, &b.to_string()) {
             log::warn!("update: couldn't keep the rollout number: {e}");
         }

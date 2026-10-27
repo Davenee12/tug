@@ -4,9 +4,10 @@
 //!   registered them) and the indicator window, and pumps their messages. A press only notes
 //!   which window is in front and hands the hold to the worker, so the queue never waits.
 //! - `tug-voice` is a COM thread that runs each hold: microphone open while the key is down,
-//!   recognize, shape the text, type it. It also owns the engines between holds: the accurate
-//!   one (whisper.cpp, loaded on a helper thread while the first hold records) and Windows'
-//!   recognizer (Basic, and Accurate's fallback). Both are let go when voice typing goes off.
+//!   recognize, shape the text, type it. It also owns the engines between holds: a whisper.cpp
+//!   one (Accurate or Most accurate, loaded on a helper thread while the first hold records, with
+//!   Accurate standing in for Most accurate when memory is short) and Windows' recognizer (Basic,
+//!   and the fallback). All are let go when voice typing goes off.
 //!
 //! RegisterHotKey only reports the press, so the worker watches the shortcut's key with
 //! GetAsyncKeyState to know when it's let go: no keyboard hook, nothing else is seen.
@@ -37,9 +38,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::engine::{AccurateProblem, Engine, EngineChoice, EngineError};
+use super::model::ModelId;
 use super::{
-    audio, judge_recording, judge_typing, model, peak, pill_problem, text, EngineConfig, StartError, VoiceLanguage,
-    VoiceOutcome, MAX_HOLD, TAIL,
+    audio, judge_recording, judge_typing, model, peak, pill_problem, text, vocab, EngineConfig, StartError,
+    VoiceLanguage, VoiceOutcome, MAX_HOLD, TAIL,
 };
 use crate::callback::guarded;
 use crate::code_fill::Keys;
@@ -87,18 +89,35 @@ enum Job {
     Mic(mpsc::Sender<bool>),
 }
 
+/// A loaded whisper.cpp engine and which model it runs (Most accurate's, or Accurate's, which may
+/// be standing in for it when memory was short).
+struct Loaded {
+    model: ModelId,
+    whisper: whisper::Whisper,
+}
+
 /// The speech thread's engines and what they're for.
 #[derive(Default)]
 struct Engines {
     config: EngineConfig,
     basic: Option<sapi::Sapi>,
-    accurate: Option<whisper::Whisper>,
+    accurate: Option<Loaded>,
+}
+
+/// Whether a configuration runs a whisper.cpp engine.
+fn whisper_engine(config: &EngineConfig) -> bool {
+    config.engine.and_then(EngineChoice::model).is_some()
 }
 
 impl Engines {
     /// Take a new configuration, letting go of any engine it no longer uses.
     fn configure(&mut self, config: EngineConfig) {
-        if config.engine != Some(EngineChoice::Accurate) || config.model != self.config.model {
+        if !whisper_engine(&config)
+            || config.engine != self.config.engine
+            || config.model != self.config.model
+            || config.fallback != self.config.fallback
+            || config.spoken != self.config.spoken
+        {
             self.accurate = None;
         }
         // Basic is let go when it isn't the engine (it's loaded again if Accurate ever needs to
@@ -453,116 +472,188 @@ fn finish(outcome: VoiceOutcome) {
     }
 }
 
-/// Why the accurate engine didn't load.
+/// Why a whisper.cpp engine didn't load.
 enum LoadError {
     /// The file isn't exactly the model (wrong size or hash) or is gone: it's deleted.
     Damaged(String),
-    /// Not enough free memory right now (bytes available): this hold uses Basic, the next tries again.
-    LowMemory(u64),
     /// whisper.cpp couldn't start with the checked model: the file is kept, Basic listens.
     Failed(String),
 }
 
-/// Load the accurate engine: check there's memory for it, read the model file once, check those
-/// very bytes against the model's hash, and hand the same bytes to whisper.cpp. Nothing can change
-/// the file between the check and the load, and whisper.cpp never sees a damaged or swapped file.
-fn load_accurate(path: &std::path::Path) -> Result<whisper::Whisper, LoadError> {
+/// Load a whisper.cpp engine: read the model file once, check those very bytes against the
+/// model's hash, and hand the same bytes to whisper.cpp, to listen in `language`. Nothing can
+/// change the file between the check and the load, and whisper.cpp never sees a damaged or swapped
+/// file. (Whether there's memory for it is decided first: `engine::plan_load`.)
+fn load_whisper(path: &std::path::Path, model: ModelId, language: &'static str) -> Result<Loaded, LoadError> {
     let t0 = Instant::now();
-    let available = system::available_memory();
-    if !crate::voice::engine::enough_memory(available) {
-        return Err(LoadError::LowMemory(available.unwrap_or(0)));
-    }
     let bytes = std::fs::read(path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => LoadError::Damaged("it's gone".into()),
         _ => LoadError::Failed(format!("couldn't read it: {e}")),
     })?;
-    if !model::verify_bytes(&bytes, &model::MODEL) {
+    if !model::verify_bytes(&bytes, model.spec()) {
         return Err(LoadError::Damaged("it doesn't match its SHA-256".into()));
     }
-    let w = whisper::Whisper::load(&bytes).map_err(|e| LoadError::Failed(format!("{e:?}")))?;
+    let whisper = whisper::Whisper::load_tuned(&bytes, whisper::Tuning::for_model(model), language)
+        .map_err(|e| LoadError::Failed(format!("{e:?}")))?;
     drop(bytes);
     log::info!(
-        "voice typing: accurate engine loaded in {} ms ({} threads)",
+        "voice typing: {} engine loaded in {} ms ({} threads, language {language})",
+        model.as_str(),
         t0.elapsed().as_millis(),
         whisper::threads()
     );
-    Ok(w)
+    Ok(Loaded { model, whisper })
 }
 
-/// Loading the accurate engine on a helper thread while the person talks: the first hold after
-/// switching on waits for the recording, not the recording and then the model.
-type Loading = std::thread::JoinHandle<Result<whisper::Whisper, LoadError>>;
+/// A whisper.cpp engine being loaded on a helper thread while the person talks (the first hold
+/// after switching on waits for the recording, not the recording and then the model), with what
+/// Settings should say about it once it's in.
+struct Loading {
+    handle: Option<std::thread::JoinHandle<Result<Loaded, LoadError>>>,
+    /// The model being loaded (`None`: nothing to load; the plan's problem still applies).
+    model: Option<ModelId>,
+    problem: Option<AccurateProblem>,
+}
 
+/// The model the configuration wants and its file, when the engine is a whisper.cpp one.
+fn wanted(config: &EngineConfig) -> Option<(ModelId, std::path::PathBuf)> {
+    let model = config.engine.and_then(EngineChoice::model)?;
+    Some((model, config.model.clone()?))
+}
+
+/// Decide what to load for this hold given the free memory (`engine::plan_load`) and start it.
+/// Nothing when the model wanted is already loaded; when memory is short for Most accurate,
+/// Accurate (if it can stand in), and nothing at all when there's too little for either.
 fn start_loading(engines: &Engines) -> Option<Loading> {
-    if engines.config.engine != Some(EngineChoice::Accurate) || engines.accurate.is_some() {
+    let (want, path) = wanted(&engines.config)?;
+    if engines.accurate.as_ref().is_some_and(|l| l.model == want) {
         return None;
     }
-    let path = engines.config.model.clone()?;
-    std::thread::Builder::new()
-        .name("tug-voice-load".into())
-        .spawn(move || load_accurate(&path))
-        .map_err(|e| log::warn!("voice typing: couldn't start loading the accurate engine ({e})"))
-        .ok()
+    let available = system::available_memory();
+    let plan = crate::voice::engine::plan_load(want, available, engines.config.fallback.is_some());
+    if let Some(free) = available.filter(|_| plan.problem.is_some()) {
+        log::info!(
+            "voice typing: {} MB of memory free, too little for the {} engine; {}",
+            free >> 20,
+            want.as_str(),
+            match plan.model {
+                Some(m) => format!("using the {} engine for this hold", m.as_str()),
+                None => "using the basic engine for this hold".into(),
+            }
+        );
+    }
+    let load = plan
+        .model
+        .filter(|m| engines.accurate.as_ref().is_none_or(|l| l.model != *m));
+    let handle = load.and_then(|m| {
+        let file = if m == want {
+            path.clone()
+        } else {
+            engines.config.fallback.clone()?
+        };
+        let language = if m == ModelId::Accurate {
+            "en"
+        } else {
+            engines.config.spoken
+        };
+        std::thread::Builder::new()
+            .name("tug-voice-load".into())
+            .spawn(move || load_whisper(&file, m, language))
+            .map_err(|e| log::warn!("voice typing: couldn't start loading the {} engine ({e})", m.as_str()))
+            .ok()
+    });
+    Some(Loading {
+        handle,
+        model: load,
+        problem: plan.problem,
+    })
 }
 
-/// Collect the helper thread's engine (or load it here if there was no helper). This hold falls
-/// back to Basic if it didn't load: a file that isn't the model is deleted (`model_damaged`); low
-/// memory is noted and tried again next hold; any other failure keeps the file, notes it and stops
-/// trying until voice typing (or the engine) is picked again.
+/// Collect the helper thread's engine. This hold falls back to something smaller if it didn't
+/// load: a file that isn't the model is deleted (`model_damaged`); low memory is noted and tried
+/// again next hold; any other failure keeps the file, notes it and stops trying until voice typing
+/// (or the engine) is picked again. A fallback (Accurate standing in) that fails is just dropped.
 fn finish_loading(engines: &mut Engines, loading: Option<Loading>) {
-    if engines.config.engine != Some(EngineChoice::Accurate) || engines.accurate.is_some() {
+    let Some(loading) = loading else {
         return;
-    }
-    let result = match loading {
-        Some(handle) => handle
-            .join()
-            .unwrap_or_else(|_| Err(LoadError::Failed("loading it panicked".into()))),
-        None => match engines.config.model.clone() {
-            Some(path) => load_accurate(&path),
-            None => return,
-        },
     };
+    let want = engines.config.engine.and_then(EngineChoice::model);
+    let result = match (loading.handle, loading.model) {
+        (Some(handle), Some(model)) => Some((
+            model,
+            handle
+                .join()
+                .unwrap_or_else(|_| Err(LoadError::Failed("loading it panicked".into()))),
+        )),
+        _ => None,
+    };
+    let Some((model, result)) = result else {
+        // Nothing was loaded: too little memory for anything new. Accurate, already loaded as a
+        // stand-in, keeps listening (it's in memory anyway); otherwise this hold uses Basic.
+        super::note_accurate(match (&engines.accurate, loading.problem) {
+            (Some(_), Some(_)) => Some(AccurateProblem::LowMemoryUsedAccurate),
+            (_, problem) => problem,
+        });
+        return;
+    };
+    let is_fallback = Some(model) != want;
     match result {
-        Ok(w) => {
-            engines.accurate = Some(w);
-            super::note_accurate(None);
+        Ok(loaded) => {
+            engines.accurate = Some(loaded);
+            super::note_accurate(loading.problem);
         }
         Err(LoadError::Damaged(why)) => {
-            super::model_damaged(&why);
-            engines.config.model = None;
+            super::model_damaged(model, &why);
+            if is_fallback {
+                engines.config.fallback = None;
+            } else {
+                engines.config.model = None;
+            }
         }
-        Err(LoadError::LowMemory(free)) => {
-            log::info!(
-                "voice typing: {} MB of memory free, too little to load the accurate engine; using the basic engine for this hold",
-                free >> 20
+        Err(LoadError::Failed(why)) if is_fallback => {
+            log::warn!(
+                "voice typing: the {} engine couldn't start ({why}); using the basic engine",
+                model.as_str()
             );
+            engines.config.fallback = None;
             super::note_accurate(Some(AccurateProblem::LowMemory));
         }
         Err(LoadError::Failed(why)) => {
-            log::warn!("voice typing: the accurate engine couldn't start ({why}); keeping the model and using the basic engine");
+            log::warn!(
+                "voice typing: the {} engine couldn't start ({why}); keeping the model and using the basic engine",
+                model.as_str()
+            );
             super::note_accurate(Some(AccurateProblem::Failed));
             engines.config.model = None;
         }
     }
 }
 
-/// Recognize one recording with the configured engine. Accurate falls back to Basic (when Windows
-/// has a speech language) if it isn't loaded or fails. `Ok((heard, engine used))`.
-fn recognize(engines: &mut Engines, pcm: &[i16]) -> Result<(String, &'static str), VoiceOutcome> {
-    if engines.config.engine == Some(EngineChoice::Accurate) {
-        if let Some(accurate) = engines.accurate.as_mut() {
-            match accurate.transcribe(pcm) {
-                Ok(heard) => return Ok((heard, "accurate")),
+/// Recognize one recording with the configured engine, with the prompt for the program in front
+/// (`focus`) and the person's hints. A whisper.cpp engine falls back to Basic (when Windows has a
+/// speech language) if it isn't loaded or fails. `Ok((heard, engine used))`.
+fn recognize(
+    engines: &mut Engines,
+    pcm: &[i16],
+    focus: vocab::Focus,
+    hints: &vocab::Hints,
+) -> Result<(String, &'static str), VoiceOutcome> {
+    if whisper_engine(&engines.config) {
+        if let Some(loaded) = engines.accurate.as_mut() {
+            loaded.whisper.set_prompt(focus, hints);
+            match loaded.whisper.transcribe(pcm) {
+                Ok(heard) => return Ok((heard, loaded.model.as_str())),
                 Err(e) => {
                     // Start fresh next time; this hold goes to Basic.
                     log::warn!(
-                        "voice typing: the accurate engine failed ({e:?}); using the basic engine for this hold"
+                        "voice typing: the {} engine failed ({e:?}); using the basic engine for this hold",
+                        loaded.model.as_str()
                     );
                     engines.accurate = None;
                 }
             }
         } else {
-            log::info!("voice typing: the accurate engine isn't ready; using the basic engine for this hold");
+            log::info!("voice typing: no whisper.cpp engine is ready; using the basic engine for this hold");
         }
     }
     let Some(language) = engines
@@ -672,11 +763,16 @@ fn hold(press: &Press, engines: &mut Engines) -> VoiceOutcome {
 
     overlay::show("Typing…", Look::Working, 0);
     let t0 = Instant::now();
-    let (heard, engine) = match recognize(engines, &pcm) {
+    // The prompt leans on what the program in front is for, with the person's own words.
+    let focus = vocab::focus_for_process(&target.exe);
+    let hints = super::hints();
+    let (heard, engine) = match recognize(engines, &pcm, focus, &hints) {
         Ok(r) => r,
         Err(outcome) => return outcome,
     };
     let recognized_ms = t0.elapsed().as_millis();
+    // The person's spellings of their names and words (case only), whichever engine heard them.
+    let heard = vocab::respell(&heard, &hints);
     let typed = text::format(&heard, text::target_for_process(&target.exe));
 
     // Held Ctrl or Alt would turn the characters into shortcuts: wait for them, and if they're

@@ -76,7 +76,7 @@ Why you can trust the download anyway:
   <img src="docs/media/weather.png" alt="tug's weather card: a little harbor with the afternoon sun low in the west and a tugboat on the water, rain due at 4:45 PM for about 45 minutes, and a reminder to charge the phone, at 22%, before the rain" width="720">
 </p>
 
-[What's changed](CHANGELOG.md) · [Everything tug can do, in detail](docs/FEATURES.md) · [Roadmap](ROADMAP.md)
+[Website](https://davenee12.github.io/tug/) · [What's changed](CHANGELOG.md) · [Everything tug can do, in detail](docs/FEATURES.md) · [Roadmap](ROADMAP.md)
 
 ## Requirements
 
@@ -180,6 +180,12 @@ and strips local paths (your user folder) from the exes. Browser preview scenari
 [Spotify developer dashboard](https://developer.spotify.com/dashboard), register the redirect URI
 `http://127.0.0.1:8972/callback`, add its listeners while in Development Mode, and put its own
 Client ID there.
+
+## Support tug
+
+tug is free and open source, and stays that way. If it saves you time, you can
+[sponsor its development on GitHub](https://github.com/sponsors/Davenee12). Sponsorships go
+first towards code signing, so Windows stops warning about the installer.
 
 ## Contributing
 

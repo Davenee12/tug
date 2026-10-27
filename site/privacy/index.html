@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>tug and your privacy</title>
+  <meta name="description" content="tug has no servers and no accounts, and collects nothing. What stays on your PC, the few things that go online and when, and how to delete everything.">
+  <link rel="canonical" href="https://davenee12.github.io/tug/privacy/">
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/site.css">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="tug and your privacy">
+  <meta property="og:description" content="No servers, no accounts, nothing collected. Here's exactly what tug keeps and what goes online.">
+  <meta property="og:url" content="https://davenee12.github.io/tug/privacy/">
+  <meta property="og:image" content="https://davenee12.github.io/tug/assets/img/og.jpg">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../"><img src="../assets/logo.svg" alt="" width="34" height="34">tug</a>
+    <nav class="nav" aria-label="Main">
+      <a href="../#features">Features</a>
+      <a href="../setup/">Setup</a>
+      <a href="./" aria-current="page">Privacy</a>
+      <a href="../developers/">Developers</a>
+      <a href="https://github.com/Davenee12/tug">GitHub</a>
+    </nav>
+    <a class="btn btn-primary" href="https://github.com/Davenee12/tug/releases/latest">Download</a>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow page-head">
+    <span class="kicker">Privacy</span>
+    <h1>tug collects nothing.</h1>
+    <p class="lede">tug has no servers and no accounts. It talks to your iPhone over Bluetooth and keeps what it receives on your PC. Nothing is sent to the people who make tug.</p>
+    <p>This page is the short, human version. The full policy, which is the one that counts, is <a href="https://github.com/Davenee12/tug/blob/main/docs/PRIVACY.md">docs/PRIVACY.md</a>, and its history is public.</p>
+  </div>
+
+  <div class="wrap narrow prose">
+
+    <h2>What tug doesn't do</h2>
+    <ul class="checks">
+      <li>No tug servers, no sign-up, no account.</li>
+      <li>No analytics, telemetry, crash reporting, advertising or tracking.</li>
+      <li>Nothing you receive (notifications, texts, contacts, calls, files) is sent anywhere by tug.</li>
+      <li>No update checks to anyone but GitHub, where tug's releases live.</li>
+    </ul>
+
+    <h2>What stays on your PC</h2>
+    <p>Your notifications, texts, contacts, recent calls and settings live in a database in your Windows profile (<code>%APPDATA%\dev.davejames.tug</code>), so you can see and search your history. Contact photos, app icons and album art are cached there too. Files you receive with Tugboat go to your <strong>Pictures › Tugboat</strong> folder.</p>
+    <p>tug's logs record connection events and errors, never message text or contact names. <strong>Copy diagnostics</strong> copies recent logs to your clipboard only when you press it, with phone numbers, email addresses, names, Bluetooth addresses and your phone's name removed.</p>
+
+    <figure>
+      <div class="window"><img src="../assets/img/settings-privacy.webp" width="1600" height="1000" loading="lazy" decoding="async"
+        alt="tug's Settings, Data and privacy page listing what stays on this PC and, feature by feature, what goes online."></div>
+      <figcaption>The same summary lives in tug, under Settings › Data &amp; privacy.</figcaption>
+    </figure>
+
+    <h2>What goes online, and only when you use it</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th scope="col">Feature</th><th scope="col">Who it talks to</th><th scope="col">What it sends</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Weather</strong>, if you set it up</td><td>Open-Meteo</td><td>Your chosen place, rounded to about 1 km, or the city you type</td></tr>
+          <tr><td><strong>"Use my location"</strong> for weather</td><td>BigDataCloud</td><td>Rounded coordinates, to name the place</td></tr>
+          <tr><td><strong>App icons</strong> (on by default, can be switched off)</td><td>Apple's App Store lookup</td><td>The app's identifier, once per app; nothing about you or your notifications</td></tr>
+          <tr><td><strong>Album art</strong> (on by default, can be switched off)</td><td>Apple's music catalog</td><td>The artist and album name of what's playing, for albums tug has no cover for yet</td></tr>
+          <tr><td><strong>Spotify</strong>, only if you connect it</td><td>Spotify</td><td>Your Spotify sign-in and the requests you make</td></tr>
+          <tr><td><strong>Automatic updates</strong></td><td>GitHub</td><td>An ordinary request for tug's latest version; nothing about you, your phone or your data</td></tr>
+          <tr><td><strong>Voice typing's speech model</strong>, once, when you press Download</td><td>Hugging Face</td><td>A request for one public file. Recognition itself never goes online</td></tr>
+          <tr><td><strong>Open on the web</strong> and similar links</td><td>The website, in your browser</td><td>Whatever your browser sends, only when you click</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Features that stay local</h2>
+    <ul>
+      <li><strong>Tugboat</strong> runs on your local network only while its panel is open. Everything is encrypted with a key from the QR code, only the phone that scanned it can join, and it turns itself off after 10 idle minutes. Your clipboard is read only when you press Send clipboard, and never saved.</li>
+      <li><strong>Voice typing</strong> is off by default. It listens only while you hold its shortcut, recognizes speech on your PC, and never sends or saves the recording.</li>
+      <li><strong>Bring in your full history</strong> reads an iPhone backup that's already on your PC, and goes nowhere online. An encrypted backup's password is used once, in memory, and never saved.</li>
+      <li><strong>Developer tools</strong> are off by default and reachable only by programs on your PC running as you. AI tools see only what you switch on, and a text or file is sent only after you click Send in tug.</li>
+      <li><strong>Hide previews while sharing or presenting</strong> looks only at this PC, to spot a screen share or a slide show. It never keeps or logs what it sees.</li>
+    </ul>
+    <figure>
+      <div class="window"><img src="../assets/img/sharing.webp" width="1600" height="1000" loading="lazy" decoding="async"
+        alt="tug's Feed while the screen is shared: names and message text are blurred under a Previews hidden banner with Show anyway."></div>
+      <figcaption>While you share your screen or present, pop-ups say only "New message", and tug's window blurs texts and names.</figcaption>
+    </figure>
+
+    <h2>Deleting your data</h2>
+    <ul>
+      <li>In tug: <strong>Settings › Data &amp; privacy › Clear history</strong> deletes saved notifications and imported history; <strong>Settings › Messages › Remove imported history</strong> removes what came from a backup; <strong>Start over</strong> (Settings › iPhone) unpairs the phone.</li>
+      <li>Everything: uninstall tug, then delete <code>%APPDATA%\dev.davejames.tug</code> and <code>%LOCALAPPDATA%\dev.davejames.tug</code> if they're left. The full policy lists every location.</li>
+      <li>To remove the PC from your iPhone: Settings › Bluetooth, tap ⓘ next to this PC, then Forget This Device.</li>
+    </ul>
+
+    <h2>Security</h2>
+    <p>tug treats everything it receives from the phone as untrusted, keeps Tugboat encrypted and local, and keeps the developer bridge to your Windows account. What it defends against, and what it doesn't try to, is in <a href="https://github.com/Davenee12/tug/blob/main/docs/SECURITY-MODEL.md">docs/SECURITY-MODEL.md</a>. To report a vulnerability privately, see <a href="https://github.com/Davenee12/tug/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+
+    <h2>This website</h2>
+    <p>This site uses no cookies, no analytics and no tracking. Its fonts are served from the site itself, and it loads nothing from anyone else. It's hosted on GitHub Pages, so GitHub handles the requests your browser makes to it, under GitHub's own privacy statement.</p>
+
+    <div class="page-nav">
+      <a class="btn btn-primary" href="https://github.com/Davenee12/tug/blob/main/docs/PRIVACY.md">Read the full privacy policy</a>
+      <a class="btn btn-secondary" href="https://github.com/Davenee12/tug/blob/main/docs/SECURITY-MODEL.md">Security model</a>
+    </div>
+  </div>
+  <section class="tight"></section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul class="footer-links">
+      <li><a href="https://github.com/Davenee12/tug">GitHub</a></li>
+      <li><a href="https://github.com/Davenee12/tug/releases">Releases</a></li>
+      <li><a href="./" aria-current="page">Privacy</a></li>
+      <li><a href="https://github.com/Davenee12/tug/blob/main/SECURITY.md">Security</a></li>
+      <li><a href="https://github.com/Davenee12/tug/blob/main/LICENSE">MIT license</a></li>
+      <li><a href="https://github.com/Davenee12/tug">Support tug</a></li>
+    </ul>
+    <p>This site uses no cookies or tracking.</p>
+    <p>tug isn't affiliated with or endorsed by Apple, Microsoft or Spotify. iPhone is a trademark of Apple Inc.</p>
+  </div>
+</footer>
+</body>
+</html>
