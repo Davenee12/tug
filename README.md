@@ -76,7 +76,7 @@ Why you can trust the download anyway:
   <img src="docs/media/weather.png" alt="tug's weather card: a little harbor with the afternoon sun low in the west and a tugboat on the water, rain due at 4:45 PM for about 45 minutes, and a reminder to charge the phone, at 22%, before the rain" width="720">
 </p>
 
-[What's changed](CHANGELOG.md) · [Everything tug can do, in detail](docs/FEATURES.md) · [Roadmap](ROADMAP.md)
+[Website](https://davenee12.github.io/tug/) · [What's changed](CHANGELOG.md) · [Everything tug can do, in detail](docs/FEATURES.md) · [Roadmap](ROADMAP.md)
 
 ## Requirements
 

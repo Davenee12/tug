@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>Set up tug: install and pair your iPhone</title>
+  <meta name="description" content="What tug needs, how to install it, and how to pair your iPhone with your Windows PC in a couple of minutes.">
+  <link rel="canonical" href="https://davenee12.github.io/tug/setup/">
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/site.css">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Set up tug">
+  <meta property="og:description" content="Install tug and pair your iPhone with your Windows PC.">
+  <meta property="og:url" content="https://davenee12.github.io/tug/setup/">
+  <meta property="og:image" content="https://davenee12.github.io/tug/assets/img/og.jpg">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../"><img src="../assets/logo.svg" alt="" width="34" height="34">tug</a>
+    <nav class="nav" aria-label="Main">
+      <a href="../#features">Features</a>
+      <a href="./" aria-current="page">Setup</a>
+      <a href="../privacy/">Privacy</a>
+      <a href="../developers/">Developers</a>
+      <a href="https://github.com/Davenee12/tug">GitHub</a>
+    </nav>
+    <a class="btn btn-primary" href="https://github.com/Davenee12/tug/releases/latest">Download</a>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow page-head">
+    <span class="kicker">Setup</span>
+    <h1>Pair once, and you're done.</h1>
+    <p class="lede">Setting up tug takes a couple of minutes: install it, pair your iPhone over Bluetooth, and turn on three switches on the phone. After that it reconnects by itself.</p>
+    <div class="page-nav">
+      <a class="btn btn-secondary" href="#requirements">Requirements</a>
+      <a class="btn btn-secondary" href="#install">Install</a>
+      <a class="btn btn-secondary" href="#pair">Pair</a>
+      <a class="btn btn-secondary" href="#help">If something's off</a>
+    </div>
+  </div>
+
+  <div class="wrap narrow prose">
+
+    <h2 id="requirements">What you need</h2>
+    <ul class="checks">
+      <li><strong>Windows 10 version 2004 or later, or Windows 11</strong>, on an x64 PC. ARM64 PCs run it under emulation, untested.</li>
+      <li><strong>A Bluetooth LE adapter that can act as a peripheral.</strong> Most Bluetooth 5 adapters can; some Realtek, MediaTek and older adapters can't. tug tells you if yours can't, and a Bluetooth 5 USB adapter fixes it.</li>
+      <li><strong>An iPhone.</strong> Android phones can't pair with tug yet (Tugboat works from Android browsers).</li>
+      <li><strong>WebView2 Runtime</strong>, already part of Windows 11 and up-to-date Windows 10.</li>
+      <li>For Tugboat: an IPv4 home or office Wi-Fi network set to <strong>Private</strong> in Windows.</li>
+    </ul>
+    <p class="muted">The app is in English for now.</p>
+
+    <h2 id="install">Install</h2>
+    <ol class="walk">
+      <li>Download the installer, <code>tug-&lt;version&gt;-setup.exe</code>, from <a href="https://github.com/Davenee12/tug/releases/latest">tug's latest release on GitHub</a>.</li>
+      <li>Run it. It installs for your Windows account only, with no admin rights needed.</li>
+    </ol>
+    <div class="note">
+      <p><strong>Windows will be cautious, because the installer isn't code-signed yet.</strong> Signing is planned.</p>
+      <p><strong>SmartScreen</strong> shows "Windows protected your PC". Click <strong>More info</strong>, check the file is the one you downloaded from tug's Releases page, then click <strong>Run anyway</strong>.</p>
+      <p><strong>Smart App Control</strong> (Windows 11, on by default on some fresh installs) may block unsigned apps outright, with no Run anyway. If it does, tug can't be installed on that PC until releases are signed. Turning Smart App Control off may not be reversible without resetting Windows, so think twice before you do.</p>
+    </div>
+    <p>To check your download wasn't changed, compare its SHA-256 checksum with the one in that release's notes. In PowerShell:</p>
+<pre><code>Get-FileHash .\tug-&lt;version&gt;-setup.exe -Algorithm SHA256</code></pre>
+    <p>After that, tug keeps itself up to date: new versions download quietly, are checked against tug's signing key, and install when you click <strong>Update</strong>.</p>
+
+    <h2 id="pair">Pair your iPhone</h2>
+    <p>tug opens with a <strong>Connect your iPhone</strong> panel (it's also in Settings › iPhone).</p>
+    <figure>
+      <div class="window"><img src="../assets/img/setup.webp" width="1600" height="1000" loading="lazy" decoding="async"
+        alt="tug's Connect your iPhone panel: instructions, a phone named Jordan's iPhone with a Pair button, and a phone paired before with Use and Remove."></div>
+      <figcaption>The Connect your iPhone panel lists your phone by name, and leaves keyboards and headphones out.</figcaption>
+    </figure>
+    <ol class="walk">
+      <li>On the iPhone, open <strong>Settings › Bluetooth</strong> and keep it open. tug lists your phone by name.</li>
+      <li>Click <strong>Pair</strong>, check the code in tug matches the one on the phone, and confirm on both. That one pairing brings notifications, music, battery and texts.</li>
+      <li>Tap <strong>Allow</strong> on the iPhone when it asks.</li>
+      <li>Turn on the switches tug shows, in iPhone Settings › Bluetooth › ⓘ next to this PC:
+        <ul>
+          <li><strong>Share System Notifications</strong>, for the Feed,</li>
+          <li><strong>Show Notifications</strong>, for texts,</li>
+          <li><strong>Sync Contacts</strong>, for names, photos and recent calls.</li>
+        </ul>
+        tug turns each one green as it comes on.
+      </li>
+    </ol>
+    <figure>
+      <div class="window"><img src="../assets/img/pairing.webp" width="1600" height="1000" loading="lazy" decoding="async"
+        alt="A pairing request dialog asking Do the codes match, showing a six-digit code with Cancel and Pair buttons."></div>
+      <figcaption>Check the six digits match the code on your iPhone, then click Pair.</figcaption>
+    </figure>
+    <p>That's it. From now on tug reconnects by itself when the phone comes back in range, after a Bluetooth blip, and when the PC wakes from sleep.</p>
+
+    <h3 id="history">Optional: bring in your full message history</h3>
+    <p>iOS doesn't share texts you send from the iPhone itself, and on a fresh install it shares only the newest 10 incoming texts. If you have a backup of your iPhone on this PC (from the Apple Devices app or iTunes, encrypted or not), <strong>Settings › Messages › Bring in your full history</strong> copies in your conversations, the texts you sent included, with their photos and videos, as a snapshot as of the backup's date. It all stays on your PC, and <strong>Remove imported history</strong> takes it out again. Group chats stay on your iPhone.</p>
+
+    <h2 id="help">If something's off</h2>
+    <div class="faq">
+      <details>
+        <summary>Message text is missing from notifications</summary>
+        <div><p>iOS only shares what the lock screen shows. On the iPhone, set Settings › Notifications › Show Previews to <strong>Always</strong>.</p></div>
+      </details>
+      <details>
+        <summary>Nothing connects after the iPhone restarted</summary>
+        <div><p>iOS keeps accessories out until the phone is unlocked once after a restart. tug says "Unlock your iPhone" and reconnects by itself as soon as you do.</p></div>
+      </details>
+      <details>
+        <summary>tug says my Bluetooth adapter can't host a connection</summary>
+        <div><p>Some adapters (some Realtek, MediaTek and older ones) can't act as a Bluetooth LE peripheral, which tug needs. A Bluetooth 5 USB adapter fixes it.</p></div>
+      </details>
+      <details>
+        <summary>My iPhone doesn't show up in the list</summary>
+        <div><p>Keep Settings › Bluetooth open on the iPhone, and check <strong>Visible to iPhone</strong> is on in tug's sidebar. Pairing from the iPhone's side or from Windows' "Add a device" works too. tug also explains common problems in plain words, such as more than one iPhone paired, or an iPhone that has forgotten this PC (with <strong>Pair again</strong>).</p></div>
+      </details>
+      <details>
+        <summary>Tugboat can't connect</summary>
+        <div><p>The phone and PC need to be on the same Wi-Fi, set to <strong>Private</strong> in Windows. Guest networks and VPNs can get in the way. tug never changes your firewall; its "Can't connect?" help walks through it.</p></div>
+      </details>
+    </div>
+    <p class="after-faq">Still stuck? <a href="https://github.com/Davenee12/tug/issues">Open an issue on GitHub</a>. Settings › iPhone › <strong>Copy diagnostics</strong> copies recent logs with numbers, names and addresses removed, if you'd like to include them.</p>
+  </div>
+
+  <section class="tight">
+    <div class="wrap narrow">
+      <a class="btn btn-primary btn-lg" href="https://github.com/Davenee12/tug/releases/latest">Download for Windows</a>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul class="footer-links">
+      <li><a href="https://github.com/Davenee12/tug">GitHub</a></li>
+      <li><a href="https://github.com/Davenee12/tug/releases">Releases</a></li>
+      <li><a href="../privacy/">Privacy</a></li>
+      <li><a href="https://github.com/Davenee12/tug/blob/main/SECURITY.md">Security</a></li>
+      <li><a href="https://github.com/Davenee12/tug/blob/main/LICENSE">MIT license</a></li>
+      <li><a href="https://github.com/Davenee12/tug">Support tug</a></li>
+    </ul>
+    <p>This site uses no cookies or tracking.</p>
+    <p>tug isn't affiliated with or endorsed by Apple, Microsoft or Spotify. iPhone is a trademark of Apple Inc.</p>
+  </div>
+</footer>
+</body>
+</html>
