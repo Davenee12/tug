@@ -10,6 +10,7 @@ import { useGameStore } from "./stores/game";
 import { useUpdateStore } from "./stores/update";
 import { useRemindersStore } from "./stores/reminders";
 import { useScheduledTextsStore } from "./stores/scheduledTexts";
+import { useWelcomeBackStore } from "./stores/welcomeBack";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import ConnectPanel from "./components/ConnectPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
@@ -46,6 +47,7 @@ const game = useGameStore();
 const update = useUpdateStore();
 const reminders = useRemindersStore();
 const scheduledTexts = useScheduledTextsStore();
+const welcomeBack = useWelcomeBackStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
 // show the Connection panel beside the feed; everything else (and narrow windows) uses
@@ -211,6 +213,9 @@ onMounted(async () => {
   void reminders.init();
   // Send later: texts that came due while tug was closed are sent (on time) or held (late) now.
   void scheduledTexts.init();
+  // "Welcome back": the Feed's summary on coming back after a while away from the window (once
+  // history has loaded, so there's something to sum up).
+  welcomeBack.init();
   // Automatic updates: the Update button and Settings › About; after an update restart, this also
   // reopens the screen the person left (so it runs once tug's own state has loaded).
   void update.init();
@@ -239,6 +244,7 @@ onUnmounted(() => {
   update.dispose();
   reminders.dispose();
   scheduledTexts.dispose();
+  welcomeBack.dispose();
 });
 </script>
 
