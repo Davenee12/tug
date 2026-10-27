@@ -125,7 +125,7 @@ claude mcp add --scope user tug -- "C:\Users\<you>\AppData\Local\tug\bin\tug.exe
 ```
 
 In a terminal: `tug code --copy`, `tug boat screenshot.png`, `tug text Sam "On my way"`,
-`tug status`. Setup for Codex, Cursor and VS Code, the safety model and troubleshooting:
+`tug next` to skip the song, `tug now`, `tug status`. Setup for Codex, Cursor and VS Code, the safety model and troubleshooting:
 **[docs/DEVELOPERS.md](docs/DEVELOPERS.md)**.
 
 ## Privacy

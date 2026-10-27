@@ -108,6 +108,47 @@ pub fn status_lines(s: &StatusResult) -> Vec<String> {
     out
 }
 
+/// `tug play` and friends, once the phone took it (or ignored a repeat it had just had).
+pub fn music_done(m: crate::args::Music, answer: &serde_json::Value) -> String {
+    use crate::args::Music;
+    if answer.get("ignored").is_some() {
+        return "Already done a moment ago, so it wasn't sent again.".into();
+    }
+    match m {
+        Music::Play => "Playing.".into(),
+        Music::Pause => "Paused.".into(),
+        Music::Toggle => "Play/pause sent.".into(),
+        Music::Next => "Next song.".into(),
+        Music::Previous => "Previous song.".into(),
+    }
+}
+
+/// `tug now`: what's playing, and whether there's anything to say (false: nothing playing, or the
+/// phone isn't connected).
+pub fn now_playing_line(p: &PhoneStatus) -> (String, bool) {
+    if !p.connected {
+        return ("Your iPhone isn't connected to tug.".into(), false);
+    }
+    match &p.now_playing {
+        Some(np) => {
+            let title = np.title.as_deref().map_or_else(|| "Unknown".into(), printable);
+            let by = np
+                .artist
+                .as_deref()
+                .filter(|a| !a.is_empty())
+                .map(|a| format!(" — {}", printable(a)))
+                .unwrap_or_default();
+            let state = if np.state == "playing" {
+                String::new()
+            } else {
+                format!(" ({})", np.state)
+            };
+            (format!("Now playing: {title}{by}{state}"), true)
+        }
+        None => ("Nothing's playing on your iPhone.".into(), false),
+    }
+}
+
 /// `tug text`: the outcome sentence and whether it counts as success.
 pub fn send_outcome(r: &SendResult) -> (String, bool) {
     match r.outcome {
@@ -466,5 +507,45 @@ mod tests {
         assert_eq!(seconds_in_words(90), "90 seconds");
         assert_eq!(seconds_in_words(60), "1 minute");
         assert_eq!(seconds_in_words(600), "10 minutes");
+    }
+
+    #[test]
+    fn music_says_what_it_did_and_what_is_playing() {
+        use crate::args::Music;
+        assert_eq!(
+            music_done(Music::Next, &serde_json::json!({"done": "next"})),
+            "Next song."
+        );
+        assert_eq!(
+            music_done(Music::Pause, &serde_json::json!({"done": "pause"})),
+            "Paused."
+        );
+        assert!(music_done(Music::Next, &serde_json::json!({"ignored": "next"})).starts_with("Already done"));
+
+        let mut p = phone("connected");
+        assert_eq!(
+            now_playing_line(&p),
+            ("Nothing's playing on your iPhone.".into(), false)
+        );
+        p.now_playing = Some(NowPlayingInfo {
+            title: Some("Teardrop".into()),
+            artist: Some("Massive Attack".into()),
+            album: None,
+            state: "playing".into(),
+            app: None,
+        });
+        assert_eq!(
+            now_playing_line(&p),
+            ("Now playing: Teardrop — Massive Attack".into(), true)
+        );
+        p.now_playing.as_mut().unwrap().state = "paused".into();
+        assert_eq!(
+            now_playing_line(&p).0,
+            "Now playing: Teardrop — Massive Attack (paused)"
+        );
+        assert_eq!(
+            now_playing_line(&phone("disconnected")).0,
+            "Your iPhone isn't connected to tug."
+        );
     }
 }

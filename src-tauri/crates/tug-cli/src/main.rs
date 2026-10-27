@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use args::Command;
 use tug_bridge::client::{time_limit, Client, ClientError};
 use tug_bridge::protocol::{
-    Call, ClientInfo, ClientKind, CodeResult, OfferResult, Progress, SendResult, StatusResult, StdinFile,
+    Call, ClientInfo, ClientKind, CodeResult, OfferResult, PhoneStatus, Progress, SendResult, StatusResult, StdinFile,
 };
 
 fn main() -> ExitCode {
@@ -101,6 +101,19 @@ async fn run(command: Command) -> i32 {
             wait,
         } => boat(&c, &files, stdin_name, wait).await,
         Command::Text { to, message } => text(&c, to, message).await,
+        Command::Music(m) => music(&c, m).await,
+        Command::Now => match call_as::<PhoneStatus>(&c, Call::PhoneStatus).await {
+            Ok(p) => {
+                let (line, ok) = format::now_playing_line(&p);
+                println!("{line}");
+                if ok {
+                    format::OK
+                } else {
+                    format::FAILED
+                }
+            }
+            Err(e) => fail(&e),
+        },
         Command::Mcp | Command::Help | Command::Version => format::OK,
     }
 }
@@ -134,6 +147,34 @@ async fn text(c: &Client, to: String, message: String) -> i32 {
             } else {
                 format::FAILED
             }
+        }
+        Err(e) => fail(&e),
+    }
+}
+
+/// `tug next` and friends: ask the phone's player, say it was done, and after a skip what's playing
+/// now (once the phone has moved on; only with the Phone status switch on, otherwise just the skip).
+async fn music(c: &Client, m: args::Music) -> i32 {
+    let answer = call_as::<serde_json::Value>(
+        c,
+        Call::MediaControl {
+            action: m.action().into(),
+        },
+    )
+    .await;
+    match answer {
+        Ok(v) => {
+            println!("{}", format::music_done(m, &v));
+            if matches!(m, args::Music::Next | args::Music::Previous) {
+                // The phone takes a moment to tell tug the new song.
+                tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                if let Ok(p) = call_as::<PhoneStatus>(c, Call::PhoneStatus).await {
+                    if let (line, true) = format::now_playing_line(&p) {
+                        println!("{line}");
+                    }
+                }
+            }
+            format::OK
         }
         Err(e) => fail(&e),
     }
