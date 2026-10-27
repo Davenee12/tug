@@ -577,11 +577,13 @@ pub fn set_conversation_hidden(
             true,
         ),
     };
-    state
+    let counts = state
         .shared
         .store
         .set_conversation_hidden(&senders, &addresses, at, hidden)
         .map_err(|e| e.to_string())?;
+    // Counts only: no names, numbers or words.
+    log::info!("{}", counts.log_line(hidden));
     Ok(at)
 }
 
@@ -838,6 +840,37 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.onboarded",
     "ui.seenSince",
 ];
+
+/// Settings › About › Report a problem (and the "didn't close normally" notice): GitHub's bug
+/// report form in the browser, filled in with the version and Windows version. The window copies
+/// the diagnostics to the clipboard first, for the person to read through and paste. Nothing is
+/// sent by tug.
+#[tauri::command]
+pub fn report_problem(app: tauri::AppHandle, unclean: bool) -> Result<()> {
+    let version = app.package_info().version.to_string();
+    let url = crate::report::issue_url(&version, &crate::diagnostics::os_version(), unclean);
+    log::info!(
+        "report: opening the bug report form{}",
+        if unclean { " (didn't close normally)" } else { "" }
+    );
+    open_in_browser(&url)
+}
+
+/// At startup, from the window: this version's last run didn't close normally and tug hasn't
+/// offered a report for it yet. Answers the version once (and remembers it offered); `None` after.
+#[tauri::command]
+pub fn unclean_exit(app: tauri::AppHandle, state: State<'_, AppState>) -> Option<String> {
+    use crate::report;
+    let current = app.package_info().version.to_string();
+    let offered = state.shared.store.setting(report::OFFERED_SETTING).ok().flatten();
+    if !report::offer_unclean(report::last_run(), &current, offered.as_deref()) {
+        return None;
+    }
+    if let Err(e) = state.shared.store.set_setting(report::OFFERED_SETTING, &current) {
+        log::warn!("report: couldn't remember offering: {e}");
+    }
+    Some(current)
+}
 
 /// Build the "Copy diagnostics" report and put it on the clipboard, returning it too so the UI
 /// can confirm. Sync for the same STA reason as `copy_text`. Message bodies, phone numbers,
@@ -1374,6 +1407,12 @@ pub fn devtools_set_enabled(state: State<'_, AppState>, enabled: bool) -> Result
 #[tauri::command]
 pub fn devtools_set_permission(state: State<'_, AppState>, key: String, on: bool) -> Result<DevToolsStatus> {
     state.devtools.set_permission(&key, on)
+}
+
+/// Settings › Developer tools › "Send `tug text` without asking".
+#[tauri::command]
+pub fn devtools_set_texts_without_asking(state: State<'_, AppState>, on: bool) -> Result<DevToolsStatus> {
+    state.devtools.set_texts_without_asking(on)
 }
 
 /// "Revoke access": a new token; connected AI tools must be restarted.

@@ -13,14 +13,10 @@ all-features = true
 # Fail on every vulnerability, unmaintained-crate and unsound advisory in the Windows graph,
 # except the ones listed (each with a reason) below.
 yanked = "warn"
-ignore = [
-  # glib 0.18: `VariantStrIter` is unsound. glib only comes in through Tauri's GTK backend for
-  # Linux (tauri -> tray-icon/muda/wry -> gtk 0.18 -> glib), and
-  # `cargo tree -i glib --target x86_64-pc-windows-msvc` prints nothing: it isn't compiled into
-  # tug. Kept here so a run without the target filter above doesn't fail on it.
-  # Revisit when Tauri moves to gtk-rs >= 0.20 (glib >= 0.20 has the fix), then delete this line.
-  { id = "RUSTSEC-2024-0429", reason = "glib is Linux-only (Tauri's GTK backend); not in tug's Windows build. Revisit when Tauri uses gtk >= 0.20." },
-]
+# Nothing is ignored. (glib's RUSTSEC-2024-0429 was, until v0.5.20: glib only comes in through
+# Tauri's GTK backend for Linux, which the Windows-only graph above never includes, so the entry
+# matched nothing and cargo-deny warned it was unused.) A new entry needs an id and a reason.
+ignore = []
 
 [licenses]
 # Exactly the licences tug's Windows build uses today. tug is MIT and mustn't take on copyleft

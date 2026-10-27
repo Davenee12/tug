@@ -117,10 +117,7 @@ pub fn website(dir: &Path, app_id: &str) -> Result<Option<String>, String> {
     if let Ok(url) = std::fs::read_to_string(&url_file) {
         return Ok(Some(url.trim().to_string()).filter(|u| !u.is_empty()));
     }
-    let recent_miss = std::fs::metadata(&miss)
-        .and_then(|m| m.modified())
-        .is_ok_and(|t| SystemTime::now().duration_since(t).unwrap_or_default() < MISS_RETRY);
-    if recent_miss {
+    if recent_miss(&miss, SystemTime::now()) {
         return Ok(None);
     }
     let lookup = http::get_string(&format!("https://itunes.apple.com/lookup?bundleId={app_id}"))?;
@@ -131,9 +128,25 @@ pub fn website(dir: &Path, app_id: &str) -> Result<Option<String>, String> {
             Ok(Some(url))
         }
         None => {
-            let _ = std::fs::write(&miss, b"");
+            mark_miss(&miss);
             Ok(None)
         }
+    }
+}
+
+/// Whether `marker` says the App Store had nothing for this app less than [`MISS_RETRY`] ago.
+fn recent_miss(marker: &Path, now: SystemTime) -> bool {
+    std::fs::metadata(marker)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| now.duration_since(t).unwrap_or_default() < MISS_RETRY)
+}
+
+/// Remember a miss from now. Rewriting an empty file doesn't move its modified time on Windows, so
+/// the time is set outright, as `album_art` does for its markers: otherwise, once a marker was a
+/// week old, every request for that app's icon or website would look it up again.
+fn mark_miss(marker: &Path) {
+    if let Ok(f) = std::fs::File::create(marker) {
+        let _ = f.set_modified(SystemTime::now());
     }
 }
 
@@ -155,10 +168,7 @@ pub fn icon(dir: &Path, app_id: &str) -> Result<Option<String>, String> {
     if let Ok(bytes) = std::fs::read(&img) {
         return Ok(data_uri(&bytes));
     }
-    let recent_miss = std::fs::metadata(&miss)
-        .and_then(|m| m.modified())
-        .is_ok_and(|t| SystemTime::now().duration_since(t).unwrap_or_default() < MISS_RETRY);
-    if recent_miss {
+    if recent_miss(&miss, SystemTime::now()) {
         return Ok(None);
     }
     let lookup = http::get_string(&format!("https://itunes.apple.com/lookup?bundleId={app_id}"))?;
@@ -179,7 +189,7 @@ pub fn icon(dir: &Path, app_id: &str) -> Result<Option<String>, String> {
             Ok(Some(uri))
         }
         None => {
-            let _ = std::fs::write(&miss, b"");
+            mark_miss(&miss);
             Ok(None)
         }
     }
@@ -296,6 +306,31 @@ pub(crate) mod http {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stale_miss_marker_is_fresh_again_once_marked() {
+        let dir = std::env::temp_dir().join(format!("tug-app-icons-miss-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("com.example.none");
+        let now = SystemTime::now();
+        assert!(!recent_miss(&marker, now), "no marker: look it up");
+        mark_miss(&marker);
+        assert!(recent_miss(&marker, now + Duration::from_secs(60)));
+        // A week and a bit later it's worth asking again...
+        let old = now - MISS_RETRY - Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&marker)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert!(!recent_miss(&marker, now));
+        // ...and when the App Store still has nothing, the marker counts from now, even though
+        // rewriting an empty file wouldn't move its modified time on Windows.
+        mark_miss(&marker);
+        assert!(recent_miss(&marker, SystemTime::now()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn only_bundle_ids_get_through() {

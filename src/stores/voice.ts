@@ -55,6 +55,9 @@ export const useVoiceStore = defineStore("voice", () => {
       );
     } catch (e) {
       tug.notify("error", errorMessage(e));
+      // A fresh copy, so a switch or picker the person just changed shows the real setting again.
+      if (cur) status.value = { ...cur };
+      return null;
     }
     return status.value;
   }
@@ -77,6 +80,7 @@ export const useVoiceStore = defineStore("voice", () => {
       status.value = await call();
     } catch (e) {
       tug.notify("error", errorMessage(e));
+      if (status.value) status.value = { ...status.value };
     }
   }
 

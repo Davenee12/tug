@@ -29,6 +29,23 @@ versions between.
   a steadier connection and texts and notifications that don't go missing. See
   [docs/DEVELOPERS.md](docs/DEVELOPERS.md).
 
+## Road to 1.0
+
+1.0 is a promise, not a feature list: tug is safe to install, stable on PCs and iPhones other than
+the maintainer's, and its developer surface won't change under people's scripts. It ships when all
+of these are true:
+
+- [ ] **People want it:** the demand goals in [docs/RELEASING.md](docs/RELEASING.md#do-people-want-tug)
+      met within about a month of announcing tug.
+- [ ] **Code-signed installer**, so SmartScreen and Smart App Control don't stand in the way.
+- [ ] **A beta group** of 10–20 people on different PCs, Bluetooth adapters and iPhones, for a few
+      weeks, with no serious problems left open.
+- [ ] **A quiet fix-only release:** one bug-fixing-only version whose review finds nothing serious.
+- [ ] **Decisions that get harder later, made:** where tug keeps its data (roaming or local
+      AppData), the shape of the `tug` command and MCP tools (after 1.0 they only change with a
+      new major version), and Spotify out of beta or clearly labelled.
+- [x] **Safe releases:** staged rollouts, Report a problem, and signed automatic updates.
+
 ## Near term — open-source readiness
 - **Code signing** for the installer and exes, via a free open-source route (SignPath Foundation)
   or Azure Trusted Signing, so SmartScreen and Smart App Control stop blocking installs.

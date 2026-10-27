@@ -9,6 +9,9 @@ pub enum Recipient {
     One {
         name: String,
         address: String,
+        /// Only found because the name contains what was typed ("ann" → "Joanne"), not because
+        /// it is the name, starts with it, or is a number. Such a text always gets the card.
+        loose: bool,
     },
     /// Several different people match: their names, so the caller can be more specific.
     Several(Vec<String>),
@@ -53,10 +56,14 @@ pub fn resolve(query: &str, contacts: &[Contact], recent: &[String]) -> Recipien
             .iter()
             .find(|c| normalize(&c.address) == number)
             .map_or_else(|| number.clone(), |c| c.name.clone());
-        return Recipient::One { name, address: number };
+        return Recipient::One {
+            name,
+            address: number,
+            loose: false,
+        };
     }
     let tiers: [&dyn Fn(&str) -> bool; 3] = [&|n| n == q, &|n| word_prefix(n, &q), &|n| n.contains(&q)];
-    for matches in tiers {
+    for (tier, matches) in tiers.into_iter().enumerate() {
         let hits: Vec<&Contact> = contacts.iter().filter(|c| matches(&fold(&c.name))).collect();
         if hits.is_empty() {
             continue;
@@ -76,6 +83,7 @@ pub fn resolve(query: &str, contacts: &[Contact], recent: &[String]) -> Recipien
         return Recipient::One {
             name: best.name.trim().to_string(),
             address: normalize(&best.address),
+            loose: tier == 2,
         };
     }
     Recipient::NoMatch
@@ -109,7 +117,8 @@ mod tests {
             r,
             Recipient::One {
                 name: "Sam Rivera".into(),
-                address: "+15550100001".into()
+                address: "+15550100001".into(),
+                loose: false,
             }
         );
     }
@@ -139,7 +148,8 @@ mod tests {
             resolve("Sam Rivera", &book(), &recent),
             Recipient::One {
                 name: "Sam Rivera".into(),
-                address: "+15550100002".into()
+                address: "+15550100002".into(),
+                loose: false,
             }
         );
     }
@@ -150,16 +160,31 @@ mod tests {
             resolve("(555) 010-0099", &book(), &[]),
             Recipient::One {
                 name: "+15550100099".into(),
-                address: "+15550100099".into()
+                address: "+15550100099".into(),
+                loose: false,
             }
         );
         assert_eq!(
             resolve("+1 555 010 0004", &book(), &[]),
             Recipient::One {
                 name: "Alex Kim".into(),
-                address: "+15550100004".into()
+                address: "+15550100004".into(),
+                loose: false,
             }
         );
+    }
+
+    #[test]
+    fn a_name_that_only_contains_the_query_is_loose() {
+        assert!(matches!(
+            resolve("mantha", &book(), &[]),
+            Recipient::One { ref name, loose: true, .. } if name == "Samantha Lee"
+        ));
+        // Starting a word of the name isn't loose ("tay" → "Taylor Smith").
+        assert!(matches!(
+            resolve("lee", &book(), &[]),
+            Recipient::One { ref name, loose: false, .. } if name == "Samantha Lee"
+        ));
     }
 
     #[test]

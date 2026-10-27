@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { ChevronRight, History, Image, Info, Phone, Plus, RotateCcw, ShieldQuestionMark, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { useScheduledTextsStore } from "../stores/scheduledTexts";
 import { useBackupStore } from "../stores/backup";
 import { backupLabel, isImported, photoHint } from "../lib/backupImport";
 import { api } from "../lib/ipc";
@@ -18,11 +19,14 @@ import ConversationRow from "./ConversationRow.vue";
 import MediaChip from "./MediaChip.vue";
 import MessageComposer from "./MessageComposer.vue";
 import SmartReplyChips from "./SmartReplyChips.vue";
+import ScheduledTexts from "./ScheduledTexts.vue";
+import SmartText from "./SmartText.vue";
 import { findCode } from "../lib/codes";
 import { conversationReplies } from "../lib/smartReplies";
 import type { SmsMessage } from "../types/protocol";
 
 const tug = useTugStore();
+const scheduled = useScheduledTextsStore();
 // History brought in from an iPhone backup: conversations older than the recent page, and each
 // conversation's whole history when it's opened (stores/backup).
 const backup = useBackupStore();
@@ -236,6 +240,8 @@ function bubbleClass(i: ConversationItem): string {
 }
 const codeIn = (i: ConversationItem) => findCode(i.body);
 // What each bubble shows: words, a photo chip ("Attachment: 1 Photo"), or both (lib/messageType).
+// The words go through SmartText, so links, numbers, addresses and parcel numbers in them are one
+// click (lib/smartActions); a code keeps its own chip underneath.
 const contents = computed(() => new Map(shownItems.value.map((i) => [i.id, itemContent(i)])));
 const contentOf = (i: ConversationItem): Shown => contents.value.get(i.id) ?? itemContent(i);
 // A backup's real photos and videos, shown in place of a chip.
@@ -330,6 +336,29 @@ async function send(text = draft.value) {
   // took the text (as for a pop-up reply): a failed or unconfirmed one leaves them to come back to.
   if (result === "sent") void tug.clearItems(conv.notifications);
   sending.value = false;
+}
+
+// A stranger's texts keep their web links as plain words (lib/smartActions): one-click links are how
+// scam texts work. Everything else in them still acts.
+const linksOk = computed(() => !selected.value || tug.trustsLinksFrom(selected.value));
+
+// Send later: the draft goes into the conversation's scheduled texts (stores/scheduledTexts) and
+// the box empties, as if it had been sent.
+async function sendLater(at: number, label: string) {
+  const conv = selected.value;
+  const to = replyTo.value;
+  const text = draft.value;
+  if (!conv || !to || !text.trim()) return;
+  const outcome = await scheduled.schedule({ address: to, name: conv.contact, threadKey: conv.key }, text, at);
+  if (outcome !== "ok") {
+    tug.notify(
+      "error",
+      outcome === "full" ? "50 texts are already waiting to be sent. Send or cancel one first." : "Couldn't save the scheduled text. Try again in a moment.",
+    );
+    return;
+  }
+  if (draftFor(conv.key) === text) setDraftFor(conv.key, "");
+  tug.notify("info", `Your text will send ${label.charAt(0).toLowerCase()}${label.slice(1)}.`);
 }
 
 // Retry resends that same message to the number it was meant for (not a new copy to whichever
@@ -461,7 +490,7 @@ async function retry(m: SmsMessage) {
                 {{ item.n.subtitle }}
               </span>
               <span v-if="unsent(item)" class="italic opacity-70">{{ contentOf(item).text }}</span>
-              <template v-else-if="contentOf(item).text">{{ contentOf(item).text }}</template>
+              <SmartText v-else-if="contentOf(item).text" :text="contentOf(item).text" :links="linksOk" />
               <MessageAttachments
                 v-if="attachmentsOf(item).length"
                 :attachments="attachmentsOf(item)"
@@ -511,6 +540,7 @@ async function retry(m: SmsMessage) {
           </select>
           <span v-if="selected.addresses.length > 1">· {{ selected.addresses.length }} numbers under this name</span>
         </label>
+        <ScheduledTexts :conversation="selected" />
         <SmartReplyChips
           v-if="canReply"
           :replies="suggestions"
@@ -527,6 +557,7 @@ async function retry(m: SmsMessage) {
           :blocked="sending || !replyTo"
           @update="(text) => setDraftFor(selected!.key, text)"
           @send="send()"
+          @schedule="sendLater"
         />
         <p v-else class="flex items-center gap-2 py-1 text-[13px] text-muted">
           <Info :size="14" class="shrink-0" />

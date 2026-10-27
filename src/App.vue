@@ -8,6 +8,9 @@ import { usePcAudioStore } from "./stores/pcAudio";
 import { useVoiceStore } from "./stores/voice";
 import { useGameStore } from "./stores/game";
 import { useUpdateStore } from "./stores/update";
+import { useRemindersStore } from "./stores/reminders";
+import { useScheduledTextsStore } from "./stores/scheduledTexts";
+import { useWelcomeBackStore } from "./stores/welcomeBack";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import ConnectPanel from "./components/ConnectPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
@@ -31,7 +34,8 @@ import { phoneTextMessage, skippedMessage } from "./lib/tugboat";
 import { START_FAILED } from "./lib/startup";
 import { isWide } from "./lib/layout";
 import { useElementSize } from "./lib/useElementSize";
-import { api, on } from "./lib/ipc";
+import { api, errorMessage, on } from "./lib/ipc";
+import { reportProblem, REPORT_OPENED, UNCLEAN_EXIT } from "./lib/report";
 import { quickActionRunner, runQuickAction } from "./lib/quickActions";
 
 const tug = useTugStore();
@@ -41,6 +45,9 @@ const pcAudio = usePcAudioStore();
 const voice = useVoiceStore();
 const game = useGameStore();
 const update = useUpdateStore();
+const reminders = useRemindersStore();
+const scheduledTexts = useScheduledTextsStore();
+const welcomeBack = useWelcomeBackStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
 // show the Connection panel beside the feed; everything else (and narrow windows) uses
@@ -183,6 +190,32 @@ onMounted(async () => {
     console.error("tug init failed", e);
     tug.notify("error", START_FAILED);
   }
+  // This version's last run didn't close normally (a crash, or the power went): offer a report,
+  // once per version. Nothing is sent unless the person files it.
+  void api
+    .uncleanExit()
+    .then((version) => {
+      if (version) {
+        tug.notify("info", UNCLEAN_EXIT, {
+          label: "Report it",
+          run: () =>
+            void reportProblem(true).then(
+              () => tug.notify("info", REPORT_OPENED),
+              (e) => tug.notify("error", errorMessage(e)),
+            ),
+        });
+      }
+    })
+    .catch(() => {
+      /* nothing to offer */
+    });
+  // Remind me: reminders that came due while tug was closed come back now that history has loaded.
+  void reminders.init();
+  // Send later: texts that came due while tug was closed are sent (on time) or held (late) now.
+  void scheduledTexts.init();
+  // "Welcome back": the Feed's summary on coming back after a while away from the window (once
+  // history has loaded, so there's something to sum up).
+  welcomeBack.init();
   // Automatic updates: the Update button and Settings › About; after an update restart, this also
   // reopens the screen the person left (so it runs once tug's own state has loaded).
   void update.init();
@@ -209,6 +242,9 @@ onUnmounted(() => {
   pcAudio.dispose();
   voice.dispose();
   update.dispose();
+  reminders.dispose();
+  scheduledTexts.dispose();
+  welcomeBack.dispose();
 });
 </script>
 

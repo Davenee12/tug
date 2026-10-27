@@ -31,6 +31,7 @@ mod pc_audio;
 mod perf;
 mod pin_confirm;
 mod quick_actions;
+mod report;
 mod session_end;
 mod share_privacy;
 mod spotify;
@@ -192,6 +193,8 @@ pub fn run() {
             // (tug crashed, or the PC lost power mid-import) go now, before an import could start.
             // Deleting a handful of files: quick, and done before the window can ask for one.
             let local_dir = app.path().app_local_data_dir()?;
+            // How the last run ended (Settings offers a report if it didn't close normally).
+            report::start(&local_dir, &app.package_info().version.to_string());
             if backup::files::sweep_temp(&local_dir) {
                 log::info!("backup: removed scratch files a previous import left behind");
             }
@@ -383,6 +386,8 @@ pub fn run() {
             commands::show_toast,
             commands::screen_share_watch,
             commands::copy_diagnostics,
+            commands::report_problem,
+            commands::unclean_exit,
             commands::bt_inventory,
             commands::open_logs_folder,
             commands::spotify_status,
@@ -426,6 +431,7 @@ pub fn run() {
             commands::devtools_status,
             commands::devtools_set_enabled,
             commands::devtools_set_permission,
+            commands::devtools_set_texts_without_asking,
             commands::devtools_revoke,
             commands::devtools_confirm,
             commands::devtools_set_on_path,
@@ -502,6 +508,10 @@ pub(crate) fn tidy_before_exit(app: &tauri::AppHandle, ending: bool) {
         // Hand the phone's audio back to the phone rather than leave it routed to a PC
         // that stopped listening.
         state.pc_audio.shutdown_now(plan.audio_wait);
+    }
+    // This run closed normally (nothing to offer a report about at the next start).
+    if let Ok(dir) = app.path().app_local_data_dir() {
+        report::end_run(&dir);
     }
     log::info!(
         "exit: tidied up in {} ms{}",

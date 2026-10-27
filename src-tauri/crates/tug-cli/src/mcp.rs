@@ -232,6 +232,9 @@ pub fn to_call(name: &str, args: Option<&JsonObject>) -> Result<Call, String> {
         "send_text" => Call::SendText {
             to: str_arg(a, "to", true)?.unwrap_or_default(),
             message: str_arg(a, "message", true)?.unwrap_or_default(),
+            // An AI tool's text always gets tug's card.
+            progress: false,
+            typed: false,
         },
         // The paths as given; `call_tool` resolves them against this server's folder.
         "send_file_to_phone" => Call::OfferFiles {
