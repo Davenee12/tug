@@ -400,16 +400,17 @@ function newestCallFirst(a: CallRecord, b: CallRecord): number {
 }
 
 /**
- * What picking a call in Ctrl+K does, and the words its row shows for it. `route` is how tug can
- * call them right now (the store's `callRoute`): then it's the call the Calls list's button makes.
- * Otherwise their conversation, to text them instead; a call with no number (withheld) has
- * neither, so it opens Calls on that call.
+ * What picking a call in Ctrl+K does, and the words its row shows for it. Never a call: a search
+ * result is picked with Enter, often by reflex (typing "missed" puts the newest missed call first
+ * and selected), and a call placed by accident reaches a real person. When tug can call them
+ * (`route`, the store's `callRoute`) it opens Calls on that call, its Call back button one click
+ * away; "call zoe" in Ctrl+K still calls on purpose. When it can't, their conversation, to text
+ * them instead. A withheld number has no one to call or text: Calls, on that call.
  */
 export function callPick(
   c: Pick<CallRecord, "direction" | "number">,
   route: "back" | "dial" | null,
-): { open: "call" | "message" | "calls"; label: string } {
-  if (!c.number) return { open: "calls", label: "Show in Calls" };
-  if (route) return { open: "call", label: route === "back" || c.direction === "missed" ? "Call back" : "Call" };
+): { open: "message" | "calls"; label: string } {
+  if (!c.number || route) return { open: "calls", label: "Show in Calls" };
   return { open: "message", label: "Message" };
 }

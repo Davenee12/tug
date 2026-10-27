@@ -412,10 +412,10 @@ describe("matchCalls (Ctrl+K)", () => {
 describe("callPick (Ctrl+K)", () => {
   const number = "+15550100142";
 
-  it("calls them back or dials when tug can, worded like the Calls list's button", () => {
-    expect(callPick({ direction: "missed", number }, "back")).toEqual({ open: "call", label: "Call back" });
-    expect(callPick({ direction: "missed", number }, "dial")).toEqual({ open: "call", label: "Call back" });
-    expect(callPick({ direction: "outgoing", number }, "dial")).toEqual({ open: "call", label: "Call" });
+  it("never places a call from a search result, even when tug could: it shows the call in Calls", () => {
+    expect(callPick({ direction: "missed", number }, "back")).toEqual({ open: "calls", label: "Show in Calls" });
+    expect(callPick({ direction: "missed", number }, "dial")).toEqual({ open: "calls", label: "Show in Calls" });
+    expect(callPick({ direction: "outgoing", number }, "dial")).toEqual({ open: "calls", label: "Show in Calls" });
   });
 
   it("opens their conversation when tug can't call them", () => {

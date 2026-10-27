@@ -311,9 +311,8 @@ function pick(o: Option | undefined) {
   if (o.kind === "person") {
     openConversation(o.c.address, cleanName(o.c.name));
   } else if (o.kind === "call") {
-    // A call: what its row says (lib/commands callPick).
-    if (o.pick.open === "call") void tug.callPerson(o.name, o.call.number);
-    else if (o.pick.open === "message") openConversation(o.call.number, o.name);
+    // A call: what its row says (lib/commands callPick). Never a call by itself.
+    if (o.pick.open === "message" && o.call.number) openConversation(o.call.number, o.name);
     else {
       tug.view = "calls";
       tug.focusItem = `c${callKeyOf.value.get(o.call) ?? ""}`;
