@@ -1,12 +1,14 @@
-//! The accurate engine: whisper.cpp (through `whisper-rs`), on the CPU, with the English model
-//! from `voice/model.rs`. Nothing leaves the PC: whisper.cpp reads the model file once and works
-//! on the recording in memory.
+//! The whisper.cpp engines (through `whisper-rs`), on the CPU: Accurate with the English model and
+//! Most accurate with the multilingual one, both from `voice/model.rs`. Nothing leaves the PC:
+//! whisper.cpp reads the model file once and works on the recording in memory.
 //!
 //! - Loaded on the first hold that needs it (in parallel with the recording, see `win/mod.rs`),
 //!   kept while voice typing is on, dropped when it's switched off or Basic is picked.
 //! - Each hold: the recording is trimmed, levelled and padded (`voice/audio.rs`), decoded
-//!   greedily as one short English segment with the vocabulary prompt (`voice/vocab.rs`), and the
-//!   result tidied (`vocab::clean`) for `text::format`.
+//!   greedily as one short segment in the engine's language (English, a picked language, or
+//!   detected) with the prompt for the program in front and the person's hints
+//!   (`voice/vocab.rs`, [`Whisper::set_prompt`]), and the result tidied (`vocab::clean`) for
+//!   `text::format`.
 //! - The encoder looks at a 15 s window (more for a long hold, see [`audio_ctx`]) instead of
 //!   Whisper's full 30 s: a short phrase is encoded in about half the time, with no loss of
 //!   accuracy on the phrases measured.
@@ -18,8 +20,9 @@ use std::sync::Once;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
 
 use crate::voice::audio;
-use crate::voice::engine::{Engine, EngineError, SAMPLE_RATE};
-use crate::voice::vocab;
+use crate::voice::engine::{self, Engine, EngineError, SAMPLE_RATE};
+use crate::voice::model::ModelId;
+use crate::voice::vocab::{self, Focus, Hints};
 
 /// The most prompt tokens whisper.cpp uses (half its 448-token text context).
 const MAX_PROMPT_TOKENS: usize = 224;
@@ -72,6 +75,23 @@ pub struct Tuning {
     pub flash_attn: bool,
 }
 
+impl Tuning {
+    /// What tug uses for a model. Most accurate (large-v3-turbo) gets Whisper's full 30 s window:
+    /// with the 15 s one Accurate uses (and with 20 s), it repeated short phrases ("git push git
+    /// push git push…") on the test phrases; with the full window it typed them right
+    /// (`compares_whisper_with_windows_recognizer`, `TUG_WHISPER_WINDOWS`). It costs time: about
+    /// 9 s a phrase on 8 threads instead of 3.6 s.
+    pub fn for_model(model: ModelId) -> Tuning {
+        match model {
+            ModelId::Accurate => Tuning::default(),
+            ModelId::MostAccurate => Tuning {
+                window: Some(FULL_AUDIO_CTX as i32),
+                ..Tuning::default()
+            },
+        }
+    }
+}
+
 impl Default for Tuning {
     fn default() -> Self {
         Tuning {
@@ -85,10 +105,15 @@ impl Default for Tuning {
 
 pub struct Whisper {
     state: WhisperState,
+    /// What it listens in: "en" (Accurate), or Most accurate's picked language or "auto".
+    language: &'static str,
+    /// The prompt in use, its tokens, and what it was built from (rebuilt only when that changes).
+    prompt: String,
     prompt_tokens: Vec<i32>,
+    prompt_for: Option<(Focus, Hints)>,
     tuning: Tuning,
     // Last: dropped after the state that came from it.
-    _ctx: WhisperContext,
+    ctx: WhisperContext,
 }
 
 fn failed(what: &str, e: impl std::fmt::Display) -> EngineError {
@@ -97,12 +122,15 @@ fn failed(what: &str, e: impl std::fmt::Display) -> EngineError {
 
 impl Whisper {
     /// Load the model from its bytes (already checked against its hash by the caller, on these
-    /// very bytes, so nothing can change the file between the check and the load).
-    pub fn load(bytes: &[u8]) -> Result<Self, EngineError> {
-        Self::load_tuned(bytes, Tuning::default())
+    /// very bytes, so nothing can change the file between the check and the load), to listen in
+    /// `language` (Whisper's code, or "auto"), with the default tuning. (tug loads with
+    /// [`Tuning::for_model`].)
+    #[cfg(test)]
+    pub fn load(bytes: &[u8], language: &'static str) -> Result<Self, EngineError> {
+        Self::load_tuned(bytes, Tuning::default(), language)
     }
 
-    pub fn load_tuned(bytes: &[u8], tuning: Tuning) -> Result<Self, EngineError> {
+    pub fn load_tuned(bytes: &[u8], tuning: Tuning, language: &'static str) -> Result<Self, EngineError> {
         quiet_logs();
         let mut params = WhisperContextParameters::default();
         // No GPU backend is compiled in; say so rather than rely on the default.
@@ -111,24 +139,42 @@ impl Whisper {
         let ctx =
             WhisperContext::new_from_buffer_with_params(bytes, params).map_err(|e| failed("loading the model", e))?;
         let state = ctx.create_state().map_err(|e| failed("the model's state", e))?;
-        let prompt_tokens = if tuning.prompt {
-            let mut t = ctx
-                .tokenize(&vocab::prompt(), MAX_PROMPT_TOKENS * 2)
-                .map_err(|e| failed("the prompt", e))?;
-            // whisper.cpp keeps the end of an overlong prompt, and uses at most one less than
-            // half its text context; keep the start (the examples and the commands), which matter
-            // most. (The prompt is about 135 tokens today: `prompt_len` in the test report.)
-            t.truncate(MAX_PROMPT_TOKENS - 1);
-            t
-        } else {
-            Vec::new()
-        };
-        Ok(Whisper {
+        let mut w = Whisper {
             state,
-            prompt_tokens,
+            language,
+            prompt: String::new(),
+            prompt_tokens: Vec::new(),
+            prompt_for: None,
             tuning,
-            _ctx: ctx,
-        })
+            ctx,
+        };
+        w.set_prompt(Focus::General, &Hints::default());
+        Ok(w)
+    }
+
+    /// Use the prompt for a program with this focus and the person's hints (`vocab::prompt_for`,
+    /// within whisper.cpp's budget by its own tokenizer). Built again only when the focus or the
+    /// hints change. Nothing about it is logged.
+    pub fn set_prompt(&mut self, focus: Focus, hints: &Hints) {
+        if !self.tuning.prompt {
+            return;
+        }
+        if self.prompt_for.as_ref().is_some_and(|(f, h)| *f == focus && h == hints) {
+            return;
+        }
+        let ctx = &self.ctx;
+        let fits = |s: &str| {
+            ctx.tokenize(s, MAX_PROMPT_TOKENS * 2)
+                .is_ok_and(|t| t.len() <= vocab::PROMPT_TOKENS)
+        };
+        let prompt = vocab::prompt_for(focus, hints, engine::prompt_in_english(self.language), &fits);
+        let mut tokens = ctx.tokenize(&prompt, MAX_PROMPT_TOKENS * 2).unwrap_or_default();
+        // whisper.cpp keeps the end of an overlong prompt; `prompt_for` already fits, so this only
+        // guards it, keeping the start (what matters most).
+        tokens.truncate(vocab::PROMPT_TOKENS);
+        self.prompt = prompt;
+        self.prompt_tokens = tokens;
+        self.prompt_for = Some((focus, hints.clone()));
     }
 
     /// How many prompt tokens are in use (for the test report).
@@ -140,7 +186,7 @@ impl Whisper {
 
 impl Engine for Whisper {
     fn language(&self) -> &str {
-        "en"
+        self.language
     }
 
     fn transcribe(&mut self, pcm: &[i16]) -> Result<String, EngineError> {
@@ -149,7 +195,7 @@ impl Engine for Whisper {
         let samples = audio::prepare(pcm);
         let mut p = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         p.set_n_threads(self.tuning.threads);
-        p.set_language(Some("en"));
+        p.set_language(Some(self.language));
         p.set_translate(false);
         p.set_detect_language(false);
         // Each hold stands alone: nothing carried over from the last one.
@@ -182,7 +228,9 @@ impl Engine for Whisper {
             }
         }
         let heard = vocab::clean(&heard);
-        if vocab::is_prompt_echo(&heard, speech_secs) {
+        let none = Hints::default();
+        let hints = self.prompt_for.as_ref().map_or(&none, |(_, h)| h);
+        if vocab::is_prompt_echo(&heard, speech_secs, &self.prompt, hints) {
             // Whisper repeated its own prompt (a cough or a click it couldn't make out): nothing
             // was said that should be typed. Logged without the words.
             log::info!(
@@ -234,16 +282,86 @@ mod tests {
             return v;
         }
         let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
-        let p = Path::new(&local)
-            .join("dev.davejames.tug")
-            .join(model::DIR)
-            .join(model::MODEL.file);
-        if p.exists() {
-            vec![p]
-        } else {
-            Vec::new()
-        }
+        model::ModelId::ALL
+            .iter()
+            .map(|m| {
+                Path::new(&local)
+                    .join("dev.davejames.tug")
+                    .join(model::DIR)
+                    .join(m.spec().file)
+            })
+            .filter(|p| p.exists())
+            .collect()
     }
+
+    /// A made-up contact list (most frequent first) and personal dictionary, standing in for the
+    /// person's: no real people (CONTRIBUTING).
+    const FAKE_CONTACTS: &[&str] = &[
+        "Katelyn Moore",
+        "Jaxon Okafor",
+        "Priya Raman",
+        "Aidan Walsh",
+        "Zoey Nguyen",
+        "Sam Okafor",
+        "Mei Lin",
+        "Jordan Blake",
+    ];
+    const FAKE_DICTIONARY: &[&str] = &["Zephyrine", "Kubernetes", "Tauri"];
+
+    /// Names and the person's own words: what's said, where it's typed, what should come out
+    /// (compared without punctuation or case: Whisper punctuates a sentence its own way) and the
+    /// names that must be spelled exactly.
+    const NAME_PHRASES: &[(&str, &str, &str, &[&str])] = &[
+        (
+            "tell Katelyn I'm running late",
+            "slack.exe",
+            "Tell Katelyn I'm running late",
+            &["Katelyn"],
+        ),
+        (
+            "ask Jaxon Okafor to call me back",
+            "ms-teams.exe",
+            "Ask Jaxon Okafor to call me back",
+            &["Jaxon Okafor"],
+        ),
+        (
+            "Priya Raman and Aidan are coming tonight",
+            "outlook.exe",
+            "Priya Raman and Aidan are coming tonight",
+            &["Priya Raman", "Aidan"],
+        ),
+        (
+            "message Zoey Nguyen about lunch",
+            "msedge.exe",
+            "Message Zoey Nguyen about lunch",
+            &["Zoey Nguyen"],
+        ),
+        (
+            "deploy Zephyrine to Kubernetes",
+            "code.exe",
+            "deploy Zephyrine to Kubernetes",
+            &["Zephyrine", "Kubernetes"],
+        ),
+        (
+            "the Tauri build is green",
+            "slack.exe",
+            "The Tauri build is green",
+            &["Tauri"],
+        ),
+    ];
+
+    /// Phrases in other languages for Most accurate: Windows' language id (for a voice to speak
+    /// it), what's said and what should come out. Used only where Windows has a voice for the
+    /// language.
+    const OTHER_LANGUAGES: &[(&str, &str, &str)] = &[
+        ("40c", "je serai en retard ce soir", "Je serai en retard ce soir"),
+        ("407", "ich komme morgen etwas später", "Ich komme morgen etwas später"),
+        (
+            "c0a",
+            "nos vemos mañana en la oficina",
+            "Nos vemos mañana en la oficina",
+        ),
+    ];
 
     /// The phrases from the issue (first three), then more code dictation; where each is typed
     /// and what should come out.
@@ -330,27 +448,48 @@ mod tests {
         heard: String,
         typed: String,
         right: bool,
+        /// Every name in the phrase spelled exactly (`None`: the phrase has none).
+        names: Option<bool>,
         score: f64,
         ms: u128,
     }
 
+    #[derive(Clone)]
     struct Sample {
+        /// "clean", "noisy", "phone" (code phrases), "names" or "other" (other languages).
         audio: &'static str,
         said: &'static str,
         exe: &'static str,
         want: &'static str,
+        names: &'static [&'static str],
         pcm: Vec<i16>,
+    }
+
+    /// Lower case, letters, digits and apostrophes only, single spaces: for sentences Whisper
+    /// punctuates its own way.
+    fn loose(s: &str) -> String {
+        s.chars()
+            .map(|c| if c.is_alphanumeric() || c == '\'' { c } else { ' ' })
+            .collect::<String>()
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn row(engine: &str, s: &Sample, heard: String, ms: u128) -> Row {
         let typed = format(&heard, target_for_process(s.exe));
-        let a = same_number(&typed);
-        let b = same_number(s.want);
+        let (a, b) = if matches!(s.audio, "names" | "other") {
+            (loose(&typed), loose(s.want))
+        } else {
+            (same_number(&typed), same_number(s.want))
+        };
         Row {
             engine: engine.to_string(),
             audio: s.audio,
             said: s.said,
             right: a == b,
+            names: (!s.names.is_empty()).then(|| s.names.iter().all(|n| typed.contains(n))),
             score: similarity(&a, &b),
             heard,
             typed,
@@ -358,14 +497,25 @@ mod tests {
         }
     }
 
-    /// Whisper against Windows' recognizer on this PC, with Windows' text-to-speech standing in
-    /// for a voice (like the SAPI test): the phrases voice typing gets wrong most, clean, with
-    /// room noise, and through a hands-free headset. Prints what each heard, what would be typed,
-    /// whether that's exactly right, a similarity score and how long recognition took. Needs a
-    /// downloaded model (or `TUG_WHISPER_MODELS`, a folder of ggml .bin files), Windows' English
-    /// speech recognizer and a voice, so it's run by hand:
-    /// `cargo test --manifest-path src-tauri/Cargo.toml -p tug --lib voice::win::whisper -- --ignored --nocapture`
-    /// `TUG_WHISPER_WINDOWS=256,512,768,full` compares encoder windows (see below).
+    /// The engines on this PC side by side, with Windows' text-to-speech standing in for a voice
+    /// (like the SAPI test):
+    ///
+    /// - the code phrases voice typing gets wrong most, clean, with room noise, and through a
+    ///   hands-free headset;
+    /// - sentences with names from a made-up contact list and words from a made-up personal
+    ///   dictionary ([`FAKE_CONTACTS`], [`FAKE_DICTIONARY`]), typed into chat, mail and code apps;
+    /// - for a multilingual model, sentences in other languages, where Windows has a voice for them.
+    ///
+    /// Each whisper.cpp model runs twice: as v0.5.19 did (the plain prompt, no hints) and with the
+    /// prompt for the program in front plus the hints (Accurate+hints, Most accurate+hints). It
+    /// prints what each heard, what would be typed, whether that's right, whether the names are
+    /// spelled exactly, a similarity score, how long recognition took and the memory it used.
+    /// Needs a downloaded model (or `TUG_WHISPER_MODELS`, a folder of ggml .bin files), Windows'
+    /// English speech recognizer and a voice, so it's run by hand, in a release build (whisper.cpp
+    /// is unoptimised in a debug one):
+    /// `cargo test --release --manifest-path src-tauri/Cargo.toml -p tug --lib voice::win::whisper -- --ignored --nocapture`
+    /// `TUG_WHISPER_WINDOWS=256,512,768,full` compares encoder windows (see below);
+    /// `TUG_WHISPER_LANGS=auto,en` the languages a multilingual model is told (default: both).
     #[test]
     #[ignore]
     fn compares_whisper_with_windows_recognizer() {
@@ -392,10 +542,38 @@ mod tests {
                     said,
                     exe,
                     want,
+                    names: &[],
                     pcm,
                 });
             }
         }
+        for (said, exe, want, names) in NAME_PHRASES {
+            samples.push(Sample {
+                audio: "names",
+                said,
+                exe,
+                want,
+                names,
+                pcm: speak(said),
+            });
+        }
+        let mut other: Vec<Sample> = Vec::new();
+        for (lang, said, want) in OTHER_LANGUAGES {
+            match sapi::tests::speak_in(said, lang) {
+                Some(pcm) => other.push(Sample {
+                    audio: "other",
+                    said,
+                    exe: "slack.exe",
+                    want,
+                    names: &[],
+                    pcm,
+                }),
+                None => println!("no Windows voice for language {lang}: skipping {said:?}"),
+            }
+        }
+        let names: Vec<String> = FAKE_CONTACTS.iter().map(|s| s.to_string()).collect();
+        let words: Vec<String> = FAKE_DICTIONARY.iter().map(|s| s.to_string()).collect();
+        let hints = Hints::new(&words, &names);
         let mut rows = Vec::new();
 
         match sapi::Sapi::new("409") {
@@ -421,7 +599,12 @@ mod tests {
                         "full" => Some(FULL_AUDIO_CTX as i32),
                         n => Some(n.parse().expect("a window size, tug or full")),
                     };
-                    for threads in [Tuning::default().threads, 4] {
+                    // `TUG_WHISPER_THREADS=8` tries only that count.
+                    let counts: Vec<i32> = std::env::var("TUG_WHISPER_THREADS")
+                        .ok()
+                        .map(|l| l.split(',').filter_map(|n| n.trim().parse().ok()).collect())
+                        .unwrap_or_else(|| vec![Tuning::default().threads, 4]);
+                    for threads in counts {
                         variants.push((
                             format!("window {w}, {threads} threads"),
                             Tuning {
@@ -435,72 +618,132 @@ mod tests {
             }
             Err(_) => variants.push(("default".into(), Tuning::default())),
         }
+        let langs: Vec<&'static str> = std::env::var("TUG_WHISPER_LANGS")
+            .map(|l| l.split(',').map(|c| engine::spoken_language(Some(c))).collect())
+            .unwrap_or_else(|_| vec!["auto", "en"]);
 
         for path in &models {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
-            let mb = std::fs::metadata(path).map(|m| m.len() / 1_000_000).unwrap_or(0);
+            let mb = std::fs::metadata(path).map(|m| m.len() >> 20).unwrap_or(0);
+            // English-only models (".en") listen in English; multilingual ones in each language
+            // asked for.
+            let model_langs: Vec<&'static str> = if name.contains(".en") {
+                vec!["en"]
+            } else {
+                langs.clone()
+            };
             for (label, tuning) in &variants {
-                let before = working_set();
-                let t = Instant::now();
-                let bytes = std::fs::read(path).expect("model readable");
-                let mut w = match Whisper::load_tuned(&bytes, *tuning) {
-                    Ok(w) => w,
-                    Err(e) => {
-                        println!("{name}: didn't load: {e:?}");
-                        continue;
-                    }
+                // tug's own settings for this kind of model, unless windows were asked for.
+                let tuning = &if label == "default" {
+                    Tuning::for_model(if name.contains(".en") {
+                        model::ModelId::Accurate
+                    } else {
+                        model::ModelId::MostAccurate
+                    })
+                } else {
+                    *tuning
                 };
-                let with_file = working_set();
-                drop(bytes);
-                let load_ms = t.elapsed().as_millis();
-                // A first hold warms whisper.cpp's buffers; it's reported on its own, and the
-                // rows below are the steady state from the second hold on.
-                let t = Instant::now();
-                let _ = w.transcribe(&samples[0].pcm);
-                println!(
-                    "{name} ({mb} MB, {label}): loaded in {load_ms} ms, first hold {} ms, {} threads, {} prompt tokens",
-                    t.elapsed().as_millis(),
-                    tuning.threads,
-                    w.prompt_len()
-                );
-                for sample in &samples {
+                for lang in &model_langs {
+                    let before = working_set();
                     let t = Instant::now();
-                    let heard = w.transcribe(&sample.pcm).expect("recognized");
-                    rows.push(row(
-                        &format!("Accurate {name} [{label}]"),
-                        sample,
-                        heard,
+                    let bytes = std::fs::read(path).expect("model readable");
+                    let mut w = match Whisper::load_tuned(&bytes, *tuning, lang) {
+                        Ok(w) => w,
+                        Err(e) => {
+                            println!("{name}: didn't load: {e:?}");
+                            continue;
+                        }
+                    };
+                    let with_file = working_set();
+                    drop(bytes);
+                    let load_ms = t.elapsed().as_millis();
+                    // A first hold warms whisper.cpp's buffers; it's reported on its own, and the
+                    // rows below are the steady state from the second hold on.
+                    let t = Instant::now();
+                    let _ = w.transcribe(&samples[0].pcm);
+                    println!(
+                        "{name} ({mb} MB, {label}, language {lang}): loaded in {load_ms} ms, first hold {} ms, {} threads, {} prompt tokens (plain)",
                         t.elapsed().as_millis(),
-                    ));
+                        tuning.threads,
+                        w.prompt_len()
+                    );
+                    for with_hints in [false, true] {
+                        let engine = format!("{name} [{label}, {lang}{}]", if with_hints { ", hints" } else { "" });
+                        let mut tokens = Vec::new();
+                        for sample in &samples {
+                            // Plain: v0.5.19's prompt everywhere. Hints: the prompt for the app
+                            // the words are going to, with the made-up names and words.
+                            if with_hints {
+                                w.set_prompt(vocab::focus_for_process(sample.exe), &hints);
+                            } else {
+                                w.set_prompt(Focus::General, &Hints::default());
+                            }
+                            tokens.push(w.prompt_len());
+                            let t = Instant::now();
+                            let heard = w.transcribe(&sample.pcm).expect("recognized");
+                            // As a hold does: the hints' capitals put back (case only).
+                            let heard = if with_hints {
+                                vocab::respell(&heard, &hints)
+                            } else {
+                                heard
+                            };
+                            rows.push(row(&engine, sample, heard, t.elapsed().as_millis()));
+                        }
+                        if !name.contains(".en") {
+                            for sample in &other {
+                                let none = Hints::default();
+                                w.set_prompt(Focus::Chat, if with_hints { &hints } else { &none });
+                                let t = Instant::now();
+                                let heard = w.transcribe(&sample.pcm).expect("recognized");
+                                // As a hold does: the hints' capitals put back (case only).
+                                let heard = if with_hints {
+                                    vocab::respell(&heard, &hints)
+                                } else {
+                                    heard
+                                };
+                                rows.push(row(&engine, sample, heard, t.elapsed().as_millis()));
+                            }
+                        }
+                        println!(
+                            "   {engine}: {}–{} prompt tokens",
+                            tokens.iter().min().unwrap_or(&0),
+                            tokens.iter().max().unwrap_or(&0)
+                        );
+                    }
+                    let heard = w.transcribe(&noisy(&vec![0i16; 24_000])).expect("hiss is fine");
+                    println!("   hiss only (voice typing doesn't get this far: audio::has_speech) → {heard:?}");
+                    let (ws_before, ws_file, ws_loaded) = (before, with_file, working_set());
+                    println!(
+                        "   memory: working set {} MB before loading, {} MB while the file and the model were both in memory, {} MB loaded after holds (+{} MB); peak {} MB",
+                        ws_before.0 >> 20,
+                        ws_file.0 >> 20,
+                        ws_loaded.0 >> 20,
+                        ws_loaded.0.saturating_sub(ws_before.0) >> 20,
+                        ws_loaded.1 >> 20
+                    );
+                    drop(w);
+                    println!("   memory: {} MB after letting it go", working_set().0 >> 20);
                 }
-                let heard = w.transcribe(&noisy(&vec![0i16; 24_000])).expect("hiss is fine");
-                println!("   hiss only (voice typing doesn't get this far: audio::has_speech) → {heard:?}");
-                let (ws_before, ws_file, ws_loaded) = (before, with_file, working_set());
-                println!(
-                    "   memory: working set {} MB before loading, {} MB while the file and the model were both in memory, {} MB loaded after holds (+{} MB); peak {} MB",
-                    ws_before.0 >> 20,
-                    ws_file.0 >> 20,
-                    ws_loaded.0 >> 20,
-                    ws_loaded.0.saturating_sub(ws_before.0) >> 20,
-                    ws_loaded.1 >> 20
-                );
-                drop(w);
-                println!("   memory: {} MB after letting it go", working_set().0 >> 20);
             }
         }
 
         println!();
-        println!("| engine | audio | said | heard | typed | right | similarity | ms |");
-        println!("|---|---|---|---|---|---|---|---|");
+        println!("| engine | audio | said | heard | typed | right | names | similarity | ms |");
+        println!("|---|---|---|---|---|---|---|---|---|");
         for r in &rows {
             println!(
-                "| {} | {} | {} | {:?} | {:?} | {} | {:.2} | {} |",
+                "| {} | {} | {} | {:?} | {:?} | {} | {} | {:.2} | {} |",
                 r.engine,
                 r.audio,
                 r.said,
                 r.heard,
                 r.typed,
                 if r.right { "yes" } else { "no" },
+                match r.names {
+                    Some(true) => "yes",
+                    Some(false) => "no",
+                    None => "",
+                },
                 r.score,
                 r.ms
             );
@@ -509,17 +752,24 @@ mod tests {
         let mut engines: Vec<&str> = rows.iter().map(|r| r.engine.as_str()).collect();
         engines.dedup();
         for e in engines {
-            for kind in ["clean", "noisy", "phone"] {
+            for kind in ["clean", "noisy", "phone", "names", "other"] {
                 let mine: Vec<&Row> = rows.iter().filter(|r| r.engine == e && r.audio == kind).collect();
                 if mine.is_empty() {
                     continue;
                 }
                 let right = mine.iter().filter(|r| r.right).count();
+                let named = mine.iter().filter(|r| r.names == Some(true)).count();
+                let with_names = mine.iter().filter(|r| r.names.is_some()).count();
                 let score = mine.iter().map(|r| r.score).sum::<f64>() / mine.len() as f64;
                 let ms = mine.iter().map(|r| r.ms).sum::<u128>() / mine.len() as u128;
                 let worst = mine.iter().map(|r| r.ms).max().unwrap_or(0);
+                let names = if with_names > 0 {
+                    format!(", names spelled right {named}/{with_names}")
+                } else {
+                    String::new()
+                };
                 println!(
-                    "{e} / {kind}: {right}/{} exactly right, similarity {score:.2}, mean {ms} ms, worst {worst} ms",
+                    "{e} / {kind}: {right}/{} right{names}, similarity {score:.2}, mean {ms} ms, worst {worst} ms",
                     mine.len()
                 );
             }
@@ -550,8 +800,8 @@ mod tests {
     /// damaged never gets this far: its hash is checked first.)
     #[test]
     fn bytes_that_arent_a_model_fail_to_load_without_crashing() {
-        let r = Whisper::load(&vec![0x5au8; 4096]);
+        let r = Whisper::load(&vec![0x5au8; 4096], "en");
         assert!(matches!(r, Err(EngineError::Failed(_))), "{:?}", r.as_ref().err());
-        assert!(Whisper::load(&[0u8; 4]).is_err(), "too short to be anything");
+        assert!(Whisper::load(&[0u8; 4], "auto").is_err(), "too short to be anything");
     }
 }

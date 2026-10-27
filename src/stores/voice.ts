@@ -5,8 +5,8 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, errorMessage, on } from "../lib/ipc";
-import { DEFAULT_VOICE_HOTKEY, knownVoiceHotkey, voiceProblem, voiceStartProblem } from "../lib/voice";
-import type { VoiceEngine, VoiceStatus } from "../types/protocol";
+import { DEFAULT_VOICE_HOTKEY, knownVoiceHotkey, showReadyPrompt, voiceProblem, voiceStartProblem } from "../lib/voice";
+import type { VoiceEngine, VoiceModelId, VoiceStatus } from "../types/protocol";
 import { useTugStore } from "./tug";
 
 export const useVoiceStore = defineStore("voice", () => {
@@ -84,16 +84,43 @@ export const useVoiceStore = defineStore("voice", () => {
     }
   }
 
-  /** Pick the accurate or the basic engine. */
+  /** Pick an engine; a whisper.cpp engine's model starts downloading in the background if it isn't here. */
   const setEngine = (engine: VoiceEngine) => act(() => api.setVoiceEngine(engine));
-  /** Download (or resume) the speech model; progress arrives as status events. */
-  const downloadModel = () => act(() => api.voiceModelDownload());
-  const cancelDownload = () => act(() => api.voiceModelCancel());
+  /** Download (or resume) a speech model; progress arrives as status events. */
+  const downloadModel = (model: VoiceModelId) => act(() => api.voiceModelDownload(model));
+  const cancelDownload = (model: VoiceModelId) => act(() => api.voiceModelCancel(model));
+  /** Delete every downloaded speech model. */
+  const deleteModels = () => act(() => api.voiceModelsDelete());
+  const setSpokenLanguage = (language: string) => act(() => api.setVoiceSpokenLanguage(language));
+  const setContactHints = (on: boolean) => act(() => api.setVoiceContactHints(on));
 
-  /** The first-time offer was answered: Download starts it, Not now just stops offering. */
-  async function answerOffer(download: boolean) {
-    await act(() => api.voiceModelOffered());
-    if (download) await downloadModel();
+  /** The personal dictionary, as saved (loaded when Settings opens). */
+  const dictionary = ref<string[]>([]);
+  async function loadDictionary() {
+    try {
+      dictionary.value = await api.voiceDictionary();
+    } catch {
+      /* keep what we have */
+    }
+  }
+  /** Save the dictionary; it comes back as saved (tidied, without duplicates). */
+  async function saveDictionary(words: string[]) {
+    try {
+      dictionary.value = await api.setVoiceDictionary(words);
+    } catch (e) {
+      tug.notify("error", errorMessage(e));
+    }
+    return dictionary.value;
+  }
+
+  /** The "Get voice typing ready now?" card is on screen (until it's answered or closed). */
+  const readyCardOpen = ref(false);
+  /** Open the card if it's due (App.vue says when nothing else needs the window), and tell the
+   * backend it was shown, so it never shows by itself again, whatever the answer. */
+  function offerReadyCard() {
+    if (readyCardOpen.value || !showReadyPrompt(status.value)) return;
+    readyCardOpen.value = true;
+    void act(() => api.voiceReadyPromptShown());
   }
 
   async function openFix() {
@@ -119,7 +146,14 @@ export const useVoiceStore = defineStore("voice", () => {
     setEngine,
     downloadModel,
     cancelDownload,
-    answerOffer,
+    deleteModels,
+    setSpokenLanguage,
+    setContactHints,
+    dictionary,
+    loadDictionary,
+    saveDictionary,
+    readyCardOpen,
+    offerReadyCard,
     openFix,
   };
 });

@@ -1,23 +1,28 @@
 <script setup lang="ts">
 // Settings › General › Voice typing: on/off, the hold-to-talk shortcut, the language, the speech
-// engine (Accurate with its one-time model download, or Basic), and what to do if Windows is in
-// the way. Words from lib/voice; state from stores/voice.
-import { computed, onMounted } from "vue";
-import { CircleAlert } from "lucide-vue-next";
+// engine (Basic, Accurate or Most accurate, the last two with a one-time download that starts by
+// itself), the person's own words (contacts' names and a personal dictionary), the space the
+// models take, and what to do if Windows is in the way. Words from lib/voice; state from
+// stores/voice.
+import { computed, onMounted, ref } from "vue";
+import { CircleAlert, Pencil, X } from "lucide-vue-next";
 import { useVoiceStore } from "../stores/voice";
 import { hotkeyLabel } from "../lib/codeFill";
 import {
+  SPOKEN_LANGUAGES,
   VOICE_COMMANDS,
   VOICE_HOTKEYS,
-  downloadPercent,
+  dictionaryEntry,
   engineOptions,
   languageName,
-  modelLine,
-  modelOfferText,
+  modelLines,
+  modelsDiskUsed,
   phoneMicNote,
-  showModelOffer,
+  sizeLabel,
+  spokenLanguageNote,
   voiceDescription,
   voiceHotkeyAlternatives,
+  type ModelLine,
 } from "../lib/voice";
 import type { VoiceEngine } from "../types/protocol";
 import SettingsRow from "./SettingsRow.vue";
@@ -38,20 +43,73 @@ const engine = computed<VoiceEngine>({
   get: () => voice.status?.engine ?? "accurate",
   set: (v) => void voice.setEngine(v),
 });
+const spoken = computed({
+  get: () => voice.status?.spokenLanguage ?? "auto",
+  set: (v) => void voice.setSpokenLanguage(v),
+});
+const contactHints = computed({
+  get: () => voice.status?.contactHints ?? true,
+  set: (v) => void voice.setContactHints(v),
+});
 const options = computed(() => (voice.status ? engineOptions(voice.status) : []));
-const line = computed(() => (voice.status ? modelLine(voice.status) : null));
-const percent = computed(() => (voice.status ? downloadPercent(voice.status.model) : 0));
-const offer = computed(() => (voice.status && showModelOffer(voice.status) ? modelOfferText(voice.status) : null));
+const lines = computed(() => (voice.status ? modelLines(voice.status) : []));
+const diskUsed = computed(() => (voice.status ? modelsDiskUsed(voice.status) : 0));
 const micNote = computed(() => phoneMicNote(voice.status));
 
-function runLineAction() {
-  const action = line.value?.action;
-  if (action === "cancel") void voice.cancelDownload();
-  else if (action === "download" || action === "resume") void voice.downloadModel();
+function runLineAction(l: ModelLine) {
+  if (l.action === "cancel") void voice.cancelDownload(l.model);
+  else if (l.action === "download" || l.action === "resume") void voice.downloadModel(l.model);
 }
 
-// The installed languages, and a fresh look at the microphone, each time Settings opens.
-onMounted(() => void voice.refresh());
+// Deleting the models asks once more, in place.
+const confirmDelete = ref(false);
+async function deleteModels() {
+  confirmDelete.value = false;
+  await voice.deleteModels();
+}
+
+// The personal dictionary: add, edit (the word goes back into the box) and remove.
+const draft = ref("");
+const editing = ref<string | null>(null);
+const wordProblem = ref<string | null>(null);
+async function saveWord() {
+  const words = voice.dictionary;
+  const checked = dictionaryEntry(draft.value, words, editing.value);
+  if ("problem" in checked) {
+    wordProblem.value = checked.problem;
+    return;
+  }
+  const next = editing.value ? words.map((w) => (w === editing.value ? checked.word : w)) : [...words, checked.word];
+  const saved = await voice.saveDictionary(next);
+  // The backend tidies entries (emoji and other symbols go); say so if it couldn't use this one.
+  if (!saved.some((w) => w.toLowerCase() === checked.word.toLowerCase().replace(/[^\p{L}\p{N}\s'.+#&-]/gu, "").trim())) {
+    wordProblem.value = "tug couldn't use that one. Try letters and numbers.";
+    return;
+  }
+  draft.value = "";
+  editing.value = null;
+  wordProblem.value = null;
+}
+function editWord(word: string) {
+  editing.value = word;
+  draft.value = word;
+  wordProblem.value = null;
+}
+function cancelEdit() {
+  editing.value = null;
+  draft.value = "";
+  wordProblem.value = null;
+}
+async function removeWord(word: string) {
+  if (editing.value === word) cancelEdit();
+  await voice.saveDictionary(voice.dictionary.filter((w) => w !== word));
+}
+
+// The installed languages, a fresh look at the microphone and the dictionary, each time Settings opens.
+onMounted(() => {
+  void voice.refresh();
+  void voice.loadDictionary();
+});
 </script>
 
 <template>
@@ -59,16 +117,6 @@ onMounted(() => void voice.refresh());
     <SettingsRow label="Voice typing" :description="voiceDescription(voice.keys)">
       <SettingsSwitch v-model="enabled" label="Voice typing" />
     </SettingsRow>
-
-    <!-- The first time it's on: offer the accurate engine's model, once. -->
-    <div v-if="offer" class="border-t border-hairline-soft px-5 py-4" role="region" aria-label="Speech model">
-      <p class="text-[13px] font-medium text-ink">{{ offer.title }}</p>
-      <p class="mt-0.5 text-[13px] text-muted">{{ offer.body }}</p>
-      <div class="mt-3 flex flex-wrap gap-2">
-        <button class="btn-primary btn-sm" @click="voice.answerOffer(true)">{{ offer.button }}</button>
-        <button class="btn-secondary btn-sm" @click="voice.answerOffer(false)">Not now</button>
-      </div>
-    </div>
 
     <div v-if="voice.enabled" class="flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-hairline-soft px-5 py-3">
       <label class="flex items-center gap-2 text-[13px] text-body">
@@ -98,21 +146,29 @@ onMounted(() => void voice.refresh());
         </label>
       </div>
 
-      <div v-if="line && !offer" class="mt-3" role="status" aria-live="polite">
+      <label v-if="engine === 'mostAccurate'" class="mt-3 flex items-center gap-2 text-[13px] text-body">
+        Most accurate listens in
+        <select v-model="spoken" class="rounded-md border border-hairline bg-canvas px-2 py-1 text-[13px] text-ink">
+          <option v-for="l in SPOKEN_LANGUAGES" :key="l.code" :value="l.code">{{ l.name }}</option>
+        </select>
+      </label>
+      <p v-if="engine === 'mostAccurate'" class="mt-1 text-[12px] text-muted">{{ spokenLanguageNote(spoken) }}</p>
+
+      <div v-for="l in lines" :key="`${l.model}-${l.action}`" class="mt-3" role="status" aria-live="polite">
         <div class="flex items-center gap-3">
-          <p class="min-w-0 flex-1 text-[13px]" :class="line.error ? 'text-error' : 'text-body'">{{ line.text }}</p>
-          <button v-if="line.action" class="btn-secondary btn-sm shrink-0" @click="runLineAction">{{ line.actionLabel }}</button>
+          <p class="min-w-0 flex-1 text-[13px]" :class="l.error ? 'text-error' : 'text-body'">{{ l.text }}</p>
+          <button v-if="l.action" class="btn-secondary btn-sm shrink-0" @click="runLineAction(l)">{{ l.actionLabel }}</button>
         </div>
         <div
-          v-if="line.progress"
+          v-if="l.progress"
           class="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-cream-strong"
           role="progressbar"
           aria-label="Speech model download"
-          :aria-valuenow="percent"
+          :aria-valuenow="l.percent"
           aria-valuemin="0"
           aria-valuemax="100"
         >
-          <div class="h-full rounded-full bg-ink" :style="{ width: `${percent}%` }" />
+          <div class="h-full rounded-full bg-ink" :style="{ width: `${l.percent}%` }" />
         </div>
       </div>
 
@@ -139,6 +195,67 @@ onMounted(() => void voice.refresh());
       <button v-if="voice.problem.button" class="btn-secondary btn-sm shrink-0" @click="voice.openFix()">
         {{ voice.problem.button }}
       </button>
+    </div>
+
+    <!-- The person's own words: Accurate and Most accurate spell these their way. All on this PC. -->
+    <div v-if="voice.enabled" class="border-t border-hairline-soft">
+      <SettingsRow
+        label="Use your contacts' names"
+        description="Accurate and Most accurate spell the names of the people you text most the way your contacts do. The names stay on this PC."
+      >
+        <SettingsSwitch v-model="contactHints" label="Use your contacts' names" />
+      </SettingsRow>
+      <div class="px-5 pb-4">
+        <p id="voice-dictionary-label" class="text-[14px] font-medium text-ink">Personal dictionary</p>
+        <p class="mt-0.5 text-[13px] leading-snug text-muted">
+          Words and names you want spelled your way, like a product, a place or a nickname. Used by Accurate and Most accurate,
+          and kept on this PC.
+        </p>
+        <form class="mt-2 flex flex-wrap items-center gap-2" aria-labelledby="voice-dictionary-label" @submit.prevent="saveWord">
+          <input
+            v-model="draft"
+            class="input min-w-0 flex-1 py-1 text-[13px]"
+            :placeholder="editing ? 'Change the word' : 'Add a word or a name'"
+            :aria-label="editing ? `Change ${editing}` : 'Add a word or a name'"
+            maxlength="60"
+            @keydown.esc.prevent="cancelEdit"
+          />
+          <button type="submit" class="btn-secondary btn-sm">{{ editing ? "Save" : "Add" }}</button>
+          <button v-if="editing" type="button" class="btn-secondary btn-sm" @click="cancelEdit">Cancel</button>
+        </form>
+        <p v-if="wordProblem" class="mt-1.5 text-[12px] text-error" role="alert">{{ wordProblem }}</p>
+        <ul v-if="voice.dictionary.length" class="mt-2.5 flex flex-wrap gap-1.5" aria-label="Your words">
+          <li
+            v-for="w in voice.dictionary"
+            :key="w"
+            class="flex items-center gap-1 rounded-full border border-hairline bg-canvas py-0.5 pr-1 pl-2.5 text-[13px] text-ink"
+            :class="{ 'border-ink': editing === w }"
+          >
+            <span>{{ w }}</span>
+            <button type="button" class="rounded-full p-0.5 text-muted hover:text-ink" :aria-label="`Change ${w}`" @click="editWord(w)">
+              <Pencil :size="12" />
+            </button>
+            <button type="button" class="rounded-full p-0.5 text-muted hover:text-ink" :aria-label="`Remove ${w}`" @click="removeWord(w)">
+              <X :size="12" />
+            </button>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- The space the models take, whether voice typing is on or not, with a way to get it back. -->
+    <div v-if="diskUsed > 0" class="flex flex-wrap items-center gap-3 border-t border-hairline-soft px-5 py-3">
+      <p class="min-w-0 flex-1 text-[13px] text-body">
+        <template v-if="confirmDelete">
+          Delete {{ sizeLabel(diskUsed) }} of speech models? tug uses Basic until you download one again.
+        </template>
+        <template v-else>Speech models use {{ sizeLabel(diskUsed) }} on this PC.</template>
+      </p>
+      <template v-if="confirmDelete">
+        <button class="btn-secondary btn-sm shrink-0" @click="deleteModels">Delete</button>
+        <button class="btn-secondary btn-sm shrink-0" @click="confirmDelete = false">Keep them</button>
+      </template>
+      <button v-else class="btn-secondary btn-sm shrink-0" @click="confirmDelete = true">Delete downloaded models</button>
     </div>
 
     <div v-if="voice.enabled" class="border-t border-hairline-soft px-5 py-3">
