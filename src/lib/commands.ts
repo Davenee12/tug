@@ -1,8 +1,9 @@
 // Ctrl+K actions: a few verbs typed into search, so common things become keystrokes.
 // "text zoe running late", "pause", "copy code", "clear all", "new message". Pure, so it's tested.
 
-import type { MediaCommand, PhoneNotification, SpotifyPlaylist } from "../types/protocol";
-import { cleanName, formatAddress, isConversation, missedCallFor, threadKey } from "./format";
+import type { CallRecord, MediaCommand, PhoneNotification, SpotifyPlaylist } from "../types/protocol";
+import { normalizeAddress, numberTail } from "./address";
+import { callTime, cleanName, formatAddress, isConversation, missedCallFor, threadKey } from "./format";
 import { matchPlaylists, normalize, playlistDetail } from "./spotify";
 
 export interface Person {
@@ -334,4 +335,82 @@ export function notificationPick(
 ): { open: "messages"; thread: string } | { open: "feed" } | { open: "here" } {
   if (isConversation(n)) return { open: "messages", thread: threadKey(n) };
   return n.removedAt == null ? { open: "feed" } : { open: "here" };
+}
+
+/** At most this many recent calls under Calls in Ctrl+K. */
+export const CALL_RESULTS = 5;
+
+/** "missed", "missed calls", "missed calls from zoe": missed calls only, from whoever follows. */
+const MISSED = /^missed(?:\s+calls?)?(?:\s+from)?(?:\s+(.+))?$/i;
+/** A typed phone number, or part of one: "0142", "(302) 555-0142", "+44 7700 900123". */
+const NUMBERISH = /^\+?[\d\s().-]+$/;
+
+/**
+ * The phone's recent calls that match what was typed in Ctrl+K, newest first, at most `limit`.
+ * A name matches when each typed word starts a word of the caller's name: the contact's name for
+ * that number now (`nameFor`, as the Calls list shows it) or the name the phone gave the call. Part
+ * of a number matches its digits (3 or more, like People), and a whole number typed another way
+ * (`07700 900123` for `+447700900123`) its last 10. "missed" lists missed calls, of anyone or of
+ * whoever follows ("missed zoe", "missed calls from 0142").
+ */
+export function matchCalls(
+  query: string,
+  calls: CallRecord[],
+  nameFor: Map<string, string>,
+  limit = CALL_RESULTS,
+): CallRecord[] {
+  const q = query.trim().replace(/\s+/g, " ");
+  if (!q) return [];
+  const missed = MISSED.exec(q);
+  const matches = callMatcher(missed ? (missed[1] ?? "") : q, nameFor);
+  if (!matches) return [];
+  return calls
+    .filter((c) => (!missed || c.direction === "missed") && matches(c))
+    .sort(newestCallFirst)
+    .slice(0, limit);
+}
+
+/** Who `who` means among calls: anyone (nothing typed), a number, or a name; null when it can't match. */
+function callMatcher(who: string, nameFor: Map<string, string>): ((c: CallRecord) => boolean) | null {
+  if (!who) return () => true;
+  if (NUMBERISH.test(who)) {
+    const digits = who.replace(/\D/g, "");
+    // Fewer than 3 digits would match almost every number.
+    if (digits.length < 3) return null;
+    const tail = numberTail(normalizeAddress(who));
+    return (c) =>
+      !!c.number && (c.number.replace(/\D/g, "").includes(digits) || (tail !== null && numberTail(c.number) === tail));
+  }
+  const words = key(who).split(" ").filter(Boolean);
+  if (!words.length) return null;
+  const starts = (name: string | null | undefined) => {
+    if (!name) return false;
+    const parts = key(name).split(" ");
+    return words.every((w) => parts.some((p) => p.startsWith(w)));
+  };
+  return (c) => starts(c.number ? nameFor.get(c.number) : null) || starts(c.name);
+}
+
+/** Newest first; calls without a time can't be placed, so they go last (in the order they came). */
+function newestCallFirst(a: CallRecord, b: CallRecord): number {
+  const x = callTime(a)?.getTime();
+  const y = callTime(b)?.getTime();
+  if (x === undefined || y === undefined) return x === undefined ? (y === undefined ? 0 : 1) : -1;
+  return y - x;
+}
+
+/**
+ * What picking a call in Ctrl+K does, and the words its row shows for it. Never a call: a search
+ * result is picked with Enter, often by reflex (typing "missed" puts the newest missed call first
+ * and selected), and a call placed by accident reaches a real person. When tug can call them
+ * (`route`, the store's `callRoute`) it opens Calls on that call, its Call back button one click
+ * away; "call zoe" in Ctrl+K still calls on purpose. When it can't, their conversation, to text
+ * them instead. A withheld number has no one to call or text: Calls, on that call.
+ */
+export function callPick(
+  c: Pick<CallRecord, "direction" | "number">,
+  route: "back" | "dial" | null,
+): { open: "message" | "calls"; label: string } {
+  if (!c.number || route) return { open: "calls", label: "Show in Calls" };
+  return { open: "message", label: "Message" };
 }

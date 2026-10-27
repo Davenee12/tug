@@ -78,6 +78,8 @@ const COMMANDS = computed<Array<[string, string]>>(() => [
     'tug text Sam "On my way"',
     withoutAsking.value && textsOn.value && s.value?.enabled ? "Text someone (sends right away)" : "Text someone (tug asks you first)",
   ],
+  ["tug next", "Skip the song on your iPhone (also play, pause, previous)"],
+  ["tug now", "What's playing on your iPhone"],
   ["tug status", "Is tug running, and how's the phone"],
 ]);
 </script>

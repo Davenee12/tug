@@ -1,15 +1,27 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { Bell, CheckCheck, ClipboardCopy, Copy, FastForward, Gamepad2, ListMusic, ListPlus, MessageSquare, Mic, Moon, Music2, Phone, Plus, QrCode, Repeat, Rewind, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, ThumbsDown, ThumbsUp, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
+import { Bell, CheckCheck, ClipboardCopy, Copy, FastForward, Gamepad2, ListMusic, ListPlus, MessageSquare, Mic, Moon, Music2, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Plus, QrCode, Repeat, Rewind, Search, SendHorizontal, Settings2, SkipBack, SkipForward, Pause, Play, ThumbsDown, ThumbsUp, Trash2, Volume1, Volume2, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useTugboatStore } from "../stores/tugboat";
 import { useGameStore } from "../stores/game";
 import { useVoiceStore } from "../stores/voice";
 import { useFocusTrap } from "../lib/focusTrap";
 import { byArrival } from "../lib/messageSync";
-import { afterPaletteSend, notificationPick, parseActions, type Action, type ActionContext, type Person } from "../lib/commands";
+import {
+  afterPaletteSend,
+  callPick,
+  matchCalls,
+  notificationPick,
+  parseActions,
+  type Action,
+  type ActionContext,
+  type Person,
+} from "../lib/commands";
 import {
   appLabel,
+  callKeys,
+  callName,
+  callTime,
   canClear,
   cleanName,
   clockTime,
@@ -21,7 +33,7 @@ import {
   snippet,
   threadKey,
 } from "../lib/format";
-import type { Contact, PhoneNotification, SearchResults, SmsMessage } from "../types/protocol";
+import type { CallDirection, CallRecord, Contact, PhoneNotification, SearchResults, SmsMessage } from "../types/protocol";
 import { isTugChant } from "../lib/logoTricks";
 import { logoSpins } from "../lib/logoSpin";
 import AppAvatar from "./AppAvatar.vue";
@@ -85,6 +97,7 @@ watch(query, (q) => {
 type Option =
   | { kind: "action"; key: string; a: Action }
   | { kind: "person"; key: string; c: Contact }
+  | { kind: "call"; key: string; call: CallRecord; name: string; pick: ReturnType<typeof callPick> }
   | { kind: "message"; key: string; m: SmsMessage }
   | { kind: "notification"; key: string; n: PhoneNotification };
 
@@ -120,6 +133,23 @@ const ctx = computed<ActionContext>(() => {
   };
 });
 
+// Recent calls come from the phone and are kept in the window, not the database, so they're
+// matched here, under the names the Calls list shows. Keyed as the Calls list keys its rows, so
+// "Show in Calls" points at the same row.
+const nameFor = computed(() => new Map(tug.contacts.map((c) => [c.address, c.name])));
+const callKeyOf = computed(() => {
+  const keys = callKeys(tug.calls);
+  return new Map(tug.calls.map((c, i) => [c, keys[i]]));
+});
+const calls = computed<Option[]>(() =>
+  matchCalls(query.value, tug.calls, nameFor.value).map((call) => {
+    const name = callName(call, nameFor.value);
+    // What Enter does, worked out with the row, so the row can say it.
+    const pick = callPick(call, tug.callRoute(name, call.number));
+    return { kind: "call" as const, key: `c:${callKeyOf.value.get(call)}`, call, name, pick };
+  }),
+);
+
 // Actions answer as you type (no search round-trip), above the results.
 const actions = computed<Option[]>(() =>
   parseActions(query.value, people.value, ctx.value).map((a, i) => ({ kind: "action" as const, key: `a:${i}:${a.label}`, a })),
@@ -136,13 +166,21 @@ const options = computed<Option[]>(() => {
   return [
     ...actions.value,
     ...r.people.slice(0, 5).map((c) => ({ kind: "person" as const, key: `p:${c.address}`, c })),
+    // With the results, so People never lands above a call the selection is already on.
+    ...calls.value,
     ...r.messages.slice(0, 12).map((m) => ({ kind: "message" as const, key: `m:${m.id}`, m })),
     ...notifications.slice(0, 12).map((n) => ({ kind: "notification" as const, key: `n:${n.id}`, n })),
   ];
 });
 
 const sectionOf = (o: Option) =>
-  ({ action: "Actions", person: "People", message: "Texts", notification: "Notifications" })[o.kind];
+  ({ action: "Actions", person: "People", call: "Calls", message: "Texts", notification: "Notifications" })[o.kind];
+// As in the Calls list: which way the call went, by icon and tone.
+const CALL_DIRECTION: Record<CallDirection, { label: string; icon: typeof Phone; tone: string }> = {
+  incoming: { label: "Incoming", icon: PhoneIncoming, tone: "bg-accent-teal/20 text-ink" },
+  outgoing: { label: "Outgoing", icon: PhoneOutgoing, tone: "bg-surface-cream-strong text-body-strong" },
+  missed: { label: "Missed", icon: PhoneMissed, tone: "bg-error/10 text-error" },
+};
 const MEDIA_ICONS = {
   play: Play,
   pause: Pause,
@@ -188,6 +226,12 @@ const showHeader = (i: number) => i === 0 || options.value[i].kind !== options.v
 const messageName = (m: SmsMessage) => cleanName(m.contactName ?? formatAddress(m.address));
 const when = (d: Date) => `${dayLabel(d)} · ${clockTime(d)}`;
 const messageTime = (m: SmsMessage) => new Date(m.sentAt ?? m.receivedAt);
+const callWhen = (c: CallRecord) => {
+  const at = callTime(c);
+  return at ? when(at) : "";
+};
+// The number goes under the name only when the name isn't the number already (as in Calls).
+const showCallNumber = (c: CallRecord, name: string) => !!c.number && name !== formatAddress(c.number);
 
 function close() {
   tug.searchOpen = false;
@@ -266,6 +310,13 @@ function pick(o: Option | undefined) {
   }
   if (o.kind === "person") {
     openConversation(o.c.address, cleanName(o.c.name));
+  } else if (o.kind === "call") {
+    // A call: what its row says (lib/commands callPick). Never a call by itself.
+    if (o.pick.open === "message" && o.call.number) openConversation(o.call.number, o.name);
+    else {
+      tug.view = "calls";
+      tug.focusItem = `c${callKeyOf.value.get(o.call) ?? ""}`;
+    }
   } else if (o.kind === "message") {
     // An old text (brought in from a backup) may be older than what the window has loaded: add it,
     // so the conversation has it to scroll to while the rest of its history loads.
@@ -402,6 +453,42 @@ function onKey(e: KeyboardEvent) {
                     </template>
                   </span>
                   <span class="preview-private block font-mono text-[12px] text-muted-soft">{{ formatAddress(o.c.address) }}</span>
+                </span>
+              </template>
+
+              <!-- Recent call -->
+              <template v-else-if="o.kind === 'call'">
+                <span
+                  :class="['grid size-8 shrink-0 place-items-center rounded-lg', CALL_DIRECTION[o.call.direction].tone]"
+                  :title="CALL_DIRECTION[o.call.direction].label"
+                >
+                  <component :is="CALL_DIRECTION[o.call.direction].icon" :size="15" />
+                </span>
+                <span class="min-w-0 flex-1">
+                  <span class="flex items-baseline gap-2">
+                    <span
+                      :class="[
+                        'preview-private truncate text-[14px] font-medium',
+                        o.call.direction === 'missed' ? 'text-error' : 'text-ink',
+                      ]"
+                    >
+                      <template v-for="(r, j) in highlight(o.name, query)" :key="j">
+                        <mark v-if="r.match" class="rounded-sm bg-accent-amber/30 text-ink">{{ r.text }}</mark>
+                        <template v-else>{{ r.text }}</template>
+                      </template>
+                    </span>
+                    <span class="ml-auto shrink-0 font-mono text-[11px] text-muted-soft">{{ callWhen(o.call) }}</span>
+                  </span>
+                  <span class="flex items-baseline gap-2">
+                    <span class="min-w-0 truncate text-[13px] text-muted">
+                      {{ CALL_DIRECTION[o.call.direction].label }}<template v-if="showCallNumber(o.call, o.name)"> · <span class="preview-private">{{ formatAddress(o.call.number!) }}</span></template>
+                    </span>
+                    <!-- What Enter (or a click) does here: call back, call, message, or show it in Calls. -->
+                    <span v-if="i === active" class="ml-auto flex shrink-0 items-center gap-1.5 text-[12px] text-muted">
+                      {{ o.pick.label }}
+                      <kbd class="rounded border border-hairline px-1.5 font-mono text-[11px]">Enter</kbd>
+                    </span>
+                  </span>
                 </span>
               </template>
 

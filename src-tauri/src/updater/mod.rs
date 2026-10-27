@@ -254,7 +254,7 @@ impl Updater {
                 };
                 let due = policy::check_due(now_ms(), me.inner.started_ms, last, failed);
                 if policy::background_check(phase, me.auto(), due) {
-                    me.check().await;
+                    me.check(false).await;
                 }
             }
         });
@@ -271,12 +271,34 @@ impl Updater {
             s.failure = None;
         });
         let me = self.clone();
-        tauri::async_runtime::spawn(async move { me.check().await });
+        tauri::async_runtime::spawn(async move { me.check(true).await });
         status
     }
 
-    /// One check, and the download it leads to.
-    async fn check(&self) {
+    /// This install's rollout number (`policy::ROLLOUT_BUCKET_SETTING`), picked at random the
+    /// first time and kept. Without the store (it's always there once tug runs) it counts as 0, so
+    /// this PC is among the first: never later than it would have been before rollouts.
+    fn bucket(&self) -> u8 {
+        let Some(store) = self.store() else {
+            return 0;
+        };
+        let saved = store.setting(policy::ROLLOUT_BUCKET_SETTING).ok().flatten();
+        if let Some(b) = policy::parse_bucket(saved.as_deref()) {
+            return b;
+        }
+        use chacha20poly1305::aead::rand_core::RngCore;
+        let mut random = [0u8; 2];
+        chacha20poly1305::aead::OsRng.fill_bytes(&mut random);
+        let b = policy::bucket_from(random);
+        if let Err(e) = store.set_setting(policy::ROLLOUT_BUCKET_SETTING, &b.to_string()) {
+            log::warn!("update: couldn't keep the rollout number: {e}");
+        }
+        b
+    }
+
+    /// One check, and the download it leads to. `manual`: Check for updates, which always takes
+    /// the newest release; the schedule waits for this PC's turn in a staged rollout.
+    async fn check(&self, manual: bool) {
         {
             let mut s = lock(&self.inner.state);
             // A manual check already set Checking; the schedule only gets here from a quiet phase.
@@ -313,6 +335,19 @@ impl Updater {
                 log::warn!("update: refused {} (not newer than {})", u.version, self.inner.current);
             }
             newer
+        });
+        // A staged rollout that hasn't reached this PC yet: up to date for now (the schedule looks
+        // again in 6 hours; Check for updates takes it at once).
+        let found = found.filter(|u| {
+            let percent = policy::rollout_percent(&u.raw_json);
+            let take = policy::in_rollout(self.bucket(), percent, manual);
+            if !take {
+                log::info!(
+                    "update: tug {} is rolling out ({percent}%); this PC's turn comes later",
+                    u.version
+                );
+            }
+            take
         });
         // The installer must come from tug's own releases on GitHub, whatever latest.json says.
         if let Some(u) = found

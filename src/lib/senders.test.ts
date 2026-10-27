@@ -4,6 +4,7 @@ import { isAddressLike, normalizeAddress } from "./address";
 import {
   isKnownConversation,
   isKnownSender,
+  linksTrusted,
   outgoingAddresses,
   senderIndex,
   senderMayToast,
@@ -238,5 +239,29 @@ describe("toasts and unread for unknown senders", () => {
     const notes = [note("Zoe", "omw", 1), note("+1 (555) 013-2244", "Reply YES", 9)];
     expect(newestUnreadThread(notes, () => 1, (t) => threadCounts(t, index))).toBe(threadKey({ appId: SMS, title: "Zoe" }));
     expect(newestUnreadThread([notes[1]], () => 1, (t) => threadCounts(t, index))).toBeNull();
+  });
+});
+
+describe("one-click links", () => {
+  const contacts: Contact[] = [{ name: "Jane Doe", address: "+15550100142" } as Contact];
+  const index = senderIndex(contacts, ["+15550100177"], ["+15550100188"]);
+  const msg = (contact: string, addresses: string[] = []) => ({ appId: SMS, contact, addresses });
+
+  it("trusts Messages from a contact, a number you've texted, or one you moved", () => {
+    expect(linksTrusted(msg("Jane Doe"), index)).toBe(true);
+    expect(linksTrusted(msg("(555) 010-0142"), index)).toBe(true);
+    expect(linksTrusted(msg("Sam", ["+1 555-010-0177"]), index)).toBe(true);
+    expect(linksTrusted(msg("+15550100188"), index)).toBe(true);
+  });
+
+  it("doesn't trust a name it can't find in your contacts, a stranger's group, or other apps", () => {
+    // A business sender name can be spoofed; iOS titles it like a contact.
+    expect(linksTrusted(msg("PayPal"), index)).toBe(false);
+    expect(linksTrusted(msg("+1 (555) 010-0199 & 3 others"), index)).toBe(false);
+    expect(linksTrusted(msg("Messages"), index)).toBe(false);
+    expect(linksTrusted(msg("+15550100199"), index)).toBe(false);
+    // Other apps can't say who sent it: even a contact's name there is just a title.
+    expect(linksTrusted({ appId: "net.whatsapp.WhatsApp", contact: "Jane Doe", addresses: [] }, index)).toBe(false);
+    expect(linksTrusted({ appId: "com.google.Gmail", contact: "PayPal Security", addresses: [] }, index)).toBe(false);
   });
 });

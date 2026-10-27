@@ -3,10 +3,13 @@
 // this, and the time comes from the weather store's coarse clock: no timer of its own.
 import { computed } from "vue";
 import { useWeatherStore } from "../stores/weather";
+import { usePickupsStore } from "../stores/pickups";
 import { greeting } from "../lib/greeting";
 import { withCurrentHour } from "../lib/weather";
 
 const w = useWeatherStore();
+const pickups = usePickupsStore();
+void pickups.load();
 const text = computed(() => {
   const f = w.place && w.place !== "off" && w.forecast ? withCurrentHour(w.forecast, w.now) : null;
   return greeting(new Date(w.now), f, w.unit);
@@ -14,5 +17,7 @@ const text = computed(() => {
 </script>
 
 <template>
-  <p class="truncate px-1 text-[13px] text-muted">{{ text }}</p>
+  <p class="truncate px-1 text-[13px] text-muted">
+    {{ text }}<template v-if="pickups.greetingLine"> · {{ pickups.greetingLine }}</template>
+  </p>
 </template>

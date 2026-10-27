@@ -14,11 +14,14 @@ import FeedEntryRow from "./FeedEntryRow.vue";
 import FeedGreeting from "./FeedGreeting.vue";
 import MessageThreads from "./MessageThreads.vue";
 import WeatherCard from "./WeatherCard.vue";
+import WelcomeBackCard from "./WelcomeBackCard.vue";
 import { useWeatherStore } from "../stores/weather";
+import { useWelcomeBackStore } from "../stores/welcomeBack";
 
 
 const tug = useTugStore();
 const weather = useWeatherStore();
+const welcome = useWelcomeBackStore();
 onMounted(() => void weather.init());
 onUnmounted(() => weather.dispose());
 
@@ -197,6 +200,18 @@ const nudgeDismissed = ref(false);
     <div v-else ref="feedScroller" class="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-10">
       <div class="mx-auto w-full max-w-3xl px-3 pt-4">
         <FeedGreeting />
+        <!-- Back after a while: what arrived meanwhile, above everything else (lib/welcomeBack). -->
+        <Transition
+          mode="out-in"
+          enter-active-class="transition duration-300 ease-out motion-reduce:transition-none"
+          enter-from-class="opacity-0 -translate-y-1"
+          leave-active-class="transition duration-200 ease-in motion-reduce:transition-none"
+          leave-to-class="opacity-0"
+        >
+          <div v-if="welcome.card" :key="welcome.card.until" class="mt-2">
+            <WelcomeBackCard :scroller="feedScroller" />
+          </div>
+        </Transition>
         <div v-if="weather.place !== 'off'" class="mt-2">
           <WeatherCard />
         </div>

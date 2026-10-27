@@ -122,6 +122,8 @@ tug code [--copy]          the newest code on stdout (--copy: also on the clipbo
 tug boat <file>...         send files to your iPhone with Tugboat: tug asks you first
 tug boat - --name <name>   send what's piped in (up to 64 MB) as a file called <name>
 tug text <name> "<msg>"    text someone: tug asks you first (unless Send tug text without asking is on)
+tug next / previous        skip the song on your iPhone; also play, pause, toggle (Music controls on)
+tug now                    what's playing on your iPhone (Phone status on)
 tug status                 is tug running, the phone (with Phone status on), what's switched on
 tug mcp                    the MCP server (your AI tool starts this)
 ```

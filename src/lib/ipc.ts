@@ -117,6 +117,10 @@ export const api = {
   voiceModelOffered: () => invoke<VoiceStatus>("voice_model_offered"),
   /** Build the support report, copy it to the clipboard, and return it (for a preview/length). */
   copyDiagnostics: () => invoke<string>("copy_diagnostics"),
+  /** Settings › About › Report a problem: GitHub's bug report form, filled in, in the browser. */
+  reportProblem: (unclean: boolean) => invoke<void>("report_problem", { unclean }),
+  /** This version's last run didn't close normally (once per version; null after). */
+  uncleanExit: () => invoke<string | null>("unclean_exit"),
   /** The Bluetooth inventory: what the iPhone exposes to tug (runs it now; privacy-safe). */
   btInventory: () => invoke<BtInventory>("bt_inventory"),
   /** Open tug's log folder in Explorer. */

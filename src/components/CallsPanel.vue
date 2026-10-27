@@ -40,6 +40,31 @@ const keyMap = computed(() => {
 });
 const keyOf = (c: CallRecord) => keyMap.value.get(c) ?? callKey(c);
 
+// Arriving from search (Ctrl+K's "Show in Calls", `c<key>`): reveal the call if it's further down
+// than the rows built so far, scroll to it and briefly highlight it.
+const flashed = ref<string | null>(null);
+watch(
+  () => tug.focusItem,
+  async (item) => {
+    if (!item?.startsWith("c")) return;
+    tug.focusItem = null;
+    const key = item.slice(1);
+    const at = tug.calls.findIndex((c) => keyOf(c) === key);
+    if (at < 0) return;
+    limit.value = Math.max(limit.value, at + 1);
+    await nextTick();
+    // After the place-keeping below has settled the rows just revealed, or it would undo the scroll.
+    window.setTimeout(() => {
+      const row = [...(scroller.value?.querySelectorAll<HTMLElement>("[data-call]") ?? [])].find((el) => el.dataset.call === key);
+      if (!row) return;
+      row.scrollIntoView({ block: "center" });
+      flashed.value = key;
+      window.setTimeout(() => (flashed.value = null), 1800);
+    });
+  },
+  { immediate: true },
+);
+
 // Hold the reader's place as calls arrive. The list is newest-first, so a new call lands at the top:
 // left alone the viewport would slide down by the new row's height. Measure before the DOM updates
 // (this watcher runs pre-flush), then restore — stay pinned at the top if they were already there
@@ -75,7 +100,17 @@ const name = (c: CallRecord) => names.value.get(c) ?? callName(c, nameFor.value)
 const route = (c: CallRecord) => (routes.value.has(c) ? routes.value.get(c)! : tug.callRoute(name(c), c.number));
 // Every row with a number can be clicked: it calls when tug can, and says why when it can't
 // (rows that look tappable but do nothing were confusing).
-function callFrom(c: CallRecord) {
+// A row places a call with one click, so a stray click mustn't: not the second click of a
+// double-click (a Ctrl+K result double-clicked lands its second click on whatever row is under the
+// pointer here), and not one in the moment after Calls opens or a search jumps into it.
+const SETTLE_MS = 700;
+let shownAt = Date.now();
+watch(
+  () => [tug.view, tug.focusItem],
+  () => (shownAt = Date.now()),
+);
+function callFrom(c: CallRecord, e?: MouseEvent) {
+  if ((e && e.detail > 1) || Date.now() - shownAt < SETTLE_MS) return;
   if (c.number) void tug.callPerson(name(c), c.number);
 }
 // The number goes under the name only when the name isn't the number already.
@@ -109,9 +144,15 @@ const emptyHint = computed(() => callsEmptyHint(tug.status, tug.switchContext));
           <li
             v-for="c in g.calls"
             :key="keyOf(c)"
-            :class="['group flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-surface-soft', c.number ? 'cursor-pointer' : '']"
+            :data-call="keyOf(c)"
+            :class="[
+              'group flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-surface-soft',
+              c.number ? 'cursor-pointer' : '',
+              // Inset: the sticky day heading above the first row of a day would cover an outer ring.
+              flashed === keyOf(c) ? 'ring-2 ring-inset ring-accent-amber' : '',
+            ]"
             :title="c.number ? `Call ${name(c)}${route(c) === 'back' ? ' back' : ''} on your iPhone` : undefined"
-            @click="callFrom(c)"
+            @click="callFrom(c, $event)"
           >
             <AppAvatar
               v-if="photo(c)"

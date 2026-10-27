@@ -3,7 +3,8 @@
 // the conversation above it. The drafts (one per conversation) stay with MessageThreads, which
 // sends; this only shows and edits the one for `draftKey`.
 import { computed } from "vue";
-import { SendHorizontal } from "lucide-vue-next";
+import { Clock, SendHorizontal } from "lucide-vue-next";
+import TimeMenu from "./TimeMenu.vue";
 
 const props = defineProps<{
   /** Every conversation's draft, by conversation key (reactive; read here, written by the parent). */
@@ -13,7 +14,7 @@ const props = defineProps<{
   /** A send is under way, or there's no number to send to yet. */
   blocked: boolean;
 }>();
-const emit = defineEmits<{ update: [text: string]; send: [] }>();
+const emit = defineEmits<{ update: [text: string]; send: []; schedule: [at: number, label: string] }>();
 
 const text = computed({
   get: () => props.drafts.get(props.draftKey) ?? "",
@@ -37,6 +38,16 @@ function onKey(e: KeyboardEvent) {
       :placeholder="placeholder"
       @keydown="onKey"
     />
+    <TimeMenu
+      heading="Send later"
+      title="Send later"
+      up
+      :disabled="!text.trim() || blocked"
+      button-class="btn-secondary w-10 px-0"
+      @pick="(at, label) => emit('schedule', at, label)"
+    >
+      <template #button><Clock :size="16" /></template>
+    </TimeMenu>
     <button type="submit" class="btn-primary w-10 shrink-0 px-0" :disabled="!text.trim() || blocked" aria-label="Send">
       <SendHorizontal :size="16" />
     </button>
