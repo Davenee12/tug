@@ -292,6 +292,13 @@ export const useTugStore = defineStore("tug", () => {
   function isKnown(c: Pick<Conversation, "appId" | "contact" | "addresses">): boolean {
     return !settings.value.filterUnknown || isKnownConversation(c, senders.value);
   }
+  /**
+   * Whether a Messages conversation is from someone you know (a contact, a number you've texted, one
+   * you moved), whatever Filter unknown senders says: a stranger's text gets no one-click web links.
+   */
+  function isKnownSender(c: Pick<Conversation, "appId" | "contact" | "addresses">): boolean {
+    return isKnownConversation(c, senders.value);
+  }
   const countsTowardUnread = (t: Thread) => !settings.value.filterUnknown || threadCounts(t, senders.value);
 
   /** App icons as data URIs by app id; null = the App Store has none (initials instead). */
@@ -2345,6 +2352,7 @@ export const useTugStore = defineStore("tug", () => {
     copyLatestCode,
     showReminder,
     openReminder,
+    isKnownSender,
     latestCode,
     codeFeed,
     clearCode,

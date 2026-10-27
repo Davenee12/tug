@@ -320,3 +320,21 @@ describe("sameUrlKey", () => {
     expect(sameUrlKey("https://example.com/Path/")).toBe("example.com/Path");
   });
 });
+
+describe("texts from someone you don't know", () => {
+  const body = "Your parcel 1Z999AA10123456784 is held, pay at https://example.com/pay or call +1 (555) 010-0199";
+
+  it("keep web links as plain words, but still act on what tug builds itself", () => {
+    const kinds = (links: boolean) => smartChips(body, { links }).map((a) => a.kind);
+    expect(kinds(true)).toContain("link");
+    expect(kinds(false)).not.toContain("link");
+    expect(kinds(false)).toEqual(expect.arrayContaining(["tracking", "phone"]));
+  });
+
+  it("render the link as text, joined back exactly", () => {
+    const segments = smartSegments(body, { links: false });
+    expect(segments.map((s) => s.text).join("")).toBe(body);
+    expect(segments.some((s) => s.kind === "action" && s.action.kind === "link")).toBe(false);
+    expect(segments.some((s) => s.kind === "action" && s.action.kind === "tracking")).toBe(true);
+  });
+});

@@ -314,12 +314,17 @@ export function findSmartActions(body: string | null | undefined): SmartAction[]
   return found.sort((a, b) => a.start - b.start);
 }
 
-/** `body` as plain text and actions, in order; joined back together they're `body` exactly. */
-export function smartSegments(body: string | null | undefined): SmartSegment[] {
+/**
+ * `body` as plain text and actions, in order; joined back together they're `body` exactly. With
+ * `links: false` (a text from someone you don't know) its web links stay plain text, as iOS keeps
+ * them: one-click links are how scam texts work. Addresses, numbers and parcel numbers still act,
+ * because tug builds those pages itself.
+ */
+export function smartSegments(body: string | null | undefined, { links = true }: { links?: boolean } = {}): SmartSegment[] {
   if (!body) return [];
   const out: SmartSegment[] = [];
   let at = 0;
-  for (const action of findSmartActions(body)) {
+  for (const action of findSmartActions(body).filter((a) => links || a.kind !== "link")) {
     if (action.start > at) out.push({ kind: "text", text: body.slice(at, action.start) });
     out.push({ kind: "action", text: action.text, action });
     at = action.end;
@@ -336,6 +341,8 @@ export interface ChipOptions {
   limit?: number;
   /** Pages the item already has a button for (its app's Open), not offered again. */
   skipUrls?: (string | null | undefined)[];
+  /** False for a text from someone you don't know: no web link chips (see smartSegments). */
+  links?: boolean;
 }
 
 /**
@@ -343,13 +350,13 @@ export interface ChipOptions {
  * couldn't be told apart), nothing the item already offers, the most specific first.
  */
 export function smartChips(body: string | null | undefined, options: ChipOptions = {}): SmartAction[] {
-  const { limit = 3, skipUrls = [] } = options;
+  const { limit = 3, skipUrls = [], links = true } = options;
   const kinds = new Set<SmartKind>();
   const targets = new Set(skipUrls.filter((u): u is string => !!u).map(sameUrlKey));
   const chips: SmartAction[] = [];
   for (const a of findSmartActions(body)) {
     const target = a.url ? sameUrlKey(a.url) : `copy:${a.copy}`;
-    if (kinds.has(a.kind) || targets.has(target)) continue;
+    if (kinds.has(a.kind) || targets.has(target) || (!links && a.kind === "link")) continue;
     kinds.add(a.kind);
     targets.add(target);
     chips.push(a);

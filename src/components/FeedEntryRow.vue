@@ -64,6 +64,8 @@ const smart = computed(() => {
   return smartChips([n.subtitle, n.message].filter(Boolean).join("\n"), {
     limit: code.value ? 1 : 2,
     skipUrls: [webLink.value?.url],
+    // No web link chip on a stranger's text: one-click links are how scam texts work.
+    links: tug.isKnownSender({ appId: n.appId, contact: title.value, addresses: [] }),
   });
 });
 // Clicking a single Gmail notification's body opens it in the browser instead of expanding — the

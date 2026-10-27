@@ -338,6 +338,10 @@ async function send(text = draft.value) {
   sending.value = false;
 }
 
+// A stranger's texts keep their web links as plain words (lib/smartActions): one-click links are how
+// scam texts work. Everything else in them still acts.
+const linksOk = computed(() => !selected.value || tug.isKnownSender(selected.value));
+
 // Send later: the draft goes into the conversation's scheduled texts (stores/scheduledTexts) and
 // the box empties, as if it had been sent.
 async function sendLater(at: number, label: string) {
@@ -482,7 +486,7 @@ async function retry(m: SmsMessage) {
                 {{ item.n.subtitle }}
               </span>
               <span v-if="unsent(item)" class="italic opacity-70">{{ contentOf(item).text }}</span>
-              <SmartText v-else-if="contentOf(item).text" :text="contentOf(item).text" />
+              <SmartText v-else-if="contentOf(item).text" :text="contentOf(item).text" :links="linksOk" />
               <MessageAttachments
                 v-if="attachmentsOf(item).length"
                 :attachments="attachmentsOf(item)"

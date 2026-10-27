@@ -5,8 +5,9 @@ import { useSmartAction } from "../lib/useSmartAction";
 
 // A message's words with its links, numbers, addresses and parcel numbers made clickable
 // (lib/smartActions). Inline and still selectable: the rest of the text copies as before.
-const props = defineProps<{ text: string }>();
-const segments = computed(() => smartSegments(props.text));
+// `links: false` for a text from someone you don't know: its web links stay plain words.
+const props = withDefaults(defineProps<{ text: string; links?: boolean }>(), { links: true });
+const segments = computed(() => smartSegments(props.text, { links: props.links }));
 const { run } = useSmartAction();
 
 function onClick(action: SmartAction) {

@@ -39,7 +39,12 @@ const messageText = computed(() => (hasChip.value ? (content.value?.text ?? "") 
 // A link, number, address or parcel number in it (lib/smartActions): up to two chips, never the
 // page the Open button already goes to (and never the code: CodeChip has that).
 const smart = computed(() =>
-  smartChips([props.n.subtitle, messageText.value].filter(Boolean).join("\n"), { limit: 2, skipUrls: [webLink.value?.url] }),
+  smartChips([props.n.subtitle, messageText.value].filter(Boolean).join("\n"), {
+    limit: 2,
+    skipUrls: [webLink.value?.url],
+    // No web link chip on a stranger's text: one-click links are how scam texts work.
+    links: tug.isKnownSender({ appId: props.n.appId, contact: props.n.title, addresses: [] }),
+  }),
 );
 const expanded = ref(false);
 const busy = ref<"positive" | "negative" | null>(null);
