@@ -5003,7 +5003,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tug"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "aes",
  "aes-kw",
@@ -5048,7 +5048,7 @@ dependencies = [
 
 [[package]]
 name = "tug-bridge"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "getrandom 0.4.3",
  "hmac",
@@ -5062,7 +5062,7 @@ dependencies = [
 
 [[package]]
 name = "tug-cli"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "rmcp",
  "serde",
