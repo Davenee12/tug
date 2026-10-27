@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   currentRollout,
+  DEMAND_GOALS,
+  demandLines,
+  strangerIssues,
+  totalDownloads,
   issuesFor,
   parsePercent,
   parseVersion,
@@ -86,4 +90,35 @@ test("the status adds up downloads and counts crash reports", () => {
   assert.match(text, /Crashes reported:\s+1/);
   assert.match(text, /#1 \[v0\.5\.22\] voice typing: no sound  \(closed\)/);
   assert.match(statusLines({ version: "0.5.22", rollout: 0, publishedAt: null, assets: [], issues: [] }).join("\n"), /\(paused\)/);
+});
+
+test("demand counts downloads of the apps only, from published releases", () => {
+  const releases = [
+    { draft: false, assets: [{ name: "tug-0.5.21-setup.exe", download_count: 10 }, { name: "tug-0.5.21-portable.exe", download_count: 2 }, { name: "latest.json", download_count: 900 }] },
+    { draft: false, assets: [{ name: "tug_0.5.12_x64-setup.exe", download_count: 4 }, { name: "SHA256SUMS.txt", download_count: 3 }] },
+    { draft: true, assets: [{ name: "tug-0.5.22-setup.exe", download_count: 1 }] },
+  ];
+  assert.equal(totalDownloads(releases), 16);
+});
+
+test("only issues from other people, since the date, count as demand", () => {
+  const issue = (number, login, created_at, extra = {}) => ({ number, title: `t${number}`, created_at, user: { login, type: "User" }, ...extra });
+  const all = [
+    issue(1, "someone", "2026-11-02T00:00:00Z"),
+    issue(2, "Davenee12", "2026-11-02T00:00:00Z"),
+    issue(3, "someone", "2026-10-01T00:00:00Z"),
+    issue(4, "dependabot[bot]", "2026-11-02T00:00:00Z", { user: { login: "dependabot[bot]", type: "Bot" } }),
+    issue(5, "someone", "2026-11-03T00:00:00Z", { pull_request: {} }),
+  ];
+  assert.deepEqual(strangerIssues(all, "2026-10-27T00:00:00Z").map((i) => i.number), [1]);
+});
+
+test("the demand check says plainly whether each goal is met", () => {
+  const some = demandLines({ since: "2026-10-27T00:00:00Z", stars: 120, downloads: 40, issues: [] }).join("\n");
+  assert.match(some, /Stars:\s+met \(120 of 100\)/);
+  assert.match(some, /Installer downloads:\s+not yet \(40 of 200\)/);
+  assert.match(some, /1 of 3 goals met/);
+  const issues = [1, 2, 3].map((n) => ({ number: n, title: "x", user: { login: "a" } }));
+  const all = demandLines({ since: "2026-10-27T00:00:00Z", stars: DEMAND_GOALS.stars, downloads: DEMAND_GOALS.downloads, issues }).join("\n");
+  assert.match(all, /All three goals met/);
 });

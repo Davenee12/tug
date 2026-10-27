@@ -1,9 +1,57 @@
+<div align="center">
+
 # tug
 
-**Your iPhone on your Windows PC.** tug brings your iPhone's notifications, texts, calls and music
-to your PC over Bluetooth, the way a smartwatch or a car kit does. There's no app to install on the
-phone, no Mac, no account and no cloud: tug pairs with your iPhone directly and keeps everything on
-your PC.
+**Your iPhone on your Windows PC.** Notifications, texts, calls and music over Bluetooth.<br>
+No app on the phone, no account, no cloud.
+
+[![Download tug for Windows](https://img.shields.io/badge/Download_for_Windows-free-D97757?style=for-the-badge)](https://github.com/Davenee12/tug/releases/latest)
+
+Windows 10 (2004 or later) or 11 · an iPhone · free and open source · [v0.5.21](CHANGELOG.md)
+
+<img src="docs/media/demo.gif" alt="tug's window: the Feed of iPhone notifications, a text conversation, Ctrl+K search finding a verification code, and an AI tool asking to send a text" width="900">
+
+</div>
+
+- **Your phone's notifications and texts, on your PC.** Read and reply from your keyboard, get
+  Windows pop-ups you can act on, and copy verification codes in one click.
+- **Music, calls and files without picking up the phone.** Now Playing with your media keys,
+  incoming calls and missed-call call-backs, and photos and files over Wi-Fi with Tugboat.
+- **Built for developers, too.** Claude Code, Cursor, Codex and VS Code can read your newest 2FA
+  code or search your texts through tug, and can only send a text after you click **Send**.
+
+## Download
+
+1. Download **`tug-<version>-setup.exe`** from the
+   **[latest release](https://github.com/Davenee12/tug/releases/latest)**. It installs for your
+   Windows account only, with no admin rights needed (there's a portable exe there too).
+2. Open it and follow **Connect your iPhone** ([Quick start](#quick-start)).
+
+### Windows may warn you. Here's why, and why it's safe
+
+The installer isn't **code-signed** yet. Signing certificates cost money, and free signing for
+open-source projects is on the [roadmap](ROADMAP.md). Until then, Windows says it doesn't recognise
+the publisher:
+
+- **SmartScreen** shows "Windows protected your PC". Click **More info**, then **Run anyway**.
+- **Smart App Control** (on by default on some fresh Windows 11 installs) may block unsigned apps
+  with no Run anyway. If it does, tug can't be installed on that PC until releases are signed.
+  Turning Smart App Control off may not be reversible without resetting Windows, so think twice.
+
+Why you can trust the download anyway:
+
+- **Everything is open source**, here in this repository: read exactly what tug does.
+- **Releases are built by GitHub, not on someone's PC.** Every installer comes from
+  [a public workflow](.github/workflows/release.yml) run on GitHub's servers, from a tagged commit on
+  `main`; anyone can see the run that made it.
+- **You can check your file is the real one.** Each release lists SHA-256 checksums. In PowerShell,
+  `Get-FileHash .\tug-0.5.21-setup.exe` must print the same value as the release notes.
+- **Updates are signed.** tug only installs an update signed with its own key, so nobody can slip
+  in a changed version.
+- **Nothing about you leaves your PC.** No servers, no account, no analytics, no telemetry
+  ([Privacy](#privacy)).
+
+## Everything tug does
 
 - **Notifications** from every app, with Windows pop-ups you can act on, quiet hours and VIPs.
 - **Texts:** read them the moment they arrive and reply from your keyboard, with verification codes
@@ -15,33 +63,13 @@ your PC.
 - **For developers:** your AI tools (Claude Code, Codex, Cursor, VS Code) and a `tug` command can
   use your phone, always with you in charge.
 
-> Screenshots are coming. Until then, `npm run dev` shows the whole UI with sample data (see
-> [Build from source](#build-from-source)).
+<p align="center">
+  <img src="docs/media/messages.png" alt="A text conversation in tug" width="32%">
+  <img src="docs/media/search.png" alt="Ctrl+K search finding verification codes" width="32%">
+  <img src="docs/media/ai-tools.png" alt="tug asking before an AI tool sends a text" width="32%">
+</p>
 
-**Current release: v0.5.20** · [What's changed](CHANGELOG.md) · [Everything tug can do](docs/FEATURES.md) · [Roadmap](ROADMAP.md)
-
-## Download
-
-Get the installer (`tug_<version>_x64-setup.exe`) from
-**[Releases](https://github.com/Davenee12/tug/releases)**. It installs for your Windows account
-only, with no admin rights needed.
-
-**The installer isn't code-signed yet** (signing is planned; see the [roadmap](ROADMAP.md)), so
-Windows will be cautious:
-
-- **SmartScreen** shows "Windows protected your PC". Click **More info**, check the file is the one
-  you downloaded from this repository's Releases page, then click **Run anyway**.
-- **Smart App Control** (Windows 11, on by default on some fresh installs) may block unsigned apps
-  outright, with no Run anyway. If it does, tug can't be installed on that PC until releases are
-  signed. Turning Smart App Control off in Windows Security may not be reversible without
-  resetting Windows, so think twice before you do.
-
-To check your download wasn't changed, compare its SHA-256 checksum with the one listed in that
-release's notes:
-
-```powershell
-Get-FileHash .\tug_0.5.12_x64-setup.exe -Algorithm SHA256
-```
+[What's changed](CHANGELOG.md) · [Everything tug can do, in detail](docs/FEATURES.md) · [Roadmap](ROADMAP.md)
 
 ## Requirements
 

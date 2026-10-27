@@ -7,6 +7,10 @@
 //   node scripts/rollout.mjs set <version> <percent> roll it out to that much of tug (0 pauses it,
 //                                                    100 is everyone): rewrites the release's
 //                                                    latest.json
+//   node scripts/rollout.mjs demand [since]          do people want tug? stars, downloads across
+//                                                    every release, and issues from people other
+//                                                    than the owner (since a date, default 30 days),
+//                                                    against the goals in DEMAND_GOALS
 //
 // Every number here is public already (GitHub's download counts and issues). tug itself sends
 // nothing: each copy keeps its rollout number to itself, and a report is only ever an issue the
@@ -69,6 +73,56 @@ export function issuesFor(issues, version, publishedAt) {
   );
 }
 
+/** The owner: their own issues and stars don't count as demand. */
+export const OWNER = "Davenee12";
+
+/**
+ * What "people want tug" means, decided before looking (so the numbers can't be talked into it):
+ * within about a month of telling people about it.
+ */
+export const DEMAND_GOALS = { stars: 100, downloads: 200, strangerIssues: 3 };
+
+/** Downloads of the installer and portable exe, over every published release. */
+export function totalDownloads(releases) {
+  return releases
+    .filter((r) => !r.draft)
+    .flatMap((r) => r.assets)
+    .filter((a) => /(-setup|-portable|_x64-setup)\.exe$|\.msi$/.test(a.name))
+    .reduce((n, a) => n + a.download_count, 0);
+}
+
+/** Issues (not pull requests or bots) opened by someone other than the owner since `since`. */
+export function strangerIssues(issues, since) {
+  const t = Date.parse(since);
+  return issues.filter(
+    (i) =>
+      !i.pull_request &&
+      Date.parse(i.created_at) >= t &&
+      i.user?.login !== OWNER &&
+      i.user?.type !== "Bot",
+  );
+}
+
+/** The demand check, as lines to print. */
+export function demandLines({ since, stars, downloads, issues, goals = DEMAND_GOALS }) {
+  const mark = (have, want) => `${have >= want ? "met" : "not yet"} (${have} of ${want})`;
+  const met = [stars >= goals.stars, downloads >= goals.downloads, issues.length >= goals.strangerIssues];
+  const lines = [
+    `Do people want tug? Since ${since.slice(0, 10)}`,
+    `  Stars:                     ${mark(stars, goals.stars)}  (all time)`,
+    `  Installer downloads:       ${mark(downloads, goals.downloads)}  (all releases, all time)`,
+    `  Issues from other people:  ${mark(issues.length, goals.strangerIssues)}`,
+  ];
+  for (const i of issues) lines.push(`    #${i.number} ${i.title}  (${i.user.login})`);
+  lines.push(
+    "",
+    met.every(Boolean)
+      ? "All three goals met: people want tug. Worth investing in (code signing, a Store listing)."
+      : `${met.filter(Boolean).length} of 3 goals met.`,
+  );
+  return lines;
+}
+
 /** The status report, as lines to print. */
 export function statusLines({ version, rollout, publishedAt, assets, issues }) {
   const count = (suffix) => assets.filter((a) => a.name.endsWith(suffix)).reduce((n, a) => n + a.download_count, 0);
@@ -90,6 +144,18 @@ function gh(args, opts = {}) {
   return execFileSync("gh", args, { encoding: opts.binary ? "buffer" : "utf8", stdio: ["ignore", "pipe", "inherit"] });
 }
 
+/** Every page of a list endpoint (`per_page=100` is added), one request per page. */
+function ghAll(endpoint) {
+  const out = [];
+  for (let page = 1; page <= 50; page++) {
+    const sep = endpoint.includes("?") ? "&" : "?";
+    const batch = JSON.parse(gh(["api", `${endpoint}${sep}per_page=100&page=${page}`]));
+    out.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return out;
+}
+
 function release(version) {
   const which = version ? `tags/v${version}` : "latest";
   return JSON.parse(gh(["api", `repos/${REPO}/releases/${which}`]));
@@ -108,9 +174,7 @@ async function main([command, ...args]) {
       const rel = release(args[0] ? parseVersion(args[0]) : null);
       const version = parseVersion(rel.tag_name);
       const latest = readLatest(rel);
-      const all = JSON.parse(
-        gh(["api", "--paginate", `repos/${REPO}/issues?state=all&per_page=100&since=${rel.published_at ?? rel.created_at}`]),
-      );
+      const all = ghAll(`repos/${REPO}/issues?state=all&since=${rel.published_at ?? rel.created_at}`);
       const issues = issuesFor(all, version, rel.published_at ?? rel.created_at);
       for (const line of statusLines({ version, rollout: currentRollout(latest), publishedAt: rel.published_at, assets: rel.assets, issues })) {
         console.log(line);
@@ -135,8 +199,24 @@ async function main([command, ...args]) {
       if (rel.draft) console.log("It's still a draft: nobody gets it until you publish it.");
       return;
     }
+    case "demand": {
+      const since = args[0] ? new Date(args[0]).toISOString() : new Date(Date.now() - 30 * 86_400_000).toISOString();
+      if (Number.isNaN(Date.parse(since))) throw new Error(`not a date: ${args[0]}`);
+      const repo = JSON.parse(gh(["api", `repos/${REPO}`]));
+      const releases = ghAll(`repos/${REPO}/releases`);
+      const all = ghAll(`repos/${REPO}/issues?state=all&since=${since}`);
+      for (const line of demandLines({
+        since,
+        stars: repo.stargazers_count,
+        downloads: totalDownloads(releases),
+        issues: strangerIssues(all, since),
+      })) {
+        console.log(line);
+      }
+      return;
+    }
     default:
-      console.error("usage: node scripts/rollout.mjs status [version] | set <version> <percent>");
+      console.error("usage: node scripts/rollout.mjs status [version] | set <version> <percent> | demand [since]");
       process.exit(2);
   }
 }

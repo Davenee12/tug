@@ -239,6 +239,21 @@ replaced there's no `latest.json`; a check then just tries again later.
 **A rhythm that works:** 10% for a day or two, 50% for a day, then 100%. A hotfix can go straight
 to 100%. If anything looks wrong, `set … 0` and ship the fix forward.
 
+## Do people want tug?
+
+`node scripts/rollout.mjs demand [since]` (default: the last 30 days) checks the goals set before
+telling anyone about tug, so the numbers can't be talked into meaning more than they do:
+
+| Goal | Counted from |
+|---|---|
+| **100 stars** | GitHub, all time |
+| **200 installer downloads** | GitHub's counts for every release's installer and portable exe |
+| **3 issues from other people** | Issues opened by anyone but the owner (not bots, not pull requests) since `since` |
+
+Baseline on 2026-10-27, before any announcement: 1 star, 15 downloads, 0 issues from other people.
+All three met within about a month of announcing tug means it's worth spending money on (code
+signing, a Store listing); the goals live in `DEMAND_GOALS` in `scripts/rollout.mjs`.
+
 **A manual run** (Actions › release › Run workflow) takes the version (as in `package.json`) and a
 **dry run** switch, on by default. A dry run runs only `build`: it builds and checks everything and
 uploads the unsigned files as a workflow artifact for 14 days, but has no secrets, signs nothing
