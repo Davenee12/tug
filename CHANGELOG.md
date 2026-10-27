@@ -2,10 +2,41 @@
 
 ## v0.5.22 — 2026-10-27
 
-Report a problem, gradual updates, and a backup fix. From #165. It arrives through automatic
-updates.
+A live harbor on the weather card, Send later, Remind me, one-click links and addresses in texts, a
+Welcome back summary, music from the terminal, Report a problem and gradual updates. From #165. It
+arrives through automatic updates.
 
 ### New
+- **The weather card opens on a live harbor** of the weather where you are: the sun and moon where
+  they really are between the place's sunrise and sunset, the moon in its real phase (lit the right
+  way for your hemisphere), clouds from the cloud cover, rain or snow as hard as it's falling, fog,
+  storms that flash, and waves from the wind's Beaufort force, with tug's own tugboat riding them,
+  its pennant and smoke going the way the real wind blows. A caption gives the sunset by day, the
+  moon and the next sunrise by night, and the sea state ("Force 4 · moderate breeze from the
+  southwest"). It moves only while you can see it, and holds still with reduced motion.
+- **Rain to the quarter-hour:** "Rain from about 5:45 PM, for about 30 minutes", with a small strip
+  for the next two hours, in place of the 12-hour outlook when the forecast has it.
+- **Before you head out:** with rain or snow due in the next two hours, or a freezing feels-like,
+  and your iPhone at 30% or less, the weather card puts the two together: "Rain from about 5:45 PM
+  and your phone's at 18%. Charge it before you head out."
+- **Send later:** the clock beside Send schedules a text (in 20 minutes up to tomorrow morning). It
+  waits above the box with Send now and Cancel and goes through your iPhone when it's due. A text
+  more than 30 minutes late (tug was closed, the phone was away) is never sent by itself: it's held
+  for you to Send now or Discard.
+- **Remind me:** the alarm clock on a Feed row brings a text or notification back later (20
+  minutes up to tomorrow morning) as a Windows pop-up with its own buttons. Reminders survive a
+  restart.
+- **Links, numbers, addresses and parcels are one click** in texts and notifications: Open link,
+  Copy number or email, Open in Maps, Track parcel. Web links are one click only in texts from people
+  you know; from a stranger they stay plain text.
+- **Welcome back:** after 20 minutes or more away from your PC, a card at the top of the Feed sums
+  up what arrived meanwhile: texts by person, missed calls, a fresh code, other apps.
+- **Calls in Ctrl+K:** search recent calls by name or number. A result never places a call by
+  itself.
+- **Music from the terminal:** `tug next`, `tug previous`, `tug play`, `tug pause` and `tug now`
+  (what's playing), with Music controls and Phone status on in Developer tools.
+- **Pickups saved** (Settings › About): a gentle count of the times tug spared you picking up the
+  phone (a code copied, a reply sent, a call answered, a song skipped).
 - **Report a problem** (Settings › About) opens GitHub's bug report form with tug's version and
   your Windows version filled in, and puts the diagnostics (phone numbers, names and message
   contents removed) on the clipboard for you to read through and paste. tug sends nothing itself.

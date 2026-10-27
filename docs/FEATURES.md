@@ -54,6 +54,11 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   this evening, or tomorrow morning) as a Windows pop-up with its own buttons, titled "Reminder".
   The row shows when; the menu changes or cancels it. Reminders survive a restart, and one that
   came due while tug was closed comes back when it starts.
+- **Links, numbers, addresses and parcels** in texts and notifications are one click: Open link,
+  Copy number or email, Open in Maps, Track parcel. Web links are one click only from people you
+  know; from a stranger they stay plain text.
+- **Welcome back:** after 20 minutes or more away, a card at the top of the Feed sums up what
+  arrived meanwhile (texts by person, missed calls, a fresh code, other apps).
 - **Open on the web** opens a notification's web page (for example your inbox for Gmail), or the
   app's website.
 - Real app icons, looked up once per app from Apple's App Store and kept on your PC (you can turn
@@ -311,6 +316,16 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 - An optional **weather card** on the Feed: now, feels like, high and low, the next 24 hours, 7
   days, wind, humidity and a rain or snow outlook.
+- The card opens on a **live harbor** of the weather there: the sun and moon where they really are
+  between sunrise and sunset, the moon's real phase (lit the right way for the hemisphere), clouds,
+  rain or snow as hard as it's falling, fog, lightning, and waves from the wind's Beaufort force,
+  with tug's tugboat riding them, its pennant and smoke going the way the real wind blows. A caption
+  gives the sunset, or the moon and the next sunrise, and the sea state. It moves only while it's on
+  screen and holds still with reduced motion.
+- **Rain to the quarter-hour** for the next two hours ("Rain from about 5:45 PM, for about 30
+  minutes"), with a small strip of bars.
+- **Before you head out:** rain or snow due within two hours, or a freezing feels-like, with the
+  iPhone at 30% or less, and the card says to charge it first.
 - Choose a place with **Use my location** (Windows location) or by typing a city.
 - Forecasts from Open-Meteo, refreshed every 15 minutes and when you come back to tug.
 - °F or °C, on the card or in Settings › Weather.
@@ -405,7 +420,7 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
   download them (`--wait <secs>`, `--no-wait`). `tug boat - --name notes.txt` sends what's piped in.
   Regular files only; files the phone didn't download in time are taken off offer.
 - The **`tug` command**: `tug code [--copy]`, `tug boat <file>` (or `-` for stdin), `tug text <name> "<message>"`,
-  `tug status`, `tug mcp`.
+  `tug next`, `tug previous`, `tug play`, `tug pause`, `tug now`, `tug status`, `tug mcp`.
 - **Add tug to PATH** puts the command in new terminals for your account only; **Remove from PATH**
   undoes it.
 - **Connected tools** lists who has used tug and when; **Revoke access** disconnects them all.

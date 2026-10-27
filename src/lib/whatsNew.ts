@@ -22,12 +22,14 @@ export interface ReleaseNote {
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
     version: "0.5.22",
-    title: "Report a problem, and gentler updates",
+    title: "A live harbor, Send later and Remind me",
     highlights: [
-      "Settings › About › Report a problem opens a bug report with your version filled in. tug sends nothing itself.",
-      "If tug didn't close normally last time, it offers to report it, once.",
-      "Updates now roll out gradually, so a problem reaches fewer people. Check for updates always gets the newest.",
-      "Unlocking an encrypted iPhone backup works again right after a wrong password.",
+      "The weather card opens on a live harbor: the real sun, moon and wind where you are, and rain to the quarter-hour.",
+      "With rain on the way and your phone low, the weather card tells you to charge it before you head out.",
+      "Send later: write a text now and pick when tug sends it through your iPhone.",
+      "Remind me: put a text or notification aside and have it come back later.",
+      "Links, numbers, addresses and parcel numbers in texts are one click, and a Welcome back card sums up what you missed.",
+      "Report a problem from Settings › About, and updates now roll out gradually.",
     ],
   },
   {
