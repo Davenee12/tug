@@ -23,8 +23,9 @@ describe("the harbor's extra weather", () => {
         ...base,
         current: { ...base.current, cloud_cover: 90, wind_gusts_10m: 41.5, precipitation: 0.6 },
         daily: { ...base.daily, sunrise: ["2026-10-05T07:12"], sunset: ["2026-10-05T18:40"] },
+        // Each is the rain in the quarter *before* its time: 14:45's 0.2 mm fell from 14:30.
         minutely_15: {
-          time: ["2026-10-05T14:00", "2026-10-05T14:15", "2026-10-05T14:30", "2026-10-05T14:45", "2026-10-05T15:00"],
+          time: ["2026-10-05T14:15", "2026-10-05T14:30", "2026-10-05T14:45", "2026-10-05T15:00", "2026-10-05T15:15"],
           precipitation: [0.4, 0.3, 0.2, 0, null],
         },
       },
@@ -32,7 +33,7 @@ describe("the harbor's extra weather", () => {
     );
     expect(f.now).toMatchObject({ clouds: 90, gusts: 41.5, precip: 0.6 });
     expect(f.days[0]).toMatchObject({ sunrise: "2026-10-05T07:12", sunset: "2026-10-05T18:40" });
-    // From the current quarter on; a missing value is left out.
+    // Kept by when each quarter starts, from the current one on; a missing value is left out.
     expect(f.quarters).toEqual([
       { time: "2026-10-05T14:30", precip: 0.2 },
       { time: "2026-10-05T14:45", precip: 0 },

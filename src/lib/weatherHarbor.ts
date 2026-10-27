@@ -7,8 +7,7 @@
 //
 // Pure: the component passes the time; weatherHarborDraw draws it.
 
-import { clockTime } from "./format";
-import { describe, quarterOf, type Forecast, type Quarter } from "./weather";
+import { describe, quarterOf, type Day, type Forecast, type Quarter } from "./weather";
 
 export type Phase = "night" | "dawn" | "day" | "dusk";
 
@@ -158,6 +157,20 @@ function cloudsOf(f: Forecast): number {
   return { clear: 0.1, partly: 0.45, cloudy: 0.9, fog: 0.7, drizzle: 0.8, rain: 0.9, snow: 0.9, storm: 1 }[sky];
 }
 
+/**
+ * A day's sunrise and sunset as local minutes, when they're real: on the day, sunset after sunrise.
+ * Near the poles the sun can stay up or down all day, and the service's placeholder times for that
+ * mustn't be drawn or shown.
+ */
+export function sunTimes(day: Day | undefined): { rise: number; set: number } | null {
+  const rise = day?.sunrise ? localMinutes(day.sunrise) : null;
+  const set = day?.sunset ? localMinutes(day.sunset) : null;
+  const start = day ? localMinutes(`${day.date}T00:00`) : null;
+  if (rise === null || set === null || start === null) return null;
+  const onTheDay = (m: number) => m >= start - 12 * 60 && m <= start + 36 * 60;
+  return set > rise && onTheDay(rise) && onTheDay(set) ? { rise, set } : null;
+}
+
 /** Where the sun or moon is along an arc from `start` to `end` (local minutes). */
 function arc(now: number, start: number, end: number): { at: number; height: number } {
   const at = Math.min(1, Math.max(0, (now - start) / (end - start)));
@@ -171,28 +184,28 @@ function arc(now: number, start: number, end: number): { at: number; height: num
  */
 export function harborScene(f: Forecast, nowMs: number): HarborScene {
   const now = localMinutes(placeNow(nowMs, f.timezone)) ?? 0;
-  const today = f.days[0];
-  const tomorrow = f.days[1];
-  const rise = today?.sunrise ? localMinutes(today.sunrise) : null;
-  const set = today?.sunset ? localMinutes(today.sunset) : null;
+  const sunToday = sunTimes(f.days[0]);
+  const sunTomorrow = sunTimes(f.days[1]);
   const phaseNow = moonPhase(nowMs);
   const lit = (1 - Math.cos(2 * Math.PI * phaseNow)) / 2;
 
   let phase: Phase;
   let sun: HarborScene["sun"] = null;
   let moon: HarborScene["moon"] = null;
-  if (rise === null || set === null || set <= rise) {
+  if (!sunToday) {
     phase = f.now.day ? "day" : "night";
     if (f.now.day) sun = { at: 0.5, height: 1 };
     else moon = { at: 0.5, height: 1, phase: phaseNow, lit };
-  } else if (now >= rise && now <= set) {
+  } else if (now >= sunToday.rise && now <= sunToday.set) {
+    const { rise, set } = sunToday;
     sun = arc(now, rise, set);
     phase = now - rise < TWILIGHT_MIN ? "dawn" : set - now < TWILIGHT_MIN ? "dusk" : "day";
   } else {
     // The night runs from this evening's sunset to tomorrow's sunrise, or from last night's to this
     // morning's (yesterday's sunset is close enough to today's less a day).
-    const nextRise = tomorrow?.sunrise ? localMinutes(tomorrow.sunrise) : null;
-    const [start, end] = now > set ? [set, nextRise ?? rise + 24 * 60] : [set - 24 * 60, rise];
+    const { rise, set } = sunToday;
+    const nextRise = sunTomorrow && sunTomorrow.rise > set ? sunTomorrow.rise : rise + 24 * 60;
+    const [start, end] = now > set ? [set, nextRise] : [set - 24 * 60, rise];
     moon = { ...arc(now, start, end), phase: phaseNow, lit };
     phase = now > set && now - set < TWILIGHT_MIN ? "dusk" : now < rise && rise - now < TWILIGHT_MIN ? "dawn" : "night";
   }
@@ -218,9 +231,10 @@ export function harborScene(f: Forecast, nowMs: number): HarborScene {
  */
 export function skyCaption(s: HarborScene, f: Forecast, nowLocal: string): string | null {
   const [today, tomorrow] = f.days;
-  if (s.sun) return today?.sunset ? `Sunset ${wallClock(today.sunset)}` : null;
+  const real = (d: Day | undefined) => (sunTimes(d) ? d : undefined);
+  if (s.sun) return real(today)?.sunset ? `Sunset ${wallClock(today.sunset!)}` : null;
   const moon = s.moon ? moonName(s.moon.phase) : null;
-  const next = today?.sunrise && nowLocal < today.sunrise ? today.sunrise : tomorrow?.sunrise;
+  const next = real(today) && nowLocal < today.sunrise! ? today.sunrise : real(tomorrow)?.sunrise;
   const rise = next ? `Sunrise ${wallClock(next)}` : null;
   return [moon, rise].filter(Boolean).join(" · ") || null;
 }
@@ -239,12 +253,21 @@ export interface NextRain {
   quarters: Quarter[];
 }
 
+let clockFormat: Intl.DateTimeFormat | null = null;
+
+/**
+ * The place's "2026-10-05T17:45" as "5:45 PM", in the PC's own style. Read as UTC so the PC's
+ * daylight-saving change can't move a time at the place by an hour.
+ */
 function wallClock(local: string): string {
-  const [d, t] = local.split("T");
-  const [y, mo, da] = d.split("-").map(Number);
-  const [h, mi] = t.split(":").map(Number);
-  return clockTime(new Date(y, mo - 1, da, h, mi));
+  const m = localMinutes(local);
+  if (m === null) return "";
+  clockFormat ??= new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit", timeZone: "UTC" });
+  return clockFormat.format(new Date(m * MINUTE));
 }
+
+/** The harbor reads this far ahead: two hours, a quarter at a time. */
+const AHEAD = 8;
 
 function minutesWord(n: number): string {
   if (n < 60) return `about ${n} minutes`;
@@ -254,7 +277,7 @@ function minutesWord(n: number): string {
 
 /** The next two hours' rain (or snow), from the quarters still ahead of the place's `nowLocal`. */
 export function nextRain(quarters: Quarter[] | undefined, nowLocal: string, what: "Rain" | "Snow" = "Rain"): NextRain {
-  const ahead = (quarters ?? []).filter((q) => q.time.slice(0, 16) >= quarterOf(nowLocal));
+  const ahead = (quarters ?? []).filter((q) => q.time.slice(0, 16) >= quarterOf(nowLocal)).slice(0, AHEAD);
   const wet = (q: Quarter) => q.precip >= WET_MM;
   const none = { line: null, start: null, quarters: ahead };
   if (ahead.length < 2) return none;
@@ -262,7 +285,7 @@ export function nextRain(quarters: Quarter[] | undefined, nowLocal: string, what
     const dry = ahead.findIndex((q) => !wet(q));
     const line =
       dry < 0
-        ? `${what} for the next ${ahead.length >= 8 ? "2 hours" : `${ahead.length * 15} minutes`} or more`
+        ? `${what} for the next ${ahead.length >= AHEAD ? "2 hours" : `${ahead.length * 15} minutes`} or more`
         : `${what} easing off around ${wallClock(ahead[dry].time)}`;
     return { line, start: "now", quarters: ahead };
   }

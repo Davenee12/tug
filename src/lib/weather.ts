@@ -103,7 +103,10 @@ export function withCurrentHour(f: Forecast, nowMs: number): Forecast {
   const i = withToday.hours.findIndex((h) => h.time.slice(0, 13) === key);
   if (i < 0) return withToday;
   const h = withToday.hours[i];
-  return { ...withToday, now: { ...f.now, time: h.time, temp: h.temp, code: h.code, day: h.day }, hours: withToday.hours.slice(i) };
+  // Cloud cover and rain measured at download belong to that hour; the harbor works them out from
+  // the new hour's sky instead (wind, like feels-like, stays from the download).
+  const now = { ...f.now, time: h.time, temp: h.temp, code: h.code, day: h.day, clouds: undefined, precip: undefined };
+  return { ...withToday, now, hours: withToday.hours.slice(i) };
 }
 
 /**
@@ -202,8 +205,8 @@ const HARBOR = {
   hourly: BASE.hourly,
   daily: `${BASE.daily},sunrise,sunset`,
   minutely_15: "precipitation",
-  // A few spare: the series can start at the top of the hour, before the current quarter.
-  forecast_minutely_15: "12",
+  // Spares: the series can start at the top of the hour, and quarters pass between downloads.
+  forecast_minutely_15: "16",
 };
 
 export async function fetchForecast(p: Place): Promise<Forecast> {
@@ -225,6 +228,21 @@ export async function fetchForecast(p: Place): Promise<Forecast> {
 }
 
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
+/**
+ * Open-Meteo's 15-minute rain is the total for the quarter *before* each time: 14:45 is the rain
+ * from 14:30 to 14:45. tug keeps each quarter by its start (14:30), the way it's read: "from 14:30".
+ */
+function quarterStart(end: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(end);
+  if (!m) return "";
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) - 15 * 60_000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+/** Quarters kept from a download: the harbor reads two hours ahead, and some pass before the next. */
+const QUARTERS_KEPT = 14;
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 
 export function parseForecast(j: any, fetchedAt: number): Forecast {
@@ -248,14 +266,14 @@ export function parseForecast(j: any, fetchedAt: number): Forecast {
     sunrise: str(d.sunrise?.[i]),
     sunset: str(d.sunset?.[i]),
   }));
-  // The next two hours from the current quarter on (the series can start earlier in the day).
+  // From the current quarter on (the series can start earlier in the day), each by its start.
   const m = j.minutely_15;
   const nowQuarter = String(c.time).slice(0, 16);
   const quarters: Quarter[] | undefined = Array.isArray(m?.time)
     ? (m.time as unknown[])
-        .map((time, i) => ({ time: str(time) ?? "", precip: num(m.precipitation?.[i]) ?? NaN }))
-        .filter((q) => q.time && Number.isFinite(q.precip) && q.time.slice(0, 16) >= quarterOf(nowQuarter))
-        .slice(0, 8)
+        .map((time, i) => ({ time: quarterStart(str(time) ?? ""), precip: num(m.precipitation?.[i]) ?? NaN }))
+        .filter((q) => q.time && Number.isFinite(q.precip) && q.time >= quarterOf(nowQuarter))
+        .slice(0, QUARTERS_KEPT)
     : undefined;
   return {
     fetchedAt,

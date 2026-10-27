@@ -78,6 +78,8 @@ const NAMES = [
 
 function draw(ms: number) {
   if (!ctx || !day || !dark) return;
+  // Moved to a screen with another scale: resize (which draws) so the harbor stays sharp.
+  if ((window.devicePixelRatio || 1) !== size.dpr) return resize();
   drawHarbor(ctx, {
     ...size,
     t: reducedMotion.value ? 4.2 : (ms - t0) / 1000,
@@ -148,8 +150,9 @@ onMounted(() => {
   ro = new ResizeObserver(resize);
   if (stage.value) ro.observe(stage.value);
   if (typeof IntersectionObserver !== "undefined" && stage.value) {
-    io = new IntersectionObserver(([e]) => {
-      onScreen = e?.isIntersecting ?? true;
+    io = new IntersectionObserver((entries) => {
+      // Several can queue up in a quick scroll: the newest says where it is now.
+      onScreen = entries[entries.length - 1]?.isIntersecting ?? true;
       update();
     });
     io.observe(stage.value);

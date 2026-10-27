@@ -15,6 +15,7 @@ import {
   rainBars,
   seaLine,
   skyCaption,
+  sunTimes,
   windOf,
 } from "./weatherHarbor";
 
@@ -109,6 +110,21 @@ describe("the harbor scene", () => {
     expect(harborScene(f, Date.UTC(2026, 9, 5, 4, 0)).sun?.at).toBeCloseTo(0.5);
     expect(placeNow(Date.UTC(2026, 9, 5, 4, 0), "Asia/Tokyo")).toBe("2026-10-05T13:00");
     expect(placeNow(Date.UTC(2026, 9, 5, 4, 0), "Not/AZone")).toMatch(/^2026-10-0\dT\d\d:00$/);
+  });
+
+  it("ignores the placeholder times polar days and nights come with", () => {
+    // The sun up all day, or down all day: no real sunrise or sunset to draw or show.
+    const polarNight = forecast({ day: false }, [{ sunrise: "2026-10-05T00:00", sunset: "2026-10-05T00:00" }, { sunrise: "1970-01-01T00:00", sunset: "1970-01-01T00:00" }]);
+    expect(sunTimes(polarNight.days[0])).toBeNull();
+    expect(sunTimes(polarNight.days[1])).toBeNull();
+    const s = harborScene(polarNight, at("2026-10-05T22:00"));
+    expect(s.moon).toMatchObject({ at: 0.5, height: 1 });
+    expect(skyCaption(s, polarNight, "2026-10-05T22:00")).not.toMatch(/Sunrise/);
+    const polarDay = forecast({}, [{ sunrise: "1970-01-01T00:00", sunset: "1970-01-01T00:00" }]);
+    expect(skyCaption(harborScene(polarDay, at("2026-10-05T13:00")), polarDay, "2026-10-05T13:00")).toBeNull();
+    // The last night before the polar night: the moon still crosses, to where sunrise would be.
+    const lastNight = forecast({ day: false }, [{}, { sunrise: "1970-01-01T00:00", sunset: "1970-01-01T00:00" }]);
+    expect(harborScene(lastNight, at("2026-10-06T01:00")).moon?.at).toBeCloseTo(0.5);
   });
 
   it("copes with an older forecast that has no sunrise or sunset", () => {
