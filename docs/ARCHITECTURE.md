@@ -491,7 +491,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `ancs.rs`, `ancs_queue.rs` | ANCS wire format and reassembly; one-request-at-a-time queue with retries and timeouts |
 | `ams.rs` | AMS wire format, `NowPlaying`, `CommandGate` (one press, one command) |
 | `store.rs`, `messages.rs` | SQLite + FTS5 history, settings, migrations; conversations, contacts, name learning, send states |
-| `link_policy.rs` | What a failed connect means, the sticky "away" state, waiting for link-up, keep-or-relink after wake, when to ask for a re-pair |
+| `link_policy.rs` | What a failed connect means, the sticky "away" state, waiting for link-up, keep-or-relink after wake, when to ask for a re-pair, when to check the ANCS subscription again after the link cut a probe off (2, 4, 8 s, then every 15 s) and how often an unchanged check is logged |
 | `wedge.rs` | An adapter that's connected but not answering: relink with backoff and a cap |
 | `forgotten.rs` | The iPhone forgot this PC while Windows kept the bond: a link that keeps coming up and dropping at once on a phone that has worked here before, Windows' stale-bond error twice, or refused connects while the link is also flapping. Refusals alone never count (a healthy phone refuses too, with Share System Notifications off or after Don't Allow), nor do blips while notifications are subscribed; never while it's locked, and not after a wake, radio change or adapter stall |
 | `wake.rs` | A real sleep vs a stalled thread, from two clocks and the resume flag |
@@ -688,3 +688,11 @@ it where it isn't a secure context, as on a phone).
   or after Don't Allow.
 - After registering for notifications, an open MAP session's inbox listing can go stale if the MNS
   link dies; reopening the session fixes it.
+- iOS sends nothing when Share System Notifications is turned off, so tug asks every 15 s (every
+  2 s while the switches are on screen) with a Control Point request it refuses one way or the
+  other. When the link drops under a GATT request, Windows fails it with "The operation was
+  canceled by the user" (ERROR_CANCELLED): neither the user nor tug cancelled anything. Windows
+  often closes tug's GATT objects for the phone just after, so tug checks again within seconds.
+- Right after tug starts or the phone comes back, iOS can take a while to offer message access
+  even with the notifications link up (76 s once). tug retries at 2, 4 and 8 s while that link is
+  up, then backs off (30 s up to 5 minutes); the link coming up again starts it over.

@@ -33,6 +33,9 @@ pub enum BleError {
 /// longer has (the PC was forgotten on the phone).
 const STALE_BOND: windows::core::HRESULT = windows::core::HRESULT(0x8007_0016_u32 as i32);
 
+/// HRESULT_FROM_WIN32(ERROR_CANCELLED).
+const CANCELLED: windows::core::HRESULT = windows::core::HRESULT(0x8007_04C7_u32 as i32);
+
 impl BleError {
     pub fn is_stale_bond(&self) -> bool {
         matches!(self, Self::Win(e) if e.code() == STALE_BOND)
@@ -49,10 +52,19 @@ impl BleError {
         matches!(self, Self::TimedOut)
     }
 
+    /// ERROR_CANCELLED ("The operation was canceled by the user"): Windows gave up a GATT request
+    /// that was still waiting when the connection under it went away. Not tug's own time limit
+    /// (that's `TimedOut`, which leaves Windows' operation running). Seen on hardware: every one of
+    /// 56 in six days came within seconds of the link dropping or blipping.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Win(e) if e.code() == CANCELLED)
+    }
+
     /// The link this request went over is gone: Windows closed tug's objects, can't reach the
-    /// phone, or stopped answering. Carrying on with setup over it only waits out more timeouts.
+    /// phone, stopped answering, or cancelled the request as the connection dropped. Carrying on
+    /// with setup over it only waits out more timeouts.
     pub fn link_is_dead(&self) -> bool {
-        self.is_closed() || matches!(self, Self::Unreachable | Self::TimedOut)
+        self.is_closed() || self.is_cancelled() || matches!(self, Self::Unreachable | Self::TimedOut)
     }
 
     /// This error, reduced to what `link_policy` decides on.
@@ -423,6 +435,18 @@ mod tests {
         assert!(!BleError::Unreachable.is_timeout());
         assert!(!BleError::Protocol(Some(0x0E)).is_timeout());
         assert_eq!(BleError::TimedOut.att_code(), None);
+    }
+
+    #[test]
+    fn a_request_windows_cancelled_as_the_link_dropped_reads_as_a_dead_link() {
+        let cancelled = BleError::Win(windows::core::Error::from(windows::core::HRESULT(
+            0x8007_04C7_u32 as i32,
+        )));
+        assert!(cancelled.is_cancelled() && cancelled.link_is_dead());
+        assert!(!cancelled.is_timeout(), "not tug's own time limit");
+        assert!(!cancelled.is_closed());
+        assert!(!BleError::TimedOut.is_cancelled());
+        assert!(!BleError::Protocol(Some(0xA2)).is_cancelled());
     }
 
     #[test]

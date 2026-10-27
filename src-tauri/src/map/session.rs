@@ -7,7 +7,7 @@ use std::time::Duration;
 use thiserror::Error;
 use windows::core::{GUID, HSTRING};
 use windows::Devices::Bluetooth::Rfcomm::RfcommServiceId;
-use windows::Devices::Bluetooth::{BluetoothCacheMode, BluetoothDevice};
+use windows::Devices::Bluetooth::{BluetoothCacheMode, BluetoothDevice, BluetoothError};
 use windows::Devices::Enumeration::DeviceInformation;
 use windows::Networking::Sockets::{SocketProtectionLevel, StreamSocket};
 use windows::Storage::Streams::{DataReader, DataWriter, InputStreamOptions};
@@ -91,6 +91,10 @@ pub enum MapError {
     NoDevice,
     #[error("the iPhone isn't offering this service over Bluetooth")]
     NoService,
+    /// Windows' service lookup itself failed (it couldn't reach the phone's Classic side, say), so
+    /// the empty list it returned says nothing about what the phone offers.
+    #[error("Windows couldn't ask the iPhone which services it offers ({0})")]
+    LookupFailed(&'static str),
     #[error(
         "the iPhone refused message access; turn on Show Notifications for this PC under Settings › Bluetooth › ⓘ"
     )]
@@ -132,6 +136,26 @@ pub use super::pick::MapDevice;
 
 fn service_id(uuid: u128) -> windows::core::Result<RfcommServiceId> {
     RfcommServiceId::FromUuid(GUID::from_u128(uuid))
+}
+
+/// Why a service lookup that listed nothing failed, or None when it worked (the phone really didn't
+/// list the service). For the log, so "not offered" and "couldn't ask" stay apart.
+fn lookup_failure(error: BluetoothError) -> Option<&'static str> {
+    if error == BluetoothError::Success {
+        None
+    } else if error == BluetoothError::DeviceNotConnected {
+        Some("the iPhone isn't connected")
+    } else if error == BluetoothError::RadioNotAvailable {
+        Some("Bluetooth is off")
+    } else if error == BluetoothError::ResourceInUse {
+        Some("in use")
+    } else if error == BluetoothError::DisabledByPolicy || error == BluetoothError::DisabledByUser {
+        Some("turned off in Windows")
+    } else if error == BluetoothError::ConsentRequired {
+        Some("Windows wants consent")
+    } else {
+        Some("lookup error")
+    }
 }
 
 /// Paired Classic devices that advertise a Message Access Server.
@@ -210,12 +234,17 @@ impl ObexLink {
         service_uuid: u128,
         mode: BluetoothCacheMode,
     ) -> Result<StreamSocket> {
-        let services = device
+        let result = device
             .GetRfcommServicesForIdWithCacheModeAsync(&service_id(service_uuid)?, mode)?
-            .await?
-            .Services()?;
+            .await?;
+        let services = result.Services()?;
         if services.Size()? == 0 {
-            return Err(MapError::NoService);
+            // Empty is "not offered" only when the lookup worked: one that couldn't reach the phone
+            // comes back empty too, and used to be logged (and shown) as the phone not offering it.
+            return Err(match lookup_failure(result.Error()?) {
+                Some(why) => MapError::LookupFailed(why),
+                None => MapError::NoService,
+            });
         }
         let service = services.GetAt(0)?;
         let socket = StreamSocket::new()?;
@@ -818,6 +847,17 @@ async fn pull_calls(link: &mut ObexLink, list: &str, max: u16) -> Result<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_service_list_is_not_offered_only_when_the_lookup_worked() {
+        assert_eq!(lookup_failure(BluetoothError::Success), None);
+        assert_eq!(
+            lookup_failure(BluetoothError::DeviceNotConnected),
+            Some("the iPhone isn't connected")
+        );
+        assert!(lookup_failure(BluetoothError::OtherError).is_some());
+        assert!(lookup_failure(BluetoothError::RadioNotAvailable).is_some());
+    }
 
     #[test]
     fn notification_registration_bytes() {
