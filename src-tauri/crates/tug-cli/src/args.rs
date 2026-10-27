@@ -55,7 +55,8 @@ tug: your iPhone, from the terminal (tug must be running)
   tug boat <file>...         send files to your iPhone with Tugboat; tug asks you to confirm first
                              --wait <secs> (default 120, at most 600) or --no-wait
   tug boat - --name <name>   send what's piped in, as a file called <name>
-  tug text <name> \"<msg>\"    text someone; tug asks you to confirm first
+  tug text <name> \"<msg>\"    text someone; tug asks you to confirm first (unless you've turned on
+                             Settings › Developer tools › Send tug text without asking)
   tug status                 is tug running, and how's the phone
   tug mcp                    the MCP server for AI tools (they start it; see Settings › Developer tools)
 

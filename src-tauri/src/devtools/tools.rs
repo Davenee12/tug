@@ -111,7 +111,12 @@ pub(super) async fn run(
         }
         Request::PhoneStatus => json(phone_status(dt)),
         Request::Media(action) => media(dt, action).await,
-        Request::SendText { to, message } => send_text(dt, client, &to, message).await,
+        Request::SendText {
+            to,
+            message,
+            typed,
+            progress: _,
+        } => send_text(dt, client, &to, message, typed, progress).await,
         Request::OfferFiles {
             paths,
             stdin,
@@ -341,6 +346,8 @@ async fn send_text(
     client: &ClientInfo,
     to: &str,
     message: String,
+    typed: bool,
+    progress: &ProgressSink,
 ) -> Result<serde_json::Value, BridgeError> {
     if !dt.shared.status().services.messages || dt.shared.map.get().is_none() {
         return Err(BridgeError::new(
@@ -379,7 +386,10 @@ async fn send_text(
             ))
         }
     };
-    json(dt.confirm_and_send(client, name, address, message).await?)
+    json(
+        dt.confirm_and_send(client, name, address, message, typed, progress)
+            .await?,
+    )
 }
 
 /// `tug boat` / `send_file_to_phone`: check every file again here (whatever the caller said),

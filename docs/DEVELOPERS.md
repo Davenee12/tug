@@ -87,7 +87,7 @@ Times come back as UTC ISO 8601. The developer-app list lives in one place:
 ## The confirmation card
 
 A text from an AI tool or `tug text`, and files from `send_file_to_phone` or `tug boat`, are only
-ever sent from tug's own card:
+ever sent from tug's own card (the one exception is below):
 
 - For a text it says "*<tool>* wants to text *<name>*", with the number and the exact message.
 - For files it asks "Send report.pdf (2.1 MB) to your iPhone?" (or "Send 3 files (…)"), lists each
@@ -98,6 +98,14 @@ ever sent from tug's own card:
 - Focus starts on **Don't send**, and **Esc** means Don't send, so a stray Enter can't send.
 - **Send** stays disabled for 1.5 s after the card appears and whenever tug's window isn't in
   front, so a click or key press meant for something else can't land on it.
+
+**Send `tug text` without asking** (Settings › Developer tools › The tug command, off until you
+turn it on, and only while **Send texts** is on) skips the card for `tug text` typed in a
+terminal: tug sends it straight away. Everything else still gets the card: AI tools over MCP
+always, and `tug text` run by a script or program with no terminal (its stdin isn't a console).
+That check is a hint, not proof: anything that can type in your terminals, including an AI tool
+that drives a real terminal window, looks the same as you, so only turn it on if that's fine with
+you. The rate limit (5 texts per 10 minutes) still applies.
 - One card at a time, and an answer only counts for the card it was given on.
 - A message longer than the box says so, so you can scroll through all of it before you send.
 - The **Send texts** (or **Send files to your iPhone**) switch must be on; with it off the tool is
@@ -110,7 +118,7 @@ ever sent from tug's own card:
 tug code [--copy]          the newest code on stdout (--copy: also on the clipboard, kept out of history)
 tug boat <file>...         send files to your iPhone with Tugboat: tug asks you first
 tug boat - --name <name>   send what's piped in (up to 64 MB) as a file called <name>
-tug text <name> "<msg>"    text someone: tug asks you first, nothing sends by itself
+tug text <name> "<msg>"    text someone: tug asks you first (unless Send tug text without asking is on)
 tug status                 is tug running, the phone (with Phone status on), what's switched on
 tug mcp                    the MCP server (your AI tool starts this)
 ```

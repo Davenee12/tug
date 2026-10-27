@@ -70,6 +70,7 @@ export const useDevToolsStore = defineStore("devtools", () => {
 
   const setEnabled = (on: boolean) => run(() => api.devtoolsSetEnabled(on));
   const setPermission = (key: string, on: boolean) => run(() => api.devtoolsSetPermission(key, on));
+  const setTextsWithoutAsking = (on: boolean) => run(() => api.devtoolsSetTextsWithoutAsking(on));
   const revoke = () => run(() => api.devtoolsRevoke());
   const setOnPath = (on: boolean) => run(() => api.devtoolsSetOnPath(on));
 
@@ -89,5 +90,5 @@ export const useDevToolsStore = defineStore("devtools", () => {
     }
   }
 
-  return { status, confirm, working, error, init, dispose, refresh, setEnabled, setPermission, revoke, setOnPath, answer };
+  return { status, confirm, working, error, init, dispose, refresh, setEnabled, setPermission, setTextsWithoutAsking, revoke, setOnPath, answer };
 });

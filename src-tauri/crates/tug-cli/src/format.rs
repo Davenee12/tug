@@ -168,6 +168,9 @@ pub fn seconds_in_words(secs: u32) -> String {
     }
 }
 
+/// What `tug text` says on stderr once tug is showing its card.
+pub const TEXT_CONFIRMING: &str = "Check tug: Send or Don't send (it won't send by itself; 2 minutes)…";
+
 /// `tug boat`'s progress, one line on stderr each time it changes.
 pub fn boat_progress(p: &Progress) -> String {
     match p {

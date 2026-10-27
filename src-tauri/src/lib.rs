@@ -426,6 +426,7 @@ pub fn run() {
             commands::devtools_status,
             commands::devtools_set_enabled,
             commands::devtools_set_permission,
+            commands::devtools_set_texts_without_asking,
             commands::devtools_revoke,
             commands::devtools_confirm,
             commands::devtools_set_on_path,
