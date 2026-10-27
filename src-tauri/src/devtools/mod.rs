@@ -4,7 +4,9 @@
 //!
 //! Everything is off until the user switches on Settings › Developer tools › "Let AI tools use
 //! tug". Then each switch gates its tools (reading on, music and texts off), every tool is
-//! rate-limited, and `send_text` never sends without a click on tug's confirmation card. Each
+//! rate-limited, and `send_text` never sends without a click on tug's confirmation card (the one
+//! exception, off unless the user turns it on: "Send `tug text` without asking", for `tug text`
+//! typed in a terminal; see `settings::skips_card`). Each
 //! call is logged to tug.log by tool name, who asked, outcome and count, never by content.
 //!
 //! Pure parts are tested in their modules: `confirm` (the confirmation state machine),
@@ -173,6 +175,8 @@ pub struct DevToolsStatus {
     pub rev: u64,
     pub enabled: bool,
     pub permissions: Vec<PermissionState>,
+    /// "Send `tug text` without asking" (`settings::TEXTS_WITHOUT_ASKING`).
+    pub texts_without_asking: bool,
     pub clients: Vec<ClientRecord>,
     /// `...\tug\bin\tug.exe`, the command and MCP server; `None` if it isn't installed.
     pub cli_path: Option<String>,
@@ -277,6 +281,19 @@ impl DevTools {
         settings::parse_enabled(self.setting(settings::ENABLED).as_deref())
     }
 
+    fn texts_without_asking(&self) -> bool {
+        settings::parse_enabled(self.setting(settings::TEXTS_WITHOUT_ASKING).as_deref())
+    }
+
+    /// "Send `tug text` without asking" goes off with what it depends on (Send texts, the master
+    /// switch, Revoke access), so switching those back on never quietly brings it back.
+    fn stop_texting_without_asking(&self) {
+        if self.texts_without_asking() {
+            let _ = self.shared.store.set_setting(settings::TEXTS_WITHOUT_ASKING, "false");
+            log::info!("devtools: tug text without asking off (with what it depends on)");
+        }
+    }
+
     fn permissions(&self) -> BTreeMap<Permission, bool> {
         effective_permissions(&settings::parse_permissions(
             self.setting(settings::PERMISSIONS).as_deref(),
@@ -313,6 +330,7 @@ impl DevTools {
                     on: perms[&p],
                 })
                 .collect(),
+            texts_without_asking: self.texts_without_asking(),
             clients: settings::parse_clients(self.setting(settings::CLIENTS).as_deref()),
             cli_path: cli.map(|p| p.to_string_lossy().into_owned()),
             on_path: cli_dir.as_deref().is_some_and(path_env::is_on_path),
@@ -347,6 +365,7 @@ impl DevTools {
         } else {
             self.cancel_pending(|_| true);
             self.stop_sending_files();
+            self.stop_texting_without_asking();
         }
         self.shared
             .store
@@ -368,12 +387,24 @@ impl DevTools {
             .map_err(|e| e.to_string())?;
         if p == Permission::SendText && !on {
             self.cancel_pending(|a| !a.is_files());
+            self.stop_texting_without_asking();
         }
         if p == Permission::TugboatSend && !on {
             self.cancel_pending(Ask::is_files);
             self.stop_sending_files();
         }
         log::info!("devtools: {} {}", p.key(), if on { "on" } else { "off" });
+        self.emit_status();
+        Ok(self.status())
+    }
+
+    /// "Send `tug text` without asking": `tug text` typed in a terminal sends with no card.
+    pub fn set_texts_without_asking(&self, on: bool) -> Result<DevToolsStatus, String> {
+        self.shared
+            .store
+            .set_setting(settings::TEXTS_WITHOUT_ASKING, if on { "true" } else { "false" })
+            .map_err(|e| e.to_string())?;
+        log::info!("devtools: tug text without asking {}", if on { "on" } else { "off" });
         self.emit_status();
         Ok(self.status())
     }
@@ -389,6 +420,7 @@ impl DevTools {
         *lock(&self.token) = Some(token);
         self.cancel_pending(|_| true);
         self.stop_sending_files();
+        self.stop_texting_without_asking();
         let _ = self.shared.store.delete_setting(settings::CLIENTS);
         log::info!("devtools: access revoked (new token)");
         self.emit_status();
@@ -451,8 +483,9 @@ impl DevTools {
     }
 
     /// Ask the person, and wait (up to 2 minutes) for Send or Don't send. Another card already
-    /// showing means "busy", never a queue.
-    async fn ask(&self, client: &ClientInfo, ask: Ask) -> Result<Resolution, BridgeError> {
+    /// showing means "busy", never a queue. `Progress::Confirming` goes out only once the card is
+    /// really up, so a busy answer never comes after "Check tug".
+    async fn ask(&self, client: &ClientInfo, ask: Ask, progress: &ProgressSink) -> Result<Resolution, BridgeError> {
         let opened = lock(&self.confirms).open(client.display_name(), ask, now_ms());
         let Ok(req) = opened else {
             return Err(BridgeError::new(
@@ -460,6 +493,7 @@ impl DevTools {
                 "tug is already asking you about something else. Try again once that's answered.",
             ));
         };
+        progress.send(Progress::Confirming);
         let (tx, rx) = oneshot::channel();
         lock(&self.waiters).insert(req.id, tx);
         let id = req.id;
@@ -479,20 +513,29 @@ impl DevTools {
         Ok(resolution)
     }
 
-    /// `send_text` after the recipient is known: ask, then send only on Send.
+    /// `send_text` after the recipient is known: ask, then send only on Send. With `skip_card`
+    /// (`settings::skips_card`: a typed `tug text` with "Send `tug text` without asking" on) it goes
+    /// straight to sending.
     async fn confirm_and_send(
         &self,
         client: &ClientInfo,
         to_name: String,
         address: String,
         message: String,
+        skip_card: bool,
+        progress: &ProgressSink,
     ) -> Result<SendResult, BridgeError> {
-        let ask = Ask::Text {
-            to_name: to_name.clone(),
-            to_address: address.clone(),
-            message: message.clone(),
+        let resolution = if skip_card {
+            log::info!("devtools: send_text without the card (tug text typed in a terminal)");
+            Resolution::Approved
+        } else {
+            let ask = Ask::Text {
+                to_name: to_name.clone(),
+                to_address: address.clone(),
+                message: message.clone(),
+            };
+            self.ask(client, ask, progress).await?
         };
-        let resolution = self.ask(client, ask).await?;
         let (outcome, detail) = match resolution {
             Resolution::Declined => (SendOutcome::Declined, Some("They chose Don't send.".to_string())),
             Resolution::TimedOut => (
@@ -501,6 +544,7 @@ impl DevTools {
             ),
             Resolution::Cancelled => (SendOutcome::Cancelled, Some("It was cancelled in tug.".to_string())),
             Resolution::Approved => {
+                progress.send(Progress::Sending);
                 // The same path as tug's own composer (#99): saved, shown as "Sending…" and queued
                 // before anything waits, and a send the phone didn't take comes back as a failed
                 // row, not an error. Running out of SEND_WAIT only stops this wait: the queued text
@@ -550,8 +594,7 @@ impl DevTools {
         // Counts and sizes only, never names or paths.
         log::info!("devtools: asking to send {} files ({total_bytes} bytes)", picked.len());
         let files = picked.iter().map(outgoing::Picked::card).collect();
-        progress.send(Progress::Confirming);
-        let resolution = self.ask(client, Ask::Files { files }).await?;
+        let resolution = self.ask(client, Ask::Files { files }, progress).await?;
         if let Some((outcome, detail)) = unapproved(resolution) {
             return Ok(answer(outcome, detail));
         }

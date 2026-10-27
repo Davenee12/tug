@@ -38,6 +38,9 @@
 //   http://localhost:1420/?model=iPhone12,8   the phone reports that model identifier (default iPhone16,2)
 //   http://localhost:1420/?nomodel    the phone hasn't reported its model (generic picture, no model line)
 //   http://localhost:1420/?away       the phone is out of range: disconnected, last known model kept
+//   http://localhost:1420/?welcomeback   back at the PC after 1 h 20 min away: the Feed opens with its
+//                                     "Welcome back" card summing up what arrived meanwhile (texts by
+//                                     person, missed calls, a fresh and an old code, other apps)
 //   http://localhost:1420/?tugboat    the Tugboat panel open with a phone connected: a video arriving,
 //                                     saved files, a text from the phone, files on offer (?drop works too;
 //                                     add &android for an Android phone)
@@ -53,6 +56,9 @@
 //   http://localhost:1420/?game2p     Tugboat Run, two players with two phones (add &p2drop: Player 2's
 //                                     phone goes quiet mid-race). Any game URL takes &weather=rain,
 //                                     snow, night, windy, storm or off for the daily challenge
+//   http://localhost:1420/?harbor=night   the weather card's live harbor: day, dawn, dusk, night, rain,
+//                                     showers, snow, fog, storm or gale (&south for the southern sky,
+//                                     &battery=18 for "before you head out")
 //   http://localhost:1420/?games      the games picker
 //   http://localhost:1420/?stack      Harbor Stack open (?stackphone with a phone that drops every 1.6 s,
 //                                     ?stack2p a stack-off with two phones, &p2drop, &weather= as above)
@@ -150,6 +156,10 @@ const history: PhoneNotification[] = noPhone
       n("net.whatsapp.WhatsApp", "WhatsApp", "Sam Okafor", "Sent you the slides, have a look before the call", 9),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Also bring the charger 🙏", 14),
       n("com.apple.mobilecal", "Calendar", "Design review", "In 15 minutes · Room 4", 18, { category: "schedule" }),
+      // Smart actions (lib/smartActions): an address and a number in a text get Open in Maps and
+      // Copy number; a delivery app's parcel number and link get Track parcel and Open link.
+      n("com.apple.MobileSMS", "Messages", "Chris Smith", "New place is 88 Larkspur Lane, Austin, TX 78701. Buzz 4B or call 555-010-0111 if the door's stuck", 8),
+      n("com.example.Parcels", "Parcels", "Out for delivery", "Your USPS package 9400 1000 0000 0000 0000 00 arrives today by 8 PM. Details: example.com/p/9400", 16, { category: "other" }),
       n("com.hammerandchisel.discord", "Discord", "#release", "ci passed on main, tagging v0.4 now", 41),
       // Other chat apps stay in the Feed (tug can't reply to them), even from a name that also
       // texts you: Teams' Jane Doe never joins her Messages conversation. A WhatsApp code still
@@ -168,6 +178,25 @@ const history: PhoneNotification[] = noPhone
       n("com.apple.MobileSMS", "Messages", "‪+1 (555) 013-2244‬", "Congrats! You've been selected for a $500 gift card. Reply YES to claim before midnight.", 7),
       n("com.apple.MobileSMS", "Messages", "72975", "Your Acme verification code is 731904. It expires in 10 minutes.", 12),
     ];
+
+// ?welcomeback: back after 1 h 20 min away. The sample history's last hour (Zoe, Jane, Mum's missed
+// call, a fresh and an old code, WhatsApp, Slack, Calendar...) plus a little more is what arrived
+// meanwhile, so the Feed opens with the "Welcome back" card on top.
+if (params.has("welcomeback") && !noPhone) {
+  history.push(
+    n("com.apple.MobileSMS", "Messages", "Priya", "Lunch tomorrow? The new place on Elm opens at 11:30", 47),
+    n("com.apple.MobileSMS", "Messages", "Priya", "Or Friday works too", 46),
+    n("com.apple.mobilephone", "Phone", "Chris Smith", "Missed Call", 58, { category: "missedCall", flags: flags({ positiveAction: true }), positiveLabel: "Dial" }),
+    n("com.apple.Fitness", "Fitness", "Activity", "You're halfway to closing your Move ring.", 33, { category: "healthAndFitness" }),
+  );
+  // As if the person had just come back: once the history has loaded, the card for the last 80 min.
+  const showCard = async (tries: number) => {
+    const { useWelcomeBackStore } = await import("../stores/welcomeBack");
+    const at = Date.now();
+    if (!useWelcomeBackStore().cameBack({ since: at - 80 * min, until: at }) && tries > 0) setTimeout(() => void showCard(tries - 1), 300);
+  };
+  setTimeout(() => void showCard(10), 500);
+}
 
 // Mirrors the backend's reconnect sweep: anything no longer on the phone is cleared.
 for (const x of history) if (!x.live && x.removedAt == null) x.removedAt = x.receivedAt + min;
@@ -227,7 +256,7 @@ const status: DeviceStatus = noPhone
       advertising: "on",
       device: { id: "mock", name: "Jordan's iPhone", model },
       connection: "connected",
-      battery: 76,
+      battery: params.has("battery") ? Number(params.get("battery")) : 76,
       // ?nudge: notifications work but the optional switches are off, so the Feed shows its
       // dismissible "Get more from tug" nudge (texts + names) without blocking the way in.
       services: { notifications: true, media: true, battery: true, messages: !params.has("nudge") },
@@ -430,6 +459,9 @@ const messages: SmsMessage[] = noPhone
       // so the dev view shows the blue/green tinting when the phone distinguishes them.
       sms("in", "are you coming tonight?", 40),
       sms("out", "yeah! leaving soon", 38),
+      // Smart actions in a bubble (lib/smartActions): the parcel number tracks on UPS and the link
+      // opens, inline in the text.
+      sms("in", "sent you the shoes 👟 tracking 1Z999AA10123456784, should land Thu. receipt's at example.com/orders/1042", 20),
       // Photos arrive as words over MAP ("Attachment: 2 Photos"); the thread shows photo chips.
       sms("in", "Attachment: 2 Photos", 6),
       sms("in", "the view from up here\nAttachment: 1 Photo", 5),
@@ -938,6 +970,60 @@ if (mockWeather && mockWeather !== "off") {
 } else if (mockWeather === "off") {
   settings["ui.weather"] = "off";
 }
+// ?harbor=day, dawn, dusk, night, rain, showers, snow, fog, storm or gale: the weather card's live
+// harbor in that weather (a made-up forecast at this PC's clock, so any time of day works). Add
+// &south for a place south of the equator, &battery=18 for "before you head out".
+const harborKind = params.get("harbor");
+if (harborKind !== null) {
+  const place = { name: params.has("south") ? "Wellington, New Zealand" : "Portland, Oregon", latitude: params.has("south") ? -41.29 : 45.52, longitude: params.has("south") ? 174.78 : -122.68 };
+  settings["ui.weather"] = JSON.stringify(place);
+  const H = 3_600_000;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const local = (ms: number) => {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const t = Date.now();
+  // When the sun rises and sets around now, for each kind: [hours to sunrise, hours to sunset].
+  const sunAt: Record<string, [number, number]> = {
+    day: [-4, 6], dawn: [-0.25, 11], dusk: [-11, 0.25], night: [-15, -3],
+    rain: [-3, 7], showers: [-8.7, 2.1], snow: [-2, 6], fog: [-1.5, 8], storm: [-16, -2], gale: [-6, 4],
+  };
+  const kinds: Record<string, { code: number; wind: number; gusts: number; windDir: number; clouds: number; precip: number; temp: number; feels: number; q: number[] }> = {
+    day: { code: 1, wind: 14, gusts: 22, windDir: 250, clouds: 20, precip: 0, temp: 18, feels: 18, q: [] },
+    dawn: { code: 2, wind: 6, gusts: 9, windDir: 90, clouds: 40, precip: 0, temp: 8, feels: 6, q: [] },
+    dusk: { code: 1, wind: 9, gusts: 14, windDir: 300, clouds: 25, precip: 0, temp: 14, feels: 13, q: [] },
+    night: { code: 0, wind: 4, gusts: 7, windDir: 180, clouds: 5, precip: 0, temp: 7, feels: 5, q: [] },
+    rain: { code: 63, wind: 22, gusts: 38, windDir: 225, clouds: 100, precip: 0.6, temp: 11, feels: 8, q: [0.6, 0.5, 0.4, 0.2, 0, 0, 0, 0] },
+    showers: { code: 2, wind: 16, gusts: 28, windDir: 240, clouds: 55, precip: 0, temp: 13, feels: 11, q: [0, 0, 0, 0.3, 0.8, 0.4, 0, 0] },
+    snow: { code: 73, wind: 11, gusts: 18, windDir: 20, clouds: 100, precip: 0.3, temp: -3, feels: -8, q: [0.3, 0.3, 0.4, 0.4, 0.3, 0.3, 0.2, 0.2] },
+    fog: { code: 45, wind: 3, gusts: 5, windDir: 160, clouds: 90, precip: 0, temp: 6, feels: 5, q: [] },
+    storm: { code: 95, wind: 42, gusts: 70, windDir: 230, clouds: 100, precip: 1.4, temp: 16, feels: 15, q: [1.4, 2.2, 1.5, 0.6, 0.1, 0, 0, 0] },
+    gale: { code: 3, wind: 66, gusts: 90, windDir: 270, clouds: 85, precip: 0, temp: 9, feels: 3, q: [] },
+  };
+  const k = kinds[harborKind] ?? kinds.day;
+  const [toRise, toSet] = sunAt[harborKind] ?? sunAt.day;
+  const nowLocal = local(t);
+  const quarter = Math.floor(t / (15 * 60_000)) * 15 * 60_000;
+  const day = (i: number) => ({
+    date: local(t + i * 24 * H).slice(0, 10),
+    code: k.code,
+    high: k.temp + 4,
+    low: k.temp - 5,
+    rain: k.q.length ? 80 : 10,
+    sunrise: local(t + (toRise + i * 24) * H),
+    sunset: local(t + (toSet + i * 24) * H),
+  });
+  const isDay = toRise <= 0 && toSet > 0;
+  const forecast = {
+    fetchedAt: t,
+    now: { time: nowLocal, temp: k.temp, feels: k.feels, code: k.code, day: isDay, wind: k.wind, windDir: k.windDir, humidity: 80, clouds: k.clouds, gusts: k.gusts, precip: k.precip },
+    hours: Array.from({ length: 24 }, (_, i) => ({ time: `${local(t + i * H).slice(0, 13)}:00`, temp: k.temp, code: k.code, day: isDay, rain: k.q.length ? 70 : 5 })),
+    days: Array.from({ length: 7 }, (_, i) => day(i)),
+    quarters: k.q.length ? k.q.map((precip, i) => ({ time: local(quarter + i * 15 * 60_000), precip })) : undefined,
+  };
+  localStorage.setItem("tug.weather.v1", JSON.stringify({ place, forecast }));
+}
 if (params.has("game") || params.has("gamephone") || twoPhones || stackGame || params.has("games")) {
   setTimeout(async () => {
     const { useGameStore } = await import("../stores/game");
@@ -965,6 +1051,7 @@ const DEV_LABELS: Array<[DevToolsStatus["permissions"][number]["key"], string, b
 const devState: DevToolsStatus = {
   enabled: params.has("devtools") || params.has("devconfirm") || params.has("devconfirmfiles"),
   permissions: DEV_LABELS.map(([key, label, on]) => ({ key, label, on })),
+  textsWithoutAsking: false,
   clients: params.has("devtools")
     ? [
         { name: "Claude Code", kind: "mcp", lastUsed: Date.now() - 4 * 60_000 },
@@ -1264,8 +1351,11 @@ mockIPC(
         const q = String(a.query).toLowerCase().trim();
         const words = q.split(/\s+/).filter(Boolean);
         const hit = (t: string) => words.every((w) => t.toLowerCase().split(/\W+/).some((x) => x.startsWith(w)));
+        // Like store search_contacts: part of the name, or 3+ digits of the number ("0142" finds Zoe).
+        // Recent calls aren't searched here: the window matches them itself (lib/commands matchCalls).
+        const digits = q.replace(/\D/g, "");
         return {
-          people: contacts.filter((c) => c.name.toLowerCase().includes(q)),
+          people: contacts.filter((c) => c.name.toLowerCase().includes(q) || (digits.length >= 3 && c.address.includes(digits))),
           messages: messages.filter((m) => hit(m.body)).reverse(),
           notifications: history.filter((x) => hit(`${x.title} ${x.message}`)),
         };
@@ -1303,6 +1393,12 @@ mockIPC(
         setTimeout(() => void emit("message", Object.assign(m, { status: "accepted" })), 700);
         return { ...m };
       }
+      case "report_problem":
+        console.log("[devMock] would open GitHub's bug report form", a.unclean ? "(didn't close normally)" : "");
+        return null;
+      // `?unclean` shows the "didn't close normally" notice at startup.
+      case "unclean_exit":
+        return params.has("unclean") ? appVersion : null;
       // A stand-in report so Settings › Copy diagnostics works in the browser. The real one is
       // built and redacted in Rust (src-tauri/src/diagnostics.rs).
       case "copy_diagnostics": {
@@ -1384,6 +1480,9 @@ mockIPC(
         if (p) p.on = Boolean(a.on);
         return sendDev();
       }
+      case "devtools_set_texts_without_asking":
+        devState.textsWithoutAsking = Boolean(a.on);
+        return sendDev();
       case "devtools_revoke":
         devState.clients = [];
         return sendDev();

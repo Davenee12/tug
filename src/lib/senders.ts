@@ -12,13 +12,15 @@
 
 import type { Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 import { findCode } from "./codes";
-import { MESSAGES_APP, cleanName, isConversation, type Conversation, type Thread } from "./format";
+import { MESSAGES_APP, cleanName, isConversation, nameKey, type Conversation, type Thread } from "./format";
 import { isAddressLike, normalizeAddress, numberTail } from "./address";
 
 /** Everything a sender can be known by, built once per change instead of per sender. */
 export interface SenderIndex {
   addresses: Set<string>;
   tails: Set<string>;
+  /** Contacts' names (`nameKey`), for checking a name really is a saved contact. */
+  names: Set<string>;
 }
 
 /**
@@ -34,6 +36,7 @@ function isRealName(name: string): boolean {
 export function senderIndex(contacts: Contact[], outgoingAddresses: Iterable<string>, allowlist: Iterable<string>): SenderIndex {
   const addresses = new Set<string>();
   const tails = new Set<string>();
+  const names = new Set<string>();
   const add = (raw: string) => {
     const a = normalizeAddress(raw);
     if (!a) return;
@@ -41,10 +44,14 @@ export function senderIndex(contacts: Contact[], outgoingAddresses: Iterable<str
     const tail = numberTail(a);
     if (tail) tails.add(tail);
   };
-  for (const c of contacts) if (isRealName(c.name)) add(c.address);
+  for (const c of contacts) {
+    if (!isRealName(c.name)) continue;
+    add(c.address);
+    names.add(nameKey(c.name));
+  }
   for (const a of outgoingAddresses) add(a);
   for (const a of allowlist) add(a);
-  return { addresses, tails };
+  return { addresses, tails, names };
 }
 
 /** Every number you've sent a text to (pending and failed sends count: you meant to). */
@@ -79,6 +86,23 @@ export function isKnownConversation(
 ): boolean {
   if (c.appId !== MESSAGES_APP) return true;
   return isKnownTo(index, c.contact) || c.addresses.some((a) => isKnownTo(index, a));
+}
+
+/**
+ * Whether a web link in this conversation or notification may be one click (lib/smartActions).
+ * Stricter than "known", because one-click links are how scam texts work: only Messages, and only
+ * from a sender tug can vouch for: a name that is one of your contacts (not just any name iOS
+ * shows: a business's sender name like "PayPal" can be spoofed, and a group can be titled with a
+ * stranger's number), or a number that's a contact's, one you've texted, or one you moved to your
+ * conversations. Other apps can't tell tug who sent something, so their links stay plain text.
+ */
+export function linksTrusted(c: Pick<Conversation, "appId" | "contact" | "addresses">, index: SenderIndex): boolean {
+  if (c.appId !== MESSAGES_APP) return false;
+  return [c.contact, ...c.addresses].some((x) => {
+    const s = cleanName(x);
+    if (!s) return false;
+    return isAddressLike(s) ? isKnownTo(index, s) : index.names.has(nameKey(s));
+  });
 }
 
 /** Known conversations, and unknown senders' (each newest first, as given). */

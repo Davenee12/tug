@@ -9,7 +9,7 @@
 //! server → {"type":"result","ok":{...}}  or  {"type":"error","code":"...","message":"..."}
 //! ```
 //!
-//! A call that asks for it (`offer_files` with `"progress": true`) may also get any number of
+//! A call that asks for it (`offer_files` or `send_text` with `"progress": true`) may also get any number of
 //! `{"type":"progress","progress":{...}}` lines before its result: only after the handshake, so
 //! they come from tug, and never to a call that didn't ask (older clients don't know them).
 //!
@@ -194,12 +194,15 @@ pub enum ServerMsg {
     Error(BridgeError),
 }
 
-/// How an `offer_files` call is getting on, for the `tug` command to say on stderr.
+/// How an `offer_files` or `send_text` call is getting on, for the `tug` command to say on stderr.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "stage", rename_all = "snake_case")]
 pub enum Progress {
     /// tug is showing its card: Send or Don't send.
     Confirming,
+    /// A text is approved (or needed no card) and tug is sending it through the phone now. Only
+    /// to `send_text` calls that asked for progress.
+    Sending,
     /// Sent with Send: on offer in Tugboat, waiting for the phone to download it.
     Waiting {
         /// What the phone sees the files called.
@@ -300,6 +303,15 @@ pub enum Call {
     SendText {
         to: String,
         message: String,
+        /// Send `Progress::Confirming` if tug shows its card and `Progress::Sending` once it sends,
+        /// so the command can say what's happening.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        progress: bool,
+        /// `tug text` typed by a person: the command's stdin is a terminal. With "Send `tug text`
+        /// without asking" on, only such a text skips the card. A hint, not proof (whatever
+        /// can type in a terminal looks the same), so it never applies to AI tools over MCP.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        typed: bool,
     },
     /// `tug boat <file...>` and the MCP tool `send_file_to_phone`: ask to send files to the phone
     /// through Tugboat. tug shows its card first; once the person clicks Send the files are held
@@ -450,6 +462,8 @@ pub enum Request {
     SendText {
         to: String,
         message: String,
+        progress: bool,
+        typed: bool,
     },
     OfferFiles {
         paths: Vec<String>,
@@ -473,7 +487,10 @@ pub struct StdinFile {
 impl Request {
     /// Whether the caller asked for `Progress` lines before its answer.
     pub fn wants_progress(&self) -> bool {
-        matches!(self, Request::OfferFiles { progress: true, .. })
+        matches!(
+            self,
+            Request::OfferFiles { progress: true, .. } | Request::SendText { progress: true, .. }
+        )
     }
 
     /// The tool name, for logs and rate limits.
@@ -590,9 +607,16 @@ impl Call {
                 MediaAction::parse(action)
                     .ok_or_else(|| BridgeError::invalid("`action` must be play, pause, toggle, next or previous"))?,
             ),
-            Call::SendText { to, message } => Request::SendText {
+            Call::SendText {
+                to,
+                message,
+                progress,
+                typed,
+            } => Request::SendText {
                 to: text("to", to, MAX_NAME_CHARS, false)?,
                 message: text("message", message, MAX_TEXT_CHARS, true)?,
+                progress: *progress,
+                typed: *typed,
             },
             Call::OfferFiles {
                 paths,
@@ -888,6 +912,14 @@ mod tests {
             Call::SendText {
                 to: "Sam".into(),
                 message: "On my way".into(),
+                progress: false,
+                typed: false,
+            },
+            Call::SendText {
+                to: "Sam".into(),
+                message: "On my way".into(),
+                progress: true,
+                typed: true,
             },
         ];
         for c in calls {
@@ -923,6 +955,31 @@ mod tests {
                 limit: DEFAULT_LIMIT
             })
         );
+        // An AI tool's text (or an older command's) is neither typed nor asks for progress.
+        let text = parse(r#"{"tool":"send_text","to":"Sam","message":"hi"}"#)
+            .validate(NOW)
+            .unwrap();
+        assert!(matches!(
+            text,
+            Request::SendText {
+                progress: false,
+                typed: false,
+                ..
+            }
+        ));
+        assert!(!text.wants_progress());
+        assert_eq!(
+            serde_json::to_value(Call::SendText {
+                to: "Sam".into(),
+                message: "hi".into(),
+                progress: false,
+                typed: false,
+            })
+            .unwrap(),
+            serde_json::json!({"tool": "send_text", "to": "Sam", "message": "hi"})
+        );
+        let asked = parse(r#"{"tool":"send_text","to":"Sam","message":"hi","progress":true}"#);
+        assert!(asked.validate(NOW).unwrap().wants_progress());
         assert!(serde_json::from_str::<Call>(r#"{"tool":"rm_rf"}"#).is_err());
         assert!(serde_json::from_str::<Call>(r#"{"tool":"search_messages"}"#).is_err());
     }
@@ -976,6 +1033,8 @@ mod tests {
             Call::SendText {
                 to: to.into(),
                 message: msg.into(),
+                progress: false,
+                typed: false,
             }
             .validate(NOW)
         };
@@ -983,7 +1042,9 @@ mod tests {
             v(" Sam ", "line one\r\nline two"),
             Ok(Request::SendText {
                 to: "Sam".into(),
-                message: "line one\nline two".into()
+                message: "line one\nline two".into(),
+                progress: false,
+                typed: false,
             })
         );
         assert!(v("", "hi").is_err());
@@ -1226,7 +1287,9 @@ mod tests {
         assert_eq!(
             Request::SendText {
                 to: "a".into(),
-                message: "b".into()
+                message: "b".into(),
+                progress: false,
+                typed: false,
             }
             .permission(),
             Some(Permission::SendText)

@@ -1,5 +1,103 @@
 # Changelog
 
+## v0.5.22 — 2026-10-27
+
+A live harbor on the weather card, Send later, Remind me, one-click links and addresses in texts, a
+Welcome back summary, music from the terminal, Report a problem and gradual updates. From #165. It
+arrives through automatic updates.
+
+### New
+- **The weather card opens on a live harbor** of the weather where you are: the sun and moon where
+  they really are between the place's sunrise and sunset, the moon in its real phase (lit the right
+  way for your hemisphere), clouds from the cloud cover, rain or snow as hard as it's falling, fog,
+  storms that flash, and waves from the wind's Beaufort force, with tug's own tugboat riding them,
+  its pennant and smoke going the way the real wind blows. A caption gives the sunset by day, the
+  moon and the next sunrise by night, and the sea state ("Force 4 · moderate breeze from the
+  southwest"). It moves only while you can see it, and holds still with reduced motion.
+- **The harbor shows your phone too:** new texts float by as messages in bottles (click them to
+  open the newest), a missed call sets the lighthouse blinking coral (click it for your calls), and
+  music playing on your iPhone drifts up from the tug as notes. Counts only, never names or words.
+- **Daylight and the golden hour:** the caption marks the last hour of sunlight, and the card's
+  details say how long the day is, how tomorrow compares, and when the golden hour starts.
+- **Rain to the quarter-hour:** "Rain from about 5:45 PM, for about 30 minutes", with a small strip
+  for the next two hours, in place of the 12-hour outlook when the forecast has it.
+- **Before you head out:** with rain or snow due in the next two hours, or a freezing feels-like,
+  and your iPhone at 30% or less, the weather card puts the two together: "Your phone's at 18%.
+  Charge it before the rain at 5:45 PM."
+- **Send later:** the clock beside Send schedules a text (in 20 minutes up to tomorrow morning). It
+  waits above the box with Send now and Cancel and goes through your iPhone when it's due. A text
+  more than 30 minutes late (tug was closed, the phone was away) is never sent by itself: it's held
+  for you to Send now or Discard.
+- **Remind me:** the alarm clock on a Feed row brings a text or notification back later (20
+  minutes up to tomorrow morning) as a Windows pop-up with its own buttons. Reminders survive a
+  restart.
+- **Links, numbers, addresses and parcels are one click** in texts and notifications: Open link,
+  Copy number or email, Open in Maps, Track parcel. Web links are one click only in texts from your
+  contacts or numbers you've texted; from strangers and in other apps they stay plain text.
+- **Welcome back:** after 20 minutes or more away from your PC, a card at the top of the Feed sums
+  up what arrived meanwhile: texts by person, missed calls, a fresh code, other apps.
+- **Calls in Ctrl+K:** search recent calls by name or number. A result never places a call by
+  itself.
+- **Music from the terminal:** `tug next`, `tug previous`, `tug play`, `tug pause` and `tug now`
+  (what's playing), with Music controls and Phone status on in Developer tools.
+- **Pickups saved** (Settings › About): a gentle count of the times tug spared you picking up the
+  phone (a code copied, a reply sent, a call answered, a song skipped).
+- **Report a problem** (Settings › About) opens GitHub's bug report form with tug's version and
+  your Windows version filled in, and puts the diagnostics (phone numbers, names and message
+  contents removed) on the clipboard for you to read through and paste. tug sends nothing itself.
+- **"tug didn't close normally last time."** If this version of tug ended some other way than
+  closing (a crash, but also a power cut or End task), it offers that report once.
+- **Updates roll out gradually**, starting with the next one: each copy of tug keeps a random number
+  from 0 to 99 to itself and takes a new version once its rollout reaches that number, so a problem
+  in a release reaches a few PCs first and can be paused. **Check for updates** always takes the
+  newest version at once. The number is never sent anywhere.
+
+### Fixed
+- Unlocking an encrypted iPhone backup again right after a wrong password could say "tug is already
+  reading a backup."
+
+### For maintainers
+- `node scripts/rollout.mjs status | set | demand`: a release's rollout, downloads and reported
+  problems; widening, pausing or finishing a rollout; and the demand goals. See docs/RELEASING.md.
+- The README opens with a demo of the app, a download button and why the download is safe.
+
+## v0.5.21 — 2026-10-27
+
+Texts from the terminal without a click, and fixes from a review of voice typing. From #162 and
+the release review. It arrives through automatic updates.
+
+### New
+- **Send `tug text` without asking** (Settings › Developer tools › The tug command, off until you
+  turn it on, and only while Send texts is on). `tug text Sam "On my way"` typed in a terminal
+  sends straight away instead of waiting for Send on tug's card, and says "Sending…" then who it
+  went to. AI tools connected to tug, `tug text` run by a script with no terminal, and a name
+  that only *contains* what you typed ("ann" for Joanne) still get the card; the start of a
+  name ("tay" for Taylor) or a number is fine. It goes off by itself when Send texts, Let AI tools
+  use tug or Revoke access turns things off. Anything that can type in your terminals, including
+  AI agents that run commands in a real terminal window, looks like you to it. (#162)
+
+### Fixed
+- **Accurate voice typing no longer types made-up words after a cough or mumble.** On a hold it
+  couldn't make out, the speech engine tried again up to five more times with random guesses and
+  typed the last one, slowly. It now types nothing ("Didn't catch that").
+- Words between two stars (`x * y * z`, `a ** b`) are no longer removed as if they were a sound
+  note like `*coughs*`.
+- On a PC where Windows' speech languages can't be listed, voice typing no longer switches itself
+  off when the speech model can listen on its own.
+- Turning voice typing off while the speech model is just arriving no longer leaves its shortcut
+  working (Settings, a finished download and startup now take turns).
+- Clicking Resume right as a download ends no longer shows it as paused while it runs.
+- A download site that redirects somewhere tug won't follow now says the site is unavailable,
+  not "check your internet connection".
+- Voice typing with no window in front says "Click where the text should go" instead of "The
+  window changed".
+- In Settings, a voice typing change that fails no longer leaves the control showing it, and
+  Ctrl+K no longer says "Voice typing is off" right after an error.
+- `tug text` and `tug boat` only say "Check tug: Send or Don't send" once tug's card is really up,
+  not before a "tug is already asking you about something else".
+- Security: `ctutils` updated to 0.4.6 for a RustSec advisory (a constant-time comparison could
+  compile to a branch on secret values). It's used through the hashing in tug's local connections.
+
 ## v0.5.20 — 2026-10-18
 
 A bug-fix release (every fifth version is fixes only). It arrives through automatic updates.

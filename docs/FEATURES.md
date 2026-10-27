@@ -1,6 +1,6 @@
 # What tug can do
 
-Everything tug does today (v0.5.12), one line each. tug works with **no app on the phone**: it
+Everything tug does today (v0.5.22), one line each. tug works with **no app on the phone**: it
 uses what iOS shares with any Bluetooth accessory, like a smartwatch or a car kit. The limits that
 come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone-doesnt-allow-yet).
 
@@ -50,6 +50,15 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - Act on a notification with the phone's own buttons (answer, decline and so on), or **Call back**
   a missed call.
 - The ✕ on a row clears it on your iPhone too.
+- **Remind me:** the alarm clock on a row brings it back later (in 20 minutes, 1 hour or 3 hours,
+  this evening, or tomorrow morning) as a Windows pop-up with its own buttons, titled "Reminder".
+  The row shows when; the menu changes or cancels it. Reminders survive a restart, and one that
+  came due while tug was closed comes back when it starts.
+- **Links, numbers, addresses and parcels** in texts and notifications are one click: Open link,
+  Copy number or email, Open in Maps, Track parcel. Web links are one click only in texts from your
+  contacts or numbers you've texted; from strangers and in other apps they stay plain text.
+- **Welcome back:** after 20 minutes or more away, a card at the top of the Feed sums up what
+  arrived meanwhile (texts by person, missed calls, a fresh code, other apps).
 - **Open on the web** opens a notification's web page (for example your inbox for Gmail), or the
   app's website.
 - Real app icons, looked up once per app from Apple's App Store and kept on your PC (you can turn
@@ -101,6 +110,10 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   sends it just like typing it (Sending…, Sent, or Not sent with Retry), and a pop-up's suggestion
   shows in the conversation the same way.
 - Start a **new conversation** with Ctrl+N or +: recent people, contacts, or a typed number.
+- **Send later:** the clock beside Send schedules the text (in 20 minutes up to tomorrow morning).
+  It waits above the box with Send now and Cancel, and goes through your iPhone when it's due; if
+  the phone isn't connected it waits, and a text more than 30 minutes late is never sent by itself:
+  it's held for you to Send now or Discard.
 - Drafts are kept per conversation while tug is open, so text typed to one person can't go to
   another.
 - When a contact has several numbers, **To:** lets you choose which one.
@@ -303,6 +316,21 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 - An optional **weather card** on the Feed: now, feels like, high and low, the next 24 hours, 7
   days, wind, humidity and a rain or snow outlook.
+- The card opens on a **live harbor** of the weather there: the sun and moon where they really are
+  between sunrise and sunset, the moon's real phase (lit the right way for the hemisphere), clouds,
+  rain or snow as hard as it's falling, fog, lightning, and waves from the wind's Beaufort force,
+  with tug's tugboat riding them, its pennant and smoke going the way the real wind blows. A caption
+  gives the sunset, or the moon and the next sunrise, and the sea state. It moves only while it's on
+  screen and holds still with reduced motion.
+- The harbor shows **your phone** too: new texts as messages in bottles (click to open the newest),
+  a missed call as the lighthouse blinking coral (click for Calls), and music as notes rising from the
+  tug. Counts only, never names or words.
+- **Daylight:** how long the day is, how tomorrow compares, and when the golden hour starts; the
+  caption marks the golden hour itself.
+- **Rain to the quarter-hour** for the next two hours ("Rain from about 5:45 PM, for about 30
+  minutes"), with a small strip of bars.
+- **Before you head out:** rain or snow due within two hours, or a freezing feels-like, with the
+  iPhone at 30% or less, and the card says to charge it first.
 - Choose a place with **Use my location** (Windows location) or by typing a city.
 - Forecasts from Open-Meteo, refreshed every 15 minutes and when you come back to tug.
 - °F or °C, on the card or in Settings › Weather.
@@ -311,7 +339,9 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 
 ## Search (Ctrl+K)
 
-- **Ctrl+K** searches people, texts and notifications, including ones you've cleared.
+- **Ctrl+K** searches people, recent calls, texts and notifications, including ones you've cleared.
+  A name or part of a number finds calls (`missed` lists missed calls); picking one shows it in
+  Calls, or opens their conversation. It never places a call by itself: `call sam` does that.
 - It also takes actions. Type:
   - `play`, `pause`, `next`, `previous`, `louder`, `quieter` for music;
   - `text sam on my way` (or `message`, `tell`, `send`) to send a text, or `text sam` to open the
@@ -395,7 +425,7 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
   download them (`--wait <secs>`, `--no-wait`). `tug boat - --name notes.txt` sends what's piped in.
   Regular files only; files the phone didn't download in time are taken off offer.
 - The **`tug` command**: `tug code [--copy]`, `tug boat <file>` (or `-` for stdin), `tug text <name> "<message>"`,
-  `tug status`, `tug mcp`.
+  `tug next`, `tug previous`, `tug play`, `tug pause`, `tug now`, `tug status`, `tug mcp`.
 - **Add tug to PATH** puts the command in new terminals for your account only; **Remove from PATH**
   undoes it.
 - **Connected tools** lists who has used tug and when; **Revoke access** disconnects them all.
@@ -418,13 +448,19 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
 - **Developer tools:** see above.
 - **Data & privacy:** what stays on your PC and what goes online, the App icons switch, and Clear
   history.
-- **About:** version, updates (Check for updates, Download updates automatically, release notes),
-  What's new, credits, Copy diagnostics.
+- **About:** version, **Pickups saved** (how many times tug spared you picking up the phone; the
+  Feed's greeting shows this week's), updates (Check for updates, Download updates automatically,
+  release notes), What's new, credits, Copy diagnostics, and **Report a problem**, which opens a
+  bug report on GitHub with your version filled in and the diagnostics on the clipboard to paste.
+  tug sends nothing itself.
+- If tug didn't close normally last time, it offers that report once for the version.
 - **Automatic updates:** once a release build is set up for them, tug downloads a new version
   quietly and an **Update** button appears beside its name: click it, confirm, and tug restarts on the
   same screen. It never restarts by itself, waits while a call rings, Tugboat is moving files or voice
   typing is busy, and quitting from the tray installs a downloaded update (the menu says Quit and
   update tug). The portable exe can't update itself; its button opens the download page.
+  New versions **roll out gradually**: each copy keeps a random number to itself and takes a version
+  once its rollout reaches that number; **Check for updates** always takes the newest at once.
 - A **What's new** card appears once after each update (and any time from About).
 
 ## Privacy & data

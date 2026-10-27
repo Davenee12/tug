@@ -999,6 +999,8 @@ export interface DevToolsStatus {
   rev?: number;
   enabled: boolean;
   permissions: DevToolsPermission[];
+  /** "Send tug text without asking": `tug text` typed in a terminal sends with no card. */
+  textsWithoutAsking: boolean;
   clients: DevToolsClient[];
   /** Full path of the tug command (`...\bin\tug.exe`), or null if it isn't installed. */
   cliPath: string | null;
@@ -1093,7 +1095,7 @@ export interface VoiceStatus {
 
 /** What one hold did (`voice-typed`). The words themselves are never sent. */
 export interface VoiceTyped {
-  outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "micBusy" | "noTarget" | "keysHeld" | "unavailable" | "failed";
+  outcome: "typed" | "tooShort" | "nothingHeard" | "micBlocked" | "noMic" | "micBusy" | "noTarget" | "noWindow" | "keysHeld" | "unavailable" | "failed";
 }
 
 /** Where automatic updates are (`updater::policy::Phase`). */

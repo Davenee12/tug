@@ -23,6 +23,15 @@ export interface Day {
   high: number;
   low: number;
   rain: number | null;
+  /** Place-local "2026-10-05T07:12" (absent in caches from before the harbor). */
+  sunrise?: string;
+  sunset?: string;
+}
+
+/** A quarter of an hour of the next two: how much rain (or melted snow) falls in it, mm. */
+export interface Quarter {
+  time: string; // place-local, e.g. 2026-10-05T14:15
+  precip: number;
 }
 
 export interface Forecast {
@@ -30,9 +39,24 @@ export interface Forecast {
   /** IANA zone of the place, e.g. America/New_York (absent in caches from before it was kept). */
   timezone?: string;
   /** windDir: where the wind blows from, degrees (absent in caches from before it was kept). */
-  now: { time: string; temp: number; feels: number; code: number; day: boolean; wind: number; windDir?: number; humidity: number };
+  now: {
+    time: string;
+    temp: number;
+    feels: number;
+    code: number;
+    day: boolean;
+    wind: number;
+    windDir?: number;
+    humidity: number;
+    /** Cloud cover %, gusts km/h and rain falling now mm (absent in caches from before the harbor). */
+    clouds?: number;
+    gusts?: number;
+    precip?: number;
+  };
   hours: Hour[]; // from the current hour, next 24
   days: Day[]; // today first, 7 days
+  /** The next two hours, a quarter-hour at a time (absent when the service didn't send them). */
+  quarters?: Quarter[];
 }
 
 export type Unit = "f" | "c";
@@ -79,7 +103,10 @@ export function withCurrentHour(f: Forecast, nowMs: number): Forecast {
   const i = withToday.hours.findIndex((h) => h.time.slice(0, 13) === key);
   if (i < 0) return withToday;
   const h = withToday.hours[i];
-  return { ...withToday, now: { ...f.now, time: h.time, temp: h.temp, code: h.code, day: h.day }, hours: withToday.hours.slice(i) };
+  // Cloud cover and rain measured at download belong to that hour; the harbor works them out from
+  // the new hour's sky instead (wind, like feels-like, stays from the download).
+  const now = { ...f.now, time: h.time, temp: h.temp, code: h.code, day: h.day, clouds: undefined, precip: undefined };
+  return { ...withToday, now, hours: withToday.hours.slice(i) };
 }
 
 /**
@@ -151,23 +178,72 @@ export function outlook(f: Forecast): string | null {
 
 const round = (n: number) => Math.round(n * 100) / 100;
 
+/** "2026-10-05T14:37" → "2026-10-05T14:30": the quarter-hour it falls in. */
+export function quarterOf(local: string): string {
+  const mm = Number(local.slice(14, 16));
+  if (!Number.isFinite(mm) || local.length < 16) return local.slice(0, 16);
+  return `${local.slice(0, 14)}${String(Math.floor(mm / 15) * 15).padStart(2, "0")}`;
+}
+
 /** A hung request must not leave the card stuck on "loading" (and Retry doing nothing). */
 const TIMEOUT_MS = 15_000;
 
+/** What the card has always asked for. */
+const BASE = {
+  current: "temperature_2m,apparent_temperature,weather_code,is_day,wind_speed_10m,wind_direction_10m,relative_humidity_2m",
+  hourly: "temperature_2m,weather_code,is_day,precipitation_probability",
+  daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+};
+
+/**
+ * And what the harbor adds: clouds, gusts and rain falling now, sunrise and sunset, and the next
+ * two hours a quarter at a time. Only extra fields of the same free forecast; if the service ever
+ * refuses them, the card asks again for exactly what it always had (`fetchForecast`).
+ */
+const HARBOR = {
+  current: `${BASE.current},cloud_cover,wind_gusts_10m,precipitation`,
+  hourly: BASE.hourly,
+  daily: `${BASE.daily},sunrise,sunset`,
+  minutely_15: "precipitation",
+  // Spares: the series can start at the top of the hour, and quarters pass between downloads.
+  forecast_minutely_15: "16",
+};
+
 export async function fetchForecast(p: Place): Promise<Forecast> {
-  const q = new URLSearchParams({
-    latitude: String(round(p.latitude)),
-    longitude: String(round(p.longitude)),
-    current: "temperature_2m,apparent_temperature,weather_code,is_day,wind_speed_10m,wind_direction_10m,relative_humidity_2m",
-    hourly: "temperature_2m,weather_code,is_day,precipitation_probability",
-    daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-    timezone: "auto",
-    forecast_days: "7",
-  });
-  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${q}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+  const ask = (fields: Record<string, string>) => {
+    const q = new URLSearchParams({
+      latitude: String(round(p.latitude)),
+      longitude: String(round(p.longitude)),
+      ...fields,
+      timezone: "auto",
+      forecast_days: "7",
+    });
+    return fetch(`https://api.open-meteo.com/v1/forecast?${q}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+  };
+  let res = await ask(HARBOR);
+  // A refused field (400) must never cost the forecast itself.
+  if (res.status === 400) res = await ask(BASE);
   if (!res.ok) throw new Error(`Forecast unavailable (${res.status})`);
   return parseForecast(await res.json(), Date.now());
 }
+
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
+/**
+ * Open-Meteo's 15-minute rain is the total for the quarter *before* each time: 14:45 is the rain
+ * from 14:30 to 14:45. tug keeps each quarter by its start (14:30), the way it's read: "from 14:30".
+ */
+function quarterStart(end: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(end);
+  if (!m) return "";
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) - 15 * 60_000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+/** Quarters kept from a download: the harbor reads two hours ahead, and some pass before the next. */
+const QUARTERS_KEPT = 14;
+const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 
 export function parseForecast(j: any, fetchedAt: number): Forecast {
   const c = j.current;
@@ -187,7 +263,18 @@ export function parseForecast(j: any, fetchedAt: number): Forecast {
     high: d.temperature_2m_max[i],
     low: d.temperature_2m_min[i],
     rain: d.precipitation_probability_max?.[i] ?? null,
+    sunrise: str(d.sunrise?.[i]),
+    sunset: str(d.sunset?.[i]),
   }));
+  // From the current quarter on (the series can start earlier in the day), each by its start.
+  const m = j.minutely_15;
+  const nowQuarter = String(c.time).slice(0, 16);
+  const quarters: Quarter[] | undefined = Array.isArray(m?.time)
+    ? (m.time as unknown[])
+        .map((time, i) => ({ time: quarterStart(str(time) ?? ""), precip: num(m.precipitation?.[i]) ?? NaN }))
+        .filter((q) => q.time && Number.isFinite(q.precip) && q.time >= quarterOf(nowQuarter))
+        .slice(0, QUARTERS_KEPT)
+    : undefined;
   return {
     fetchedAt,
     timezone: typeof j.timezone === "string" ? j.timezone : undefined,
@@ -200,9 +287,13 @@ export function parseForecast(j: any, fetchedAt: number): Forecast {
       wind: c.wind_speed_10m,
       windDir: typeof c.wind_direction_10m === "number" ? c.wind_direction_10m : undefined,
       humidity: c.relative_humidity_2m,
+      clouds: num(c.cloud_cover),
+      gusts: num(c.wind_gusts_10m),
+      precip: num(c.precipitation),
     },
     hours,
     days,
+    quarters: quarters?.length ? quarters : undefined,
   };
 }
 

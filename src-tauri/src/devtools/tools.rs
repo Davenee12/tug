@@ -13,7 +13,7 @@ use tug_bridge::server::ProgressSink;
 use tug_bridge::time::iso_utc;
 
 use super::recipient::{resolve, Recipient};
-use super::{dev_apps, files, outgoing, phone_model, DevTools};
+use super::{dev_apps, files, outgoing, phone_model, settings, DevTools};
 use crate::ams::{PlaybackState, RemoteCommand};
 use crate::ble::Command;
 use crate::messages::{Direction, StoredMessage};
@@ -111,7 +111,12 @@ pub(super) async fn run(
         }
         Request::PhoneStatus => json(phone_status(dt)),
         Request::Media(action) => media(dt, action).await,
-        Request::SendText { to, message } => send_text(dt, client, &to, message).await,
+        Request::SendText {
+            to,
+            message,
+            typed,
+            progress: _,
+        } => send_text(dt, client, &to, message, typed, progress).await,
         Request::OfferFiles {
             paths,
             stdin,
@@ -341,6 +346,8 @@ async fn send_text(
     client: &ClientInfo,
     to: &str,
     message: String,
+    typed: bool,
+    progress: &ProgressSink,
 ) -> Result<serde_json::Value, BridgeError> {
     if !dt.shared.status().services.messages || dt.shared.map.get().is_none() {
         return Err(BridgeError::new(
@@ -361,8 +368,8 @@ async fn send_text(
         Ok(resolve(&query, &contacts, &recent))
     })
     .await?;
-    let (name, address) = match resolved {
-        Recipient::One { name, address } => (name, address),
+    let (name, address, loose) = match resolved {
+        Recipient::One { name, address, loose } => (name, address, loose),
         Recipient::Several(names) => {
             return Err(BridgeError::new(
                 ErrorCode::Invalid,
@@ -379,7 +386,17 @@ async fn send_text(
             ))
         }
     };
-    json(dt.confirm_and_send(client, name, address, message).await?)
+    json(
+        dt.confirm_and_send(
+            client,
+            name,
+            address,
+            message,
+            settings::skips_card(dt.texts_without_asking(), client, typed, loose),
+            progress,
+        )
+        .await?,
+    )
 }
 
 /// `tug boat` / `send_file_to_phone`: check every file again here (whatever the caller said),
