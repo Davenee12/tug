@@ -56,6 +56,9 @@
 //   http://localhost:1420/?game2p     Tugboat Run, two players with two phones (add &p2drop: Player 2's
 //                                     phone goes quiet mid-race). Any game URL takes &weather=rain,
 //                                     snow, night, windy, storm or off for the daily challenge
+//   http://localhost:1420/?harbor=night   the weather card's live harbor: day, dawn, dusk, night, rain,
+//                                     showers, snow, fog, storm or gale (&south for the southern sky,
+//                                     &battery=18 for "before you head out")
 //   http://localhost:1420/?games      the games picker
 //   http://localhost:1420/?stack      Harbor Stack open (?stackphone with a phone that drops every 1.6 s,
 //                                     ?stack2p a stack-off with two phones, &p2drop, &weather= as above)
@@ -253,7 +256,7 @@ const status: DeviceStatus = noPhone
       advertising: "on",
       device: { id: "mock", name: "Jordan's iPhone", model },
       connection: "connected",
-      battery: 76,
+      battery: params.has("battery") ? Number(params.get("battery")) : 76,
       // ?nudge: notifications work but the optional switches are off, so the Feed shows its
       // dismissible "Get more from tug" nudge (texts + names) without blocking the way in.
       services: { notifications: true, media: true, battery: true, messages: !params.has("nudge") },
@@ -966,6 +969,60 @@ if (mockWeather && mockWeather !== "off") {
   localStorage.setItem("tug.weather.v1", JSON.stringify({ place, forecast }));
 } else if (mockWeather === "off") {
   settings["ui.weather"] = "off";
+}
+// ?harbor=day, dawn, dusk, night, rain, showers, snow, fog, storm or gale: the weather card's live
+// harbor in that weather (a made-up forecast at this PC's clock, so any time of day works). Add
+// &south for a place south of the equator, &battery=18 for "before you head out".
+const harborKind = params.get("harbor");
+if (harborKind !== null) {
+  const place = { name: params.has("south") ? "Wellington, New Zealand" : "Portland, Oregon", latitude: params.has("south") ? -41.29 : 45.52, longitude: params.has("south") ? 174.78 : -122.68 };
+  settings["ui.weather"] = JSON.stringify(place);
+  const H = 3_600_000;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const local = (ms: number) => {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const t = Date.now();
+  // When the sun rises and sets around now, for each kind: [hours to sunrise, hours to sunset].
+  const sunAt: Record<string, [number, number]> = {
+    day: [-4, 6], dawn: [-0.25, 11], dusk: [-11, 0.25], night: [6, 18],
+    rain: [-3, 7], showers: [-5, 5], snow: [-2, 6], fog: [-1.5, 8], storm: [8, 20], gale: [-6, 4],
+  };
+  const kinds: Record<string, { code: number; wind: number; gusts: number; windDir: number; clouds: number; precip: number; temp: number; feels: number; q: number[] }> = {
+    day: { code: 1, wind: 14, gusts: 22, windDir: 250, clouds: 20, precip: 0, temp: 18, feels: 18, q: [] },
+    dawn: { code: 2, wind: 6, gusts: 9, windDir: 90, clouds: 40, precip: 0, temp: 8, feels: 6, q: [] },
+    dusk: { code: 1, wind: 9, gusts: 14, windDir: 300, clouds: 25, precip: 0, temp: 14, feels: 13, q: [] },
+    night: { code: 0, wind: 4, gusts: 7, windDir: 180, clouds: 5, precip: 0, temp: 7, feels: 5, q: [] },
+    rain: { code: 63, wind: 22, gusts: 38, windDir: 225, clouds: 100, precip: 0.6, temp: 11, feels: 8, q: [0.6, 0.5, 0.4, 0.2, 0, 0, 0, 0] },
+    showers: { code: 2, wind: 16, gusts: 28, windDir: 240, clouds: 55, precip: 0, temp: 13, feels: 11, q: [0, 0, 0, 0.3, 0.8, 0.4, 0, 0] },
+    snow: { code: 73, wind: 11, gusts: 18, windDir: 20, clouds: 100, precip: 0.3, temp: -3, feels: -8, q: [0.3, 0.3, 0.4, 0.4, 0.3, 0.3, 0.2, 0.2] },
+    fog: { code: 45, wind: 3, gusts: 5, windDir: 160, clouds: 90, precip: 0, temp: 6, feels: 5, q: [] },
+    storm: { code: 95, wind: 42, gusts: 70, windDir: 230, clouds: 100, precip: 1.4, temp: 16, feels: 15, q: [1.4, 2.2, 1.5, 0.6, 0.1, 0, 0, 0] },
+    gale: { code: 3, wind: 66, gusts: 90, windDir: 270, clouds: 85, precip: 0, temp: 9, feels: 3, q: [] },
+  };
+  const k = kinds[harborKind] ?? kinds.day;
+  const [toRise, toSet] = sunAt[harborKind] ?? sunAt.day;
+  const nowLocal = local(t);
+  const quarter = Math.floor(t / (15 * 60_000)) * 15 * 60_000;
+  const day = (i: number) => ({
+    date: local(t + i * 24 * H).slice(0, 10),
+    code: k.code,
+    high: k.temp + 4,
+    low: k.temp - 5,
+    rain: k.q.length ? 80 : 10,
+    sunrise: local(t + (toRise + i * 24) * H),
+    sunset: local(t + (toSet + i * 24) * H),
+  });
+  const isDay = toRise <= 0 && toSet > 0;
+  const forecast = {
+    fetchedAt: t,
+    now: { time: nowLocal, temp: k.temp, feels: k.feels, code: k.code, day: isDay, wind: k.wind, windDir: k.windDir, humidity: 80, clouds: k.clouds, gusts: k.gusts, precip: k.precip },
+    hours: Array.from({ length: 24 }, (_, i) => ({ time: `${local(t + i * H).slice(0, 13)}:00`, temp: k.temp, code: k.code, day: isDay, rain: k.q.length ? 70 : 5 })),
+    days: Array.from({ length: 7 }, (_, i) => day(i)),
+    quarters: k.q.length ? k.q.map((precip, i) => ({ time: local(quarter + i * 15 * 60_000), precip })) : undefined,
+  };
+  localStorage.setItem("tug.weather.v1", JSON.stringify({ place, forecast }));
 }
 if (params.has("game") || params.has("gamephone") || twoPhones || stackGame || params.has("games")) {
   setTimeout(async () => {

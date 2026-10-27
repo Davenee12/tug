@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from "vue";
 import {
+  BatteryLow,
   Cloud,
   CloudDrizzle,
   CloudFog,
@@ -16,7 +17,10 @@ import {
   Sun,
 } from "lucide-vue-next";
 import { useWeatherStore } from "../stores/weather";
-import { dayLabel, describe, hourLabel, localTime, outlook, temp, wind, withCurrentHour, type Place, type Sky } from "../lib/weather";
+import { dayLabel, describe, hourLabel, localTime, outlook, temp, wet, wind, withCurrentHour, type Place, type Sky } from "../lib/weather";
+import { beforeYouGo, nextRain, placeNow, rainBars } from "../lib/weatherHarbor";
+import { useTugStore } from "../stores/tug";
+import WeatherHarbor from "./WeatherHarbor.vue";
 import { useCitySearch } from "../lib/useCitySearch";
 import { relativeTime } from "../lib/format";
 import { errorMessage } from "../lib/ipc";
@@ -24,6 +28,7 @@ import { friendlyLocateError } from "../lib/locating";
 import { useLocating } from "../lib/useLocating";
 
 const w = useWeatherStore();
+const tug = useTugStore();
 
 const ICONS: Record<Sky, [Component, Component]> = {
   clear: [Sun, Moon],
@@ -42,8 +47,35 @@ const icon = (code: number, day = true) => ICONS[describe(code).sky][day ? 0 : 1
 const f = computed(() => (w.forecast ? withCurrentHour(w.forecast, now.value.getTime()) : null));
 const t = (c: number) => `${temp(c, w.unit)}°`;
 const today = computed(() => f.value?.days[0] ?? null);
-const line = computed(() => (f.value ? outlook(f.value) : null));
 const place = computed(() => (w.place && w.place !== "off" ? w.place : null));
+
+// Rain to the quarter-hour for the next two hours, when the forecast has it; the 12-hour outlook
+// otherwise. Snow when that's what's falling or coming.
+const fallWord = computed<"Rain" | "Snow">(() => {
+  const fc = f.value;
+  const first = fc ? [fc.now.code, ...fc.hours.slice(0, 3).map((h) => h.code)].find(wet) : undefined;
+  return first !== undefined && describe(first).sky === "snow" ? "Snow" : "Rain";
+});
+const soon = computed(() =>
+  f.value ? nextRain(f.value.quarters, placeNow(now.value.getTime(), f.value.timezone), fallWord.value) : null,
+);
+const bars = computed(() => (soon.value?.line ? rainBars(soon.value.quarters.slice(0, 8)) : []));
+const line = computed(() => soon.value?.line ?? (f.value ? outlook(f.value) : null));
+// "Before you head out": the weather about to happen and the phone's battery, together.
+const battery = computed(() =>
+  tug.status.connection === "connected" && tug.status.services.battery ? tug.status.battery : null,
+);
+const headsUp = computed(() =>
+  f.value
+    ? beforeYouGo({
+        battery: battery.value,
+        start: soon.value?.start ?? null,
+        what: fallWord.value,
+        feelsC: f.value.now.feels,
+        feelsLabel: t(f.value.now.feels),
+      })
+    : null,
+);
 const updated = computed(() => (f.value ? relativeTime(new Date(f.value.fetchedAt)) : ""));
 
 // Week temperature range, for the iPhone-style bars.
@@ -259,13 +291,15 @@ async function change() {
     @pointerup="up"
     @pointercancel="cancel"
   >
+    <!-- The harbor: the weather where you are, live. A press on it opens the card like the top. -->
+    <WeatherHarbor v-if="f" :forecast="f" :now="now" :south="place.latitude < 0" class="cursor-pointer" />
     <div
       ref="header"
       role="button"
       tabindex="0"
       :aria-expanded="open"
       :aria-label="open ? 'Weather: show less' : 'Weather: show the week'"
-      class="cursor-pointer touch-none px-6 pt-5 pb-1 outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
+      :class="[f ? 'pt-4' : 'pt-5', 'cursor-pointer touch-none px-6 pb-1 outline-none focus-visible:ring-2 focus-visible:ring-ink/20']"
       @keydown="onKey"
     >
       <!-- First load: quiet placeholder in the card's own shape -->
@@ -304,7 +338,19 @@ async function change() {
           <p class="text-[13px] text-muted">
             <template v-if="today">H {{ t(today.high) }} · L {{ t(today.low) }} · </template>Feels {{ t(f.now.feels) }}
           </p>
-          <p v-if="line" class="truncate text-[13px] font-medium text-body-strong">{{ line }}</p>
+          <p v-if="line" class="flex min-w-0 items-center gap-2 text-[13px] font-medium text-body-strong">
+            <!-- The next two hours, a quarter at a time -->
+            <span v-if="bars.length" class="flex h-3 shrink-0 items-end gap-px" aria-hidden="true">
+              <span
+                v-for="(b, i) in bars"
+                :key="i"
+                class="w-[3px] rounded-[1px]"
+                :class="b ? 'bg-accent-teal' : 'bg-hairline'"
+                :style="{ height: `${b ? Math.max(25, b * 100) : 15}%` }"
+              />
+            </span>
+            <span class="truncate">{{ line }}</span>
+          </p>
         </div>
         <div class="ml-auto min-w-0 text-right">
           <p class="flex items-center justify-end gap-1 truncate text-[13px] text-muted">
@@ -313,6 +359,10 @@ async function change() {
           <p class="mt-0.5 text-[13px] font-medium text-body-strong tabular-nums">{{ localTime(now, f.timezone) }}</p>
         </div>
       </div>
+      <p v-if="f && headsUp" class="mt-3 flex items-start gap-2 rounded-lg bg-canvas px-3 py-2 text-[13px] text-ink">
+        <BatteryLow :size="15" class="mt-px shrink-0 text-primary" />
+        <span>{{ headsUp }}</span>
+      </p>
     </div>
 
     <!-- More: next 24 hours and the week -->
