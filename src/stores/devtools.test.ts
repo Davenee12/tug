@@ -24,6 +24,7 @@ const base: DevToolsStatus = {
   rev: 1,
   enabled: false,
   permissions: [],
+  textsWithoutAsking: false,
   clients: [],
   cliPath: null,
   cliDir: null,

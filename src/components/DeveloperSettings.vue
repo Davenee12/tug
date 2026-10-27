@@ -65,12 +65,18 @@ async function togglePath() {
   }
 }
 
-const COMMANDS: Array<[string, string]> = [
+const textsOn = computed(() => s.value?.permissions.find((p) => p.key === "send_text")?.on ?? false);
+const withoutAsking = computed({
+  get: () => s.value?.textsWithoutAsking ?? false,
+  set: (v) => void devtools.setTextsWithoutAsking(v),
+});
+
+const COMMANDS = computed<Array<[string, string]>>(() => [
   ["tug code", "Print the newest verification code (add --copy to put it on the clipboard)"],
   ["tug boat report.pdf", "Send files to your iPhone with Tugboat (tug asks you first)"],
-  ['tug text Sam "On my way"', "Text someone (tug asks you first)"],
+  ['tug text Sam "On my way"', withoutAsking.value ? "Text someone (sends right away)" : "Text someone (tug asks you first)"],
   ["tug status", "Is tug running, and how's the phone"],
-];
+]);
 </script>
 
 <template>
@@ -168,6 +174,18 @@ const COMMANDS: Array<[string, string]> = [
             <span class="min-w-0 flex-1 text-right text-[13px] text-muted">{{ what }}</span>
           </li>
         </ul>
+        <SettingsRow
+          v-if="s.enabled"
+          class="border-t border-hairline-soft"
+          label="Send tug text without asking"
+          :description="
+            textsOn
+              ? 'Texts you type with tug text in a terminal send right away, without the Send card. AI tools connected to tug still ask you first. Anything that can type in your terminals could then text as you.'
+              : 'Turn on Send texts above first.'
+          "
+        >
+          <SettingsSwitch v-model="withoutAsking" label="Send tug text without asking" :disabled="devtools.working || !textsOn" />
+        </SettingsRow>
         <SettingsRow
           class="border-t border-hairline-soft"
           label="Use tug in any terminal"

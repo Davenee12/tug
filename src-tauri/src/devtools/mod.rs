@@ -4,7 +4,9 @@
 //!
 //! Everything is off until the user switches on Settings › Developer tools › "Let AI tools use
 //! tug". Then each switch gates its tools (reading on, music and texts off), every tool is
-//! rate-limited, and `send_text` never sends without a click on tug's confirmation card. Each
+//! rate-limited, and `send_text` never sends without a click on tug's confirmation card (the one
+//! exception, off unless the user turns it on: "Send `tug text` without asking", for `tug text`
+//! typed in a terminal; see `settings::skips_card`). Each
 //! call is logged to tug.log by tool name, who asked, outcome and count, never by content.
 //!
 //! Pure parts are tested in their modules: `confirm` (the confirmation state machine),
@@ -173,6 +175,8 @@ pub struct DevToolsStatus {
     pub rev: u64,
     pub enabled: bool,
     pub permissions: Vec<PermissionState>,
+    /// "Send `tug text` without asking" (`settings::TEXTS_WITHOUT_ASKING`).
+    pub texts_without_asking: bool,
     pub clients: Vec<ClientRecord>,
     /// `...\tug\bin\tug.exe`, the command and MCP server; `None` if it isn't installed.
     pub cli_path: Option<String>,
@@ -277,6 +281,10 @@ impl DevTools {
         settings::parse_enabled(self.setting(settings::ENABLED).as_deref())
     }
 
+    fn texts_without_asking(&self) -> bool {
+        settings::parse_enabled(self.setting(settings::TEXTS_WITHOUT_ASKING).as_deref())
+    }
+
     fn permissions(&self) -> BTreeMap<Permission, bool> {
         effective_permissions(&settings::parse_permissions(
             self.setting(settings::PERMISSIONS).as_deref(),
@@ -313,6 +321,7 @@ impl DevTools {
                     on: perms[&p],
                 })
                 .collect(),
+            texts_without_asking: self.texts_without_asking(),
             clients: settings::parse_clients(self.setting(settings::CLIENTS).as_deref()),
             cli_path: cli.map(|p| p.to_string_lossy().into_owned()),
             on_path: cli_dir.as_deref().is_some_and(path_env::is_on_path),
@@ -374,6 +383,17 @@ impl DevTools {
             self.stop_sending_files();
         }
         log::info!("devtools: {} {}", p.key(), if on { "on" } else { "off" });
+        self.emit_status();
+        Ok(self.status())
+    }
+
+    /// "Send `tug text` without asking": `tug text` typed in a terminal sends with no card.
+    pub fn set_texts_without_asking(&self, on: bool) -> Result<DevToolsStatus, String> {
+        self.shared
+            .store
+            .set_setting(settings::TEXTS_WITHOUT_ASKING, if on { "true" } else { "false" })
+            .map_err(|e| e.to_string())?;
+        log::info!("devtools: tug text without asking {}", if on { "on" } else { "off" });
         self.emit_status();
         Ok(self.status())
     }
@@ -479,20 +499,29 @@ impl DevTools {
         Ok(resolution)
     }
 
-    /// `send_text` after the recipient is known: ask, then send only on Send.
+    /// `send_text` after the recipient is known: ask, then send only on Send. A typed `tug text`
+    /// with "Send `tug text` without asking" on goes straight to sending.
     async fn confirm_and_send(
         &self,
         client: &ClientInfo,
         to_name: String,
         address: String,
         message: String,
+        typed: bool,
+        progress: &ProgressSink,
     ) -> Result<SendResult, BridgeError> {
-        let ask = Ask::Text {
-            to_name: to_name.clone(),
-            to_address: address.clone(),
-            message: message.clone(),
+        let resolution = if settings::skips_card(self.texts_without_asking(), client, typed) {
+            log::info!("devtools: send_text without the card (tug text typed in a terminal)");
+            Resolution::Approved
+        } else {
+            let ask = Ask::Text {
+                to_name: to_name.clone(),
+                to_address: address.clone(),
+                message: message.clone(),
+            };
+            progress.send(Progress::Confirming);
+            self.ask(client, ask).await?
         };
-        let resolution = self.ask(client, ask).await?;
         let (outcome, detail) = match resolution {
             Resolution::Declined => (SendOutcome::Declined, Some("They chose Don't send.".to_string())),
             Resolution::TimedOut => (
