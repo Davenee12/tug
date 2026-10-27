@@ -653,7 +653,10 @@ export const useTugStore = defineStore("tug", () => {
     { immediate: true },
   );
 
-  /** An item to scroll to and highlight after navigating from search: `m<id>` or `n<id>`. */
+  /**
+   * An item to scroll to and highlight after navigating from search: `m<id>` (a text), `n<id>` (a
+   * notification) or `c<key>` (a recent call, keyed by `callKeys`).
+   */
   const focusItem = ref<string | null>(null);
 
   /** When each feed entry (conversation or app stack) was last looked at. */

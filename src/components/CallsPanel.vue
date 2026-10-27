@@ -40,6 +40,31 @@ const keyMap = computed(() => {
 });
 const keyOf = (c: CallRecord) => keyMap.value.get(c) ?? callKey(c);
 
+// Arriving from search (Ctrl+K's "Show in Calls", `c<key>`): reveal the call if it's further down
+// than the rows built so far, scroll to it and briefly highlight it.
+const flashed = ref<string | null>(null);
+watch(
+  () => tug.focusItem,
+  async (item) => {
+    if (!item?.startsWith("c")) return;
+    tug.focusItem = null;
+    const key = item.slice(1);
+    const at = tug.calls.findIndex((c) => keyOf(c) === key);
+    if (at < 0) return;
+    limit.value = Math.max(limit.value, at + 1);
+    await nextTick();
+    // After the place-keeping below has settled the rows just revealed, or it would undo the scroll.
+    window.setTimeout(() => {
+      const row = [...(scroller.value?.querySelectorAll<HTMLElement>("[data-call]") ?? [])].find((el) => el.dataset.call === key);
+      if (!row) return;
+      row.scrollIntoView({ block: "center" });
+      flashed.value = key;
+      window.setTimeout(() => (flashed.value = null), 1800);
+    });
+  },
+  { immediate: true },
+);
+
 // Hold the reader's place as calls arrive. The list is newest-first, so a new call lands at the top:
 // left alone the viewport would slide down by the new row's height. Measure before the DOM updates
 // (this watcher runs pre-flush), then restore — stay pinned at the top if they were already there
@@ -109,7 +134,13 @@ const emptyHint = computed(() => callsEmptyHint(tug.status, tug.switchContext));
           <li
             v-for="c in g.calls"
             :key="keyOf(c)"
-            :class="['group flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-surface-soft', c.number ? 'cursor-pointer' : '']"
+            :data-call="keyOf(c)"
+            :class="[
+              'group flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-surface-soft',
+              c.number ? 'cursor-pointer' : '',
+              // Inset: the sticky day heading above the first row of a day would cover an outer ring.
+              flashed === keyOf(c) ? 'ring-2 ring-inset ring-accent-amber' : '',
+            ]"
             :title="c.number ? `Call ${name(c)}${route(c) === 'back' ? ' back' : ''} on your iPhone` : undefined"
             @click="callFrom(c)"
           >

@@ -526,7 +526,7 @@ Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` besid
 (the full-history wizard's words and steps), `attachments`
 ("Attachment: 1 Photo" → a photo chip), `attention`
 (is the window really visible), `battery`, `callKeys` (no keystroke answers or declines a call), `coalesce` (one render per frame for bursts of
-updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
+updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs, and the recent calls a search finds: they live in the window, not the database),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),
 `devtools`, `errorReport`, `escape`, `feedPaging` (keep paging while the Feed's end is in view),
 `format` (conversation grouping and display), `health`, `latest` (newest request wins: late
