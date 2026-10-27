@@ -21,6 +21,16 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.22",
+    title: "Report a problem, and gentler updates",
+    highlights: [
+      "Settings › About › Report a problem opens a bug report with your version filled in. tug sends nothing itself.",
+      "If tug didn't close normally last time, it offers to report it, once.",
+      "Updates now roll out gradually, so a problem reaches fewer people. Check for updates always gets the newest.",
+      "Unlocking an encrypted iPhone backup works again right after a wrong password.",
+    ],
+  },
+  {
     version: "0.5.21",
     title: "Texts from the terminal, and voice typing fixes",
     highlights: [

@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.5.22 — 2026-10-27
+
+Report a problem, gradual updates, and a backup fix. From #165. It arrives through automatic
+updates.
+
+### New
+- **Report a problem** (Settings › About) opens GitHub's bug report form with tug's version and
+  your Windows version filled in, and puts the diagnostics (phone numbers, names and message
+  contents removed) on the clipboard for you to read through and paste. tug sends nothing itself.
+- **"tug didn't close normally last time."** If this version of tug ended some other way than
+  closing (a crash, but also a power cut or End task), it offers that report once.
+- **Updates roll out gradually**, starting with the next one: each copy of tug keeps a random number
+  from 0 to 99 to itself and takes a new version once its rollout reaches that number, so a problem
+  in a release reaches a few PCs first and can be paused. **Check for updates** always takes the
+  newest version at once. The number is never sent anywhere.
+
+### Fixed
+- Unlocking an encrypted iPhone backup again right after a wrong password could say "tug is already
+  reading a backup."
+
+### For maintainers
+- `node scripts/rollout.mjs status | set | demand`: a release's rollout, downloads and reported
+  problems; widening, pausing or finishing a rollout; and the demand goals. See docs/RELEASING.md.
+- The README opens with a demo of the app, a download button and why the download is safe.
+
 ## v0.5.21 — 2026-10-27
 
 Texts from the terminal without a click, and fixes from a review of voice typing. From #162 and

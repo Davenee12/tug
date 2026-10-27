@@ -7,7 +7,7 @@ No app on the phone, no account, no cloud.
 
 [![Download tug for Windows](https://img.shields.io/badge/Download_for_Windows-free-D97757?style=for-the-badge)](https://github.com/Davenee12/tug/releases/latest)
 
-Windows 10 (2004 or later) or 11 · an iPhone · free and open source · [v0.5.21](CHANGELOG.md)
+Windows 10 (2004 or later) or 11 · an iPhone · free and open source · [What's new](CHANGELOG.md)
 
 <img src="docs/media/demo.gif" alt="tug's window: the Feed of iPhone notifications, a text conversation, Ctrl+K search finding a verification code, and an AI tool asking to send a text" width="900">
 
@@ -45,7 +45,8 @@ Why you can trust the download anyway:
   [a public workflow](.github/workflows/release.yml) run on GitHub's servers, from a tagged commit on
   `main`; anyone can see the run that made it.
 - **You can check your file is the real one.** Each release lists SHA-256 checksums. In PowerShell,
-  `Get-FileHash .\tug-0.5.21-setup.exe` must print the same value as the release notes.
+  in the folder you downloaded it to, `Get-FileHash .\tug-*-setup.exe` must print the same value as
+  the release notes.
 - **Updates are signed.** tug only installs an update signed with its own key, so nobody can slip
   in a changed version.
 - **Nothing about you leaves your PC.** No servers, no account, no analytics, no telemetry
