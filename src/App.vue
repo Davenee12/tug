@@ -8,6 +8,7 @@ import { usePcAudioStore } from "./stores/pcAudio";
 import { useVoiceStore } from "./stores/voice";
 import { useGameStore } from "./stores/game";
 import { useUpdateStore } from "./stores/update";
+import { useRemindersStore } from "./stores/reminders";
 import ConnectionPanel from "./components/ConnectionPanel.vue";
 import ConnectPanel from "./components/ConnectPanel.vue";
 import DeviceRail from "./components/DeviceRail.vue";
@@ -42,6 +43,7 @@ const pcAudio = usePcAudioStore();
 const voice = useVoiceStore();
 const game = useGameStore();
 const update = useUpdateStore();
+const reminders = useRemindersStore();
 
 // While the iPhone needs the user (nothing paired, or it's been away a while), wide windows
 // show the Connection panel beside the feed; everything else (and narrow windows) uses
@@ -203,6 +205,8 @@ onMounted(async () => {
     .catch(() => {
       /* nothing to offer */
     });
+  // Remind me: reminders that came due while tug was closed come back now that history has loaded.
+  void reminders.init();
   // Automatic updates: the Update button and Settings › About; after an update restart, this also
   // reopens the screen the person left (so it runs once tug's own state has loaded).
   void update.init();
@@ -229,6 +233,7 @@ onUnmounted(() => {
   pcAudio.dispose();
   voice.dispose();
   update.dispose();
+  reminders.dispose();
 });
 </script>
 

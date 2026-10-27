@@ -109,6 +109,7 @@ import { useTugboatStore } from "./tugboat";
 import { useDevToolsStore } from "./devtools";
 import { usePickupsStore } from "./pickups";
 import type { PickupKind } from "../lib/pickups";
+import { reminderTitle, type Reminder } from "../lib/reminders";
 
 /** The Spotify panel's tabs. */
 export type SpotifyTab = "search" | "playlists" | "recent" | "top" | "queue";
@@ -154,6 +155,8 @@ const OVERFLOW_TOAST_ID = 2_000_000_001;
 const GAP_TOAST_ID = 2_000_000_002;
 /** The type-the-code shortcut's small confirmation: one at a time (a new one replaces it); a press opens tug. */
 const CODE_FILL_TOAST_ID = 2_000_000_003;
+/** Reminders whose notification is gone get pop-up ids from here (a thousand, reused in turn). */
+const REMINDER_TOAST_BASE = 2_100_000_000;
 
 const EMPTY_STATUS: DeviceStatus = {
   radio: "unknown",
@@ -898,6 +901,64 @@ export const useTugStore = defineStore("tug", () => {
     return false;
   }
 
+  /** Pop-ups shown for reminders whose notification is gone: what pressing them opens. */
+  const reminderToasts = new Map<number, Reminder>();
+  let reminderToastSeq = 0;
+
+  /** Show what a reminder is about: the conversation, or the notification in the Feed. */
+  function openReminder(r: Reminder) {
+    searchOpen.value = false;
+    pickerOpen.value = false;
+    closeSettings();
+    if (r.threadKey) {
+      openThread(r.threadKey);
+    } else if (r.notificationId !== null && notifications.value.some((n) => n.id === r.notificationId)) {
+      view.value = "feed";
+      focusItem.value = `n${r.notificationId}`;
+    }
+  }
+
+  /**
+   * A reminder came due (stores/reminders): a note in the window, and a Windows pop-up unless
+   * pop-ups are off. While the notification is still in tug the pop-up is its own, buttons and
+   * all, titled as a reminder; otherwise a plain one that opens the conversation. Quiet hours and
+   * Do not disturb don't hold it back: the person asked for it. Hiding previews while the screen
+   * is shared still applies (the pop-up's kind is never `info`).
+   */
+  async function showReminder(r: Reminder) {
+    const title = reminderTitle(r, Date.now());
+    notify("info", title, { label: "Open", run: () => openReminder(r) });
+    if (!settings.value.toasts || !(await hasToastPermission())) return;
+    const n = r.notificationId !== null ? notifications.value.find((x) => x.id === r.notificationId) : undefined;
+    let spec: ToastSpec;
+    if (n) {
+      spec = {
+        ...toastSpec(n, messages.value, contacts.value, {
+          enabled: settings.value.smartReplies,
+          defaults: settings.value.smartReplyDefaults,
+        }),
+        title,
+      };
+    } else {
+      const id = REMINDER_TOAST_BASE + (reminderToastSeq++ % 1000);
+      reminderToasts.set(id, r);
+      spec = {
+        id,
+        title,
+        body: r.body,
+        name: r.title,
+        replyTo: null,
+        markRead: false,
+        code: null,
+        callBack: false,
+        clear: false,
+        app: r.title,
+        kind: r.threadKey ? "message" : "notification",
+      };
+    }
+    void api.showToast(spec).catch(() => undefined);
+  }
+
   /** A pop-up that only says something; pressing it opens tug (its id matches no notification). */
   function showInfoToast(id: number, title: string, body: string) {
     const spec: ToastSpec = { id, title, body, name: "", replyTo: null, markRead: false, code: null, callBack: false, clear: false, app: "", kind: "info" };
@@ -1016,6 +1077,11 @@ export const useTugStore = defineStore("tug", () => {
    * the same way the in-app buttons do.
    */
   function onToastPressed({ kind, id, message }: ToastPressed) {
+    const reminder = reminderToasts.get(id);
+    if (reminder) {
+      if (kind === "open") openReminder(reminder);
+      return;
+    }
     // A reply carries the text as stored: the conversation shows it even if its events never came.
     if (message) addMissingMessages([message], "pop-up reply");
     // A reply the phone didn't take (failed, or not confirmed) leaves the conversation unread.
@@ -2274,6 +2340,8 @@ export const useTugStore = defineStore("tug", () => {
     markAllRead,
     copyCode,
     copyLatestCode,
+    showReminder,
+    openReminder,
     latestCode,
     codeFeed,
     clearCode,

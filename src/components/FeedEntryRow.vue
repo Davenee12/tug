@@ -10,6 +10,8 @@ import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import MediaChip from "./MediaChip.vue";
 import NotificationItem from "./NotificationItem.vue";
+import RemindButton from "./RemindButton.vue";
+import type { RemindTarget } from "../stores/reminders";
 import { singleFlight } from "../lib/singleFlight";
 import { useCallButtonGate } from "../lib/useCallButtonGate";
 
@@ -57,6 +59,14 @@ const webLink = computed<WebLink | null>(() => {
 const bodyOpens = computed(
   () => props.entry.kind === "stack" && items.value.length === 1 && latest.value.appId === GMAIL_APP_ID && !!webLink.value,
 );
+
+// Remind me: a person's conversation as a whole, or the app's newest notification.
+const remindTarget = computed<RemindTarget>(() => ({
+  title: title.value,
+  body: preview.value,
+  notificationIds: items.value.map((n) => n.id),
+  threadKey: props.entry.kind === "thread" ? props.entry.key : null,
+}));
 
 const rowEl = ref<HTMLElement | null>(null);
 const flashed = ref(false);
@@ -148,6 +158,7 @@ function open() {
       >
         <ExternalLink :size="14" />
       </span>
+      <RemindButton v-if="!ringing" :target="remindTarget" />
       <span
         v-if="clearable && !ringing"
         role="button"
