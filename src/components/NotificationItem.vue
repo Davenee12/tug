@@ -8,9 +8,11 @@ import { mayHaveWebsite, webLinkFor, type WebLink } from "../lib/weblinks";
 import { useCallButtonGate } from "../lib/useCallButtonGate";
 import type { PhoneNotification } from "../types/protocol";
 import { findCode } from "../lib/codes";
+import { smartChips } from "../lib/smartActions";
 import AppAvatar from "./AppAvatar.vue";
 import CodeChip from "./CodeChip.vue";
 import MediaChip from "./MediaChip.vue";
+import SmartChip from "./SmartChip.vue";
 
 // `compact`: inside an expanded app stack, where the avatar and app name are already shown.
 const props = defineProps<{ n: PhoneNotification; compact?: boolean }>();
@@ -34,6 +36,11 @@ const hasChip = computed(() => !!content.value && (!!content.value.media || cont
 // A one-time code in any app's notification (a WhatsApp or bank code in a stack): one click to copy.
 const code = computed(() => findCode(props.n.message || props.n.subtitle));
 const messageText = computed(() => (hasChip.value ? (content.value?.text ?? "") : props.n.message));
+// A link, number, address or parcel number in it (lib/smartActions): up to two chips, never the
+// page the Open button already goes to (and never the code: CodeChip has that).
+const smart = computed(() =>
+  smartChips([props.n.subtitle, messageText.value].filter(Boolean).join("\n"), { limit: 2, skipUrls: [webLink.value?.url] }),
+);
 const expanded = ref(false);
 const busy = ref<"positive" | "negative" | null>(null);
 const isCall = computed(() => props.n.category === "incomingCall");
@@ -76,8 +83,9 @@ async function act(positive: boolean) {
       <MediaChip v-if="hasChip && content" class="mt-1 text-[14px] text-body" :media="content.media" :unreadable="content.unreadable" />
 
 
-      <div :class="['flex items-center gap-2', compact ? 'mt-1.5' : 'mt-2.5']">
+      <div :class="['flex flex-wrap items-center gap-2', compact ? 'mt-1.5' : 'mt-2.5']">
         <CodeChip v-if="code" :code="code.code" :from="[n]" />
+        <SmartChip v-for="a in smart" :key="`${a.kind}:${a.start}`" :action="a" />
         <template v-if="n.live">
           <button
             v-if="n.flags.positiveAction"

@@ -4,6 +4,7 @@ import { ChevronRight, ExternalLink, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { canClear, MESSAGES_APP, notificationTime, relativeTime, type FeedEntry } from "../lib/format";
 import { findCode } from "../lib/codes";
+import { smartChips } from "../lib/smartActions";
 import { previewOf, textContent } from "../lib/messageType";
 import { GMAIL_APP_ID, mayHaveWebsite, webLinkFor, type WebLink } from "../lib/weblinks";
 import AppAvatar from "./AppAvatar.vue";
@@ -12,6 +13,7 @@ import MediaChip from "./MediaChip.vue";
 import NotificationItem from "./NotificationItem.vue";
 import RemindButton from "./RemindButton.vue";
 import type { RemindTarget } from "../stores/reminders";
+import SmartChip from "./SmartChip.vue";
 import { singleFlight } from "../lib/singleFlight";
 import { useCallButtonGate } from "../lib/useCallButtonGate";
 
@@ -53,6 +55,16 @@ const webLink = computed<WebLink | null>(() => {
   if (known) return known;
   const site = mayHaveWebsite(latest.value.appId) ? tug.websiteFor(latest.value.appId) : null;
   return site ? { url: site, label: appLabel.value } : null;
+});
+// A link, number, address or parcel number in the newest notification (lib/smartActions): up to
+// two chips (one beside a code chip, so the row keeps room for its words), never the page the row's
+// Open button already goes to.
+const smart = computed(() => {
+  const n = latest.value;
+  return smartChips([n.subtitle, n.message].filter(Boolean).join("\n"), {
+    limit: code.value ? 1 : 2,
+    skipUrls: [webLink.value?.url],
+  });
 });
 // Clicking a single Gmail notification's body opens it in the browser instead of expanding — the
 // owner's "click the notification to open" for the one case where it doesn't fight the stack UI.
@@ -139,6 +151,9 @@ function open() {
       </span>
       <!-- An open stack shows each notification's code on its own line instead. -->
       <CodeChip v-if="code && !expanded" :code="code.code" :from="[latest]" />
+      <template v-if="!expanded">
+        <SmartChip v-for="a in smart" :key="`${a.kind}:${a.start}`" :action="a" />
+      </template>
       <span
         v-if="fresh"
         class="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-ink px-1.5 text-[11px] font-semibold text-on-dark"

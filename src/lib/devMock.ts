@@ -150,6 +150,10 @@ const history: PhoneNotification[] = noPhone
       n("net.whatsapp.WhatsApp", "WhatsApp", "Sam Okafor", "Sent you the slides, have a look before the call", 9),
       n("com.apple.MobileSMS", "Messages", "Jane Doe", "Also bring the charger 🙏", 14),
       n("com.apple.mobilecal", "Calendar", "Design review", "In 15 minutes · Room 4", 18, { category: "schedule" }),
+      // Smart actions (lib/smartActions): an address and a number in a text get Open in Maps and
+      // Copy number; a delivery app's parcel number and link get Track parcel and Open link.
+      n("com.apple.MobileSMS", "Messages", "Chris Smith", "New place is 88 Larkspur Lane, Austin, TX 78701. Buzz 4B or call 555-010-0111 if the door's stuck", 8),
+      n("com.example.Parcels", "Parcels", "Out for delivery", "Your USPS package 9400 1000 0000 0000 0000 00 arrives today by 8 PM. Details: example.com/p/9400", 16, { category: "other" }),
       n("com.hammerandchisel.discord", "Discord", "#release", "ci passed on main, tagging v0.4 now", 41),
       // Other chat apps stay in the Feed (tug can't reply to them), even from a name that also
       // texts you: Teams' Jane Doe never joins her Messages conversation. A WhatsApp code still
@@ -430,6 +434,9 @@ const messages: SmsMessage[] = noPhone
       // so the dev view shows the blue/green tinting when the phone distinguishes them.
       sms("in", "are you coming tonight?", 40),
       sms("out", "yeah! leaving soon", 38),
+      // Smart actions in a bubble (lib/smartActions): the parcel number tracks on UPS and the link
+      // opens, inline in the text.
+      sms("in", "sent you the shoes 👟 tracking 1Z999AA10123456784, should land Thu. receipt's at example.com/orders/1042", 20),
       // Photos arrive as words over MAP ("Attachment: 2 Photos"); the thread shows photo chips.
       sms("in", "Attachment: 2 Photos", 6),
       sms("in", "the view from up here\nAttachment: 1 Photo", 5),
