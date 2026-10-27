@@ -20,10 +20,49 @@ pub enum Command {
     },
     /// `tug status`
     Status,
+    /// `tug play`, `pause`, `next`, `previous`, `toggle` (or `tug music <that>`): the phone's music.
+    Music(Music),
+    /// `tug now`: what's playing on the phone.
+    Now,
     /// `tug mcp`: the MCP server AI tools start (stdio).
     Mcp,
     Help,
     Version,
+}
+
+/// What `tug play` and friends ask the phone's music player to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Music {
+    Play,
+    Pause,
+    Toggle,
+    Next,
+    Previous,
+}
+
+impl Music {
+    /// The word `media_control` takes.
+    pub fn action(self) -> &'static str {
+        match self {
+            Music::Play => "play",
+            Music::Pause => "pause",
+            Music::Toggle => "toggle",
+            Music::Next => "next",
+            Music::Previous => "previous",
+        }
+    }
+
+    /// The verb as typed, aliases included (`skip`, `prev`, `back`, `playpause`).
+    fn from_word(w: &str) -> Option<Music> {
+        Some(match w {
+            "play" | "resume" => Music::Play,
+            "pause" | "stop" => Music::Pause,
+            "toggle" | "playpause" => Music::Toggle,
+            "next" | "skip" => Music::Next,
+            "previous" | "prev" | "back" => Music::Previous,
+            _ => return None,
+        })
+    }
 }
 
 /// How long `tug boat` waits for the phone.
@@ -55,11 +94,22 @@ tug: your iPhone, from the terminal (tug must be running)
   tug boat <file>...         send files to your iPhone with Tugboat; tug asks you to confirm first
                              --wait <secs> (default 120, at most 600) or --no-wait
   tug boat - --name <name>   send what's piped in, as a file called <name>
-  tug text <name> \"<msg>\"    text someone; tug asks you to confirm first
+  tug text <name> \"<msg>\"    text someone; tug asks you to confirm first (unless you've turned on
+                             Settings › Developer tools › Send tug text without asking)
+  tug next / previous        skip the song on your iPhone (also: play, pause, toggle)
+  tug now                    what's playing on your iPhone
   tug status                 is tug running, and how's the phone
   tug mcp                    the MCP server for AI tools (they start it; see Settings › Developer tools)
 
 AI tools need Settings › Developer tools › Let AI tools use tug switched on, and so does this command.";
+
+/// The command line as text, never panicking: `std::env::args()` panics on an argument that isn't
+/// valid Unicode (a lone UTF-16 surrogate another program passed), and the release build aborts on
+/// a panic. Such an argument is read lossily (U+FFFD for what can't be decoded), so it's simply an
+/// unknown argument and gets the usage.
+pub fn lossy(args: impl IntoIterator<Item = std::ffi::OsString>) -> Vec<String> {
+    args.into_iter().map(|a| a.to_string_lossy().into_owned()).collect()
+}
 
 /// Parse the arguments after the program name. `Err` is a sentence to print with the usage.
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -79,6 +129,15 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "help" | "--help" | "-h" | "/?" => Ok(Command::Help),
         "version" | "--version" | "-V" => no_more(Command::Version),
         "status" => no_more(Command::Status),
+        "now" | "playing" | "np" => no_more(Command::Now),
+        "music" | "song" => match rest.as_slice() {
+            [] => Ok(Command::Now),
+            [w] => Music::from_word(&w.to_ascii_lowercase())
+                .map(Command::Music)
+                .ok_or_else(|| format!("`tug music` doesn't know {w:?}. Try play, pause, next or previous.")),
+            [_, extra, ..] => Err(format!("`tug music` takes one word, not {extra:?}.")),
+        },
+        w if Music::from_word(w).is_some() => no_more(Command::Music(Music::from_word(w).expect("checked"))),
         "mcp" => no_more(Command::Mcp),
         "code" => match rest.as_slice() {
             [] => Ok(Command::Code { copy: false }),
@@ -177,6 +236,44 @@ mod tests {
 
     fn p(args: &[&str]) -> Result<Command, String> {
         parse(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn a_non_unicode_argument_is_read_lossily_not_a_panic() {
+        use std::ffi::OsString;
+        #[cfg(windows)]
+        let odd = {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[0x0041, 0xD800, 0x0042])
+        };
+        #[cfg(unix)]
+        let odd = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(vec![b'A', 0xFF, b'B'])
+        };
+        assert!(odd.to_str().is_none(), "the test argument really isn't Unicode");
+        let argv = lossy([OsString::from("status"), odd]);
+        assert_eq!(argv, vec!["status".to_string(), "A\u{FFFD}B".to_string()]);
+        assert!(parse(&argv).is_err(), "an unknown argument, not a crash");
+        assert_eq!(parse(&lossy([OsString::from("status")])), Ok(Command::Status));
+    }
+
+    #[test]
+    fn music_verbs_and_their_aliases() {
+        assert_eq!(p(&["next"]), Ok(Command::Music(Music::Next)));
+        assert_eq!(p(&["skip"]), Ok(Command::Music(Music::Next)));
+        assert_eq!(p(&["prev"]), Ok(Command::Music(Music::Previous)));
+        assert_eq!(p(&["back"]), Ok(Command::Music(Music::Previous)));
+        assert_eq!(p(&["play"]), Ok(Command::Music(Music::Play)));
+        assert_eq!(p(&["pause"]), Ok(Command::Music(Music::Pause)));
+        assert_eq!(p(&["toggle"]), Ok(Command::Music(Music::Toggle)));
+        assert_eq!(p(&["music", "Next"]), Ok(Command::Music(Music::Next)));
+        assert_eq!(p(&["music"]), Ok(Command::Now));
+        assert_eq!(p(&["now"]), Ok(Command::Now));
+        assert!(p(&["next", "please"]).is_err());
+        assert!(p(&["music", "louder"]).unwrap_err().contains("doesn't know"));
+        assert!(p(&["music", "next", "now"]).is_err());
+        assert_eq!(Music::Previous.action(), "previous");
     }
 
     #[test]

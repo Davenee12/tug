@@ -21,7 +21,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_APP, WM_HOTKEY,
 };
 
-use super::{decide, keystrokes, newest, CodeFilled, FillOutcome, Keys, Plan, MAX_AGE_MS};
+use super::{decide, judge_typing, keystrokes, newest, CodeFilled, FillOutcome, Keys, Plan, MAX_AGE_MS};
 
 /// The one hotkey tug registers.
 const HOTKEY_ID: i32 = 1;
@@ -158,11 +158,20 @@ fn fill(app: &AppHandle) -> CodeFilled {
             report(outcome)
         }
         Plan::Type { code, from } => {
-            wait_for_release();
-            // The person may have switched windows while letting go: type only where they pressed.
-            if foreground_target() != target {
-                log::info!("type-the-code shortcut: the window changed; not typed");
-                return report(FillOutcome::NoTarget);
+            // Held Ctrl, Alt or Shift would turn the digits into shortcuts in the app: wait for
+            // them, and if one is still down when the wait runs out, type nothing. The person may
+            // also have switched windows while letting go: type only where they pressed.
+            let released = wait_for_release();
+            match judge_typing(released, foreground_target() == target) {
+                Some(FillOutcome::KeysHeld) => {
+                    log::info!("type-the-code shortcut: keys still held after the wait; not typed");
+                    return report(FillOutcome::KeysHeld);
+                }
+                Some(outcome) => {
+                    log::info!("type-the-code shortcut: the window changed; not typed");
+                    return report(outcome);
+                }
+                None => {}
             }
             if type_text(&code) {
                 log::info!("code filled by the shortcut");

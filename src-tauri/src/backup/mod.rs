@@ -67,6 +67,13 @@ pub enum Phase {
     Failed,
 }
 
+/// Why reading a backup stopped early (`read_backup`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    Cancelled,
+    Failed(Problem),
+}
+
 /// Why a backup couldn't be read or imported; the window says it in its own words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -303,14 +310,13 @@ impl BackupService {
                 Ok(scan) => Ok((session, scan)),
                 Err(_) => {
                     log::warn!("backup: couldn't compare the backup with tug's history");
-                    self.fail(Problem::Failed);
-                    Err(Phase::Failed)
+                    Err(Stop::Failed(Problem::Failed))
                 }
             }
         });
         // One press, one action: a Cancel that landed while it read or compared still cancels.
         let result = match result {
-            Ok(_) if cancel.load(Ordering::Relaxed) => Err(Phase::Cancelled),
+            Ok(_) if cancel.load(Ordering::Relaxed) => Err(Stop::Cancelled),
             other => other,
         };
         let mut st = self.state();
@@ -325,7 +331,7 @@ impl BackupService {
                     s.scan = Some(scan);
                 });
             }
-            Err(Phase::Cancelled) => {
+            Err(Stop::Cancelled) => {
                 drop(st);
                 log::info!(
                     "backup: reading cancelled after {:.1} s",
@@ -336,8 +342,11 @@ impl BackupService {
                     s.progress = None;
                 });
             }
-            // Failed: the status already says why.
-            Err(_) => {}
+            // Only now, with the job cleared: a "try again" straight away is accepted.
+            Err(Stop::Failed(problem)) => {
+                drop(st);
+                self.fail(problem);
+            }
         }
     }
 
@@ -362,19 +371,18 @@ impl BackupService {
         });
     }
 
-    /// Returns the read session, or the phase it stopped in (`Cancelled`, or `Failed` after the
-    /// status says why).
+    /// Returns the read session, or why it stopped. Nothing here says it stopped: `open_job` does,
+    /// once the job is cleared, so a status that says it stopped always takes a new Open.
     fn read_backup(
         &self,
         folder: &Path,
         info: BackupInfo,
         password: Option<Zeroizing<String>>,
         cancel: &AtomicBool,
-    ) -> Result<Session, Phase> {
+    ) -> Result<Session, Stop> {
         let fail = |p: Problem, why: &str| {
             log::warn!("backup: couldn't read it: {why}");
-            self.fail(p);
-            Phase::Failed
+            Stop::Failed(p)
         };
         if let Some(p) = info.problem {
             return Err(fail(p.into(), "not a readable backup"));
@@ -401,15 +409,14 @@ impl BackupService {
                     self.update(|s| s.progress = Some((done as f64 / total).min(1.0)));
                     !cancel.load(Ordering::Relaxed)
                 })
-                .ok_or(Phase::Cancelled)?;
+                .ok_or(Stop::Cancelled)?;
             drop(password);
             let keys = bag.unlock(&key).ok_or_else(|| {
                 log::info!(
                     "backup: the password didn't unlock it ({:.1} s)",
                     t.elapsed().as_secs_f64()
                 );
-                self.fail(Problem::WrongPassword);
-                Phase::Failed
+                Stop::Failed(Problem::WrongPassword)
             })?;
             log::info!("backup: unlocked in {:.1} s", t.elapsed().as_secs_f64());
             Some(keys)
@@ -417,7 +424,7 @@ impl BackupService {
             None
         };
         if cancel.load(Ordering::Relaxed) {
-            return Err(Phase::Cancelled);
+            return Err(Stop::Cancelled);
         }
         self.update(|s| {
             s.phase = Phase::Reading;
@@ -440,7 +447,7 @@ impl BackupService {
             !cancel.load(Ordering::Relaxed)
         })
         .map_err(|e| match e {
-            decrypt::CopyError::Cancelled => Phase::Cancelled,
+            decrypt::CopyError::Cancelled => Stop::Cancelled,
             decrypt::CopyError::Write(_) => fail(Problem::CantWrite, "Manifest.db copy"),
             _ => fail(Problem::Unreadable, "Manifest.db"),
         })?;
@@ -465,7 +472,7 @@ impl BackupService {
         let _ = std::fs::remove_file(&manifest_db);
 
         let sms_db = temp.file("sms.db");
-        let extract = |entry: &FileEntry, dest: &Path| -> Result<(), Phase> {
+        let extract = |entry: &FileEntry, dest: &Path| -> Result<(), Stop> {
             let src = entry
                 .path_in(folder)
                 .ok_or_else(|| fail(Problem::Unreadable, "file id"))?;
@@ -481,7 +488,7 @@ impl BackupService {
             };
             decrypt::copy_file(&src, dest, key.as_ref(), entry.size, || !cancel.load(Ordering::Relaxed)).map_err(
                 |e| match e {
-                    decrypt::CopyError::Cancelled => Phase::Cancelled,
+                    decrypt::CopyError::Cancelled => Stop::Cancelled,
                     decrypt::CopyError::Write(_) => fail(Problem::CantWrite, "Messages database copy"),
                     _ => fail(Problem::Unreadable, "Messages database"),
                 },

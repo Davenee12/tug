@@ -18,7 +18,8 @@ fn main() {
     use tug_lib::toast::native::{self, Toast, POWERSHELL_AUMID};
     use tug_lib::toast::xml::{decode, notification_toast, ToastSpec};
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Lossily, never a panic on an argument that isn't valid Unicode (tug_lib::launch_args).
+    let args: Vec<String> = tug_lib::launch_args().skip(1).collect();
     let value = |flag: &str| {
         args.iter()
             .position(|a| a == flag)

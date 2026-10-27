@@ -15,11 +15,11 @@ use std::process::ExitCode;
 use args::Command;
 use tug_bridge::client::{time_limit, Client, ClientError};
 use tug_bridge::protocol::{
-    Call, ClientInfo, ClientKind, CodeResult, OfferResult, Progress, SendResult, StatusResult, StdinFile,
+    Call, ClientInfo, ClientKind, CodeResult, OfferResult, PhoneStatus, Progress, SendResult, StatusResult, StdinFile,
 };
 
 fn main() -> ExitCode {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let argv = args::lossy(std::env::args_os().skip(1));
     let command = match args::parse(&argv) {
         Ok(c) => c,
         Err(e) => {
@@ -100,33 +100,98 @@ async fn run(command: Command) -> i32 {
             stdin_name,
             wait,
         } => boat(&c, &files, stdin_name, wait).await,
-        Command::Text { to, message } => {
-            let call = call_as::<SendResult>(&c, Call::SendText { to, message });
-            tokio::pin!(call);
-            // Only once tug has accepted the request and is showing the card (an error, like the
-            // switch being off, comes back at once).
-            let answer = tokio::select! {
-                r = &mut call => r,
-                _ = tokio::time::sleep(std::time::Duration::from_millis(800)) => {
-                    eprintln!("Check tug: Send or Don't send (it won't send by itself; 2 minutes)…");
-                    let _ = std::io::stderr().flush();
-                    call.await
+        Command::Text { to, message } => text(&c, to, message).await,
+        Command::Music(m) => music(&c, m).await,
+        Command::Now => match call_as::<PhoneStatus>(&c, Call::PhoneStatus).await {
+            Ok(p) => {
+                let (line, ok) = format::now_playing_line(&p);
+                println!("{line}");
+                if ok {
+                    format::OK
+                } else {
+                    format::FAILED
                 }
-            };
-            match answer {
-                Ok(r) => {
-                    let (line, ok) = format::send_outcome(&r);
-                    println!("{line}");
-                    if ok {
-                        format::OK
-                    } else {
-                        format::FAILED
-                    }
-                }
-                Err(e) => fail(&e),
+            }
+            Err(e) => fail(&e),
+        },
+        Command::Mcp | Command::Help | Command::Version => format::OK,
+    }
+}
+
+/// `tug text`: ask tug to send it. Typed in a terminal, it says so, and with "Send `tug text`
+/// without asking" on tug sends it straight away; otherwise tug shows its card. tug says which
+/// (`Progress`), and this passes it on on stderr; the outcome goes to stdout.
+async fn text(c: &Client, to: String, message: String) -> i32 {
+    use std::io::IsTerminal;
+    let call = Call::SendText {
+        to,
+        message,
+        progress: true,
+        typed: std::io::stdin().is_terminal(),
+    };
+    let mut say = |p: Progress| {
+        if let Some(line) = format::text_progress(&p) {
+            eprintln!("{line}");
+            let _ = std::io::stderr().flush();
+        }
+    };
+    let answer = c.call_with_progress(c.info(), &call, time_limit(&call), &mut say).await;
+    match answer.and_then(|v| {
+        serde_json::from_value::<SendResult>(v).map_err(|e| ClientError::Other(format!("unexpected answer: {e}")))
+    }) {
+        Ok(r) => {
+            let (line, ok) = format::send_outcome(&r);
+            println!("{line}");
+            if ok {
+                format::OK
+            } else {
+                format::FAILED
             }
         }
-        Command::Mcp | Command::Help | Command::Version => format::OK,
+        Err(e) => fail(&e),
+    }
+}
+
+/// `tug next` and friends: ask the phone's player, say it was done, and after a skip what's playing
+/// now (once the phone has moved on; only with the Phone status switch on, otherwise just the skip).
+async fn music(c: &Client, m: args::Music) -> i32 {
+    let skip = matches!(m, args::Music::Next | args::Music::Previous);
+    // The song before the skip, so the one after is only printed once it really is another.
+    let before = if skip { playing_line(c).await } else { None };
+    let answer = call_as::<serde_json::Value>(
+        c,
+        Call::MediaControl {
+            action: m.action().into(),
+        },
+    )
+    .await;
+    match answer {
+        Ok(v) => {
+            println!("{}", format::music_done(m, &v));
+            if skip {
+                // The phone takes a moment to tell tug the new song: up to 3 s, never the old one.
+                for _ in 0..10 {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    if let Some(line) = playing_line(c).await {
+                        if before.as_deref() != Some(line.as_str()) {
+                            println!("{line}");
+                            break;
+                        }
+                    }
+                }
+            }
+            format::OK
+        }
+        Err(e) => fail(&e),
+    }
+}
+
+/// What the phone says is playing, as `tug now` prints it, when something is.
+async fn playing_line(c: &Client) -> Option<String> {
+    let p = call_as::<PhoneStatus>(c, Call::PhoneStatus).await.ok()?;
+    match format::now_playing_line(&p) {
+        (line, true) => Some(line),
+        _ => None,
     }
 }
 

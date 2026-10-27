@@ -21,6 +21,36 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.22",
+    title: "A live harbor, Send later and Remind me",
+    highlights: [
+      "The weather card opens on a live harbor: the real sun, moon and wind, rain to the quarter-hour, and your new texts floating by in bottles.",
+      "With rain on the way and your phone low, the weather card tells you to charge it before you head out.",
+      "Send later: write a text now and pick when tug sends it through your iPhone.",
+      "Remind me: put a text or notification aside and have it come back later.",
+      "Links, numbers, addresses and parcel numbers in texts are one click, and a Welcome back card sums up what you missed.",
+      "Report a problem from Settings › About, and updates now roll out gradually.",
+    ],
+  },
+  {
+    version: "0.5.21",
+    title: "Texts from the terminal, and voice typing fixes",
+    highlights: [
+      "Turn on Send tug text without asking (Settings › Developer tools) and tug text sends straight away, no click.",
+      "Voice typing no longer types made-up words after a cough or a mumble.",
+      "Fixes for voice typing's switch and speech model download.",
+    ],
+  },
+  {
+    version: "0.5.20",
+    title: "Faster voice typing, and fixes",
+    highlights: [
+      "Voice typing's Accurate engine is about 12 times faster: a short phrase is typed in about a quarter of a second.",
+      "Ctrl+Shift+V waits for you to let go of the keys before it types a code.",
+      "App icons and a few other small fixes.",
+    ],
+  },
+  {
     version: "0.5.19",
     title: "Accurate voice typing, still on your PC",
     highlights: [

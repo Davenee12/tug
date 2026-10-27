@@ -58,7 +58,7 @@ env:
   # A real release: a tag push, or a manual run with dry run off.
   RELEASING: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
   # The Tauri CLI the sign job runs (the version package-lock.json has), installed without scripts.
-  TAURI_CLI: "@tauri-apps/cli@2.12.1"
+  TAURI_CLI: "@tauri-apps/cli@2.12.3"
 
 jobs:
   build:
@@ -132,6 +132,13 @@ jobs:
       # (scripts/remap-paths.mjs: rustc's paths, and the target folder trimmed from the C/C++
       # whisper.cpp's __FILE__ strings), then the NSIS installer.
       - run: npm run build:release
+
+      # whisper.cpp must be compiled optimised (/O2, NDEBUG) for AVX2: v0.5.19 shipped it unoptimised
+      # (the cmake crate's flags replaced CMake's Release ones) and voice typing's accurate engine
+      # took about 3 s a phrase instead of 0.25 s. Reads the build's CMake cache; see .cargo/config.toml.
+      - name: whisper.cpp is compiled optimised
+        shell: bash
+        run: node scripts/release-assets.mjs whisper release
 
       - name: No local paths in the exes
         shell: bash

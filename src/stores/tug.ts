@@ -46,7 +46,7 @@ import { canSeeWindow } from "../lib/attention";
 import { grantedOnceCache } from "../lib/permission";
 import { arrivedDuringGap, GAP_COLLECT_MS, gapSummaryText, planGapPopups } from "../lib/reconnectPopups";
 import type { ToastSpec } from "../types/protocol";
-import { isKnownConversation, outgoingAddresses, senderIndex, senderMayToast, threadCounts } from "../lib/senders";
+import { isKnownConversation, linksTrusted, outgoingAddresses, senderIndex, senderMayToast, threadCounts } from "../lib/senders";
 import type {
   CallRecord,
   CodeFilled,
@@ -107,6 +107,9 @@ import {
 } from "../lib/sharePrivacy";
 import { useTugboatStore } from "./tugboat";
 import { useDevToolsStore } from "./devtools";
+import { usePickupsStore } from "./pickups";
+import type { PickupKind } from "../lib/pickups";
+import { reminderTitle, type Reminder } from "../lib/reminders";
 
 /** The Spotify panel's tabs. */
 export type SpotifyTab = "search" | "playlists" | "recent" | "top" | "queue";
@@ -152,6 +155,8 @@ const OVERFLOW_TOAST_ID = 2_000_000_001;
 const GAP_TOAST_ID = 2_000_000_002;
 /** The type-the-code shortcut's small confirmation: one at a time (a new one replaces it); a press opens tug. */
 const CODE_FILL_TOAST_ID = 2_000_000_003;
+/** Reminders whose notification is gone get pop-up ids from here (a thousand, reused in turn). */
+const REMINDER_TOAST_BASE = 2_100_000_000;
 
 const EMPTY_STATUS: DeviceStatus = {
   radio: "unknown",
@@ -193,6 +198,11 @@ const EMPTY_NOW_PLAYING: NowPlaying = {
 
 /** A send the iPhone didn't take; the message stays in the conversation with Retry. */
 const NOT_SENT = "Your iPhone didn't send that text. Use Retry when it's nearby.";
+
+/** Something was done from the PC instead of the phone: Pickups saved (stores/pickups). */
+function savedPickup(kind: PickupKind) {
+  void usePickupsStore().count(kind);
+}
 
 export const useTugStore = defineStore("tug", () => {
   const status = ref<DeviceStatus>(EMPTY_STATUS);
@@ -281,6 +291,14 @@ export const useTugStore = defineStore("tug", () => {
   /** With the filter off, everyone is treated as known, exactly as before it existed. */
   function isKnown(c: Pick<Conversation, "appId" | "contact" | "addresses">): boolean {
     return !settings.value.filterUnknown || isKnownConversation(c, senders.value);
+  }
+  /**
+   * Whether web links in this conversation or notification may be one click (lib/senders
+   * `linksTrusted`): Messages from a contact, a number you've texted or one you moved, whatever
+   * Filter unknown senders says. Everything else keeps its links as plain text.
+   */
+  function trustsLinksFrom(c: Pick<Conversation, "appId" | "contact" | "addresses">): boolean {
+    return linksTrusted(c, senders.value);
   }
   const countsTowardUnread = (t: Thread) => !settings.value.filterUnknown || threadCounts(t, senders.value);
 
@@ -643,7 +661,10 @@ export const useTugStore = defineStore("tug", () => {
     { immediate: true },
   );
 
-  /** An item to scroll to and highlight after navigating from search: `m<id>` or `n<id>`. */
+  /**
+   * An item to scroll to and highlight after navigating from search: `m<id>` (a text), `n<id>` (a
+   * notification) or `c<key>` (a recent call, keyed by `callKeys`).
+   */
   const focusItem = ref<string | null>(null);
 
   /** When each feed entry (conversation or app stack) was last looked at. */
@@ -835,6 +856,7 @@ export const useTugStore = defineStore("tug", () => {
 
   /** The type-the-code shortcut was pressed: a small pop-up says what happened (never the code). */
   function onCodeFilled(e: CodeFilled) {
+    if (e.outcome === "typed") savedPickup("code");
     // Feedback for a key the person just pressed, so Do not disturb doesn't hold it; turning
     // Windows pop-ups off does.
     if (!settings.value.toasts) return;
@@ -888,6 +910,64 @@ export const useTugStore = defineStore("tug", () => {
       }, toasts.windowMs);
     }
     return false;
+  }
+
+  /** Pop-ups shown for reminders whose notification is gone: what pressing them opens. */
+  const reminderToasts = new Map<number, Reminder>();
+  let reminderToastSeq = 0;
+
+  /** Show what a reminder is about: the conversation, or the notification in the Feed. */
+  function openReminder(r: Reminder) {
+    searchOpen.value = false;
+    pickerOpen.value = false;
+    closeSettings();
+    if (r.threadKey) {
+      openThread(r.threadKey);
+    } else if (r.notificationId !== null && notifications.value.some((n) => n.id === r.notificationId)) {
+      view.value = "feed";
+      focusItem.value = `n${r.notificationId}`;
+    }
+  }
+
+  /**
+   * A reminder came due (stores/reminders): a note in the window, and a Windows pop-up unless
+   * pop-ups are off. While the notification is still in tug the pop-up is its own, buttons and
+   * all, titled as a reminder; otherwise a plain one that opens the conversation. Quiet hours and
+   * Do not disturb don't hold it back: the person asked for it. Hiding previews while the screen
+   * is shared still applies (the pop-up's kind is never `info`).
+   */
+  async function showReminder(r: Reminder) {
+    const title = reminderTitle(r, Date.now());
+    notify("info", title, { label: "Open", run: () => openReminder(r) });
+    if (!settings.value.toasts || !(await hasToastPermission())) return;
+    const n = r.notificationId !== null ? notifications.value.find((x) => x.id === r.notificationId) : undefined;
+    let spec: ToastSpec;
+    if (n) {
+      spec = {
+        ...toastSpec(n, messages.value, contacts.value, {
+          enabled: settings.value.smartReplies,
+          defaults: settings.value.smartReplyDefaults,
+        }),
+        title,
+      };
+    } else {
+      const id = REMINDER_TOAST_BASE + (reminderToastSeq++ % 1000);
+      reminderToasts.set(id, r);
+      spec = {
+        id,
+        title,
+        body: r.body,
+        name: r.title,
+        replyTo: null,
+        markRead: false,
+        code: null,
+        callBack: false,
+        clear: false,
+        app: r.title,
+        kind: r.threadKey ? "message" : "notification",
+      };
+    }
+    void api.showToast(spec).catch(() => undefined);
   }
 
   /** A pop-up that only says something; pressing it opens tug (its id matches no notification). */
@@ -1008,10 +1088,18 @@ export const useTugStore = defineStore("tug", () => {
    * the same way the in-app buttons do.
    */
   function onToastPressed({ kind, id, message }: ToastPressed) {
+    const reminder = reminderToasts.get(id);
+    if (reminder) {
+      if (kind === "open") openReminder(reminder);
+      return;
+    }
     // A reply carries the text as stored: the conversation shows it even if its events never came.
     if (message) addMissingMessages([message], "pop-up reply");
     // A reply the phone didn't take (failed, or not confirmed) leaves the conversation unread.
     if (kind === "replied" && !replyReadsConversation(message)) return;
+    if (kind === "replied") savedPickup("reply");
+    else if (kind === "copied") savedPickup("code");
+    else if (kind === "calledBack") savedPickup("call");
     const n = notifications.value.find((x) => x.id === id);
     if (!n) return;
     if (kind === "open") {
@@ -1139,6 +1227,7 @@ export const useTugStore = defineStore("tug", () => {
       return false;
     }
     notify("info", `Copied ${code}`);
+    savedPickup("code");
     void clearItems(from, { quiet: true });
     return true;
   }
@@ -1216,6 +1305,7 @@ export const useTugStore = defineStore("tug", () => {
     const ok = await attempt(() => api.performAction(n.id, answer).then(() => true));
     if (!ok) return false;
     hideCall(n.id);
+    savedPickup("call");
     if (answer) notify("info", "Answered. Talk on your iPhone.");
     return true;
   }
@@ -1245,6 +1335,7 @@ export const useTugStore = defineStore("tug", () => {
     try {
       await api.dial(number);
       notify("info", `Calling ${name}. Talk on your iPhone.`);
+      savedPickup("call");
       return true;
     } catch (e) {
       notify("error", `Couldn't call ${name}: ${errorMessage(e)}`);
@@ -1278,6 +1369,7 @@ export const useTugStore = defineStore("tug", () => {
       const ok = await attempt(() => api.performAction(missed.id, true).then(() => true));
       if (!ok) return false;
       notify("info", `Calling ${cleanName(name)} back on your iPhone.`);
+      savedPickup("call");
       // The phone logs the call a moment later; show it in Calls without waiting.
       window.setTimeout(() => void api.refreshCalls().catch(() => undefined), 6000);
       return true;
@@ -2234,6 +2326,7 @@ export const useTugStore = defineStore("tug", () => {
     openWhatsNew,
     focusItem,
     seen,
+    seenSince,
     connected,
     init,
     dispose,
@@ -2253,14 +2346,19 @@ export const useTugStore = defineStore("tug", () => {
     markSeen,
     openThread,
     startConversation,
+    openLatestConversation,
     clearItems,
     readConversation,
     warmTexts,
     markAllRead,
     copyCode,
     copyLatestCode,
+    showReminder,
+    openReminder,
+    trustsLinksFrom,
     latestCode,
     codeFeed,
+    clearedCodes,
     clearCode,
     deleteConversation,
     appNameFor,
@@ -2275,6 +2373,7 @@ export const useTugStore = defineStore("tug", () => {
       try {
         const outcome = sendOutcome(await api.sendMessage(address, text));
         if (outcome === "failed") notify("error", NOT_SENT);
+        else savedPickup("reply");
         return outcome;
       } catch (e) {
         notify("error", errorMessage(e));
@@ -2300,7 +2399,9 @@ export const useTugStore = defineStore("tug", () => {
     openUrl: (url: string) => attempt(() => api.openUrl(url)),
     /** True once the phone accepted the write (which isn't the player acting on it). */
     async media(command: MediaCommand): Promise<boolean> {
-      return (await attempt(() => api.mediaCommand(command).then(() => true))) === true;
+      const ok = (await attempt(() => api.mediaCommand(command).then(() => true))) === true;
+      if (ok) savedPickup("music");
+      return ok;
     },
     startDiscovery: () => attempt(api.startDiscovery),
     stopDiscovery: () => {

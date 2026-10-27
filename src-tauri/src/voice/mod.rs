@@ -203,6 +203,8 @@ pub enum VoiceOutcome {
     MicBusy,
     /// The window changed before typing, so nothing was typed.
     NoTarget,
+    /// No window was in front when the keys were pressed, so there was nothing to type into.
+    NoWindow,
     /// Ctrl, Alt, Shift or Windows was still held after the wait, so nothing was typed: the
     /// characters would have gone in as shortcuts.
     KeysHeld,
@@ -260,6 +262,7 @@ pub fn pill_problem(outcome: VoiceOutcome) -> Option<&'static str> {
         VoiceOutcome::NoMic => "No microphone found",
         VoiceOutcome::MicBusy => "The microphone is busy right now. Try again in a moment",
         VoiceOutcome::NoTarget => "The window changed, so nothing was typed",
+        VoiceOutcome::NoWindow => "Click where the text should go, then try again",
         VoiceOutcome::KeysHeld => "Let go of the keys",
         VoiceOutcome::Unavailable => "Voice typing needs a speech language. Open tug's Settings",
         VoiceOutcome::Failed => "Couldn't type that. Try again",
@@ -428,6 +431,10 @@ pub fn settle(enabled: bool, can_listen: bool, attempt: Result<bool, StartError>
 }
 
 static STATUS: Mutex<Option<VoiceStatus>> = Mutex::new(None);
+/// Held for the whole of [`apply`] (and [`resettle`]'s look and apply): the switch, Settings,
+/// a download finishing and startup can each turn voice typing on or off, and one at a time keeps
+/// the shortcut, the status and the saved switch in agreement.
+static APPLYING: Mutex<()> = Mutex::new(());
 static APP: Mutex<Option<AppHandle>> = Mutex::new(None);
 /// Where the speech model lives (`speech\` under tug's local app data), set at startup.
 static MODEL_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -536,13 +543,15 @@ pub fn needs_resettle(s: &VoiceStatus) -> bool {
 /// it ([`needs_resettle`]), so the shortcut and Settings match. Waits for the speech thread (it
 /// lists the languages), so never call it from that thread.
 fn resettle() {
+    // Looked at under the lock: a switch-off that got there first isn't undone.
+    let _one_at_a_time = APPLYING.lock().unwrap_or_else(|e| e.into_inner());
     let s = current();
     if needs_resettle(&s) {
         log::info!(
             "voice typing: what can listen changed while it was {:?}; settling again",
             s.state
         );
-        apply(true, &s.keys, s.language.as_deref());
+        apply_now(true, &s.keys, s.language.as_deref());
     }
 }
 
@@ -578,6 +587,12 @@ fn note_mic_blocked(blocked: bool) {
 /// status says why (`start_error`). Each step is logged before it's tried, so tug.log shows how
 /// far it got.
 pub fn apply(enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
+    let _one_at_a_time = APPLYING.lock().unwrap_or_else(|e| e.into_inner());
+    apply_now(enabled, keys, language)
+}
+
+/// [`apply`], with [`APPLYING`] already held.
+fn apply_now(enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
     let id = known_hotkey(Some(keys));
     log::info!("voice typing: turning {} ({id})", if enabled { "on" } else { "off" });
     log::info!("voice typing: listing the speech languages");
@@ -591,11 +606,13 @@ pub fn apply(enabled: bool, keys: &str, language: Option<&str>) -> VoiceStatus {
     let mut probe = current();
     probe.language = language.clone();
     let can_listen = engine::pick_engine(&engine_inputs(&probe)).is_some();
+    // A failed listing only stops voice typing when nothing else can listen: with the speech
+    // model there, Accurate listens without Windows' languages.
     let attempt = match (enabled, listed) {
         (false, _) => Ok(false),
+        (true, _) if can_listen => set_registration(parse_hotkey(id)),
         (true, Err(e)) => Err(e),
-        (true, Ok(_)) if !can_listen => Ok(false),
-        (true, Ok(_)) => set_registration(parse_hotkey(id)),
+        (true, Ok(_)) => Ok(false),
     };
     if let Err(e) = &attempt {
         log::warn!("voice typing couldn't start: {}", e.detail());
@@ -784,7 +801,6 @@ pub fn download_model() -> VoiceStatus {
                 ),
                 Err(e) => log::warn!("voice typing: speech model download stopped: {}", e.detail()),
             }
-            DOWNLOADING.store(false, Ordering::SeqCst);
             let ok = result.is_ok();
             update(|s| {
                 s.model = model::status_on_disk(&dir, &model::MODEL);
@@ -793,6 +809,8 @@ pub fn download_model() -> VoiceStatus {
                     s.accurate_problem = None;
                 }
             });
+            // Only now: a Download clicked earlier would have its status overwritten by this one.
+            DOWNLOADING.store(false, Ordering::SeqCst);
             // On a PC with no Windows speech language, the model is what lets voice typing listen:
             // register the shortcut now rather than leave it unavailable.
             resettle();

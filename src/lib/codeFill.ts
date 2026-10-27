@@ -104,6 +104,8 @@ export function fillFeedback(e: CodeFilled, hotkey: string): { title: string; bo
       return { title: "No recent code", body: "Codes from the last 10 minutes can be typed." };
     case "noTarget":
       return { title: "Click where the code goes", body: `Then press ${hotkeyLabel(hotkey)} again.` };
+    case "keysHeld":
+      return { title: "Let go of the keys", body: `Press ${hotkeyLabel(hotkey)}, then let go to type the code.` };
     case "failed":
       return { title: "Couldn't type the code", body: "Copy it from tug instead." };
   }

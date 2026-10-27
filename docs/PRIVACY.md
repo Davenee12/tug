@@ -58,9 +58,19 @@ Disconnect any time in Settings › Connectors, which removes the stored sign-in
 
 **Automatic updates** only ever contact GitHub. Like any web request, GitHub sees your IP address
 and that a copy of tug asked for its latest version; GitHub's privacy statement applies to that.
-tug sends no identifier, no version history and nothing from your phone. A downloaded update is
+tug sends no identifier, no version history and nothing from your phone. New versions roll out
+gradually: each copy of tug picks a random number from 0 to 99 once and keeps it to itself, and
+takes a new version automatically once the rollout reaches that number (Check for updates always
+takes it). The number is never sent anywhere. A downloaded update is
 checked against tug's signing key before it can be installed, and tug only restarts to install it
 when you click **Update** (or quit from the tray).
+
+**Report a problem** (Settings › About) sends nothing by itself: it copies the diagnostics (with
+phone numbers, names and message contents removed, as for Copy diagnostics) to your clipboard and
+opens GitHub's bug report form in your browser with tug's version and your Windows version filled
+in. Nothing reaches anyone unless you read it, paste what you choose and submit the issue, which is
+public. tug also notes, in a small file on your PC, whether it closed normally; if this version
+didn't last time, it offers that report once.
 
 ## Features that stay local
 

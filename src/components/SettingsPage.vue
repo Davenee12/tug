@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
-import { Bell, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, History, Info, MessageSquare, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
+import { Bell, Bug, Check, CircleAlert, ClipboardList, CloudSun, FolderOpen, History, Info, MessageSquare, Minus, Music, Plug, Plus, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, X } from "lucide-vue-next";
 import { useBackupStore } from "../stores/backup";
 import { importedLine } from "../lib/backupImport";
 import BackupImport from "./BackupImport.vue";
 import { api, errorMessage } from "../lib/ipc";
+import { reportProblem, REPORT_OPENED } from "../lib/report";
 import { useTugStore, type SettingsSection } from "../stores/tug";
 import { useWeatherStore } from "../stores/weather";
 import { usePcAudioStore } from "../stores/pcAudio";
 import { useUpdateStore } from "../stores/update";
+import { usePickupsStore } from "../stores/pickups";
 import { connectionHealth, errorAge, type HealthLink, type LinkState } from "../lib/health";
 import { stepZoom } from "../lib/zoom";
 import { escClosesSettings } from "../lib/escape";
@@ -33,6 +35,8 @@ const pcAudio = usePcAudioStore();
 const pcView = computed(() => pcAudio.view);
 // Data & privacy › What goes online: update checks are listed only when this build makes them.
 const update = useUpdateStore();
+const pickups = usePickupsStore();
+void pickups.load();
 const whatGoesOnline = computed(
   () =>
     "Weather, only if you turn it on: the place you pick (rounded to about 1 km) goes to the forecast service, and 'Use my location' asks a lookup service for the town's name. App icons: each app's ID (like com.google.Gmail, never what it sent you) goes to Apple's App Store once. Album art: the artist and album name of what's playing go to Apple's music catalog when tug doesn't have that album's cover yet." +
@@ -108,6 +112,14 @@ async function copyDiagnostics() {
     window.setTimeout(() => (diagnostics.value = "idle"), 2500);
   } catch (e) {
     diagnostics.value = "idle";
+    tug.notify("error", errorMessage(e));
+  }
+}
+async function report() {
+  try {
+    await reportProblem(false);
+    tug.notify("info", REPORT_OPENED);
+  } catch (e) {
     tug.notify("error", errorMessage(e));
   }
 }
@@ -897,6 +909,11 @@ async function clearHistory() {
         <template v-else>
           <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow label="tug" :description="version ? `Version ${version}` : 'Version unavailable'" />
+            <SettingsRow
+              v-if="pickups.aboutLine"
+              label="Pickups saved"
+              :description="`${pickups.aboutLine} Replies, codes, calls and music handled from this PC, counted here and never sent anywhere.`"
+            />
             <UpdateSettings />
             <SettingsRow label="What's new" description="See what changed in this and earlier updates.">
               <button class="btn-secondary btn-sm" @click="tug.openWhatsNew()">
@@ -913,6 +930,14 @@ async function clearHistory() {
             >
               <button class="btn-secondary btn-sm" :disabled="diagnostics === 'copying'" @click="copyDiagnostics">
                 <ClipboardList :size="14" /> {{ diagnostics === "done" ? "Copied" : "Copy diagnostics" }}
+              </button>
+            </SettingsRow>
+            <SettingsRow
+              label="Report a problem"
+              description="Opens a bug report on GitHub with your version filled in, and copies the diagnostics for you to read through and paste. tug sends nothing itself."
+            >
+              <button class="btn-secondary btn-sm" @click="report">
+                <Bug :size="14" /> Report a problem
               </button>
             </SettingsRow>
           </div>

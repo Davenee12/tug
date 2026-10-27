@@ -452,7 +452,16 @@ Universal CRT. The release workflow checks the exes' import tables (`release-ass
 and fails on any DLL that isn't part of Windows. `.cargo/config.toml` fixes ggml's instruction set at AVX2 + FMA + F16C +
 BMI2 (`GGML_NATIVE=OFF`), so a release built on a CI runner with AVX-512 still runs everywhere;
 `voice::engine::cpu_supported` checks for those before whisper.cpp is ever called, and keeps Basic
-on a processor without them. Only ggml's CPU backend (`ggml-cpu`) is compiled with `/arch:AVX2`, and
+on a processor without them. It also sets `CMAKE_C_FLAGS_RELEASE`/`CMAKE_CXX_FLAGS_RELEASE` to
+`/MT /O2 /Ob2 /DNDEBUG`: whisper-rs-sys always builds CMake's Release configuration, and with Visual
+Studio's generator the `cmake` crate otherwise replaces those flags with its own (no `/O2`, no
+`/DNDEBUG`), which is how v0.5.19 shipped whisper.cpp unoptimised and about 12 times slower. Cargo
+doesn't rerun whisper-rs-sys's build script when those values change, so `BINDGEN_EXTRA_CLANG_ARGS`
+(which it does watch) carries a `TUG_WHISPER_BUILD` number to bump with them. CI checks the result:
+`release-assets.mjs whisper <profile>` reads the build's `CMakeCache.txt` and `ggml-cpu.vcxproj` and
+fails unless the Release flags have `/O2`, `/DNDEBUG` and `/MT`, MSBuild compiles ggml-cpu at
+MaxSpeed with NDEBUG, and the GGML options are the fixed AVX2 set (release.yml on the release
+build, check.yml on the tests'). Only ggml's CPU backend (`ggml-cpu`) is compiled with `/arch:AVX2`, and
 it has no static initializers; the inline STL and CRT functions it shares with the plain-x64
 libraries are the copies from whisper.cpp's objects, which the linker meets first. (Not tried on a
 processor without AVX2: whisper.cpp is never called there, and that's all tug can promise.) `scripts/remap-paths.mjs` passes MSVC's `/d1trimfile:<target folder>` so
@@ -517,7 +526,7 @@ Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` besid
 (the full-history wizard's words and steps), `attachments`
 ("Attachment: 1 Photo" → a photo chip), `attention`
 (is the window really visible), `battery`, `callKeys` (no keystroke answers or declines a call), `coalesce` (one render per frame for bursts of
-updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs),
+updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs, and the recent calls a search finds: they live in the window, not the database),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),
 `devtools`, `errorReport`, `escape`, `feedPaging` (keep paging while the Feed's end is in view),
 `format` (conversation grouping and display), `health`, `latest` (newest request wins: late
@@ -527,7 +536,7 @@ answers never land), `layout` (sidebar density and "wide", from sizes that follo
 `pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `seen` (when each Feed entry was last looked at, with other chat apps' old per-person
 times folded onto their stack once), `senders`
-(unknown-sender filter), `sharePrivacy` (hiding previews while sharing: the banner, Show anyway, a pop-up's kind), `singleFlight` (one press, one action), `smartReplies` (suggested replies: the rules, and when there are none), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
+(unknown-sender filter), `sharePrivacy` (hiding previews while sharing: the banner, Show anyway, a pop-up's kind), `singleFlight` (one press, one action), `smartActions` (links, email addresses, phone numbers, street addresses and parcel numbers in a text made one click: what counts, and what never does), `smartReplies` (suggested replies: the rules, and when there are none), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `startup` (startup reads that fail are retried, never block), `threadWindow` (long conversations render their newest texts first),
 `quickActions` (routing a taskbar task, one take at a time), `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
 scoring, the speed curve, inertia, the weather's handling, merging the controls), `tugboatDaily` (the
@@ -596,6 +605,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?nudge` | Texts and contacts off: the Feed's "Get more from tug" nudge |
 | `/?lasterror`, `/?textsbroken`, `/?livetexts` | Connection health states |
 | `/?away` | The phone out of range, last model kept |
+| `/?welcomeback` | Back after 1 h 20 min away: the Feed's "Welcome back" card summing up what arrived meanwhile |
 | `/?model=iPhone12,8`, `/?nomodel` | A specific phone model / none reported |
 | `/?pairing` | The PIN confirmation dialog |
 | `/?call` | A call rings after 1.5 s (and becomes a missed call) |

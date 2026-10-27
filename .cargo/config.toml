@@ -22,6 +22,21 @@ rustflags = ["-C", "target-feature=+crt-static"]
 # The static runtime for whisper.cpp's own CMake targets too (CMake's default is /MD whatever the
 # flags say), matching crt-static above.
 CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
+# Optimised, without asserts. whisper-rs-sys always builds CMake's Release configuration, and with
+# Visual Studio's generator the cmake crate *replaces* CMAKE_<LANG>_FLAGS_RELEASE with its own flags,
+# which carry no /O2 and no /DNDEBUG, unless they're set here. In a release build (CMAKE_BUILD_TYPE
+# Release) that compiled whisper.cpp unoptimised with its asserts on: v0.5.19 took about 3 s to
+# recognize a short phrase instead of a quarter of a second. (Debug builds escaped it by accident:
+# there the cmake crate overwrote the RelWithDebInfo flags instead.) /MT is the static runtime, as
+# above. `node scripts/release-assets.mjs whisper <profile>` checks the result in CI.
+CMAKE_C_FLAGS_RELEASE = "/MT /O2 /Ob2 /DNDEBUG"
+CMAKE_CXX_FLAGS_RELEASE = "/MT /O2 /Ob2 /DNDEBUG"
+# Changing a value in this section doesn't make cargo run whisper-rs-sys's build script again: it
+# only watches its header and a few variables, so a target folder (or CI's cache) would keep the
+# whisper.cpp it built before. BINDGEN_EXTRA_CLANG_ARGS is one it watches, so this harmless define
+# (it only reaches bindgen's reading of whisper.h) is the rebuild switch: bump the number whenever
+# you change anything above.
+BINDGEN_EXTRA_CLANG_ARGS = "-DTUG_WHISPER_BUILD=2"
 # A fixed instruction set instead of "whatever the build machine has": a release built on a CI
 # runner with AVX-512 must still run on a laptop without it. AVX2 + FMA + F16C (+ BMI2) is every
 # Intel CPU since Haswell (2013) and every AMD Ryzen; tug checks for them at run time and keeps the
