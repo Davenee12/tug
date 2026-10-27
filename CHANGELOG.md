@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+On main, for the next release.
+
+### New
+- **Voice typing: Most accurate.** An opt-in engine for names and other languages (Whisper
+  large-v3-turbo, an 834 MB one-time download). It's much slower than Accurate, which stays the
+  default. It has its own language setting.
+- **Your own words:** a personal dictionary in Settings, and the names of the people you text most,
+  help voice typing spell them. All on your PC; it can be switched off.
+- **App-aware voice typing:** in code editors and terminals it expects code words, in chat and mail
+  names and everyday phrases.
+- Voice typing's model downloads by itself, once, when you turn it on or pick an engine, with
+  progress and Cancel in Settings. **Delete downloaded models** frees the space.
+- **Support tug** (Settings › About and the README): sponsor tug on GitHub.
+- tug has a **website**: davenee12.github.io/tug.
+
+### Fixed
+- After the iPhone comes back, texts reconnect within seconds instead of up to 5 minutes when the
+  phone's message access isn't ready at first.
+- A notifications permission check cut off by a brief Bluetooth drop is re-checked in seconds,
+  rather than logged as a failure.
+
+### Under the hood
+- Updated tokio, plist, rmcp, the Tauri CLI, vite and vitest.
+
 ## v0.5.22 — 2026-10-27
 
 A live harbor on the weather card, Send later, Remind me, one-click links and addresses in texts, a
