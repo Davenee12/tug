@@ -93,6 +93,15 @@ jobs:
             echo "::error::Releases are built only from commits on main; $GITHUB_SHA isn't on main."
             exit 1
           fi
+          # GitHub refuses this run's token permission to create the release ("HTTP 403: Resource
+          # not accessible by integration", v0.5.22) when the tagged commit's workflow files differ
+          # from main's: that would take a token that can change workflows, which GITHUB_TOKEN never
+          # is. Say so now, not after the build and the signing approval.
+          if ! git diff --quiet "$GITHUB_SHA" origin/main -- .github/workflows; then
+            echo "::error::main's workflow files have changed since $GITHUB_SHA, so GitHub won't let this run create the release. Tag main's latest commit instead (bump the version there if it has moved on)."
+            git diff --stat "$GITHUB_SHA" origin/main -- .github/workflows
+            exit 1
+          fi
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

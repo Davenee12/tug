@@ -188,7 +188,12 @@ README.
    ```
 
    The tag must match the version files exactly, and the commit must be on `main`, or the workflow
-   stops before building.
+   stops before building. Tag **main's latest commit**, right after the release PR merges: if
+   anything that changes `.github/workflows` has merged since, GitHub refuses the run's token
+   permission to create the release ("HTTP 403: Resource not accessible by integration"), so the
+   workflow stops before building and says so. Bump the version on main's tip and tag that instead.
+   (v0.5.22 hit this: its draft had to be made by hand from the run's signed files, with
+   `gh run download <run> --name tug-<version>` and `gh release create`.)
 3. **Watch the run** under Actions › release (about 45–60 minutes: the full `npm run check`, then the
    release build). When `build` is done, the run waits on **Review deployments**: check it's your
    tag, then approve `release` so `sign` can run. With SignPath set up, approve its request too.
