@@ -80,6 +80,16 @@ async fn fail<W: AsyncWrite + Unpin>(w: &mut W, code: ErrorCode, message: &str) 
 /// Serve one connection: hello → challenge → call → answer. Any stream works, so the whole
 /// exchange is tested over an in-memory pipe.
 pub async fn handle_connection<S: AsyncRead + AsyncWrite + Send + Unpin>(stream: S, handler: &dyn Handler) {
+    handle_connection_from(stream, handler, None).await;
+}
+
+/// `handle_connection`, knowing which app started the caller (`launcher`, looked up by tug from
+/// the pipe; the caller can't say).
+pub async fn handle_connection_from<S: AsyncRead + AsyncWrite + Send + Unpin>(
+    stream: S,
+    handler: &dyn Handler,
+    launcher: Option<String>,
+) {
     let (r, mut w) = tokio::io::split(stream);
     let mut r = BufReader::new(r);
 
@@ -91,11 +101,12 @@ pub async fn handle_connection<S: AsyncRead + AsyncWrite + Send + Unpin>(stream:
     let ClientMsg::Hello {
         v,
         nonce: client_nonce,
-        client,
+        mut client,
     } = hello
     else {
         return fail(&mut w, ErrorCode::Invalid, "Say hello first.").await;
     };
+    client.launcher = launcher;
     if v != PROTOCOL_VERSION {
         return fail(&mut w, ErrorCode::Version, VERSION_MESSAGE).await;
     }
@@ -238,8 +249,22 @@ pub async fn serve(
             continue;
         }
         let handler = handler.clone();
+        // Which process is at the other end comes from Windows, not from anything it says.
+        let client_pid = {
+            use std::os::windows::io::AsRawHandle;
+            crate::win::pipe_client_pid(windows::Win32::Foundation::HANDLE(conn.as_raw_handle()))
+        };
         tokio::spawn(async move {
-            handle_connection(conn, &*handler).await;
+            // Reading the process list takes a moment: off the runtime's threads, and never a
+            // reason to refuse the call.
+            let launcher = match client_pid {
+                Some(pid) => tokio::task::spawn_blocking(move || crate::win::launcher_of(pid))
+                    .await
+                    .ok()
+                    .flatten(),
+                None => None,
+            };
+            handle_connection_from(conn, &*handler, launcher).await;
             drop(permit);
         });
     }

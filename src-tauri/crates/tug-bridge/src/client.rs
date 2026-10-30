@@ -406,6 +406,7 @@ mod tests {
         ClientInfo {
             name: "test-agent".into(),
             kind: ClientKind::Mcp,
+            launcher: None,
         }
     }
 

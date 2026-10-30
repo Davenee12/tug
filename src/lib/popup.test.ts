@@ -26,6 +26,7 @@ const baseSettings: UiSettings = {
   smartReplies: true,
   smartReplyDefaults: ["👍", "OK", "Talk soon"],
   hidePreviewsWhileSharing: true,
+  pauseMediaOnCall: true,
   focus: { enabled: false, fullScreen: true, meetings: true, coding: false },
 };
 const settings = (over: Partial<UiSettings> = {}): UiSettings => ({ ...baseSettings, ...over });

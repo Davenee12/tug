@@ -18,7 +18,7 @@ pub const CONFIRM_TIMEOUT_MS: i64 = 2 * 60 * 1000;
 #[serde(rename_all = "camelCase")]
 pub struct ConfirmRequest {
     pub id: u64,
-    /// Who's asking, as it named itself ("claude-code", "tug command").
+    /// Who's asking, tamed (`ClientInfo::asker`): "Claude Code (an AI tool)", "An AI tool", "tug command".
     pub tool: String,
     /// What it wants to send: `kind` says which.
     #[serde(flatten)]
@@ -194,10 +194,10 @@ mod tests {
     #[test]
     fn json_shapes_match_protocol_ts() {
         let mut c = Confirmations::default();
-        let t = c.open("Claude Code".into(), text(), 0).unwrap();
+        let t = c.open("Claude Code (an AI tool)".into(), text(), 0).unwrap();
         assert_eq!(
             serde_json::to_value(&t).unwrap(),
-            serde_json::json!({"id": 1, "tool": "Claude Code", "kind": "text", "toName": "Sam",
+            serde_json::json!({"id": 1, "tool": "Claude Code (an AI tool)", "kind": "text", "toName": "Sam",
                 "toAddress": "+15550100", "message": "On my way", "expiresAt": CONFIRM_TIMEOUT_MS})
         );
         c.cancel();

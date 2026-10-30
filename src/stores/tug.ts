@@ -45,6 +45,18 @@ import { batteryAlert, restoreBatteryAlerted, saveBatteryAlerted } from "../lib/
 import { isAddressLike, normalizeAddress } from "../lib/address";
 import { byArrival, missingMessages, RESYNC_LIMIT, settledMessages, shouldResync, warmDue } from "../lib/messageSync";
 import { canSeeWindow } from "../lib/attention";
+import {
+  IDLE as CALL_PAUSE_IDLE,
+  missedCall,
+  nextTick,
+  OFFER_TEXT,
+  resumePressed,
+  ringStarted,
+  ringStopped,
+  tick as callPauseTick,
+  type CallPause,
+  type CallPauseNext,
+} from "../lib/callPause";
 import { grantedOnceCache } from "../lib/permission";
 import { arrivedDuringGap, GAP_COLLECT_MS, gapSummaryText, planGapPopups } from "../lib/reconnectPopups";
 import type { ToastSpec } from "../types/protocol";
@@ -260,6 +272,7 @@ export const useTugStore = defineStore("tug", () => {
     smartReplies: true,
     smartReplyDefaults: [...DEFAULT_REPLIES],
     hidePreviewsWhileSharing: true,
+    pauseMediaOnCall: true,
     focus: { ...DEFAULT_FOCUS },
   });
   /** The type-the-code shortcut as the backend registered it (Settings shows "in use" from this). */
@@ -488,6 +501,62 @@ export const useTugStore = defineStore("tug", () => {
   const canSee = computed(() =>
     canSeeWindow({ visibility: pageVisible.value ? "visible" : "hidden", focused: windowFocused.value, overlayOpen: overlayOpen.value }),
   );
+
+  // --- Pause music and videos on this PC while the iPhone rings (lib/callPause decides when; the
+  // backend's pc_media/ picks what to pause and plays only what's still as tug left it). ---
+  /** The call ringing on the phone, card or not: hiding the card here doesn't stop the ringing. */
+  const phoneRinging = computed(
+    () => notifications.value.find((n) => n.category === "incomingCall" && n.live && n.removedAt == null)?.id ?? null,
+  );
+  let callPause: CallPause = CALL_PAUSE_IDLE;
+  let callPauseTimer: number | undefined;
+  /** Answer (true) or Decline pressed here, by call, so the ringing's end can say how it ended. */
+  const callAnswers = new Map<number, boolean>();
+  /**
+   * Pause, play and let go run one after another: a call declined while the pause is still on its
+   * way must play again what that pause held, not find nothing to play. Resolves to how many
+   * things tug holds paused.
+   */
+  let pcMedia: Promise<number> = Promise.resolve(0);
+  function queuePcMedia(run: () => Promise<number>) {
+    pcMedia = pcMedia.then(run).catch(() => 0);
+  }
+  /** Resume is waiting for someone to see it. */
+  const resumeOffered = ref(false);
+  function stepCallPause(next: CallPauseNext) {
+    callPause = next.state;
+    window.clearTimeout(callPauseTimer);
+    callPauseTimer = undefined;
+    const at = nextTick(callPause);
+    if (at != null) {
+      callPauseTimer = window.setTimeout(() => stepCallPause(callPauseTick(callPause, Date.now())), Math.max(0, at - Date.now()));
+    }
+    if (next.step !== null) resumeOffered.value = false;
+    if (next.step === "pause") queuePcMedia(() => api.pcMediaPause());
+    else if (next.step === "resume") queuePcMedia(() => api.pcMediaResume().then(() => 0));
+    else if (next.step === "release") queuePcMedia(() => api.pcMediaRelease().then(() => 0));
+    else if (next.step === "offer") {
+      // Only when something was paused, and still on offer by the time the pause has answered.
+      void pcMedia.then((held) => {
+        if (held > 0 && callPause.phase === "answered") resumeOffered.value = true;
+      });
+    }
+  }
+  watch(phoneRinging, (now, before) => {
+    if (before != null && before !== now) {
+      const answered = callAnswers.get(before);
+      callAnswers.delete(before);
+      const how = answered === undefined ? "unknown" : answered ? "answered" : "declined";
+      stepCallPause(ringStopped(callPause, before, how, Date.now()));
+    }
+    if (now != null && now !== before) stepCallPause(ringStarted(callPause, now, settings.value.pauseMediaOnCall));
+  });
+  // The offer shows once tug is in front, after anything already on the flash (Answered) has gone.
+  watch([resumeOffered, canSee, flash], ([offered, seen, showing]) => {
+    if (!offered || !seen || showing) return;
+    resumeOffered.value = false;
+    notify("info", OFFER_TEXT, { label: "Resume", run: () => stepCallPause(resumePressed(callPause)) });
+  });
 
   // --- Hide previews while sharing or presenting (lib/sharePrivacy; the backend's share_privacy/
   // decides, and hides pop-up text itself). One source: the backend's answer plus this setting. ---
@@ -1452,8 +1521,15 @@ export const useTugStore = defineStore("tug", () => {
    * taken down here too. The call's audio stays on the iPhone.
    */
   async function respondToCall(n: PhoneNotification, answer: boolean): Promise<boolean> {
+    // Before asking: the phone can drop the ringing call before the answer comes back.
+    callAnswers.set(n.id, answer);
     const ok = await attempt(() => api.performAction(n.id, answer).then(() => true));
-    if (!ok) return false;
+    if (!ok) {
+      callAnswers.delete(n.id);
+      return false;
+    }
+    // The phone may keep the ringing notification a while after answering: don't wait for it.
+    stepCallPause(ringStopped(callPause, n.id, answer ? "answered" : "declined", Date.now()));
     hideCall(n.id);
     savedPickup("call");
     if (answer) notify("info", "Answered. Talk on your iPhone.");
@@ -1625,6 +1701,7 @@ export const useTugStore = defineStore("tug", () => {
       smartReplies: raw["ui.smartReplies"] !== "false",
       smartReplyDefaults: parseReplyDefaults(raw["ui.smartReplyDefaults"]),
       hidePreviewsWhileSharing: raw["ui.hidePreviewsWhileSharing"] !== "false",
+      pauseMediaOnCall: raw["ui.pauseMediaOnCall"] !== "false",
       focus: focusSettingsFrom(raw["ui.focus"]),
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
@@ -1730,6 +1807,8 @@ export const useTugStore = defineStore("tug", () => {
         if (canSee.value && view.value === "messages" && selectedThread.value === threadKey(n)) markSeen(threadKey(n));
         if (added && arrivedDuringGap(n, linkLostAt, Date.now())) queueGapPopup(n);
         else if (added) void maybeToast(n);
+        // A missed call: nobody is talking, so what was paused for it can play again.
+        if (added && n.category === "missedCall" && !n.flags.preExisting) stepCallPause(missedCall(callPause));
       }),
       on("notification-removed", (id) => {
         const at = Date.now();
@@ -1904,6 +1983,9 @@ export const useTugStore = defineStore("tug", () => {
     window.clearTimeout(spotifySongTimer);
     spotifySongTimer = undefined;
     window.clearTimeout(flashTimer);
+    window.clearTimeout(callPauseTimer);
+    callPauseTimer = undefined;
+    callPause = CALL_PAUSE_IDLE;
     window.clearInterval(watchRenew);
     window.clearInterval(switchesRenew);
     switchesRenew = undefined;

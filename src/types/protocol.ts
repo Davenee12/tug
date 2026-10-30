@@ -415,6 +415,8 @@ export interface UiSettings {
   smartReplyDefaults: string[];
   /** While the screen is shared or presented, pop-ups and the window hide texts and names (on by default; read by the backend, `share_privacy/`). */
   hidePreviewsWhileSharing: boolean;
+  /** Pause music and videos playing on this PC while the iPhone rings (on by default; lib/callPause, `pc_media/`). */
+  pauseMediaOnCall: boolean;
   /** Focus mode: hold pop-ups while you're focused, then one summary (read by the backend too, `focus_mode/`). */
   focus: FocusSettings;
 }
@@ -993,7 +995,7 @@ export interface DevToolsClient {
 /** What the "send this?" card has in common (`ConfirmRequest`). */
 interface DevToolsConfirmBase {
   id: number;
-  /** Who's asking, as it named itself. */
+  /** Who's asking, as tug names it for the card (`ClientInfo::asker`): "Claude Code (an AI tool)", "An AI tool", "tug command". */
   tool: string;
   /** Unix ms after which it counts as not sent. */
   expiresAt: number;

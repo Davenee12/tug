@@ -72,6 +72,7 @@ mod tests {
         ClientInfo {
             name: name.into(),
             kind,
+            launcher: None,
         }
     }
 

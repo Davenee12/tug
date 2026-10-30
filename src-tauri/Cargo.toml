@@ -92,6 +92,8 @@ windows = { version = "0.62", features = [
   "Devices_Radios",
   "Media",
   "Media_Audio",
+  # Pausing music and videos on this PC while the iPhone rings (GlobalSystemMediaTransportControls).
+  "Media_Control",
   "Media_Playback",
   "Networking",
   "Networking_Sockets",

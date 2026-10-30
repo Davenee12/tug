@@ -289,6 +289,12 @@ const SHORTCUTS = computed(() => {
 
 const UNITS = ["f", "c"] as const;
 
+// ---- iPhone › Calls: pause what plays on this PC while the phone rings (lib/callPause) ----
+const pauseMediaOnCall = computed({
+  get: () => tug.settings.pauseMediaOnCall,
+  set: (v) => void tug.setSetting("pauseMediaOnCall", v),
+});
+
 // ---- iPhone: experimental calling, on only after the hands-free check passes ----
 const checkingCalls = ref(false);
 async function checkCalls() {
@@ -580,6 +586,12 @@ function openSponsor() {
               <button v-else class="btn-secondary btn-sm" :disabled="checkingCalls || !tug.status.device" @click="checkCalls">
                 {{ checkingCalls ? "Checking…" : "Check" }}
               </button>
+            </SettingsRow>
+            <SettingsRow
+              label="Pause music and videos on this PC when your iPhone rings"
+              description="They play again when you miss or decline the call. tug can't tell when a call you answered ends, so then it offers Resume instead. It never plays something you paused or changed yourself."
+            >
+              <SettingsSwitch v-model="pauseMediaOnCall" label="Pause music and videos on this PC when your iPhone rings" />
             </SettingsRow>
           </div>
 

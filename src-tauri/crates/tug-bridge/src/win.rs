@@ -265,6 +265,74 @@ pub fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     })
 }
 
+/// The process at the other end of a pipe tug serves, as Windows knows it (`None` if it won't say).
+pub fn pipe_client_pid(pipe: HANDLE) -> Option<u32> {
+    use windows::Win32::System::Pipes::GetNamedPipeClientProcessId;
+    let mut pid = 0u32;
+    // SAFETY: plain FFI on a pipe handle the caller owns for the duration of the call.
+    unsafe { GetNamedPipeClientProcessId(pipe, &mut pid) }.ok()?;
+    (pid != 0).then_some(pid)
+}
+
+/// Every running process: id, parent id and exe name (no paths, nothing else).
+fn processes() -> Option<Vec<crate::launcher::Process>> {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    // SAFETY: plain FFI; the snapshot handle is closed below and each entry is a local buffer
+    // sized as the API requires.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        let mut more = Process32FirstW(snap, &mut entry).is_ok();
+        while more {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            out.push(crate::launcher::Process {
+                pid: entry.th32ProcessID,
+                parent: entry.th32ParentProcessID,
+                exe: String::from_utf16_lossy(&entry.szExeFile[..len]),
+            });
+            more = Process32NextW(snap, &mut entry).is_ok();
+        }
+        let _ = CloseHandle(snap);
+        Some(out)
+    }
+}
+
+/// When a process started (100 ns ticks since 1601), if Windows lets this user ask.
+fn started(pid: u32) -> Option<u64> {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: plain FFI; the process handle is closed below.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let (mut created, mut exited, mut kernel, mut user) = (
+            FILETIME::default(),
+            FILETIME::default(),
+            FILETIME::default(),
+            FILETIME::default(),
+        );
+        let got = GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user);
+        let _ = CloseHandle(process);
+        got.ok()?;
+        Some((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+    }
+}
+
+/// The exe that started the tug command at the other end of the pipe (`Cursor.exe`), or `None`
+/// (see `launcher::launcher`).
+pub fn launcher_of(client_pid: u32) -> Option<String> {
+    crate::launcher::launcher(&processes()?, client_pid, started)
+}
+
 /// The owner and label of a file, for tests.
 #[cfg(test)]
 fn file_sddl_of(path: &Path) -> io::Result<String> {

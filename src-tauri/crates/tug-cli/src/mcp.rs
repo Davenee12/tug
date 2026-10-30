@@ -359,6 +359,8 @@ impl ServerHandler for TugMcp {
         let info = ClientInfo {
             name: caller_name(peer.as_ref().map(|p| &p.client_info), context.meta.client_info()),
             kind: ClientKind::Mcp,
+            // tug looks this up itself, from its side of the pipe.
+            launcher: None,
         };
         let result = match self.client.call_as_client(&info, &call, time_limit(&call)).await {
             Ok(v) => CallToolResult::success(result_content(&name, v)),

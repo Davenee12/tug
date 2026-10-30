@@ -28,6 +28,7 @@ pub mod map;
 mod media_keys;
 mod messages;
 mod pc_audio;
+mod pc_media;
 #[cfg(test)]
 mod perf;
 mod pin_confirm;
@@ -348,6 +349,9 @@ pub fn run() {
             commands::pc_audio_status,
             commands::pc_audio_set,
             commands::pc_audio_set_auto,
+            commands::pc_media_pause,
+            commands::pc_media_resume,
+            commands::pc_media_release,
             commands::pair_texts,
             commands::set_advertising,
             commands::get_settings,
