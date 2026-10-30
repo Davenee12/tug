@@ -1808,7 +1808,7 @@ export const useTugStore = defineStore("tug", () => {
         if (added && arrivedDuringGap(n, linkLostAt, Date.now())) queueGapPopup(n);
         else if (added) void maybeToast(n);
         // A missed call: nobody is talking, so what was paused for it can play again.
-        if (added && n.category === "missedCall" && !n.flags.preExisting) stepCallPause(missedCall(callPause));
+        if (added && n.category === "missedCall" && !n.flags.preExisting) stepCallPause(missedCall(callPause, Date.now()));
       }),
       on("notification-removed", (id) => {
         const at = Date.now();
@@ -1985,6 +1985,9 @@ export const useTugStore = defineStore("tug", () => {
     window.clearTimeout(flashTimer);
     window.clearTimeout(callPauseTimer);
     callPauseTimer = undefined;
+    // Let go of what Rust holds too: a reloaded window has lost the call it was paused for, and a
+    // later call ending mustn't play it again hours on.
+    if (callPause.phase !== "idle") void api.pcMediaRelease().catch(() => undefined);
     callPause = CALL_PAUSE_IDLE;
     window.clearInterval(watchRenew);
     window.clearInterval(switchesRenew);

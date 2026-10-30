@@ -23,10 +23,13 @@ export const OFFER_MS = 2 * 60 * 60 * 1000;
 
 export type CallPause =
   | { phase: "idle" }
-  /** A call is ringing and tug asked Windows to pause what was playing. */
-  | { phase: "ringing"; call: number }
+  /**
+   * A call is ringing and tug asked Windows to pause what was playing. `onCall`: an earlier call
+   * was answered and may still be going (call waiting), so this one ending never plays anything.
+   */
+  | { phase: "ringing"; call: number; onCall: boolean }
   /** The ringing stopped; waiting until `until` for a missed call before treating it as answered. */
-  | { phase: "settling"; until: number }
+  | { phase: "settling"; until: number; onCall: boolean }
   /** Answered (or so it seems): Resume is on offer until `until`. */
   | { phase: "answered"; until: number };
 
@@ -48,23 +51,33 @@ export function ringStarted(s: CallPause, call: number, enabled: boolean): CallP
   if (!enabled) return { state: s, step: null };
   if (s.phase === "ringing" && s.call === call) return { state: s, step: null };
   // A second call (call waiting) pauses anything that started since; Rust keeps what it paused before.
-  return { state: { phase: "ringing", call }, step: "pause" };
+  const onCall = s.phase === "answered" || (s.phase !== "idle" && s.onCall);
+  return { state: { phase: "ringing", call, onCall }, step: "pause" };
+}
+
+/**
+ * Nobody is talking any more, as far as this call goes: play again, unless an earlier answered
+ * call may still be going, when Resume stays on offer instead (never music in someone's ear).
+ */
+function callOver(onCall: boolean, now: number): CallPauseNext {
+  if (onCall) return { state: { phase: "answered", until: now + OFFER_MS }, step: "offer" };
+  return { state: IDLE, step: "resume" };
 }
 
 /** The ringing call stopped ringing. */
 export function ringStopped(s: CallPause, call: number, how: RingEnd, now: number): CallPauseNext {
   if (s.phase !== "ringing" || s.call !== call) return { state: s, step: null };
-  if (how === "declined") return { state: IDLE, step: "resume" };
+  if (how === "declined") return callOver(s.onCall, now);
   if (how === "answered") return { state: { phase: "answered", until: now + OFFER_MS }, step: "offer" };
-  return { state: { phase: "settling", until: now + MISSED_WAIT_MS }, step: null };
+  return { state: { phase: "settling", until: now + MISSED_WAIT_MS, onCall: s.onCall }, step: null };
 }
 
 /**
  * A missed call arrived (new to tug, not replayed after a reconnect). It can come just before the
  * ringing call's removal, or after it, so it counts while ringing too.
  */
-export function missedCall(s: CallPause): CallPauseNext {
-  if (s.phase === "ringing" || s.phase === "settling") return { state: IDLE, step: "resume" };
+export function missedCall(s: CallPause, now: number): CallPauseNext {
+  if (s.phase === "ringing" || s.phase === "settling") return callOver(s.onCall, now);
   return { state: s, step: null };
 }
 

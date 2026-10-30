@@ -13,7 +13,7 @@ import {
 } from "./callPause";
 
 const T = 1_000_000;
-const ringing = (call = 7): CallPause => ({ phase: "ringing", call });
+const ringing = (call = 7): CallPause => ({ phase: "ringing", call, onCall: false });
 
 describe("pausing while the iPhone rings", () => {
   it("pauses when a call starts ringing, once per call", () => {
@@ -28,7 +28,7 @@ describe("pausing while the iPhone rings", () => {
 
   it("pauses again for a second call, even after an answered one", () => {
     const answered: CallPause = { phase: "answered", until: T + OFFER_MS };
-    expect(ringStarted(answered, 8, true)).toEqual({ state: ringing(8), step: "pause" });
+    expect(ringStarted(answered, 8, true)).toEqual({ state: { phase: "ringing", call: 8, onCall: true }, step: "pause" });
     expect(ringStarted(ringing(7), 8, true).step).toBe("pause");
   });
 });
@@ -48,12 +48,12 @@ describe("after the ringing stops", () => {
 
   it("plays again when a missed call follows the ringing", () => {
     const stopped = ringStopped(ringing(), 7, "unknown", T);
-    expect(stopped).toEqual({ state: { phase: "settling", until: T + MISSED_WAIT_MS }, step: null });
-    expect(missedCall(stopped.state)).toEqual({ state: IDLE, step: "resume" });
+    expect(stopped).toEqual({ state: { phase: "settling", until: T + MISSED_WAIT_MS, onCall: false }, step: null });
+    expect(missedCall(stopped.state, T)).toEqual({ state: IDLE, step: "resume" });
   });
 
   it("plays again when the missed call comes before the ringing call's removal", () => {
-    expect(missedCall(ringing())).toEqual({ state: IDLE, step: "resume" });
+    expect(missedCall(ringing(), T)).toEqual({ state: IDLE, step: "resume" });
   });
 
   it("treats the call as answered when no missed call comes in time", () => {
@@ -62,13 +62,13 @@ describe("after the ringing stops", () => {
     const answered = tick(stopped, T + MISSED_WAIT_MS);
     expect(answered).toEqual({ state: { phase: "answered", until: T + MISSED_WAIT_MS + OFFER_MS }, step: "offer" });
     // A missed call that turns up much later is some other call: it doesn't start anything.
-    expect(missedCall(answered.state).step).toBeNull();
+    expect(missedCall(answered.state, T).step).toBeNull();
   });
 
   it("only follows the call it paused for", () => {
     expect(ringStopped(ringing(7), 8, "declined", T)).toEqual({ state: ringing(7), step: null });
     expect(ringStopped(IDLE, 7, "declined", T)).toEqual({ state: IDLE, step: null });
-    expect(missedCall(IDLE)).toEqual({ state: IDLE, step: null });
+    expect(missedCall(IDLE, T)).toEqual({ state: IDLE, step: null });
   });
 
   it("plays again when Resume is pressed, once", () => {
@@ -81,7 +81,18 @@ describe("after the ringing stops", () => {
   it("says when to look again", () => {
     expect(nextTick(IDLE)).toBeNull();
     expect(nextTick(ringing())).toBeNull();
-    expect(nextTick({ phase: "settling", until: T })).toBe(T);
+    expect(nextTick({ phase: "settling", until: T, onCall: false })).toBe(T);
     expect(nextTick({ phase: "answered", until: T })).toBe(T);
+  });
+
+  it("never plays during call waiting while the first call may still be going", () => {
+    const answered = ringStopped(ringing(1), 1, "answered", T).state;
+    const second = ringStarted(answered, 2, true);
+    expect(second.step).toBe("pause");
+    // The second call is declined: the first is still on, so Resume stays on offer.
+    expect(ringStopped(second.state, 2, "declined", T + 1000).step).toBe("offer");
+    // Or it rings out and a missed call arrives: the same.
+    const settled = ringStopped(second.state, 2, "unknown", T + 1000).state;
+    expect(missedCall(settled, T + 2000)).toEqual({ state: { phase: "answered", until: T + 2000 + OFFER_MS }, step: "offer" });
   });
 });
