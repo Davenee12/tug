@@ -357,8 +357,8 @@ function countsOf(groups: WelcomeGroup[]): WelcomeCounts {
   return counts;
 }
 
-/** "While you were away (1 h 20 min): 7 texts from 3 people, 2 missed calls, 12 notifications" */
-export function headline(away: string, c: WelcomeCounts): string {
+/** What the counts say, in order: ["7 texts from 3 people", "2 missed calls", "12 notifications"]. */
+export function countParts(c: WelcomeCounts): string[] {
   const parts: string[] = [];
   const said = c.texts + c.chats;
   if (said) {
@@ -369,6 +369,12 @@ export function headline(away: string, c: WelcomeCounts): string {
   if (c.missedCalls) parts.push(plural(c.missedCalls, "missed call"));
   if (c.codes) parts.push(plural(c.codes, "verification code"));
   if (c.notifications) parts.push(plural(c.notifications, "notification"));
+  return parts;
+}
+
+/** "While you were away (1 h 20 min): 7 texts from 3 people, 2 missed calls, 12 notifications" */
+export function headline(away: string, c: WelcomeCounts): string {
+  const parts = countParts(c);
   return `While you were away (${away})${parts.length ? `: ${parts.join(", ")}` : ""}`;
 }
 

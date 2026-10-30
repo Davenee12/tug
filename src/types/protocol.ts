@@ -411,6 +411,22 @@ export interface UiSettings {
   smartReplyDefaults: string[];
   /** While the screen is shared or presented, pop-ups and the window hide texts and names (on by default; read by the backend, `share_privacy/`). */
   hidePreviewsWhileSharing: boolean;
+  /** Focus mode: hold pop-ups while you're focused, then one summary (read by the backend too, `focus_mode/`). */
+  focus: FocusSettings;
+}
+
+/**
+ * Settings › Notifications › Focus mode (`focus_mode::FocusSettings`). Off until turned on; then a
+ * full-screen app and a meeting count, and coding only if chosen.
+ */
+export interface FocusSettings {
+  enabled: boolean;
+  /** A full-screen app, game or presentation is in front. */
+  fullScreen: boolean;
+  /** Another app is using the microphone or camera. */
+  meetings: boolean;
+  /** A code editor or terminal is in front. */
+  coding: boolean;
 }
 
 /**
@@ -457,6 +473,15 @@ export type ShareReason = "sharing" | "presenting" | "fullScreen" | "unknown";
 export interface ShareState {
   active: boolean;
   reason: ShareReason | null;
+}
+
+/** Why Focus mode is holding pop-ups (`focus_mode::Reason`). */
+export type FocusReason = "meeting" | "fullScreen" | "coding";
+
+/** Whether Focus mode is holding pop-ups right now (`focus-state`, `focus_state`, `focus_mode/`). */
+export interface FocusState {
+  active: boolean;
+  reason: FocusReason | null;
 }
 
 /** A pop-up's body or button was pressed and carried out (`toast-pressed`, `toast/mod.rs`). */

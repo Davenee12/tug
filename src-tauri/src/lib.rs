@@ -18,6 +18,7 @@ mod device_info;
 mod device_kind;
 mod devtools;
 mod diagnostics;
+mod focus_mode;
 mod forgotten;
 mod frontend_log;
 pub mod hfp;
@@ -222,6 +223,9 @@ pub fn run() {
             // on screen or a pop-up finds something to hide.
             #[cfg(windows)]
             share_privacy::start(app.handle(), &shared.store);
+            // Focus mode: a thread that sleeps until the owner turns Focus mode on.
+            #[cfg(windows)]
+            focus_mode::start(app.handle(), &shared.store);
             // Voice typing: off by default; when the owner turned it on, its shortcut is back now.
             voice::start(app.handle(), &shared.store);
             app.manage(AppState {
@@ -390,6 +394,7 @@ pub fn run() {
             commands::dial,
             commands::show_toast,
             commands::screen_share_watch,
+            commands::focus_state,
             commands::copy_diagnostics,
             commands::report_problem,
             commands::unclean_exit,

@@ -22,7 +22,8 @@ import { replyAddress, replyReadsConversation, sendOutcome, toastSpec } from "..
 import { clearHistory as clearHistoryNow } from "../lib/clearHistory";
 import { foldChatAppSeen } from "../lib/seen";
 import { DEFAULT_REPLIES, parseReplyDefaults } from "../lib/smartReplies";
-import { shouldPopUp, type PopupEvent } from "../lib/popup";
+import { popupDecision, type PopupDecision, type PopupEvent } from "../lib/popup";
+import { DEFAULT_FOCUS, FocusSpell, focusSettingsFrom, focusStatus, focusSummary, type HeldSpell } from "../lib/focusMode";
 import { isVip, vipIndex } from "../lib/vips";
 import { applyZoom, installZoomShortcuts } from "../lib/zoom";
 import { ToastLimiter } from "../lib/toastLimiter";
@@ -55,6 +56,7 @@ import type {
   DeviceStatus,
   SmsMessage,
   DiscoveredDevice,
+  FocusState,
   MediaCommand,
   NowPlaying,
   PairingRequest,
@@ -155,6 +157,8 @@ const OVERFLOW_TOAST_ID = 2_000_000_001;
 const GAP_TOAST_ID = 2_000_000_002;
 /** The type-the-code shortcut's small confirmation: one at a time (a new one replaces it); a press opens tug. */
 const CODE_FILL_TOAST_ID = 2_000_000_003;
+/** Focus mode's "While you were focused" summary: one at a time; a press opens the Feed. */
+const FOCUS_TOAST_ID = 2_000_000_004;
 /** Reminders whose notification is gone get pop-up ids from here (a thousand, reused in turn). */
 const REMINDER_TOAST_BASE = 2_100_000_000;
 
@@ -251,19 +255,21 @@ export const useTugStore = defineStore("tug", () => {
     smartReplies: true,
     smartReplyDefaults: [...DEFAULT_REPLIES],
     hidePreviewsWhileSharing: true,
+    focus: { ...DEFAULT_FOCUS },
   });
   /** The type-the-code shortcut as the backend registered it (Settings shows "in use" from this). */
   const codeHotkey = ref<CodeHotkeyStatus>({ state: "off", keys: DEFAULT_CODE_HOTKEY });
 
   /** Who is a VIP (always let through), rebuilt when the list or the contacts change. */
   const vips = computed(() => vipIndex(settings.value.vips, contacts.value));
-  /** The pop-up policy event for a notification: its app, whether it's a call, and VIP status. */
+  /** The pop-up policy event for a notification: its app, whether it's a call or a code, and VIP status. */
   function popupEventFor(n: PhoneNotification): PopupEvent {
     const address = n.appId === MESSAGES_APP ? replyAddress(n, messages.value, contacts.value) : null;
     return {
       appId: n.appId,
       isCall: n.category === "incomingCall",
       isVip: isVip(vips.value, { name: n.title, address }),
+      isCode: findCode(n.message || n.subtitle) !== null,
     };
   }
 
@@ -772,8 +778,47 @@ export const useTugStore = defineStore("tug", () => {
    */
   let markReady: () => void = () => undefined;
   let ready = new Promise<void>((resolve) => (markReady = resolve));
-  /** Whether the settings let a pop-up through right now, for a given event (see lib/popup). */
-  const popupAllowed = (event: PopupEvent) => shouldPopUp(event, settings.value, new Date());
+  /** What the settings and Focus mode do with a pop-up right now, for a given event (see lib/popup). */
+  const popupDecisionFor = (event: PopupEvent): PopupDecision =>
+    popupDecision(event, settings.value, new Date(), focusState.value.active);
+  const popupAllowed = (event: PopupEvent) => popupDecisionFor(event) === "show";
+
+  // --- Focus mode (lib/focusMode; the backend's focus_mode/ says when a focus starts and ends).
+  // While focused, pop-ups are held (lib/popup), and the end of the focus sums them up in one. ---
+  const focusState = ref<FocusState>({ active: false, reason: null });
+  const focusSpell = new FocusSpell();
+  /** Settings' line while pop-ups are held ("Holding pop-ups now: …"), or null. */
+  const focusStatusText = computed(() => focusStatus(settings.value.focus, focusState.value));
+  function setFocusState(s: FocusState) {
+    const was = focusState.value.active;
+    focusState.value = s;
+    if (s.active) focusSpell.start(Date.now());
+    if (was && !s.active) {
+      const spell = focusSpell.end(Date.now());
+      if (spell) void showFocusSummary(spell);
+    }
+  }
+  /**
+   * The focus ended: one pop-up for what it held, if anything still waits (seen in tug or cleared
+   * on the phone since doesn't count). The summary is a pop-up like any other: Windows pop-ups off,
+   * Do not disturb and quiet hours hold it too, and everything is in the Feed regardless.
+   */
+  async function showFocusSummary(spell: HeldSpell) {
+    await ready;
+    const summary = focusSummary({
+      spell,
+      now: Date.now(),
+      notifications: notifications.value,
+      messages: messages.value,
+      contacts: contacts.value,
+      seenAt: (key) => seen.value[key] ?? seenSince.value,
+      isKnown,
+      clearedCodes: clearedCodes.value,
+    });
+    if (!summary || !popupAllowed({ appId: "", isCall: false, isVip: false })) return;
+    if (!(await hasToastPermission())) return;
+    showInfoToast(FOCUS_TOAST_ID, summary.title, summary.body);
+  }
 
   // Low phone battery: one pop-up at 20% and one at 10% per discharge (see lib/battery). The mark
   // is saved (ui.batteryAlerted), so restarting tug mid-discharge doesn't announce 20% again.
@@ -792,8 +837,8 @@ export const useTugStore = defineStore("tug", () => {
       setBatteryAlerted(r.alerted);
       return;
     }
-    // A low-battery alert is a system pop-up (no app, no VIP): held by Windows pop-ups off, DND or
-    // quiet hours, like any other.
+    // A low-battery alert is a system pop-up (no app, no VIP): held by Windows pop-ups off, DND,
+    // quiet hours or Focus mode, like any other (and shown at the next reading once it can be).
     if (!settings.value.lowBattery) return;
     if (!popupAllowed({ appId: "", isCall: false, isVip: false }) || !(await hasToastPermission())) return;
     setBatteryAlerted(r.alerted);
@@ -976,14 +1021,20 @@ export const useTugStore = defineStore("tug", () => {
     void api.showToast(spec).catch(() => undefined);
   }
 
-  /** The settings let this notification pop up (sender filter, muted apps, DND, quiet hours, VIPs). */
-  function popupEligible(n: PhoneNotification): boolean {
-    if (n.flags.silent) return false;
+  /**
+   * What the settings do with this notification's pop-up (sender filter, muted apps, DND, quiet
+   * hours, VIPs, Focus mode). One held for Focus mode is noted for its summary.
+   */
+  function notificationPopup(n: PhoneNotification): PopupDecision {
+    if (n.flags.silent) return "held";
     // Unknown senders wait quietly in their own list, unless the text carries a one-time code.
-    if (settings.value.filterUnknown && !senderMayToast(n, senders.value)) return false;
-    // Settings policy: muted apps, Do not disturb, quiet hours, VIP let-through, call handling.
-    return popupAllowed(popupEventFor(n));
+    if (settings.value.filterUnknown && !senderMayToast(n, senders.value)) return "held";
+    // Settings policy: muted apps, Do not disturb, quiet hours, VIP let-through, call handling, focus.
+    const decision = popupDecisionFor(popupEventFor(n));
+    if (decision === "focus") focusSpell.hold(n);
+    return decision;
   }
+  const popupEligible = (n: PhoneNotification) => notificationPopup(n) === "show";
 
   /**
    * Since when the iPhone link has been lost (set when a connection drops, kept through the
@@ -1057,7 +1108,12 @@ export const useTugStore = defineStore("tug", () => {
     const code = codeToastForMessage(m, notifications.value, { contacts: contacts.value });
     if (code === null || recentlyCodeToasted(code)) return;
     // A code text obeys the same policy as a notification carrying a code (Messages app, no call).
-    const event: PopupEvent = { appId: MESSAGES_APP, isCall: false, isVip: isVip(vips.value, { name: m.contactName, address: m.address }) };
+    const event: PopupEvent = {
+      appId: MESSAGES_APP,
+      isCall: false,
+      isVip: isVip(vips.value, { name: m.contactName, address: m.address }),
+      isCode: true,
+    };
     if (!popupAllowed(event)) return;
     markCodeToasted(code); // claimed before the await (see maybeToast)
     if (!(await hasToastPermission())) return;
@@ -1088,6 +1144,16 @@ export const useTugStore = defineStore("tug", () => {
    * the same way the in-app buttons do.
    */
   function onToastPressed({ kind, id, message }: ToastPressed) {
+    if (id === FOCUS_TOAST_ID) {
+      // "While you were focused": what it sums up is in the Feed.
+      if (kind === "open") {
+        searchOpen.value = false;
+        pickerOpen.value = false;
+        closeSettings();
+        view.value = "feed";
+      }
+      return;
+    }
     const reminder = reminderToasts.get(id);
     if (reminder) {
       if (kind === "open") openReminder(reminder);
@@ -1473,6 +1539,7 @@ export const useTugStore = defineStore("tug", () => {
       smartReplies: raw["ui.smartReplies"] !== "false",
       smartReplyDefaults: parseReplyDefaults(raw["ui.smartReplyDefaults"]),
       hidePreviewsWhileSharing: raw["ui.hidePreviewsWhileSharing"] !== "false",
+      focus: focusSettingsFrom(raw["ui.focus"]),
     };
     clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
     batteryAlerted = restoreBatteryAlerted(raw["ui.batteryAlerted"], Date.now());
@@ -1611,6 +1678,7 @@ export const useTugStore = defineStore("tug", () => {
       on("toast-pressed", onToastPressed),
       on("code-filled", onCodeFilled),
       on("screen-share", setScreenShare),
+      on("focus-state", setFocusState),
     ]);
     for (const r of listeners) if (r.status === "fulfilled") teardown.push(r.value);
     // Without its listeners the window would never hear about anything again: say so plainly.
@@ -1632,6 +1700,9 @@ export const useTugStore = defineStore("tug", () => {
       await attempt(loadSettings);
       // Settings are in: start (or skip) the sharing check for the window (lib/sharePrivacy).
       syncShareWatch();
+      // A focus already under way (tug's window reloaded mid-meeting) holds pop-ups from now.
+      const focus = await attempt(api.focusState);
+      if (focus) setFocusState(focus);
       // The backend registered the type-the-code shortcut at startup; Settings shows how that went.
       const hotkey = await attempt(api.codeHotkeyStatus);
       if (hotkey) codeHotkey.value = hotkey;
@@ -2309,6 +2380,8 @@ export const useTugStore = defineStore("tug", () => {
     screenShare,
     previewsHidden: previewsHiddenNow,
     shareBanner: shareBannerText,
+    focusState,
+    focusStatus: focusStatusText,
     showPreviewsAnyway,
     hidePreviewsAgain,
     settingsSection,
