@@ -69,6 +69,13 @@
 //                                     type-the-code shortcut is "pressed" at 4 s (typed) and at 6 s (tug in
 //                                     front). Add &hotkeybusy for Ctrl+Shift+V taken by another app
 //                                     (Settings › Notifications offers the others)
+//   http://localhost:1420/?quicktext  quick text: its shortcut (switched on, Ctrl+Shift+Y) is "pressed" 1.5 s
+//                                     after load, as from another app, and the "Text someone" composer
+//                                     opens. Pick someone, type, Enter: the phone takes it 0.7 s later, the
+//                                     composer closes and the console says where the keyboard went back to.
+//                                     Add &textsoff for texts not connected (the composer says so; Send stays
+//                                     off), &quicktextbusy for Ctrl+Shift+Y taken by another app (Settings ›
+//                                     Messages offers the others), &again to press it again 8 s later
 //   http://localhost:1420/?heavy      a long history for performance work: ~2,000 texts in ~60 conversations,
 //                                     ~500 notifications, 120 calls, Spotify playing, the weather card on
 //   http://localhost:1420/?pcaudio    the iPhone's audio already playing on this PC (Now Playing says so,
@@ -79,6 +86,11 @@
 //   http://localhost:1420/?sharing    the screen is being shared: the Feed and Messages blur texts and names under
 //                                     the "Previews hidden" banner (Show anyway). &presenting for a slide show,
 //                                     &stop to have sharing end after 10 s (the banner clears), &call for a call
+//   http://localhost:1420/?focus      Focus mode on: a meeting starts 2 s in (pop-ups held), texts from Priya and
+//                                     Chris, a missed call and a verification code arrive (only the code pops
+//                                     up), and the meeting ends at 16 s: one "While you were focused" summary.
+//                                     In the browser a pop-up shows as tug's note, with Open as its click
+//                                     (the summary's opens the Feed). &reason=fullScreen or &reason=coding
 //   http://localhost:1420/?update     a new version has downloaded: the Update button beside tug's name and its
 //                                     "Restart tug to update?" confirm (&updatebusy: held, as during a call)
 //   http://localhost:1420/?updatecheck   updates set up, nothing found yet: Settings › About › Check for updates
@@ -90,7 +102,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { RELEASE_NOTES } from "./whatsNew";
 import { backupMock, seedImported } from "./devMockBackup";
-import type { CallRecord, CodeHotkeyStatus, VoiceStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack, UpdateStatus } from "../types/protocol";
+import type { CallRecord, CodeHotkeyStatus, VoiceStatus, Contact, DevToolsStatus, DeviceStatus, FocusState, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack, ToastSpec, UpdateStatus } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -111,6 +123,8 @@ const appVersion = RELEASE_NOTES[0].version;
 // jump-list task, so it's waiting when the UI first takes quick actions. &again repeats it 4 s
 // later, as a click on the task while tug is running would.
 const quickActionWaiting: string[] = params.get("quickaction") ? [String(params.get("quickaction"))] : [];
+// ?quicktext: see the list above.
+const quickText = params.has("quicktext");
 const now = Date.now();
 const min = 60_000;
 
@@ -506,7 +520,17 @@ const settings: Record<string, string> = {
 // Otherwise record the current version, as a returning user would have, so it doesn't pop every run.
 if (whatsNewPreview) settings["ui.lastSeenVersion"] = RELEASE_NOTES[2]?.version ?? "0.0.0";
 else if (!setup) settings["ui.lastSeenVersion"] = appVersion;
+// ?quicktext: the owner switched quick text on (it's off by default).
+if (quickText) settings["ui.quickTextHotkey"] = "true";
 let autostart = false;
+// ?focus: Focus mode switched on, and no quiet hours in the way of the summary at night.
+const focusPreview = params.has("focus") && !noPhone;
+if (focusPreview) {
+  settings["ui.focus"] = JSON.stringify({ enabled: true, fullScreen: true, meetings: true, coding: false });
+  settings["ui.quietHours"] = "";
+}
+/** What focus_mode/ last said (see the ?focus timeline below). */
+const focusState: FocusState = { active: false, reason: null };
 
 // Spotify connector: connected by default so its UI can be reviewed in the browser; ?spotifyoff
 // starts it disconnected (to see Settings › Connectors and the empty states).
@@ -1080,7 +1104,7 @@ if (params.has("devconfirm")) {
     devState.pending = {
       id: 1,
       kind: "text",
-      tool: "Claude Code",
+      tool: "Claude Code (an AI tool)",
       toName: "Zoe",
       toAddress: ZOE,
       message: "Running 10 minutes late, start without me!",
@@ -1097,7 +1121,7 @@ if (params.has("devconfirmfiles")) {
     devState.pending = {
       id: 2,
       kind: "files",
-      tool: "Claude Code",
+      tool: "Claude Code (an AI tool)",
       files: [
         { name: "report.pdf", size: 2_202_010, folder: "C:\\Users\\Jordan\\Projects\\harbor\\docs" },
         { name: "notes.txt", size: 1_804, folder: null },
@@ -1163,6 +1187,10 @@ const shareState: ShareState = params.has("sharing")
   : { active: false, reason: null };
 
 const codeHotkey: CodeHotkeyStatus = { state: params.has("hotkeybusy") ? "inUse" : "on", keys: "ctrl+shift+v" };
+const quickTextHotkey: CodeHotkeyStatus = {
+  state: !quickText ? "off" : params.has("quicktextbusy") ? "inUse" : "on",
+  keys: "ctrl+shift+y",
+};
 // Voice typing (voice/ in Rust): off by default; `/?voice` starts it on (`&micblocked`,
 // `&nospeech` for a PC without a speech language, `&voicebusy` for a taken shortcut).
 // `?voicefail`: turning it on fails and the switch goes back off with the reason.
@@ -1350,10 +1378,24 @@ mockIPC(
         if (!status.device) throw "Connect your iPhone first.";
         pcAudio.auto = a.on === true;
         return sendPc();
+      // Pausing what plays on this PC for a ringing call: pretend one thing was playing.
+      case "pc_media_pause":
+        console.log("[devMock] pause music and videos on this PC for the call");
+        return 1;
+      case "pc_media_resume":
+        console.log("[devMock] play them again");
+        return 1;
+      case "pc_media_release":
+        return null;
       // getVersion() from @tauri-apps/api/app, so Settings › About and the "What's new" card read
       // a real version in the browser preview (unmocked, it rejects and both fall back to "dev").
       case "plugin:app|version":
         return appVersion;
+      // ?focus: the preview's pop-ups need Windows' permission; say it's granted rather than ask the browser.
+      case "plugin:notification|is_permission_granted":
+        return focusPreview ? true : null;
+      case "focus_state":
+        return { ...focusState };
       // Sync Contacts is read by asking the phone: ?contactsoff&flip turns it on at the next check
       // ("Check again"), as if the switch had just been flipped.
       case "check_switches":
@@ -1414,6 +1456,17 @@ mockIPC(
         const to = String(a.address ?? ZOE);
         const m: SmsMessage = { ...sms("out", String(a.text), 0, to, contacts.find((c) => c.address === to)?.name ?? null), status: "pending" };
         messages.push(m);
+        // ?quicktext: answer once the phone took it, as the real backend does (quick text closes on "sent").
+        if (quickText) {
+          setTimeout(() => void emit("message", m), 0);
+          return new Promise((resolve) =>
+            setTimeout(() => {
+              Object.assign(m, { status: "accepted" });
+              void emit("message", { ...m });
+              resolve({ ...m });
+            }, 700),
+          );
+        }
         setTimeout(() => void emit("message", m), 0);
         setTimeout(() => void emit("message", { ...m, status: "accepted" }), 700);
         return m;
@@ -1688,6 +1741,22 @@ mockIPC(
       // Taskbar quick actions (quick_actions/ in Rust): taking them empties the queue.
       case "take_quick_actions":
         return quickActionWaiting.splice(0);
+      // Quick text (quick_text/ in Rust): the shortcut, and giving the keyboard back.
+      case "quick_text_hotkey_status":
+        return { ...quickTextHotkey };
+      case "set_quick_text_hotkey": {
+        const keys = String(a.keys);
+        const taken = params.has("quicktextbusy") && keys === "ctrl+shift+y";
+        Object.assign(quickTextHotkey, { keys, state: !a.enabled ? "off" : taken ? "inUse" : "on" });
+        return { ...quickTextHotkey };
+      }
+      case "quick_text_done":
+        console.info(
+          a.giveBack
+            ? "[devMock] quick text closed: the keyboard goes back to the app it was pressed in, and tug to how it was"
+            : "[devMock] quick text closed: tug stays in front to show the conversation",
+        );
+        return null;
       case "set_code_hotkey": {
         const keys = String(a.keys);
         const taken = params.has("hotkeybusy") && keys === "ctrl+shift+v";
@@ -1746,6 +1815,7 @@ mockIPC(
       // Windows pop-ups don't exist in a browser; log what tug would have shown.
       case "show_toast":
         console.info("[devMock] pop-up", a.spec);
+        if (focusPreview) void showMockPopup(a.spec as ToastSpec);
         return null;
       // --- Spotify connector ---
       // Return fresh copies (the real Rust commands serialize new objects each call), so Vue
@@ -1878,6 +1948,44 @@ if (setup && params.has("btoff")) {
   }, 20000);
 }
 
+// ?focus: a pop-up shows as tug's own note (Windows' can't show in a browser); Open is the click.
+async function showMockPopup(spec: ToastSpec) {
+  const { useTugStore } = await import("../stores/tug");
+  useTugStore().notify("info", `${spec.title}: ${spec.body}`, {
+    label: "Open",
+    run: () => void emit("toast-pressed", { kind: "open", id: spec.id, message: null }),
+  });
+}
+
+// ?focus: a meeting (or &reason=fullScreen, coding) from 2 s to 16 s, as focus_mode/ reports it
+// once its wait to start is over, with things arriving in between. Priya and Chris are contacts
+// and not VIPs, so their texts are held; the code rings through; the missed call is held.
+if (focusPreview) {
+  const reason = params.get("reason") === "fullScreen" ? "fullScreen" : params.get("reason") === "coding" ? "coding" : "meeting";
+  const setFocus = (active: boolean) => {
+    Object.assign(focusState, { active, reason: active ? reason : null });
+    void emit("focus-state", { ...focusState });
+  };
+  const arrive = (atMs: number, make: () => PhoneNotification) =>
+    setTimeout(() => {
+      const x = make();
+      x.receivedAt = Date.now();
+      history.unshift(x);
+      void emit("notification", x);
+    }, atMs);
+  setTimeout(() => setFocus(true), 2000);
+  arrive(4000, () => ({ ...n("com.apple.MobileSMS", "Messages", "Priya", "Lunch tomorrow? The new place on Elm opens at 11:30", 0), id: 640 }));
+  arrive(5500, () => ({ ...n("com.apple.MobileSMS", "Messages", "Chris Smith", "Pushed the fix, can you have a look?", 0), id: 641 }));
+  arrive(7000, () => ({ ...n("com.google.Gmail", "Gmail", "Google", "G-730215 is your Google verification code.", 0, { category: "email" }), id: 642 }));
+  arrive(8500, () => ({ ...n("com.apple.MobileSMS", "Messages", "Priya", "Or Friday works too", 0), id: 643 }));
+  arrive(10000, () => ({
+    ...n("com.apple.mobilephone", "Phone", "Jane Doe", "Missed Call", 0, { category: "missedCall", flags: flags({ positiveAction: true }), positiveLabel: "Dial" }),
+    id: 644,
+  }));
+  arrive(11500, () => ({ ...n("com.apple.MobileSMS", "Messages", "Chris Smith", "No rush, after your call is fine", 0), id: 645 }));
+  setTimeout(() => setFocus(false), 16000);
+}
+
 // ?sharing&stop: sharing ends 10 s in, and the banner and blur must go with it.
 if (params.has("sharing") && params.has("stop")) {
   setTimeout(() => {
@@ -1949,6 +2057,17 @@ if (params.get("quickaction") && params.has("again")) {
     quickActionWaiting.push(String(params.get("quickaction")));
     void emit("quick-action", null);
   }, 4000);
+}
+
+// ?quicktext: the shortcut is pressed from "another app" (the real one queues a quick action and
+// brings tug forward); &again presses it a second time later.
+if (quickText) {
+  const press = () => {
+    quickActionWaiting.push("quick-text");
+    void emit("quick-action", null);
+  };
+  setTimeout(press, 1500);
+  if (params.has("again")) setTimeout(press, 8000);
 }
 
 // ?codefill: a verification code arrives as an ANCS notification and as a MAP text (as a bank's

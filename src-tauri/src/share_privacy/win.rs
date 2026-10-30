@@ -47,8 +47,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::{
     class_of_interest, covers_monitor, enabled_from_setting, hide_preview, hiding_started, judge, needs_title,
-    plan_look, share_state, transition, Answer, LookPlan, Rect, ShareState, Signal, Snapshot, TopWindow, EVENT,
-    QUNS_APP, QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, SETTING,
+    plan_look, quns_signal, share_state, transition, Answer, LookPlan, Rect, ShareState, Signal, Snapshot, TopWindow,
+    EVENT, QUNS_APP, QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, SETTING,
 };
 use crate::store::Store;
 
@@ -293,6 +293,18 @@ pub fn set_enabled(on: bool) {
         m.apply(Answer::Known(None));
     }
     m.wake.notify_all();
+}
+
+/// Whether a full-screen app, game or presentation is in front, by the same test previews use
+/// (the shell's answer, confirmed by the foreground window covering its monitor). For Focus mode
+/// (`focus_mode`), which holds pop-ups only when it knows: a failed call is "no".
+pub fn full_screen_now() -> bool {
+    // SAFETY: plain FFI call with no arguments.
+    let Ok(quns) = (unsafe { SHQueryUserNotificationState() }).map(|s| s.0) else {
+        return false;
+    };
+    let confirmed = matches!(quns, QUNS_BUSY | QUNS_APP | QUNS_RUNNING_D3D_FULL_SCREEN) && foreground_covers_monitor();
+    quns_signal(quns, confirmed).is_some()
 }
 
 /// One look at the screen. See the module docs for what each part costs. A call that fails

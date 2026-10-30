@@ -15,6 +15,7 @@ import type {
   Contact,
   SearchResults,
   ShareState,
+  FocusState,
   SmsMessage,
   DeviceStatus,
   DevToolsConfirm,
@@ -80,6 +81,13 @@ export const api = {
   pcAudioSet: (on: boolean) => invoke<PcAudioStatus>("pc_audio_set", { on }),
   /** "Turn on automatically when my iPhone connects", for the phone tug uses now. */
   pcAudioSetAuto: (on: boolean) => invoke<PcAudioStatus>("pc_audio_set_auto", { on }),
+  // --- Pause music and videos on this PC while the iPhone rings (lib/callPause) ---
+  /** Pause what's playing on this PC; answers how many things tug holds paused. */
+  pcMediaPause: () => invoke<number>("pc_media_pause"),
+  /** Play again what tug paused and nobody changed since; answers how many played. */
+  pcMediaResume: () => invoke<number>("pc_media_resume"),
+  /** Let go of what tug paused, leaving it paused. */
+  pcMediaRelease: () => invoke<void>("pc_media_release"),
   /** Pair the iPhone's Classic (texts) side from inside tug; the PIN shows via pairing-request. */
   pairTexts: () => invoke<void>("pair_texts"),
   setAdvertising: (enabled: boolean) => invoke<void>("set_advertising", { enabled }),
@@ -103,6 +111,12 @@ export const api = {
   takeQuickActions: () => invoke<QuickAction[]>("take_quick_actions"),
   /** Register the type-the-code shortcut (or unregister it); says if another app holds it. */
   setCodeHotkey: (enabled: boolean, keys: string) => invoke<CodeHotkeyStatus>("set_code_hotkey", { enabled, keys }),
+  quickTextHotkeyStatus: () => invoke<CodeHotkeyStatus>("quick_text_hotkey_status"),
+  /** Register the quick text shortcut (or unregister it); says if another app holds it. */
+  setQuickTextHotkey: (enabled: boolean, keys: string) =>
+    invoke<CodeHotkeyStatus>("set_quick_text_hotkey", { enabled, keys }),
+  /** The quick text composer closed: with `giveBack`, the app the shortcut was pressed in gets the keyboard back. Sends nothing. */
+  quickTextDone: (giveBack: boolean) => invoke<void>("quick_text_done", { giveBack }),
   /** Voice typing's state; with `languages`, the speech languages installed on this PC too (Settings). */
   voiceStatus: (languages: boolean) => invoke<VoiceStatus>("voice_status", { languages }),
   /** Turn voice typing on (shortcut, language) or off, and save it; says if the shortcut is taken or no language is installed. */
@@ -172,6 +186,7 @@ export const api = {
   showToast: (spec: ToastSpec) => invoke<void>("show_toast", { spec }),
   /** The window is on screen (or not): while it is, the backend checks for screen sharing every 2 s. Returns the answer now. */
   screenShareWatch: (on: boolean) => invoke<ShareState>("screen_share_watch", { on }),
+  focusState: () => invoke<FocusState>("focus_state"),
   // --- Spotify connector ---
   spotifyStatus: () => invoke<SpotifyStatus>("spotify_status"),
   /** Opens the browser for OAuth; resolves once the loopback redirect comes back. */
@@ -302,6 +317,7 @@ interface EventPayloads {
   "quick-action": null;
   /** Previews started or stopped being hidden because the screen is shared or presented (`share_privacy/`). */
   "screen-share": ShareState;
+  "focus-state": FocusState;
   "tugboat-status": TugboatStatus;
   "tugboat-text": TugboatTextArrived;
   /** Files dropped onto tug's window were offered (from Rust): the ones skipped. */

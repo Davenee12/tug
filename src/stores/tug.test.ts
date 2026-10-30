@@ -176,6 +176,62 @@ describe("a switch whose save fails goes back", () => {
     const registrations = called.filter(([name]) => name === "setCodeHotkey").map(([, args]) => args[0]);
     expect(registrations).toEqual([true, false]);
   });
+
+  it("the quick text switch starts off, and turning it on registers it and saves its own settings", async () => {
+    const tug = useTugStore();
+    expect(tug.settings.quickTextHotkey).toBe(false);
+    impl.setQuickTextHotkey = async (...args: never[]) => ({ state: args[0] ? "on" : "off", keys: args[1] });
+    await tug.setQuickTextHotkey(true, "ctrl+shift+u");
+    expect(tug.settings.quickTextHotkey).toBe(true);
+    expect(tug.settings.quickTextKeys).toBe("ctrl+shift+u");
+    expect(tug.quickTextHotkey).toEqual({ state: "on", keys: "ctrl+shift+u" });
+    const saved = called.filter(([name]) => name === "setSetting").map(([, args]) => args);
+    expect(saved).toEqual([
+      ["ui.quickTextHotkey", "true"],
+      ["ui.quickTextKeys", "ctrl+shift+u"],
+    ]);
+    // Code fill's shortcut is left alone.
+    expect(called.some(([name]) => name === "setCodeHotkey")).toBe(false);
+  });
+
+  it("the quick text switch stays on with the in-use warning, and never registers a shortcut it doesn't offer", async () => {
+    const tug = useTugStore();
+    impl.setQuickTextHotkey = async (...args: never[]) => ({ state: "inUse", keys: args[1] });
+    await tug.setQuickTextHotkey(true, "ctrl+shift+v");
+    expect(tug.settings.quickTextHotkey).toBe(true);
+    expect(tug.quickTextHotkey.state).toBe("inUse");
+    expect(called.find(([name]) => name === "setQuickTextHotkey")?.[1]).toEqual([true, "ctrl+shift+y"]);
+  });
+});
+
+describe("the quick text composer", () => {
+  it("gives the keyboard back once when it closes, and sends nothing", async () => {
+    const tug = useTugStore();
+    tug.openQuickText();
+    expect(tug.quickTextOpen).toBe(true);
+    expect(tug.overlayOpen).toBe(true);
+    tug.closeQuickText(true);
+    tug.closeQuickText(true);
+    expect(tug.quickTextOpen).toBe(false);
+    expect(called.filter(([name]) => name === "quickTextDone").map(([, args]) => args)).toEqual([[true]]);
+    expect(called.some(([name]) => name === "sendMessage")).toBe(false);
+  });
+
+  it("keeps tug in front when a text didn't go", () => {
+    const tug = useTugStore();
+    tug.openQuickText();
+    tug.closeQuickText(false);
+    expect(called.filter(([name]) => name === "quickTextDone").map(([, args]) => args)).toEqual([[false]]);
+  });
+
+  it("covers New message and search rather than opening under them", () => {
+    const tug = useTugStore();
+    tug.pickerOpen = true;
+    tug.searchOpen = true;
+    tug.openQuickText();
+    expect(tug.pickerOpen).toBe(false);
+    expect(tug.searchOpen).toBe(false);
+  });
 });
 
 describe("Spotify shuffle and repeat keep what was pressed", () => {
@@ -316,5 +372,130 @@ describe("unread texts count Messages only", () => {
     await flush();
     expect(tug.unreadTexts).toBe(0);
     expect(called.filter(([name]) => name === "setUnread").at(-1)?.[1]).toEqual([0]);
+  });
+});
+
+describe("music and videos on this PC pause while the iPhone rings", () => {
+  const call = (id: number): PhoneNotification => ({
+    id,
+    appId: "com.apple.mobilephone",
+    appName: null,
+    category: "incomingCall",
+    title: "Jane Doe",
+    subtitle: "",
+    message: "Incoming Call",
+    postedAt: null,
+    receivedAt: Date.now(),
+    flags: { silent: false, important: true, preExisting: false, positiveAction: true, negativeAction: true },
+    positiveLabel: "Answer",
+    negativeLabel: "Decline",
+    removedAt: null,
+    live: true,
+    fresh: true,
+  });
+  const media = () => called.filter(([name]) => name.startsWith("pcMedia")).map(([name]) => name);
+  /** Read afresh (TypeScript would keep `flash` narrowed to null after the test clears it). */
+  const flashOf = (tug: ReturnType<typeof useTugStore>) => tug.flash;
+  const stopRinging = (tug: ReturnType<typeof useTugStore>) =>
+    (tug.notifications = tug.notifications.map((n) => ({ ...n, live: false, removedAt: Date.now() })));
+
+  afterEach(() => vi.useRealTimers());
+
+  it("pauses when a call rings, and plays again when it's declined in tug", async () => {
+    const tug = useTugStore();
+    impl.pcMediaPause = () => Promise.resolve(1);
+    tug.notifications = [call(1)];
+    await flush();
+    expect(media()).toEqual(["pcMediaPause"]);
+    expect(await tug.respondToCall(tug.notifications[0], false)).toBe(true);
+    await flush();
+    expect(media()).toEqual(["pcMediaPause", "pcMediaResume"]);
+    // The phone dropping the call afterwards doesn't play anything twice.
+    stopRinging(tug);
+    await flush();
+    expect(media()).toEqual(["pcMediaPause", "pcMediaResume"]);
+  });
+
+  it("knows a call declined here even when the phone drops it before Decline answers", async () => {
+    const tug = useTugStore();
+    impl.pcMediaPause = () => Promise.resolve(1);
+    tug.notifications = [call(2)];
+    await flush();
+    const declining = deferred();
+    impl.performAction = () => declining.promise;
+    const done = tug.respondToCall(tug.notifications[0], false);
+    stopRinging(tug);
+    await flush();
+    expect(media()).toEqual(["pcMediaPause", "pcMediaResume"]);
+    declining.resolve();
+    expect(await done).toBe(true);
+    expect(media()).toEqual(["pcMediaPause", "pcMediaResume"]);
+  });
+
+  it("plays again only after the pause has answered", async () => {
+    const tug = useTugStore();
+    const pausing = deferred<number>();
+    impl.pcMediaPause = () => pausing.promise;
+    tug.notifications = [call(3)];
+    await flush();
+    await tug.respondToCall(tug.notifications[0], false);
+    await flush();
+    expect(media()).toEqual(["pcMediaPause"]);
+    pausing.resolve(1);
+    await flush();
+    expect(media()).toEqual(["pcMediaPause", "pcMediaResume"]);
+  });
+
+  it("offers Resume after a call answered in tug instead of playing by itself", async () => {
+    const tug = useTugStore();
+    impl.pcMediaPause = () => Promise.resolve(1);
+    tug.notifications = [call(4)];
+    await flush();
+    await tug.respondToCall(tug.notifications[0], true);
+    await flush();
+    expect(media()).toEqual(["pcMediaPause"]);
+    // "Answered" shows first; the offer follows once it's gone.
+    expect(tug.flash?.text).toBe("Answered. Talk on your iPhone.");
+    tug.flash = null;
+    await flush();
+    const offer = flashOf(tug);
+    expect(offer?.text).toBe("tug paused what was playing on this PC for your call.");
+    offer?.action?.run();
+    await flush();
+    expect(media()).toEqual(["pcMediaPause", "pcMediaResume"]);
+  });
+
+  it("offers nothing when nothing was playing", async () => {
+    const tug = useTugStore();
+    impl.pcMediaPause = () => Promise.resolve(0);
+    tug.notifications = [call(5)];
+    await flush();
+    await tug.respondToCall(tug.notifications[0], true);
+    tug.flash = null;
+    await flush();
+    expect(flashOf(tug)).toBeNull();
+  });
+
+  it("treats a call that stopped ringing with no missed call as answered", async () => {
+    vi.useFakeTimers();
+    const tug = useTugStore();
+    impl.pcMediaPause = () => Promise.resolve(1);
+    tug.notifications = [call(6)];
+    await flush();
+    stopRinging(tug);
+    await flush();
+    vi.advanceTimersByTime(10_000);
+    await flush();
+    // Nothing plays by itself; Resume is offered instead.
+    expect(media()).toEqual(["pcMediaPause"]);
+    expect(tug.flash?.action?.label).toBe("Resume");
+  });
+
+  it("does nothing with the setting off", async () => {
+    const tug = useTugStore();
+    tug.settings = { ...tug.settings, pauseMediaOnCall: false };
+    tug.notifications = [call(7)];
+    await flush();
+    expect(media()).toEqual([]);
   });
 });

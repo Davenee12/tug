@@ -1,6 +1,6 @@
 [package]
 name = "tug"
-version = "0.5.22"
+version = "0.5.23"
 description = "Bluetooth LE companion that mirrors iPhone notifications and media controls to Windows"
 authors = ["tug contributors"]
 license = "MIT"
@@ -92,6 +92,8 @@ windows = { version = "0.62", features = [
   "Devices_Radios",
   "Media",
   "Media_Audio",
+  # Pausing music and videos on this PC while the iPhone rings (GlobalSystemMediaTransportControls).
+  "Media_Control",
   "Media_Playback",
   "Networking",
   "Networking_Sockets",

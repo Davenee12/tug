@@ -40,10 +40,14 @@ pub enum QuickAction {
     CopyCode,
     Game,
     Settings,
+    /// Not a jump-list task: the quick text shortcut (`quick_text`) queues it, so a press is
+    /// carried out once, even before the window has loaded. Not in `ALL`, so no task offers it
+    /// and no `--action` launches it.
+    QuickText,
 }
 
 impl QuickAction {
-    /// In the order the jump list shows them.
+    /// The jump list's tasks, in the order it shows them.
     pub const ALL: [QuickAction; 5] = [
         QuickAction::NewMessage,
         QuickAction::Tugboat,
@@ -59,6 +63,7 @@ impl QuickAction {
             QuickAction::CopyCode => "copy-code",
             QuickAction::Game => "game",
             QuickAction::Settings => "settings",
+            QuickAction::QuickText => "quick-text",
         }
     }
 
@@ -74,6 +79,7 @@ impl QuickAction {
             QuickAction::CopyCode => "Copy latest code",
             QuickAction::Game => "Play a game",
             QuickAction::Settings => "Settings",
+            QuickAction::QuickText => "Text someone",
         }
     }
 
@@ -85,6 +91,7 @@ impl QuickAction {
             QuickAction::CopyCode => "Copy the newest verification code from your iPhone",
             QuickAction::Game => "Tugboat Run or Harbor Stack",
             QuickAction::Settings => "Open tug's settings",
+            QuickAction::QuickText => "Send a text from your iPhone without leaving what you're doing",
         }
     }
 }
@@ -274,6 +281,12 @@ pub fn init(identifier: &str) {
     let _ = id;
 }
 
+/// The AppUserModelID this process claimed (`None` before `init`). Windows names tug's own media
+/// session by it, which `pc_media` must leave alone.
+pub fn own_app_id() -> Option<String> {
+    APP_ID.get().cloned()
+}
+
 /// Hand the Tasks to Windows, off the calling thread (COM, and nothing should wait on the shell).
 /// Called at startup and when Show games changes; failures are logged, never shown.
 pub fn install(show_games: bool) {
@@ -386,6 +399,17 @@ mod tests {
             assert_eq!(QuickAction::from_id(a.id()), Some(a));
             assert_eq!(serde_json::to_value(a).unwrap(), serde_json::json!(a.id()));
         }
+    }
+
+    #[test]
+    fn quick_text_reaches_the_ui_but_is_never_a_task_or_a_launch() {
+        assert_eq!(
+            serde_json::to_value(QuickAction::QuickText).unwrap(),
+            serde_json::json!("quick-text")
+        );
+        assert!(!QuickAction::ALL.contains(&QuickAction::QuickText));
+        assert!(tasks(true).iter().all(|t| t.action != QuickAction::QuickText));
+        assert_eq!(parse_args(["tug.exe", "--action", "quick-text"]), None);
     }
 
     #[test]

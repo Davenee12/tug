@@ -486,7 +486,7 @@ impl DevTools {
     /// showing means "busy", never a queue. `Progress::Confirming` goes out only once the card is
     /// really up, so a busy answer never comes after "Check tug".
     async fn ask(&self, client: &ClientInfo, ask: Ask, progress: &ProgressSink) -> Result<Resolution, BridgeError> {
-        let opened = lock(&self.confirms).open(client.display_name(), ask, now_ms());
+        let opened = lock(&self.confirms).open(client.asker(), ask, now_ms());
         let Ok(req) = opened else {
             return Err(BridgeError::new(
                 ErrorCode::Busy,

@@ -302,6 +302,11 @@ pub fn mic_blocked() -> bool {
     system::mic_blocked()
 }
 
+/// The program in front's full path, for Focus mode's coding check (never logged).
+pub fn foreground_exe() -> Option<String> {
+    system::foreground().map(|f| f.exe).filter(|exe| !exe.is_empty())
+}
+
 pub fn ui_language() -> u16 {
     system::ui_language()
 }

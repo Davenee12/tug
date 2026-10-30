@@ -18,6 +18,7 @@ mod device_info;
 mod device_kind;
 mod devtools;
 mod diagnostics;
+mod focus_mode;
 mod forgotten;
 mod frontend_log;
 pub mod hfp;
@@ -27,10 +28,12 @@ pub mod map;
 mod media_keys;
 mod messages;
 mod pc_audio;
+mod pc_media;
 #[cfg(test)]
 mod perf;
 mod pin_confirm;
 mod quick_actions;
+mod quick_text;
 mod report;
 mod session_end;
 mod share_privacy;
@@ -218,10 +221,15 @@ pub fn run() {
             // Code fill's type-the-code shortcut: registered now (on unless switched off), so it
             // works from a tray-only start too.
             code_fill::start(app.handle(), &shared.store);
+            // Quick text's shortcut, on the same hotkey thread: only if the owner switched it on.
+            quick_text::start(&shared.store);
             // Hide previews while sharing or presenting: a thread that sleeps until the window is
             // on screen or a pop-up finds something to hide.
             #[cfg(windows)]
             share_privacy::start(app.handle(), &shared.store);
+            // Focus mode: a thread that sleeps until the owner turns Focus mode on.
+            #[cfg(windows)]
+            focus_mode::start(app.handle(), &shared.store);
             // Voice typing: off by default; when the owner turned it on, its shortcut is back now.
             voice::start(app.handle(), &shared.store);
             app.manage(AppState {
@@ -341,6 +349,9 @@ pub fn run() {
             commands::pc_audio_status,
             commands::pc_audio_set,
             commands::pc_audio_set_auto,
+            commands::pc_media_pause,
+            commands::pc_media_resume,
+            commands::pc_media_release,
             commands::pair_texts,
             commands::set_advertising,
             commands::get_settings,
@@ -358,6 +369,9 @@ pub fn run() {
             commands::code_hotkey_status,
             commands::take_quick_actions,
             commands::set_code_hotkey,
+            commands::quick_text_hotkey_status,
+            commands::set_quick_text_hotkey,
+            commands::quick_text_done,
             commands::voice_status,
             commands::set_voice_typing,
             commands::set_voice_engine,
@@ -390,6 +404,7 @@ pub fn run() {
             commands::dial,
             commands::show_toast,
             commands::screen_share_watch,
+            commands::focus_state,
             commands::copy_diagnostics,
             commands::report_problem,
             commands::unclean_exit,

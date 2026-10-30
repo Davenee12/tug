@@ -76,6 +76,10 @@ pub enum ClientKind {
 pub struct ClientInfo {
     pub name: String,
     pub kind: ClientKind,
+    /// The exe that started this `tug mcp` (`Cursor.exe`), which tug's side of the pipe looks up
+    /// itself (`launcher`). Never sent: nothing a caller says can set it.
+    #[serde(skip)]
+    pub launcher: Option<String>,
 }
 
 /// Characters that change how text around them is shown without being seen themselves:
@@ -143,10 +147,57 @@ fn friendly_client_name(name: &str) -> String {
         .join(" ")
 }
 
+/// Names that say which SDK or example a client was built from, not which tool it is (the Python
+/// SDK's default is "mcp"). They name nothing, so the app that started `tug mcp` is used instead.
+const GENERIC_CLIENT_NAMES: &[&str] = &[
+    "mcp",
+    "mcp-client",
+    "mcp client",
+    "mcp_client",
+    "client",
+    "rmcp",
+    "test",
+    "test-client",
+    "example-client",
+    "default",
+    "unknown",
+    "python",
+    "node",
+];
+
+fn is_generic_name(name: &str) -> bool {
+    let key = name.trim().to_ascii_lowercase();
+    GENERIC_CLIENT_NAMES.contains(&key.as_str())
+}
+
+/// What an AI tool is called on the card when nothing names it.
+const UNNAMED_AI_TOOL: &str = "An AI tool";
+
 impl ClientInfo {
     /// A name safe to show and log: printable, single line, at most 40 characters. An AI tool's
-    /// name reads the way people know it ("claude-code" → "Claude Code").
+    /// name reads the way people know it ("claude-code" → "Claude Code"); one that names only its
+    /// SDK ("mcp"), or none, is named after the app that started it when tug knows that app
+    /// (`launcher`), else "An AI tool".
     pub fn display_name(&self) -> String {
+        self.named().unwrap_or_else(|| match self.kind {
+            ClientKind::Mcp => UNNAMED_AI_TOOL.into(),
+            ClientKind::Cli => "tug command".into(),
+        })
+    }
+
+    /// Who's asking, for the confirmation card's sentence: an AI tool's name always says it's an
+    /// AI tool ("Claude Code (an AI tool)"). Any program running as the person could call itself
+    /// anything, "Windows" or "Your bank" included, so the name alone must never be what the card
+    /// stands on.
+    pub fn asker(&self) -> String {
+        match (self.kind, self.named()) {
+            (ClientKind::Mcp, Some(name)) => format!("{name} (an AI tool)"),
+            _ => self.display_name(),
+        }
+    }
+
+    /// The tamed name, or `None` when there's nothing usable to show.
+    fn named(&self) -> Option<String> {
         let printable: String = self
             .name
             .chars()
@@ -154,17 +205,21 @@ impl ClientInfo {
             .take(200)
             .collect();
         let named = match self.kind {
+            ClientKind::Mcp if is_generic_name(&printable) => String::new(),
             ClientKind::Mcp => friendly_client_name(printable.trim()),
             ClientKind::Cli => printable,
         };
         let clean = named.chars().take(40).collect::<String>().trim().to_string();
-        if clean.is_empty() {
-            match self.kind {
-                ClientKind::Mcp => "An AI tool".into(),
-                ClientKind::Cli => "tug command".into(),
-            }
-        } else {
-            clean
+        if !clean.is_empty() {
+            return Some(clean);
+        }
+        match self.kind {
+            ClientKind::Mcp => self
+                .launcher
+                .as_deref()
+                .and_then(crate::launcher::app_name)
+                .map(str::to_string),
+            ClientKind::Cli => None,
         }
     }
 }
@@ -1305,6 +1360,7 @@ mod tests {
         let c = |name: &str| ClientInfo {
             name: name.into(),
             kind: ClientKind::Mcp,
+            launcher: None,
         };
         assert_eq!(c("claude-code").display_name(), "Claude Code");
         assert_eq!(c("evil\nname\u{1b}[31m").display_name(), "evilname[31m");
@@ -1324,6 +1380,7 @@ mod tests {
             ClientInfo {
                 name: name.into(),
                 kind: ClientKind::Mcp,
+                launcher: None,
             }
             .display_name()
         };
@@ -1335,11 +1392,75 @@ mod tests {
         assert_eq!(c("Claude Code"), "Claude Code");
         assert_eq!(c("My Tool v2"), "My Tool v2");
         assert_eq!(c("  claude-code  "), "Claude Code");
+        // A name that's only the SDK's says nothing about the tool.
+        assert_eq!(c("mcp"), "An AI tool");
+        assert_eq!(c(" MCP-Client "), "An AI tool");
         // The tug command keeps its own name, lowercase.
         let cli = ClientInfo {
             name: "tug".into(),
             kind: ClientKind::Cli,
+            launcher: None,
         };
         assert_eq!(cli.display_name(), "tug");
+    }
+
+    #[test]
+    fn an_unnamed_tool_is_named_after_the_app_that_started_it() {
+        let c = |name: &str, launcher: Option<&str>| ClientInfo {
+            name: name.into(),
+            kind: ClientKind::Mcp,
+            launcher: launcher.map(str::to_string),
+        };
+        assert_eq!(c("", Some("Cursor.exe")).display_name(), "Cursor");
+        assert_eq!(c("mcp", Some("Code.exe")).display_name(), "VS Code");
+        // The tool's own name comes first: it's the more exact one (Claude Code inside VS Code).
+        assert_eq!(c("claude-code", Some("Code.exe")).display_name(), "Claude Code");
+        // A runtime or a shell names nothing.
+        assert_eq!(c("", Some("node.exe")).display_name(), "An AI tool");
+        assert_eq!(c("", None).display_name(), "An AI tool");
+        // The tug command never borrows a name.
+        let cli = ClientInfo {
+            name: "".into(),
+            kind: ClientKind::Cli,
+            launcher: Some("Cursor.exe".into()),
+        };
+        assert_eq!(cli.display_name(), "tug command");
+    }
+
+    #[test]
+    fn a_caller_cannot_say_which_app_started_it() {
+        let hello = r#"{"name":"","kind":"mcp","launcher":"Cursor.exe"}"#;
+        let info: ClientInfo = serde_json::from_str(hello).unwrap();
+        assert_eq!(info.launcher, None);
+        let sent = ClientInfo {
+            name: "x".into(),
+            kind: ClientKind::Mcp,
+            launcher: Some("Cursor.exe".into()),
+        };
+        assert!(!serde_json::to_string(&sent).unwrap().contains("launcher"));
+    }
+
+    #[test]
+    fn the_card_always_says_an_ai_tool_is_asking() {
+        let c = |name: &str, launcher: Option<&str>| ClientInfo {
+            name: name.into(),
+            kind: ClientKind::Mcp,
+            launcher: launcher.map(str::to_string),
+        };
+        assert_eq!(c("claude-code", None).asker(), "Claude Code (an AI tool)");
+        assert_eq!(c("", Some("Cursor.exe")).asker(), "Cursor (an AI tool)");
+        assert_eq!(c("", None).asker(), "An AI tool");
+        assert_eq!(c("mcp", Some("python.exe")).asker(), "An AI tool");
+        // Any name can be claimed; the card still says what's asking.
+        assert_eq!(c("Windows Security", None).asker(), "Windows Security (an AI tool)");
+        assert_eq!(c("tug", None).asker(), "Tug (an AI tool)");
+        // A long name is cut before the words are added, so they always show.
+        assert!(c(&"Ab".repeat(100), None).asker().ends_with(" (an AI tool)"));
+        let cli = ClientInfo {
+            name: "tug command".into(),
+            kind: ClientKind::Cli,
+            launcher: None,
+        };
+        assert_eq!(cli.asker(), "tug command");
     }
 }

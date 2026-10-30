@@ -403,6 +403,10 @@ export interface UiSettings {
   typeCodeHotkey: boolean;
   /** Which shortcut, one of `src/lib/codeHotkeys.json` (read by the backend too). */
   typeCodeKeys: string;
+  /** Quick text: a global shortcut opens a small composer from any app (read by the backend too, `quick_text/`). Off by default. */
+  quickTextHotkey: boolean;
+  /** Which shortcut, one of `src/lib/quickTextHotkeys.json` (read by the backend too). */
+  quickTextKeys: string;
   /** The sidebar's Play button and the Ctrl+K "Tugboat Run" command (on by default). */
   showGames: boolean;
   /** One-tap suggested replies on text pop-ups and in Messages (on by default; lib/smartReplies). */
@@ -411,6 +415,24 @@ export interface UiSettings {
   smartReplyDefaults: string[];
   /** While the screen is shared or presented, pop-ups and the window hide texts and names (on by default; read by the backend, `share_privacy/`). */
   hidePreviewsWhileSharing: boolean;
+  /** Pause music and videos playing on this PC while the iPhone rings (on by default; lib/callPause, `pc_media/`). */
+  pauseMediaOnCall: boolean;
+  /** Focus mode: hold pop-ups while you're focused, then one summary (read by the backend too, `focus_mode/`). */
+  focus: FocusSettings;
+}
+
+/**
+ * Settings › Notifications › Focus mode (`focus_mode::FocusSettings`). Off until turned on; then a
+ * full-screen app and a meeting count, and coding only if chosen.
+ */
+export interface FocusSettings {
+  enabled: boolean;
+  /** A full-screen app, game or presentation is in front. */
+  fullScreen: boolean;
+  /** Another app is using the microphone or camera. */
+  meetings: boolean;
+  /** A code editor or terminal is in front. */
+  coding: boolean;
 }
 
 /**
@@ -459,6 +481,15 @@ export interface ShareState {
   reason: ShareReason | null;
 }
 
+/** Why Focus mode is holding pop-ups (`focus_mode::Reason`). */
+export type FocusReason = "meeting" | "fullScreen" | "coding";
+
+/** Whether Focus mode is holding pop-ups right now (`focus-state`, `focus_state`, `focus_mode/`). */
+export interface FocusState {
+  active: boolean;
+  reason: FocusReason | null;
+}
+
 /** A pop-up's body or button was pressed and carried out (`toast-pressed`, `toast/mod.rs`). */
 export interface ToastPressed {
   kind: "open" | "read" | "replied" | "copied" | "calledBack";
@@ -480,11 +511,13 @@ export interface CodeFilled {
 
 /**
  * A task from tug's taskbar jump list (`quick_actions::QuickAction`, serialized kebab-case: the
- * same id the task passes as `--action`), taken with `take_quick_actions`.
+ * same id the task passes as `--action`), taken with `take_quick_actions`. "quick-text" isn't a
+ * task: the quick text shortcut (`quick_text`) queues it the same way.
  */
-export type QuickAction = "new-message" | "tugboat" | "copy-code" | "game" | "settings";
+export type QuickAction = "new-message" | "tugboat" | "copy-code" | "game" | "settings" | "quick-text";
 
-/** The type-the-code shortcut (`code_hotkey_status`, `set_code_hotkey`). */
+/** The type-the-code shortcut (`code_hotkey_status`, `set_code_hotkey`); quick text's shortcut
+ *  reports the same way (`quick_text_hotkey_status`, `set_quick_text_hotkey`). */
 export interface CodeHotkeyStatus {
   /** off (switched off, or not on this PC); on (registered); inUse (another app holds it). */
   state: "off" | "on" | "inUse";
@@ -962,7 +995,7 @@ export interface DevToolsClient {
 /** What the "send this?" card has in common (`ConfirmRequest`). */
 interface DevToolsConfirmBase {
   id: number;
-  /** Who's asking, as it named itself. */
+  /** Who's asking, as tug names it for the card (`ClientInfo::asker`): "Claude Code (an AI tool)", "An AI tool", "tug command". */
   tool: string;
   /** Unix ms after which it counts as not sent. */
   expiresAt: number;

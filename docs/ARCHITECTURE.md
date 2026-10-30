@@ -64,8 +64,9 @@ Inside `tug.exe`:
 | `tug-media-keys` | `media_keys.rs` | Keeps the Windows media flyout in step with Now Playing; flyout buttons and media keys send commands to the actor. |
 | Developer bridge | `devtools/mod.rs`, `crates/tug-bridge/src/server.rs` | A named-pipe accept loop for the app's lifetime (at most 8 connections); answers "off" while switched off. |
 | Tugboat | `tugboat/` | An HTTP server, a 2 s supervisor (idle stop after 10 minutes, network changes) and per-connection tasks; exists only while the panel is open (or Tugboat Run asked for the phone as a controller). While the game's controller channel is open, a 150 ms watch notices a phone that went quiet. |
-| `tug-hotkey` | `code_fill/win.rs` (logic in `code_fill/mod.rs`) | Owns the type-the-code shortcut (RegisterHotKey belongs to the registering thread); each press types the newest code with SendInput on a short-lived `tug-code-fill` thread. |
+| `tug-hotkey` | `code_fill/win.rs` (logic in `code_fill/mod.rs`) | Owns the type-the-code and quick text shortcuts, each under its own id (RegisterHotKey belongs to the registering thread); a type-the-code press types the newest code with SendInput on a short-lived `tug-code-fill` thread, a quick text press notes what's in front and opens the composer on a short-lived `tug-quick-text` thread (`quick_text/win.rs`). |
 | `tug-share-watch` | `share_privacy/win.rs` (logic in `share_privacy/mod.rs`) | Hide previews while sharing or presenting: sleeps on a condition variable until tug's window is on screen or a pop-up finds the screen shared; then one look every 2 s (shell notification state, display topology, a pass over top-level window classes, reading the titles of browser and Teams windows only, compared on the spot and never kept or logged: about 0.3 ms) until the window hides and hiding clears. Each pop-up also takes a fresh look (on a short-lived `tug-share-look` helper, at most 500 ms) before it shows. It fails closed: no answer in time, or a failed Windows call with nothing found, hides the preview and blurs the window with a banner saying tug couldn't check; a look stuck for 2 s is replaced by a fresh one (at most three at once). When hiding starts, the phone's pop-ups and their follow-ups are taken back from the screen and Action Center (`toast::withdraw_while_hiding`); tug's own stay. |
+| `tug-focus-watch` | `focus_mode/win.rs` (logic in `focus_mode/mod.rs`) | Focus mode: sleeps on a condition variable while Focus mode is off. While on, one look every 2 s for the switches that are on: the shell's full-screen answer (confirmed as for hiding previews), the ConsentStore's microphone and webcam entries in the registry (apps using them now, tug's own left out; a count only), and the foreground program against voice typing's editor and terminal list. A focus starts after 5 s and ends after 20 s without a sign of it; changes go to the window as `focus-state`, which holds pop-ups and sums them up at the end. Nothing waits on it, and the log names only the category. |
 | `tug-voice-key`, `tug-voice` | `voice/win/` (logic in `voice/mod.rs`, `voice/engine.rs`, `voice/audio.rs`, `voice/vocab.rs`, `voice/text.rs`) | Only once voice typing is switched on. `tug-voice-key` owns the hold-to-talk shortcut (RegisterHotKey) and the GDI listening indicator; `tug-voice` is a COM thread that runs each hold (microphone while the key is down, the engine, the text rules, SendInput) and keeps the engines between holds: whisper.cpp (Accurate or Most accurate, loaded by a short-lived `tug-voice-load` thread during the first hold, with Accurate standing in for Most accurate when memory is short) and Windows' offline SAPI recognizer (Basic). All are let go when voice typing goes off. whisper.cpp starts its own worker threads only while it recognizes a hold. |
 | `tug-voice-model` | `voice/mod.rs` (logic in `voice/model.rs`) | Only while a speech model downloads (voice typing was turned on, its engine picked, or Download pressed): one HTTPS download from Hugging Face, resumable, checked against its SHA-256, then gone. One per model, so Accurate's and Most accurate's can download side by side. |
 | `tug-voice-hints` | `voice/mod.rs` (logic in `voice/vocab.rs`) | For a moment, when the hints are older than 10 minutes on a hold (or voice typing is turned on): reads the personal dictionary and the most frequent contacts' names from `tug.db`, then gone. The hold doesn't wait for it. |
@@ -73,6 +74,7 @@ Inside `tug.exe`:
 | `tug-jump-list` | `quick_actions/win.rs` (logic in `quick_actions/mod.rs`) | A short-lived COM thread that hands the taskbar jump list's Tasks to Windows, at startup and when Show games changes; nothing waits for it. |
 | Automatic updates | `updater/mod.rs` (logic in `updater/policy.rs`) | Only in release builds with a real public key in `tauri.conf.json`. An async task that looks at the clock every minute: the first check 90 s after startup, then every 6 hours (an hour after a failure), while Download updates automatically is on. `tauri-plugin-updater` fetches `latest.json` from GitHub Releases, downloads the NSIS installer and verifies its minisign signature; the verified bytes wait in memory until the person clicks Update (`update_apply`, refused during a ringing call, a Tugboat transfer or voice typing) or quits from the tray. Applying runs the exit tidy-up (`tidy_before_exit`), starts the installer in update mode and exits; the installer restarts tug, which reopens the saved screen. |
 | Spotify, location | `commands.rs`, `spotify/`, `location.rs` | No background task: each command runs on `spawn_blocking`. The UI reads Spotify's player when the song changes. |
+| PC media | `pc_media/` | No thread of its own: while the iPhone rings, `pc_media_pause` pauses what plays on this PC (Windows' media sessions) on a time-limited helper (`off_thread`) and keeps those sessions behind a mutex, watching each for the person playing it themselves, until `pc_media_resume` or `pc_media_release`. |
 | PC audio | `pc_audio/` | No thread of its own: AudioPlaybackConnection is agile, so `PcAudio` keeps the open connection behind a mutex and each Windows call runs on a time-limited helper (`off_thread`). Follows the connection through a status hook on `Shared` (stop on a phone switch; the opt-in automatic switch). Closed on Stop, Forget and exit. |
 
 **Talking between them.** `BleHandle` and `MapHandle` are unbounded mpsc senders of commands, with
@@ -88,7 +90,7 @@ flight.
 `notification-removed`, `app-name`, `discovered-devices`, `pairing-request`,
 `pairing-request-closed`, `message`, `contacts`, `calls`, `open-latest-conversation`,
 `open-settings`, `toast-pressed`, `code-filled`, `quick-action` (`state.rs`); `tugboat-status`, `tugboat-text`, `tugboat-dropped`,
-`tugboat-clip`, `tugboat-send-clipboard`, `game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`); `screen-share` (`share_privacy/`); `voice-status`, `voice-typed` (`voice/mod.rs`); `update-status` (`updater/mod.rs`); `backup-import` (`backup/mod.rs`). The typed listener
+`tugboat-clip`, `tugboat-send-clipboard`, `game-pad` (`tugboat/mod.rs`); `devtools-status`, `devtools-confirm` (`devtools/mod.rs`); `pc-audio` (`pc_audio/mod.rs`); `screen-share` (`share_privacy/`); `focus-state` (`focus_mode/`); `voice-status`, `voice-typed` (`voice/mod.rs`); `update-status` (`updater/mod.rs`); `backup-import` (`backup/mod.rs`). The typed listener
 map is `EventPayloads` in `src/lib/ipc.ts`.
 
 ## Startup
@@ -306,6 +308,23 @@ UI (App.vue), only after tug.init() has loaded history and settings, and on ever
 
 A nudge carries nothing, so one lost to a page that's still loading loses nothing: the action
 waits in the queue until the next take.
+
+**Quick text (texting someone from any app)**
+
+```
+Settings › Messages › Quick text from any app (off by default) ─► set_quick_text_hotkey
+  ─► quick_text::apply ─► the tug-hotkey thread registers it under its own id (or "inUse")
+the shortcut, pressed in any app ─► quick_text::pressed (on tug-hotkey): what's in front, now
+  ─► tug-quick-text: how tug's window is (behind / minimized / in the tray) ─► remember it
+     (pressed in tug itself: nothing to give back) ─► quick_actions::receive(QuickText):
+     queue, tray::show, emit "quick-action"
+UI: take_quick_actions ─► "quick-text" ─► tug.openQuickText ─► QuickText.vue: lib/recipients
+  (the people you text, then contacts, or a typed number) ─► Enter ─► tug.sendMessage, as in Messages
+  sent, or Esc ─► quick_text_done(giveBack) ─► the app it was pressed in gets the keyboard back,
+                  then tug's window goes back to how it was
+  may have sent / not sent ─► quick_text_done(false) ─► tug stays on that conversation
+  error (nothing recorded) ─► the composer stays open with the text
+```
 
 **A game controller input (Tugboat Run, Harbor Stack)**
 
@@ -547,7 +566,7 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `map/obex.rs`, `bmessage.rs`, `listing.rs`, `vcard.rs`, `mns_event.rs`, `mns.rs`, `pick.rs` | OBEX framing, MAP/PBAP parsers, MNS event handling, which paired device is the iPhone |
 | `map/charset.rs`, `sms_pdu.rs` | A text's bytes to words without U+FFFD: UTF-8, then UTF-16, CESU-8, a cut-off last character, Windows-1252; native SMS PDUs |
 | `devtools/confirm.rs`, `rate_limit.rs`, `recipient.rs`, `settings.rs` | The send-confirmation state machine (texts and files), per-tool limits, name → contact, switch defaults |
-| `crates/tug-bridge` (`auth`, `protocol`, `framing`, `paths`, `time`) | Bridge protocol and handshake; the whole exchange is also tested over a real pipe |
+| `crates/tug-bridge` (`auth`, `protocol`, `framing`, `paths`, `time`, `launcher`) | Bridge protocol and handshake (the whole exchange is also tested over a real pipe); how a caller is named (an AI tool's own name tidied, else the app that started `tug mcp`, and always "(an AI tool)" on the card) |
 | `crates/tug-cli` (`args`, `format`, `mcp`) | Command parsing, terminal output, MCP tool mapping |
 | `tugboat/crypto.rs`, `names.rs`, `auth.rs`, `upload.rs` | Tugboat keys and sealing (a test vector shared with the phone page), safe file names, request MACs, chunk bookkeeping |
 | `tugboat/pad.rs` | The game controller channel: which game has it (`GameId`) and the one action each game may see, what an input may say, the rate limit, newest-input ordering, when a quiet phone counts as gone, two seats for a two-player game |
@@ -555,23 +574,26 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `autostart.rs`, `session_end.rs` | Start with Windows over a `Registry` trait (tested with a fake: HKCU only, moving an old HKLM entry only for a tug in the process user's own Local AppData); what exit skips when Windows is ending the session |
 | `tugboat/held.rs`, `devtools/outgoing.rs`, `crates/tug-bridge` `outgoing` | Files sent to the phone with `tug boat`: when a hold is delivered, timed out (with grace for a file still coming) or withdrawn; which paths may be sent at all (regular files, links followed, no devices or pipes) |
 | `tugboat/clip.rs`, `tugboat/dib.rs` | The shared clipboard: one waiting clipboard at a time, delivered only on the phone's word, dropped after 2 minutes, what can be sent; a clipboard bitmap to PNG |
-| `quick_actions/mod.rs` | Taskbar quick actions: reading `--action` from a launch, the jump list's tasks (the game only with Show games on), the AppUserModelID for installed, portable and cargo builds, the take-once queue |
+| `quick_actions/mod.rs` | Taskbar quick actions: reading `--action` from a launch, the jump list's tasks (the game only with Show games on), the AppUserModelID for installed, portable and cargo builds, the take-once queue (quick text's shortcut uses it too, never as a task or a launch) |
+| `quick_text/mod.rs` | Quick text: the shortcut list (shared with `src/lib/quickTextHotkeys.json`; no Ctrl+Alt, none of tug's other shortcuts), off unless switched on, where the keyboard goes back to when the composer closes |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
 | `album_art.rs` | Album art from Apple's catalog: names normalised (editions like Remastered/Deluxe and featured artists set aside), the best match by artist and album, the cache key, the day-long miss memory, the debounce and rate limit (`Gate`); the cache and setting tested with a fake network |
 | `share_privacy/mod.rs` | Hide previews while sharing or presenting: which signals mean someone may be watching (shell state confirmed by the foreground window covering its monitor, duplicate display, known share and slideshow windows by program + class), which one names the reason, the log line, what a hidden pop-up says, and that no answer means hidden (which looks to join, start or give up on), which pop-ups to take back when hiding starts |
+| `focus_mode/mod.rs` | Focus mode: its switches (off by default), which reason a look names, which apps count as using the microphone or camera (not tug, not an entry left behind for over 12 h), and the debouncing that keeps a blip from starting a focus or a quick look elsewhere from ending one |
 | `voice/mod.rs`, `voice/text.rs` | Voice typing: the shortcut list (shared with `src/lib/voiceHotkeys.json`), which language, the microphone privacy switches, what a hold means (too short, silent, keys still held, window changed) and what the pill says, what the speech thread listens with for a status (`engine_config`, with Accurate as Most accurate's fallback), which model to fetch by itself (`auto_download`, `declined`), when to offer the one-time "Get voice typing ready now?" card (`ready_prompt_due`), the saved dictionary, a phone-call headset by name and sample rate; spoken symbols, casing commands, code vs prose style and where "new line" may break a line, by program; keystrokes. `voice/win/sapi.rs` has a by-hand end-to-end test that recognizes text-to-speech audio (`--ignored`) |
 | `voice/engine.rs`, `voice/model.rs`, `voice/audio.rs`, `voice/vocab.rs` | Voice typing's engines: which one listens (Most accurate, Accurate, Basic or none) and the fallbacks, which model loads for the free memory (`plan_load`), Most accurate's languages (shared with `src/lib/voiceSpokenLanguages.json`), English language ids, the processor check; the speech models' downloads (resume with Range, a server that ignores it, cancel and temp cleanup, an overlong or wrong file, SHA-256) against a fake HTTP layer, plus an `--ignored` test against Hugging Face; trimming, levelling and padding a recording, and telling speech from steady noise; the prompt (every command in it is one `text.rs` understands; coding apps lead with the coding vocabulary, chat and mail with names and everyday phrases; the person's dictionary and contacts' names cleaned, bounded and fitted to the token budget whole), tidying Whisper's output, and dropping a prompt played back on a cough, names included (`is_prompt_echo`). `messages.rs` ranks contacts by how often they're texted (`frequent_contact_names`). `voice/win/whisper.rs` has the `--ignored` Whisper-vs-SAPI comparison that picked the model |
 | `backup/discover.rs`, `keybag.rs`, `decrypt.rs`, `manifest.rs`, `smsdb.rs`, `typedstream.rs`, `import.rs`, `clock.rs`, `files.rs` | Bring in your full history: which backups exist and what they are; iOS backup encryption (keybag TLV, both PBKDF2 steps, RFC 3394 unwrap, AES-256-CBC streaming, against RFC vectors and a generated encrypted backup); Manifest.db and its NSKeyedArchiver file records; Messages' tables across iOS versions, Apple-epoch times, which chats are groups (left out), edits, unsends, tapbacks; the text in `attributedBody`; what's new, dedupe against Bluetooth texts (the phone's zoneless times read in UTC with an offset tug knows, never guessed; nothing after the backup's date), resumable batches, Remove imported; content-addressed photo files, key checks, the scratch folder and its startup sweep. `backup/mod.rs` runs a whole encrypted backup end to end in a test |
 | `pc_audio/policy.rs` | PC audio on/off state machine (stale attempts can't turn it on), what Windows' open status means, which audio device is the iPhone (never a guess), when to turn on by itself |
+| `pc_media/policy.rs` | Pausing music and videos on this PC while the iPhone rings: which of Windows' media sessions to pause (playing, not tug's own, not the phone's), and whether one tug paused is still as it left it (same track, never played since) when the call is over |
 | `updater/policy.rs` | Automatic updates: whether the build is set up (a real minisign public key, not a debug build), installed vs portable, newer-only version comparison (no downgrades), the check schedule, what a check leads to, what holds a restart (a ringing call, a Tugboat transfer, voice typing), applying on quit, the release-notes headline |
 
 Frontend logic lives in **`src/lib/*.ts`**, each with a Vitest `*.test.ts` beside it: `albumArt`
 (which art Now Playing shows, its palette, and a tint that keeps WCAG AA contrast), `backupImport`
 (the full-history wizard's words and steps), `attachments`
 ("Attachment: 1 Photo" → a photo chip), `attention`
-(is the window really visible), `battery`, `callKeys` (no keystroke answers or declines a call), `coalesce` (one render per frame for bursts of
+(is the window really visible), `battery`, `callKeys` (no keystroke answers or declines a call), `callPause` (when to pause what plays on this PC for a ringing call, and when to play it again: at once after a missed or declined call, Resume offered after an answered one, whose end tug can't see), `coalesce` (one render per frame for bursts of
 updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `codes`, `commands` (Ctrl+K verbs, and the recent calls a search finds: they live in the window, not the database),
 `connectFlow`, `connectionPanel`, `connectionStatus` (one wording for the link everywhere),
 `devtools`, `errorReport`, `escape`, `feedPaging` (keep paging while the Feed's end is in view),
@@ -579,12 +601,12 @@ updates), `codeFeed`, `codeFill` (auto-copy and the type-the-code shortcut), `co
 answers never land), `layout` (sidebar density and "wide", from sizes that follow the zoom),
 `locating`, `media` (which controls show, skip routing, seek keys), `messageSync`, `messageType`,
 `ordering` (newest state wins over late events and reads), `pairings`,
-`pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
+`focusMode` (Focus mode: which pop-ups a focus held, and the one summary at its end, counted as Welcome back counts), `pcAudio` (PC audio button and Settings words), `permission`, `phoneModel`, `phoneSwitches` (the three iPhone switches), `playback` (Spotify Connect
 titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `seen` (when each Feed entry was last looked at, with other chat apps' old per-person
 times folded onto their stack once), `senders`
 (unknown-sender filter), `sharePrivacy` (hiding previews while sharing: the banner, Show anyway, a pop-up's kind), `singleFlight` (one press, one action), `smartActions` (links, email addresses, phone numbers, street addresses and parcel numbers in a text made one click: what counts, and what never does), `smartReplies` (suggested replies: the rules, and when there are none), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `startup` (startup reads that fail are retried, never block), `threadWindow` (long conversations render their newest texts first),
-`quickActions` (routing a taskbar task, one take at a time), `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
+`quickActions` (routing a taskbar task, one take at a time), `quickText` (quick text's shortcuts and what follows a send), `recipients` (who a new text can go to, for New message and quick text), `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
 scoring, the speed curve, inertia, the weather's handling, merging the controls), `tugboatDaily` (the
 daily challenge: the date's seed, weather → water, the start screen's line, the streak), `tugboatRace`
 (two players: who steers what, the result, when a dropped phone pauses the race; Harbor Stack's
@@ -609,7 +631,7 @@ handshake over a real named pipe (including a low-integrity impostor). Hardware 
 Everything the backend sends to the UI or takes from it is a serde type in Rust **mirrored by hand**
 in `src/types/protocol.ts`: `state.rs`, `store.rs`, `ams.rs`, `ancs.rs`, `messages.rs`,
 `map/calls.rs`, `map/health.rs`, `toast/`, `code_fill/`, `spotify/`, `tugboat/`, `bt_inventory/`, `devtools/`, `voice/`,
-`pc_audio/policy.rs`, `share_privacy/` and `backup/`.
+`pc_audio/policy.rs`, `share_privacy/`, `focus_mode/` and `backup/`.
 
 - App-facing types use `#[serde(rename_all = "camelCase")]` (fields and enum variants), so
   `contacts_off` in Rust is `contactsOff` in TypeScript.
@@ -674,7 +696,9 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?whatsnew` | The What's new card for the newest release |
 | `/?quickaction=new-message` (`tugboat`, `copy-code`, `game`, `settings`; `&again`) | tug started from that taskbar task (and, with `&again`, the task clicked again 4 s later while running) |
 | `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
+| `/?quicktext` (`&textsoff`, `&quicktextbusy`, `&again`) | The quick text shortcut pressed as from another app: the composer opens; Enter sends and it closes (the console says where the keyboard went). With texts not connected / Ctrl+Shift+Y taken by another app / pressed again 8 s later |
 | `/?sharing` (`&presenting`, `&stop`) | The screen is being shared: blurred texts and names under the `Previews hidden` banner with Show anyway (a slide show / sharing ends after 10 s); add `&call` for the call card |
+| `/?focus` (`&reason=fullScreen`, `&reason=coding`) | Focus mode on: a meeting from 2 s to 16 s, texts and a missed call held meanwhile (a code still pops up), then one "While you were focused" summary; pop-ups show as tug's note, Open as the click |
 | `/?voice` (`&micblocked`, `&nospeech`, `&voicebusy`) | Settings › General › Voice typing on, with the microphone blocked / no speech language / the shortcut taken |
 | `/?voicefail` | Settings › General › Voice typing: turning it on fails, the switch goes back off and says why |
 | `/?voice` (`&model`, `&mostmodel`, `&modelpaused`, `&modelfail`, `&noavx`, `&phonemic`, `&lowmem`) | Voice typing's speech engines: Accurate's model downloaded / Most accurate's too, and picked / a download paused at 40% / downloads that fail part way / a processor that can't run them / a hands-free headset / too little memory for Most accurate, so Accurate listened. Without `&model`, turning voice typing on (or picking an engine) plays a download with a progress bar |

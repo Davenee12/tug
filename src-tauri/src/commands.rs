@@ -220,6 +220,26 @@ pub fn pc_audio_set_auto(state: State<'_, AppState>, on: bool) -> Result<PcAudio
     state.pc_audio.set_auto(on)
 }
 
+/// The iPhone started ringing: pause music and videos playing on this PC (`pc_media`). Answers how
+/// many tug holds paused. The window decides when (Settings switch, `src/lib/callPause.ts`).
+#[tauri::command]
+pub async fn pc_media_pause() -> usize {
+    crate::pc_media::pause().await
+}
+
+/// The call is over (or Resume was pressed): play again what tug paused and nobody changed since.
+/// Answers how many played.
+#[tauri::command]
+pub async fn pc_media_resume() -> usize {
+    crate::pc_media::resume().await
+}
+
+/// Resume was on offer long enough: let go of what tug paused, leaving it paused.
+#[tauri::command]
+pub async fn pc_media_release() {
+    crate::pc_media::release().await
+}
+
 /// Pair the iPhone's Classic (texts) side from inside tug (setup's Texts step). The PIN shows in
 /// tug via the pairing-request event, the same as notifications pairing.
 #[tauri::command]
@@ -701,6 +721,13 @@ pub fn screen_share_watch(on: bool) -> crate::share_privacy::ShareState {
     }
 }
 
+/// Whether Focus mode is holding pop-ups right now, for the window at startup; changes come as
+/// `focus-state` events.
+#[tauri::command]
+pub fn focus_state() -> crate::focus_mode::FocusState {
+    crate::focus_mode::state()
+}
+
 /// Copy text to the clipboard. Sync on purpose: Tauri runs sync commands on the main
 /// (STA) thread, which the WinRT clipboard requires.
 #[tauri::command]
@@ -742,6 +769,31 @@ pub fn code_hotkey_status() -> crate::code_fill::HotkeyStatus {
 #[tauri::command]
 pub async fn set_code_hotkey(enabled: bool, keys: String) -> Result<crate::code_fill::HotkeyStatus> {
     tauri::async_runtime::spawn_blocking(move || crate::code_fill::apply(enabled, &keys))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The quick text shortcut's state, for Settings.
+#[tauri::command]
+pub fn quick_text_hotkey_status() -> crate::code_fill::HotkeyStatus {
+    crate::quick_text::status()
+}
+
+/// Turn the quick text shortcut on (as one of the offered shortcuts) or off. Says whether another
+/// app already holds it. Off the main thread: it waits for the hotkey thread.
+#[tauri::command]
+pub async fn set_quick_text_hotkey(enabled: bool, keys: String) -> Result<crate::code_fill::HotkeyStatus> {
+    tauri::async_runtime::spawn_blocking(move || crate::quick_text::apply(enabled, &keys))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The quick text composer closed. With `give_back` (sent, or cancelled), the app the shortcut
+/// was pressed in gets the keyboard back and tug's window goes back to how it was; without, tug
+/// stays in front (it's showing why a text didn't go). Sends nothing.
+#[tauri::command]
+pub async fn quick_text_done(app: tauri::AppHandle, give_back: bool) -> Result<()> {
+    tauri::async_runtime::spawn_blocking(move || crate::quick_text::done(&app, give_back))
         .await
         .map_err(|e| e.to_string())
 }
@@ -874,6 +926,7 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.appIcons",
     "ui.albumArt",
     "ui.dialing",
+    "ui.pauseMediaOnCall",
     "ui.autoCopyCodes",
     "ui.typeCodeHotkey",
     "ui.typeCodeKeys",
@@ -1039,6 +1092,11 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
     #[cfg(windows)]
     if key == crate::share_privacy::SETTING {
         crate::share_privacy::set_enabled(crate::share_privacy::enabled_from_setting(Some(&value)));
+    }
+    // Focus mode: the watcher starts or stops looking at once (off ends any focus now).
+    #[cfg(windows)]
+    if key == crate::focus_mode::SETTING {
+        crate::focus_mode::set_settings(crate::focus_mode::FocusSettings::from_setting(Some(&value)));
     }
     Ok(())
 }

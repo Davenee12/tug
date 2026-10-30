@@ -1335,6 +1335,13 @@ pub fn busy() -> bool {
     false
 }
 
+/// The program in front's full path (Focus mode's coding check uses the same lookup and the
+/// same list as voice typing). Never logged.
+#[cfg(windows)]
+pub fn foreground_exe() -> Option<String> {
+    win::foreground_exe()
+}
+
 #[cfg(windows)]
 fn mic_blocked_now() -> bool {
     win::mic_blocked()

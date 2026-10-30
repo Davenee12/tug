@@ -1,5 +1,6 @@
 // Taskbar quick actions: the Tasks in tug's jump list (right-click tug on the taskbar or in
-// Start). Rust queues each click (src-tauri/src/quick_actions) and nudges with "quick-action";
+// Start), plus quick text's global shortcut, which is queued the same way so a press runs once.
+// Rust queues each click (src-tauri/src/quick_actions) and nudges with "quick-action";
 // the UI takes what's waiting once it has loaded and on every nudge. Taking clears the queue in
 // Rust, so a click runs once even if nudges pile up or a take races another. Pure: the app hands
 // in how to take and what each action does.
@@ -13,6 +14,7 @@ export interface QuickActionHandlers {
   copyCode: () => void;
   game: () => void;
   settings: () => void;
+  quickText: () => void;
 }
 
 const ROUTES: Record<QuickAction, keyof QuickActionHandlers> = {
@@ -21,6 +23,7 @@ const ROUTES: Record<QuickAction, keyof QuickActionHandlers> = {
   "copy-code": "copyCode",
   game: "game",
   settings: "settings",
+  "quick-text": "quickText",
 };
 
 /** Carry out one action; false (and nothing done) for one this build doesn't know. */

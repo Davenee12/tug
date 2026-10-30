@@ -17,8 +17,8 @@ import {
   Sun,
 } from "lucide-vue-next";
 import { useWeatherStore } from "../stores/weather";
-import { dayLabel, describe, hourLabel, localTime, outlook, temp, wet, wind, withCurrentHour, type Place, type Sky } from "../lib/weather";
-import { beforeYouGo, daylightLine, nextRain, placeNow, rainBars } from "../lib/weatherHarbor";
+import { dayLabel, describe, hourLabel, localTime, outlook, temp, wind, withCurrentHour, type Place, type Sky } from "../lib/weather";
+import { beforeYouGo, daylightLine, fallKind, nextRain, placeNow, rainBars } from "../lib/weatherHarbor";
 import { harborLife } from "../lib/harborLife";
 import { useTugStore } from "../stores/tug";
 import WeatherHarbor from "./WeatherHarbor.vue";
@@ -52,11 +52,7 @@ const place = computed(() => (w.place && w.place !== "off" ? w.place : null));
 
 // Rain to the quarter-hour for the next two hours, when the forecast has it; the 12-hour outlook
 // otherwise. Snow when that's what's falling or coming.
-const fallWord = computed<"Rain" | "Snow">(() => {
-  const fc = f.value;
-  const first = fc ? [fc.now.code, ...fc.hours.slice(0, 3).map((h) => h.code)].find(wet) : undefined;
-  return first !== undefined && describe(first).sky === "snow" ? "Snow" : "Rain";
-});
+const fallWord = computed<"Rain" | "Snow">(() => (f.value ? fallKind(f.value) : "Rain"));
 const soon = computed(() =>
   f.value ? nextRain(f.value.quarters, placeNow(now.value.getTime(), f.value.timezone), fallWord.value) : null,
 );
