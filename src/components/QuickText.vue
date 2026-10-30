@@ -86,6 +86,8 @@ function onSearchKey(e: KeyboardEvent) {
 function onBoxKey(e: KeyboardEvent) {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
+    // A held Enter from picking the person, or one that finishes an IME word, isn't a send.
+    if (e.repeat || e.isComposing) return;
     void send();
   }
 }

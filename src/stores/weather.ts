@@ -209,9 +209,14 @@ export const useWeatherStore = defineStore("weather", () => {
       lastSpell,
     });
     if (!alert) return;
+    // Taken now, so a second check before the pop-up is decided says nothing; given back if the
+    // pop-up was held (Do not disturb, quiet hours, a focus), so a later check can still tell it.
+    const before = lastSpell;
     lastSpell = alert.spell;
-    void api.setSetting("ui.rainAlertLast", alert.spell).catch(() => undefined);
-    void tug.popInfo(RAIN_TOAST_ID, alert.title, alert.body);
+    void tug.popInfo(RAIN_TOAST_ID, alert.title, alert.body).then((shown) => {
+      if (shown) void api.setSetting("ui.rainAlertLast", alert.spell).catch(() => undefined);
+      else if (lastSpell === alert.spell) lastSpell = before;
+    });
   }
 
   function setRainAlerts(on: boolean) {

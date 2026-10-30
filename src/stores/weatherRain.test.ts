@@ -11,11 +11,12 @@ vi.mock("../lib/ipc", () => ({
   errorMessage: (e: unknown) => String(e),
 }));
 const popped: Array<[number, string, string]> = [];
+let held = false; // Do not disturb, quiet hours or a focus
 vi.mock("./tug", () => ({
   RAIN_TOAST_ID: 7,
   useTugStore: () => ({
     status: { connection: "connected", battery: 22, services: { battery: true } },
-    popInfo: async (id: number, title: string, body: string) => void popped.push([id, title, body]),
+    popInfo: async (id: number, title: string, body: string) => !held && (popped.push([id, title, body]), true),
   }),
 }));
 
@@ -38,6 +39,7 @@ describe("rain soon pop-ups", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     popped.length = 0;
+    held = false;
     for (const k of Object.keys(saved)) delete saved[k];
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.UTC(2026, 9, 5, 17, 20));
@@ -47,7 +49,7 @@ describe("rain soon pop-ups", () => {
     vi.unstubAllGlobals();
   });
 
-  it("pops up once per spell, with the battery, only when turned on", () => {
+  it("pops up once per spell, with the battery, only when turned on", async () => {
     const w = useWeatherStore();
     w.place = { name: "Portland, Oregon", latitude: 45.5, longitude: -122.7 };
     w.forecast = forecast();
@@ -60,11 +62,30 @@ describe("rain soon pop-ups", () => {
     expect(popped[0][0]).toBe(7);
     expect(popped[0][1]).toBe("Rain soon in Portland");
     expect(popped[0][2]).toMatch(/Your phone's at 22%/);
+    await Promise.resolve();
     expect(saved["ui.rainAlertLast"]).toBe("2026-10-05T17:30");
 
     // The next refresh tick: the same spell, told already.
     w.checkRain();
     expect(popped).toHaveLength(1);
+  });
+
+  it("tells a held spell later, while it's still ahead", async () => {
+    const w = useWeatherStore();
+    w.place = { name: "Portland, Oregon", latitude: 45.5, longitude: -122.7 };
+    w.forecast = forecast();
+    held = true;
+    w.setRainAlerts(true);
+    await Promise.resolve();
+    expect(popped).toEqual([]);
+    expect(saved["ui.rainAlertLast"]).toBeUndefined();
+
+    // Do not disturb ends before the rain: the next tick tells it.
+    held = false;
+    w.checkRain();
+    await Promise.resolve();
+    expect(popped).toHaveLength(1);
+    expect(saved["ui.rainAlertLast"]).toBe("2026-10-05T17:30");
   });
 
   it("remembers the spell it told about across a restart", async () => {

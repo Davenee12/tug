@@ -126,6 +126,9 @@ pub fn set_settings(settings: FocusSettings) {
         if before.reason.is_some_and(|r| !settings.allows(r)) {
             let change = g.debounce.reset();
             m.report(before, change, 0);
+        } else if before.reason.is_none() {
+            // Not focused yet: forget a part-way wait, so switching on later waits the full time.
+            let _ = g.debounce.reset();
         }
     }
     m.wake.notify_all();

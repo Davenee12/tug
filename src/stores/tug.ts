@@ -946,6 +946,7 @@ export const useTugStore = defineStore("tug", () => {
    * by pop-ups off, Do not disturb and quiet hours. A press opens tug. False when it was held.
    */
   async function popInfo(id: number, title: string, body: string): Promise<boolean> {
+    await ready; // Do not disturb, quiet hours and Focus mode are loaded by then
     if (!popupAllowed({ appId: "", isCall: false, isVip: false }) || !(await hasToastPermission())) return false;
     const spec: ToastSpec = {
       id,
