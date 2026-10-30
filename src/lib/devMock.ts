@@ -1350,6 +1350,15 @@ mockIPC(
         if (!status.device) throw "Connect your iPhone first.";
         pcAudio.auto = a.on === true;
         return sendPc();
+      // Pausing what plays on this PC for a ringing call: pretend one thing was playing.
+      case "pc_media_pause":
+        console.log("[devMock] pause music and videos on this PC for the call");
+        return 1;
+      case "pc_media_resume":
+        console.log("[devMock] play them again");
+        return 1;
+      case "pc_media_release":
+        return null;
       // getVersion() from @tauri-apps/api/app, so Settings › About and the "What's new" card read
       // a real version in the browser preview (unmocked, it rejects and both fall back to "dev").
       case "plugin:app|version":

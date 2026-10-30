@@ -411,6 +411,8 @@ export interface UiSettings {
   smartReplyDefaults: string[];
   /** While the screen is shared or presented, pop-ups and the window hide texts and names (on by default; read by the backend, `share_privacy/`). */
   hidePreviewsWhileSharing: boolean;
+  /** Pause music and videos playing on this PC while the iPhone rings (on by default; lib/callPause, `pc_media/`). */
+  pauseMediaOnCall: boolean;
 }
 
 /**

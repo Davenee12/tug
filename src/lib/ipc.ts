@@ -80,6 +80,13 @@ export const api = {
   pcAudioSet: (on: boolean) => invoke<PcAudioStatus>("pc_audio_set", { on }),
   /** "Turn on automatically when my iPhone connects", for the phone tug uses now. */
   pcAudioSetAuto: (on: boolean) => invoke<PcAudioStatus>("pc_audio_set_auto", { on }),
+  // --- Pause music and videos on this PC while the iPhone rings (lib/callPause) ---
+  /** Pause what's playing on this PC; answers how many things tug holds paused. */
+  pcMediaPause: () => invoke<number>("pc_media_pause"),
+  /** Play again what tug paused and nobody changed since; answers how many played. */
+  pcMediaResume: () => invoke<number>("pc_media_resume"),
+  /** Let go of what tug paused, leaving it paused. */
+  pcMediaRelease: () => invoke<void>("pc_media_release"),
   /** Pair the iPhone's Classic (texts) side from inside tug; the PIN shows via pairing-request. */
   pairTexts: () => invoke<void>("pair_texts"),
   setAdvertising: (enabled: boolean) => invoke<void>("set_advertising", { enabled }),

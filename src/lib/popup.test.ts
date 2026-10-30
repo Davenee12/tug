@@ -24,6 +24,7 @@ const baseSettings: UiSettings = {
   smartReplies: true,
   smartReplyDefaults: ["👍", "OK", "Talk soon"],
   hidePreviewsWhileSharing: true,
+  pauseMediaOnCall: true,
 };
 const settings = (over: Partial<UiSettings> = {}): UiSettings => ({ ...baseSettings, ...over });
 const quiet = (over: Partial<QuietHours> = {}): QuietHours => ({ enabled: true, start: "22:00", end: "07:00", days: [], ...over });

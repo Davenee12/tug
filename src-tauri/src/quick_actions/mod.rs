@@ -274,6 +274,12 @@ pub fn init(identifier: &str) {
     let _ = id;
 }
 
+/// The AppUserModelID this process claimed (`None` before `init`). Windows names tug's own media
+/// session by it, which `pc_media` must leave alone.
+pub fn own_app_id() -> Option<String> {
+    APP_ID.get().cloned()
+}
+
 /// Hand the Tasks to Windows, off the calling thread (COM, and nothing should wait on the shell).
 /// Called at startup and when Show games changes; failures are logged, never shown.
 pub fn install(show_games: bool) {

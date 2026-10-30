@@ -220,6 +220,26 @@ pub fn pc_audio_set_auto(state: State<'_, AppState>, on: bool) -> Result<PcAudio
     state.pc_audio.set_auto(on)
 }
 
+/// The iPhone started ringing: pause music and videos playing on this PC (`pc_media`). Answers how
+/// many tug holds paused. The window decides when (Settings switch, `src/lib/callPause.ts`).
+#[tauri::command]
+pub async fn pc_media_pause() -> usize {
+    crate::pc_media::pause().await
+}
+
+/// The call is over (or Resume was pressed): play again what tug paused and nobody changed since.
+/// Answers how many played.
+#[tauri::command]
+pub async fn pc_media_resume() -> usize {
+    crate::pc_media::resume().await
+}
+
+/// Resume was on offer long enough: let go of what tug paused, leaving it paused.
+#[tauri::command]
+pub async fn pc_media_release() {
+    crate::pc_media::release().await
+}
+
 /// Pair the iPhone's Classic (texts) side from inside tug (setup's Texts step). The PIN shows in
 /// tug via the pairing-request event, the same as notifications pairing.
 #[tauri::command]
@@ -874,6 +894,7 @@ const DIAGNOSTIC_SETTINGS: &[&str] = &[
     "ui.appIcons",
     "ui.albumArt",
     "ui.dialing",
+    "ui.pauseMediaOnCall",
     "ui.autoCopyCodes",
     "ui.typeCodeHotkey",
     "ui.typeCodeKeys",
