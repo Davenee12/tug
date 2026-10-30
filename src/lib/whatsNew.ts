@@ -21,6 +21,17 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.23",
+    title: "Quick text, Focus mode and calls that pause your music",
+    highlights: [
+      "Quick text: turn it on in Settings › Messages, press Ctrl+Shift+Y in any app, type, Enter, and you're back where you were.",
+      "Focus mode holds pop-ups while you're presenting, gaming or in a meeting, then sums up what came.",
+      "When your iPhone rings, music and videos on your PC pause, and carry on if you miss the call.",
+      "Rain soon: a pop-up about 15 minutes before it rains where you are (Settings › Weather).",
+      "Voice typing gets a Most accurate engine, your own words, and hints for the app you're in.",
+    ],
+  },
+  {
     version: "0.5.22",
     title: "A live harbor, Send later and Remind me",
     highlights: [

@@ -1,6 +1,6 @@
 # What tug can do
 
-Everything tug does today (v0.5.22), one line each. tug works with **no app on the phone**: it
+Everything tug does today (v0.5.23), one line each. tug works with **no app on the phone**: it
 uses what iOS shares with any Bluetooth accessory, like a smartwatch or a car kit. The limits that
 come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone-doesnt-allow-yet).
 
@@ -80,6 +80,9 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   setting.
 - **Do not disturb** keeps collecting notifications but stops pop-ups (Settings and the sidebar).
 - **Quiet hours** hold pop-ups on a schedule you choose, including overnight.
+- **Focus mode** (off until you turn it on) holds pop-ups while you're presenting, gaming, in a
+  meeting (another app is using the microphone or camera) or, if you choose, coding, then shows one
+  summary of what came, which opens the Feed. Calls, verification codes and VIPs still come through.
 - **Mute pop-ups** from any app, from its bell icon or in Settings › Notifications.
 - **Always let through:** chosen people pop up even during quiet hours and Do not disturb.
 - Calls ring through quiet hours and Do not disturb; **Mute calls** silences call pop-ups (people
@@ -110,6 +113,9 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   sends it just like typing it (Sending…, Sent, or Not sent with Retry), and a pop-up's suggestion
   shows in the conversation the same way.
 - Start a **new conversation** with Ctrl+N or +: recent people, contacts, or a typed number.
+- **Quick text** (off until you turn it on in Settings › Messages): Ctrl+Shift+Y (or U or H) in any
+  app brings up a small "Text someone" box; Enter sends through the iPhone and puts you back where
+  you were, Esc closes it.
 - **Send later:** the clock beside Send schedules the text (in 20 minutes up to tomorrow morning).
   It waits above the box with Send now and Cancel, and goes through your iPhone when it's due; if
   the phone isn't connected it waits, and a text more than 30 minutes late is never sent by itself:
@@ -177,6 +183,9 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - Answer or decline from the Feed row too.
 - **Recent calls** (Calls tab) shows the iPhone's call history with Message and Call back buttons,
   and is kept across restarts (needs Sync Contacts).
+- **Pause for calls:** music and videos playing on the PC pause while the iPhone rings and carry on
+  after a missed or declined call; after an answered call tug offers Resume. Never restarts what you
+  paused or changed yourself (on by default, Settings › iPhone › Calls).
 - **Call back** a missed call from the Feed, a pop-up, the Calls tab or Ctrl+K; the iPhone places
   the call.
 - **Call from tug** (experimental, off by default) can dial anyone over the hands-free link, once
@@ -329,6 +338,8 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   caption marks the golden hour itself.
 - **Rain to the quarter-hour** for the next two hours ("Rain from about 5:45 PM, for about 30
   minutes"), with a small strip of bars.
+- **Rain soon** (off until you turn it on, Settings › Weather): a pop-up about 15 minutes before rain
+  or snow starts at your place, with the phone's battery when it's low.
 - **Before you head out:** rain or snow due within two hours, or a freezing feels-like, with the
   iPhone at 30% or less, and the card says to charge it first.
 - Choose a place with **Use my location** (Windows location) or by typing a city.
@@ -434,6 +445,8 @@ Details and setup: [DEVELOPERS.md](DEVELOPERS.md).
   start off**.
 - A text or a file from an AI tool is sent only after you click **Send** on tug's card within 2
   minutes. The file card shows each file's name, size and folder.
+- The card names the app that's asking when tug can tell ("Cursor (an AI tool)"), and always says
+  it's an AI tool.
 - **`tug boat report.pdf`** (or an AI tool's `send_file_to_phone`) sends files to your iPhone: after
   Send, Tugboat opens with its code if your phone's page isn't open ("Scan the code in tug to
   receive report.pdf on your iPhone…"), and the command waits up to 2 minutes for the phone to

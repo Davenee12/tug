@@ -1,10 +1,28 @@
 # Changelog
 
-## Unreleased
+## v0.5.23 — 2026-10-30
 
-On main, for the next release.
+Quick text from any app, Focus mode, calls that pause your PC's music, Rain soon pop-ups and voice
+typing's Most accurate engine. It arrives through automatic updates, and is the first release to
+roll out gradually (to 10% of PCs first).
 
 ### New
+- **Quick text from any app.** Turn it on in Settings › Messages, then press Ctrl+Shift+Y wherever
+  you are (or Ctrl+Shift+U or H) to text someone through your iPhone without opening tug. Pick a
+  person, type, press Enter, and you're right back where you were. Esc closes it.
+- **Focus mode** (Settings › Notifications, off until you turn it on). While you're presenting,
+  gaming, in a meeting (another app is using your microphone or camera) or, if you choose, coding,
+  tug holds its pop-ups. When you're done, one pop-up sums up what came ("4 texts from 2 people,
+  1 missed call") and opens the Feed. Calls, verification codes and VIPs still come through.
+- **Pause for calls.** When your iPhone rings, tug pauses music and videos playing on your PC
+  (Spotify, a YouTube tab, a video player). Miss or decline the call and they carry on; after a call
+  you answered, tug offers Resume. It never restarts something you paused or changed yourself. On
+  by default in Settings › iPhone › Calls.
+- **Rain soon** (Settings › Weather, off until you turn it on): a pop-up about 15 minutes before
+  rain or snow starts at your weather place, with your phone's battery when it's low.
+- **AI tools named on the card.** The "send this?" card names the app that's asking more often,
+  like "Cursor (an AI tool)", even when the tool doesn't introduce itself. "(an AI tool)" is always
+  there, so you always know an AI is asking.
 - **Voice typing: Most accurate.** An opt-in engine for names and other languages (Whisper
   large-v3-turbo, an 834 MB one-time download). It's much slower than Accurate, which stays the
   default. It has its own language setting.
@@ -20,11 +38,13 @@ On main, for the next release.
 ### Fixed
 - After the iPhone comes back, texts reconnect within seconds instead of up to 5 minutes when the
   phone's message access isn't ready at first.
-- A notifications permission check cut off by a brief Bluetooth drop is re-checked in seconds,
-  rather than logged as a failure.
+- After a brief Bluetooth drop, notifications (calls included) come back within seconds; they could
+  stay dead for about 15 s.
 
 ### Under the hood
-- Updated tokio, plist, rmcp, the Tauri CLI, vite and vitest.
+- Updated tokio, plist, rmcp, the Tauri CLI, vite, vitest and the GitHub Actions tug's checks use.
+- A release now stops in its first minute, with what to do, if its tag's workflow files differ
+  from main's (v0.5.22's draft had to be made by hand).
 
 ## v0.5.22 — 2026-10-27
 
