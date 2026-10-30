@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, type Ref } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -38,6 +38,7 @@ import {
   rememberCopied,
   shouldAutoCopy,
 } from "../lib/codeFill";
+import { DEFAULT_QUICK_TEXT_HOTKEY, knownQuickTextHotkey } from "../lib/quickText";
 import { MESSAGES_APP } from "../lib/format";
 import { toastBody } from "../lib/attachments";
 import { batteryAlert, restoreBatteryAlerted, saveBatteryAlerted } from "../lib/battery";
@@ -253,6 +254,8 @@ export const useTugStore = defineStore("tug", () => {
     autoCopyCodes: true,
     typeCodeHotkey: true,
     typeCodeKeys: DEFAULT_CODE_HOTKEY,
+    quickTextHotkey: false,
+    quickTextKeys: DEFAULT_QUICK_TEXT_HOTKEY,
     showGames: true,
     smartReplies: true,
     smartReplyDefaults: [...DEFAULT_REPLIES],
@@ -261,6 +264,8 @@ export const useTugStore = defineStore("tug", () => {
   });
   /** The type-the-code shortcut as the backend registered it (Settings shows "in use" from this). */
   const codeHotkey = ref<CodeHotkeyStatus>({ state: "off", keys: DEFAULT_CODE_HOTKEY });
+  /** The quick text shortcut as the backend registered it (off until switched on in Settings › Messages). */
+  const quickTextHotkey = ref<CodeHotkeyStatus>({ state: "off", keys: DEFAULT_QUICK_TEXT_HOTKEY });
 
   /** Who is a VIP (always let through), rebuilt when the list or the contacts change. */
   const vips = computed(() => vipIndex(settings.value.vips, contacts.value));
@@ -434,6 +439,8 @@ export const useTugStore = defineStore("tug", () => {
   const composeTo = ref<{ address: string; name: string } | null>(null);
   /** The New message picker (+ or Ctrl+N). */
   const pickerOpen = ref(false);
+  /** The quick text composer, opened by its global shortcut from any app (lib/quickText). */
+  const quickTextOpen = ref(false);
   /** Universal search (Ctrl+K or the search box). */
   const searchOpen = ref(false);
   /** What universal search opens with, once (a Ctrl+K text that couldn't be sent comes back). */
@@ -452,6 +459,7 @@ export const useTugStore = defineStore("tug", () => {
     () =>
       searchOpen.value ||
       pickerOpen.value ||
+      quickTextOpen.value ||
       spotifyPanelOpen.value ||
       whatsNewOpen.value ||
       useTugboatStore().open ||
@@ -934,38 +942,89 @@ export const useTugStore = defineStore("tug", () => {
     void hasToastPermission().then((ok) => ok && showInfoToast(CODE_FILL_TOAST_ID, title, body));
   }
 
-  /** Presses of the type-the-code switch and shortcut picker, so only the newest may put them back. */
-  let codeHotkeyPresses = 0;
-
-  /** Settings › Notifications: turn the shortcut on or off, or pick another; the backend says if it's taken. */
-  async function setCodeHotkey(enabled: boolean, keys: string) {
-    const press = ++codeHotkeyPresses;
-    const id = knownHotkey(keys);
-    const before = { typeCodeHotkey: settings.value.typeCodeHotkey, typeCodeKeys: settings.value.typeCodeKeys };
-    const beforeStatus = codeHotkey.value;
-    settings.value = { ...settings.value, typeCodeHotkey: enabled, typeCodeKeys: id };
-    // Still the newest choice? A later press owns the switch; an older failure mustn't undo it.
-    // By press, not by value: on → off → on shows this press's value again after two newer ones.
-    const stillMine = () =>
-      press === codeHotkeyPresses && settings.value.typeCodeHotkey === enabled && settings.value.typeCodeKeys === id;
-    const revert = () => {
-      if (stillMine()) settings.value = { ...settings.value, ...before };
+  /**
+   * A global shortcut's switch and picker in Settings: turn it on or off, or pick another; the
+   * backend says if it's taken. Type-the-code and quick text each get one, with their own settings,
+   * status and presses.
+   */
+  function shortcutSwitch(o: {
+    on: "typeCodeHotkey" | "quickTextHotkey";
+    keys: "typeCodeKeys" | "quickTextKeys";
+    status: Ref<CodeHotkeyStatus>;
+    known: (id: string) => string;
+    register: (enabled: boolean, keys: string) => Promise<CodeHotkeyStatus>;
+  }) {
+    /** Presses of the switch and shortcut picker, so only the newest may put them back. */
+    let presses = 0;
+    const put = (enabled: boolean, keys: string) => {
+      const next = { ...settings.value };
+      next[o.on] = enabled;
+      next[o.keys] = keys;
+      settings.value = next;
     };
-    // Register first: if Windows' side fails outright, nothing was saved and the switch goes back
-    // (a shortcut another app holds isn't a failure; it comes back as "inUse" and Settings says so).
-    const s = await attempt(() => api.setCodeHotkey(enabled, id));
-    if (!s) return revert();
-    if (stillMine()) codeHotkey.value = s;
-    const saved =
-      (await attempt(() => api.setSetting("ui.typeCodeHotkey", JSON.stringify(enabled)).then(() => true))) === true &&
-      (await attempt(() => api.setSetting("ui.typeCodeKeys", id).then(() => true))) === true;
-    if (saved || !stillMine()) return;
-    // Not saved, so it wouldn't survive a restart: put the shortcut back as it was, quietly. (No
-    // newer press happened during the saves: `stillMine` said so just above.)
-    revert();
-    const back = await api.setCodeHotkey(before.typeCodeHotkey, before.typeCodeKeys).catch(() => null);
-    // A press during that call owns the shortcut and its status now.
-    if (press === codeHotkeyPresses) codeHotkey.value = back ?? beforeStatus;
+    return async (enabled: boolean, keys: string) => {
+      const press = ++presses;
+      const id = o.known(keys);
+      const before = { enabled: settings.value[o.on], keys: settings.value[o.keys] };
+      const beforeStatus = o.status.value;
+      put(enabled, id);
+      // Still the newest choice? A later press owns the switch; an older failure mustn't undo it.
+      // By press, not by value: on → off → on shows this press's value again after two newer ones.
+      const stillMine = () => press === presses && settings.value[o.on] === enabled && settings.value[o.keys] === id;
+      const revert = () => {
+        if (stillMine()) put(before.enabled, before.keys);
+      };
+      // Register first: if Windows' side fails outright, nothing was saved and the switch goes back
+      // (a shortcut another app holds isn't a failure; it comes back as "inUse" and Settings says so).
+      const s = await attempt(() => o.register(enabled, id));
+      if (!s) return revert();
+      if (stillMine()) o.status.value = s;
+      const saved =
+        (await attempt(() => api.setSetting(`ui.${o.on}`, JSON.stringify(enabled)).then(() => true))) === true &&
+        (await attempt(() => api.setSetting(`ui.${o.keys}`, id).then(() => true))) === true;
+      if (saved || !stillMine()) return;
+      // Not saved, so it wouldn't survive a restart: put the shortcut back as it was, quietly. (No
+      // newer press happened during the saves: `stillMine` said so just above.)
+      revert();
+      const back = await o.register(before.enabled, before.keys).catch(() => null);
+      // A press during that call owns the shortcut and its status now.
+      if (press === presses) o.status.value = back ?? beforeStatus;
+    };
+  }
+
+  /** Settings › Notifications: the type-the-code shortcut. */
+  const setCodeHotkey = shortcutSwitch({
+    on: "typeCodeHotkey",
+    keys: "typeCodeKeys",
+    status: codeHotkey,
+    known: (id) => knownHotkey(id),
+    register: (enabled, keys) => api.setCodeHotkey(enabled, keys),
+  });
+  /** Settings › Messages: the quick text shortcut. */
+  const setQuickTextHotkey = shortcutSwitch({
+    on: "quickTextHotkey",
+    keys: "quickTextKeys",
+    status: quickTextHotkey,
+    known: knownQuickTextHotkey,
+    register: (enabled, keys) => api.setQuickTextHotkey(enabled, keys),
+  });
+
+  /** The quick text shortcut was pressed (Rust has brought tug forward): open the composer. */
+  function openQuickText() {
+    searchOpen.value = false;
+    pickerOpen.value = false;
+    quickTextOpen.value = true;
+  }
+
+  /**
+   * The quick text composer closed. `giveBack` (sent, or cancelled): the app the shortcut was
+   * pressed in gets the keyboard back, if tug wasn't already in front then. Without it tug stays,
+   * showing why a text didn't go.
+   */
+  function closeQuickText(giveBack: boolean) {
+    if (!quickTextOpen.value) return;
+    quickTextOpen.value = false;
+    void api.quickTextDone(giveBack).catch(() => undefined);
   }
 
   /** Calls always ring through; everything else is rate-limited and the overflow summed up once. */
@@ -1560,6 +1619,8 @@ export const useTugStore = defineStore("tug", () => {
       autoCopyCodes: raw["ui.autoCopyCodes"] !== "false",
       typeCodeHotkey: raw["ui.typeCodeHotkey"] !== "false",
       typeCodeKeys: knownHotkey(raw["ui.typeCodeKeys"]),
+      quickTextHotkey: raw["ui.quickTextHotkey"] === "true",
+      quickTextKeys: knownQuickTextHotkey(raw["ui.quickTextKeys"]),
       showGames: raw["ui.showGames"] !== "false",
       smartReplies: raw["ui.smartReplies"] !== "false",
       smartReplyDefaults: parseReplyDefaults(raw["ui.smartReplyDefaults"]),
@@ -1731,6 +1792,9 @@ export const useTugStore = defineStore("tug", () => {
       // The backend registered the type-the-code shortcut at startup; Settings shows how that went.
       const hotkey = await attempt(api.codeHotkeyStatus);
       if (hotkey) codeHotkey.value = hotkey;
+      // The same for quick text's (registered at startup only if it was switched on).
+      const quickHotkey = await attempt(api.quickTextHotkeyStatus);
+      if (quickHotkey) quickTextHotkey.value = quickHotkey;
     } finally {
       // Settings and contacts are in (or couldn't be read): pop-ups held since the listeners went
       // in are judged now. Always, or every pop-up would wait forever.
@@ -2394,6 +2458,9 @@ export const useTugStore = defineStore("tug", () => {
     selectedThread,
     composeTo,
     pickerOpen,
+    quickTextOpen,
+    openQuickText,
+    closeQuickText,
     searchOpen,
     searchDraft,
     unreadTexts,
@@ -2433,6 +2500,8 @@ export const useTugStore = defineStore("tug", () => {
     setSetting,
     codeHotkey,
     setCodeHotkey,
+    quickTextHotkey,
+    setQuickTextHotkey,
     toggleMuted,
     addVip,
     removeVip,

@@ -15,6 +15,9 @@ mod win;
 /// Voice typing waits for the same keys before it types.
 #[cfg(windows)]
 pub(crate) use win::wait_for_release;
+/// Quick text's shortcut lives on the same hotkey thread (`quick_text`).
+#[cfg(windows)]
+pub(crate) use win::{register as register_on_hotkey_thread, Shortcut};
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -88,6 +91,12 @@ pub fn parse_hotkey(id: &str) -> Option<Keys> {
     if !HOTKEYS.contains(&id) {
         return None;
     }
+    parse_keys(id)
+}
+
+/// "ctrl+shift+v" as keys: Ctrl plus Shift and/or Alt and one letter. Callers check their own
+/// offered list first (code fill's, quick text's), so only listed shortcuts are registered.
+pub(crate) fn parse_keys(id: &str) -> Option<Keys> {
     let mut keys = Keys {
         ctrl: false,
         shift: false,
@@ -251,7 +260,7 @@ pub fn apply(enabled: bool, keys: &str) -> HotkeyStatus {
 
 #[cfg(windows)]
 fn set_registration(keys: Option<Keys>) -> bool {
-    win::register(keys)
+    win::register(win::Shortcut::CodeFill, keys)
 }
 
 #[cfg(not(windows))]
@@ -259,7 +268,8 @@ fn set_registration(_keys: Option<Keys>) -> bool {
     false
 }
 
-/// Start the hotkey thread and register the saved shortcut (on unless switched off).
+/// Start the hotkey thread (quick text's shortcut uses it too) and register the saved shortcut
+/// (on unless switched off).
 pub fn start(app: &AppHandle, store: &crate::store::Store) {
     #[cfg(windows)]
     win::start(app.clone());

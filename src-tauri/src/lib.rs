@@ -32,6 +32,7 @@ mod pc_audio;
 mod perf;
 mod pin_confirm;
 mod quick_actions;
+mod quick_text;
 mod report;
 mod session_end;
 mod share_privacy;
@@ -219,6 +220,8 @@ pub fn run() {
             // Code fill's type-the-code shortcut: registered now (on unless switched off), so it
             // works from a tray-only start too.
             code_fill::start(app.handle(), &shared.store);
+            // Quick text's shortcut, on the same hotkey thread: only if the owner switched it on.
+            quick_text::start(&shared.store);
             // Hide previews while sharing or presenting: a thread that sleeps until the window is
             // on screen or a pop-up finds something to hide.
             #[cfg(windows)]
@@ -362,6 +365,9 @@ pub fn run() {
             commands::code_hotkey_status,
             commands::take_quick_actions,
             commands::set_code_hotkey,
+            commands::quick_text_hotkey_status,
+            commands::set_quick_text_hotkey,
+            commands::quick_text_done,
             commands::voice_status,
             commands::set_voice_typing,
             commands::set_voice_engine,

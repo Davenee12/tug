@@ -20,9 +20,12 @@ export const CODE_CLEAR_AFTER_MS = 2 * 60 * 1000;
 export const CODE_HOTKEYS: readonly string[] = hotkeyList.hotkeys;
 export const DEFAULT_CODE_HOTKEY = CODE_HOTKEYS[0];
 
-/** A saved shortcut, or the default if it isn't one tug offers (an old or hand-edited value). */
-export function knownHotkey(id: string | null | undefined): string {
-  return id && CODE_HOTKEYS.includes(id) ? id : DEFAULT_CODE_HOTKEY;
+/**
+ * A saved shortcut, or the default if it isn't one tug offers (an old or hand-edited value).
+ * `offered` is code fill's list unless another shortcut (quick text's) asks about its own.
+ */
+export function knownHotkey(id: string | null | undefined, offered: readonly string[] = CODE_HOTKEYS): string {
+  return id && offered.includes(id) ? id : offered[0];
 }
 
 /** "ctrl+shift+v" → ["Ctrl", "Shift", "V"], for <kbd> chips. */
@@ -45,9 +48,9 @@ export function typeCodeShortcut(status: CodeHotkeyStatus): { what: string; keys
   return { what: "Type the latest code (in any app)", keys: hotkeyKeys(status.keys) };
 }
 
-/** The other shortcuts to offer when this one is taken by another app. */
-export function hotkeyAlternatives(current: string): string[] {
-  return CODE_HOTKEYS.filter((h) => h !== current);
+/** The other shortcuts to offer when this one is taken by another app (from `offered`, as above). */
+export function hotkeyAlternatives(current: string, offered: readonly string[] = CODE_HOTKEYS): string[] {
+  return offered.filter((h) => h !== current);
 }
 
 export interface AutoCopyCandidate {
