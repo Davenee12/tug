@@ -403,6 +403,10 @@ export interface UiSettings {
   typeCodeHotkey: boolean;
   /** Which shortcut, one of `src/lib/codeHotkeys.json` (read by the backend too). */
   typeCodeKeys: string;
+  /** Quick text: a global shortcut opens a small composer from any app (read by the backend too, `quick_text/`). Off by default. */
+  quickTextHotkey: boolean;
+  /** Which shortcut, one of `src/lib/quickTextHotkeys.json` (read by the backend too). */
+  quickTextKeys: string;
   /** The sidebar's Play button and the Ctrl+K "Tugboat Run" command (on by default). */
   showGames: boolean;
   /** One-tap suggested replies on text pop-ups and in Messages (on by default; lib/smartReplies). */
@@ -480,11 +484,13 @@ export interface CodeFilled {
 
 /**
  * A task from tug's taskbar jump list (`quick_actions::QuickAction`, serialized kebab-case: the
- * same id the task passes as `--action`), taken with `take_quick_actions`.
+ * same id the task passes as `--action`), taken with `take_quick_actions`. "quick-text" isn't a
+ * task: the quick text shortcut (`quick_text`) queues it the same way.
  */
-export type QuickAction = "new-message" | "tugboat" | "copy-code" | "game" | "settings";
+export type QuickAction = "new-message" | "tugboat" | "copy-code" | "game" | "settings" | "quick-text";
 
-/** The type-the-code shortcut (`code_hotkey_status`, `set_code_hotkey`). */
+/** The type-the-code shortcut (`code_hotkey_status`, `set_code_hotkey`); quick text's shortcut
+ *  reports the same way (`quick_text_hotkey_status`, `set_quick_text_hotkey`). */
 export interface CodeHotkeyStatus {
   /** off (switched off, or not on this PC); on (registered); inUse (another app holds it). */
   state: "off" | "on" | "inUse";

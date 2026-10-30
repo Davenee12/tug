@@ -9,6 +9,7 @@ function recorder() {
     copyCode: () => ran.push("copyCode"),
     game: () => ran.push("game"),
     settings: () => ran.push("settings"),
+    quickText: () => ran.push("quickText"),
   };
   return { ran, handlers };
 }
@@ -25,10 +26,10 @@ function manualTake() {
 describe("runQuickAction", () => {
   it("sends each task to its own handler", () => {
     const { ran, handlers } = recorder();
-    for (const a of ["new-message", "tugboat", "copy-code", "game", "settings"]) {
+    for (const a of ["new-message", "tugboat", "copy-code", "game", "settings", "quick-text"]) {
       expect(runQuickAction(a, handlers)).toBe(true);
     }
-    expect(ran).toEqual(["newMessage", "tugboat", "copyCode", "game", "settings"]);
+    expect(ran).toEqual(["newMessage", "tugboat", "copyCode", "game", "settings", "quickText"]);
   });
 
   it("does nothing for an action it doesn't know", () => {

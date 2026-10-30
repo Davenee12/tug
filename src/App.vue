@@ -21,6 +21,7 @@ import GamePicker from "./components/GamePicker.vue";
 import FeedPanel from "./components/FeedPanel.vue";
 import IncomingCall from "./components/IncomingCall.vue";
 import NewConversation from "./components/NewConversation.vue";
+import QuickText from "./components/QuickText.vue";
 import SearchPalette from "./components/SearchPalette.vue";
 import SettingsPage from "./components/SettingsPage.vue";
 import SpotifyPanel from "./components/SpotifyPanel.vue";
@@ -95,6 +96,7 @@ watch(
     !tug.whatsNewOpen &&
     !tug.searchOpen &&
     !tug.pickerOpen &&
+    !tug.quickTextOpen &&
     !tug.ringing &&
     !update.confirm.open &&
     voice.status?.readyPrompt === true,
@@ -175,6 +177,12 @@ const quickActions = quickActionRunner(api.takeQuickActions, (action) => {
       void game.show();
     },
     settings,
+    // The quick text shortcut (not a jump-list task, but queued the same way): Rust noted where to
+    // give the keyboard back and brought tug forward.
+    quickText: () => {
+      game.close();
+      tug.openQuickText();
+    },
   });
 });
 let quickActionsOff: (() => void) | undefined;
@@ -295,6 +303,8 @@ onUnmounted(() => {
     <TugboatRun v-else-if="game.screen === 'tugboat-run'" />
     <HarborStack v-else-if="game.screen === 'harbor-stack'" />
     <TugboatPanel v-if="tugboat.open" />
+    <!-- Over the panels it was summoned over, from any app by its shortcut; a call or a confirmation card still comes up over it. -->
+    <QuickText v-if="tug.quickTextOpen" />
     <!-- A text an AI tool (or `tug text`) wants to send: nothing goes without Send here. -->
     <ToolConfirmCard v-if="devtools.confirm" :key="devtools.confirm.id" :request="devtools.confirm" />
     <!-- "Restart tug to update?" from the Update button: nothing restarts without Restart now. -->

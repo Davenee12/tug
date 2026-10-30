@@ -103,6 +103,12 @@ export const api = {
   takeQuickActions: () => invoke<QuickAction[]>("take_quick_actions"),
   /** Register the type-the-code shortcut (or unregister it); says if another app holds it. */
   setCodeHotkey: (enabled: boolean, keys: string) => invoke<CodeHotkeyStatus>("set_code_hotkey", { enabled, keys }),
+  quickTextHotkeyStatus: () => invoke<CodeHotkeyStatus>("quick_text_hotkey_status"),
+  /** Register the quick text shortcut (or unregister it); says if another app holds it. */
+  setQuickTextHotkey: (enabled: boolean, keys: string) =>
+    invoke<CodeHotkeyStatus>("set_quick_text_hotkey", { enabled, keys }),
+  /** The quick text composer closed: with `giveBack`, the app the shortcut was pressed in gets the keyboard back. Sends nothing. */
+  quickTextDone: (giveBack: boolean) => invoke<void>("quick_text_done", { giveBack }),
   /** Voice typing's state; with `languages`, the speech languages installed on this PC too (Settings). */
   voiceStatus: (languages: boolean) => invoke<VoiceStatus>("voice_status", { languages }),
   /** Turn voice typing on (shortcut, language) or off, and save it; says if the shortcut is taken or no language is installed. */

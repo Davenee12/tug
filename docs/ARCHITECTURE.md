@@ -64,7 +64,7 @@ Inside `tug.exe`:
 | `tug-media-keys` | `media_keys.rs` | Keeps the Windows media flyout in step with Now Playing; flyout buttons and media keys send commands to the actor. |
 | Developer bridge | `devtools/mod.rs`, `crates/tug-bridge/src/server.rs` | A named-pipe accept loop for the app's lifetime (at most 8 connections); answers "off" while switched off. |
 | Tugboat | `tugboat/` | An HTTP server, a 2 s supervisor (idle stop after 10 minutes, network changes) and per-connection tasks; exists only while the panel is open (or Tugboat Run asked for the phone as a controller). While the game's controller channel is open, a 150 ms watch notices a phone that went quiet. |
-| `tug-hotkey` | `code_fill/win.rs` (logic in `code_fill/mod.rs`) | Owns the type-the-code shortcut (RegisterHotKey belongs to the registering thread); each press types the newest code with SendInput on a short-lived `tug-code-fill` thread. |
+| `tug-hotkey` | `code_fill/win.rs` (logic in `code_fill/mod.rs`) | Owns the type-the-code and quick text shortcuts, each under its own id (RegisterHotKey belongs to the registering thread); a type-the-code press types the newest code with SendInput on a short-lived `tug-code-fill` thread, a quick text press notes what's in front and opens the composer on a short-lived `tug-quick-text` thread (`quick_text/win.rs`). |
 | `tug-share-watch` | `share_privacy/win.rs` (logic in `share_privacy/mod.rs`) | Hide previews while sharing or presenting: sleeps on a condition variable until tug's window is on screen or a pop-up finds the screen shared; then one look every 2 s (shell notification state, display topology, a pass over top-level window classes, reading the titles of browser and Teams windows only, compared on the spot and never kept or logged: about 0.3 ms) until the window hides and hiding clears. Each pop-up also takes a fresh look (on a short-lived `tug-share-look` helper, at most 500 ms) before it shows. It fails closed: no answer in time, or a failed Windows call with nothing found, hides the preview and blurs the window with a banner saying tug couldn't check; a look stuck for 2 s is replaced by a fresh one (at most three at once). When hiding starts, the phone's pop-ups and their follow-ups are taken back from the screen and Action Center (`toast::withdraw_while_hiding`); tug's own stay. |
 | `tug-voice-key`, `tug-voice` | `voice/win/` (logic in `voice/mod.rs`, `voice/engine.rs`, `voice/audio.rs`, `voice/vocab.rs`, `voice/text.rs`) | Only once voice typing is switched on. `tug-voice-key` owns the hold-to-talk shortcut (RegisterHotKey) and the GDI listening indicator; `tug-voice` is a COM thread that runs each hold (microphone while the key is down, the engine, the text rules, SendInput) and keeps the engines between holds: whisper.cpp (Accurate or Most accurate, loaded by a short-lived `tug-voice-load` thread during the first hold, with Accurate standing in for Most accurate when memory is short) and Windows' offline SAPI recognizer (Basic). All are let go when voice typing goes off. whisper.cpp starts its own worker threads only while it recognizes a hold. |
 | `tug-voice-model` | `voice/mod.rs` (logic in `voice/model.rs`) | Only while a speech model downloads (voice typing was turned on, its engine picked, or Download pressed): one HTTPS download from Hugging Face, resumable, checked against its SHA-256, then gone. One per model, so Accurate's and Most accurate's can download side by side. |
@@ -306,6 +306,23 @@ UI (App.vue), only after tug.init() has loaded history and settings, and on ever
 
 A nudge carries nothing, so one lost to a page that's still loading loses nothing: the action
 waits in the queue until the next take.
+
+**Quick text (texting someone from any app)**
+
+```
+Settings › Messages › Quick text from any app (off by default) ─► set_quick_text_hotkey
+  ─► quick_text::apply ─► the tug-hotkey thread registers it under its own id (or "inUse")
+the shortcut, pressed in any app ─► quick_text::pressed (on tug-hotkey): what's in front, now
+  ─► tug-quick-text: how tug's window is (behind / minimized / in the tray) ─► remember it
+     (pressed in tug itself: nothing to give back) ─► quick_actions::receive(QuickText):
+     queue, tray::show, emit "quick-action"
+UI: take_quick_actions ─► "quick-text" ─► tug.openQuickText ─► QuickText.vue: lib/recipients
+  (the people you text, then contacts, or a typed number) ─► Enter ─► tug.sendMessage, as in Messages
+  sent, or Esc ─► quick_text_done(giveBack) ─► the app it was pressed in gets the keyboard back,
+                  then tug's window goes back to how it was
+  may have sent / not sent ─► quick_text_done(false) ─► tug stays on that conversation
+  error (nothing recorded) ─► the composer stays open with the text
+```
 
 **A game controller input (Tugboat Run, Harbor Stack)**
 
@@ -555,7 +572,8 @@ that calls them. Every module below has a `#[cfg(test)]` suite.
 | `autostart.rs`, `session_end.rs` | Start with Windows over a `Registry` trait (tested with a fake: HKCU only, moving an old HKLM entry only for a tug in the process user's own Local AppData); what exit skips when Windows is ending the session |
 | `tugboat/held.rs`, `devtools/outgoing.rs`, `crates/tug-bridge` `outgoing` | Files sent to the phone with `tug boat`: when a hold is delivered, timed out (with grace for a file still coming) or withdrawn; which paths may be sent at all (regular files, links followed, no devices or pipes) |
 | `tugboat/clip.rs`, `tugboat/dib.rs` | The shared clipboard: one waiting clipboard at a time, delivered only on the phone's word, dropped after 2 minutes, what can be sent; a clipboard bitmap to PNG |
-| `quick_actions/mod.rs` | Taskbar quick actions: reading `--action` from a launch, the jump list's tasks (the game only with Show games on), the AppUserModelID for installed, portable and cargo builds, the take-once queue |
+| `quick_actions/mod.rs` | Taskbar quick actions: reading `--action` from a launch, the jump list's tasks (the game only with Show games on), the AppUserModelID for installed, portable and cargo builds, the take-once queue (quick text's shortcut uses it too, never as a task or a launch) |
+| `quick_text/mod.rs` | Quick text: the shortcut list (shared with `src/lib/quickTextHotkeys.json`; no Ctrl+Alt, none of tug's other shortcuts), off unless switched on, where the keyboard goes back to when the composer closes |
 | `codes.rs` | One-time codes; a port of `src/lib/codes.ts`, both tested against `src/lib/codes.cases.json` |
 | `code_fill/mod.rs` | Code fill: what may be copied or typed, the newest fresh code, the clipboard-clear rule, the shortcut list (shared with `src/lib/codeHotkeys.json`), keystrokes |
 | `spotify/model.rs`, `toast/xml.rs`, `cache_trim.rs`, `diagnostics.rs` | Spotify JSON and device choice; toast XML and actions; cache caps; diagnostics redaction |
@@ -584,7 +602,7 @@ titles and devices), `popup` (pop-up policy), `reconnectPopups`, `scroll`, `seen
 times folded onto their stack once), `senders`
 (unknown-sender filter), `sharePrivacy` (hiding previews while sharing: the banner, Show anyway, a pop-up's kind), `singleFlight` (one press, one action), `smartActions` (links, email addresses, phone numbers, street addresses and parcel numbers in a text made one click: what counts, and what never does), `smartReplies` (suggested replies: the rules, and when there are none), `spotify`, `stableList` (regrouped lists keep unchanged rows, so only
 they re-render), `startup` (startup reads that fail are retried, never block), `threadWindow` (long conversations render their newest texts first),
-`quickActions` (routing a taskbar task, one take at a time), `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
+`quickActions` (routing a taskbar task, one take at a time), `quickText` (quick text's shortcuts and what follows a send), `recipients` (who a new text can go to, for New message and quick text), `toastLimiter`, `toastSpec`, `tugboat`, `tugboatRun` (the game's rules: the seeded course, collisions,
 scoring, the speed curve, inertia, the weather's handling, merging the controls), `tugboatDaily` (the
 daily challenge: the date's seed, weather → water, the start screen's line, the streak), `tugboatRace`
 (two players: who steers what, the result, when a dropped phone pauses the race; Harbor Stack's
@@ -674,6 +692,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?whatsnew` | The What's new card for the newest release |
 | `/?quickaction=new-message` (`tugboat`, `copy-code`, `game`, `settings`; `&again`) | tug started from that taskbar task (and, with `&again`, the task clicked again 4 s later while running) |
 | `/?codefill` (`&hotkeybusy`) | A code copied once from a notification and its text, then two presses of the type-the-code shortcut (with Ctrl+Shift+V taken by another app) |
+| `/?quicktext` (`&textsoff`, `&quicktextbusy`, `&again`) | The quick text shortcut pressed as from another app: the composer opens; Enter sends and it closes (the console says where the keyboard went). With texts not connected / Ctrl+Shift+Y taken by another app / pressed again 8 s later |
 | `/?sharing` (`&presenting`, `&stop`) | The screen is being shared: blurred texts and names under the `Previews hidden` banner with Show anyway (a slide show / sharing ends after 10 s); add `&call` for the call card |
 | `/?voice` (`&micblocked`, `&nospeech`, `&voicebusy`) | Settings › General › Voice typing on, with the microphone blocked / no speech language / the shortcut taken |
 | `/?voicefail` | Settings › General › Voice typing: turning it on fails, the switch goes back off and says why |

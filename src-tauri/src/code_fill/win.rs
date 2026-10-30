@@ -1,6 +1,7 @@
 //! The Windows side of code fill: a `tug-hotkey` thread that owns the RegisterHotKey
-//! registration (hotkeys belong to the thread that registered them, so registering, unregistering
-//! and the presses all happen on it), and typing a code with SendInput Unicode keystrokes.
+//! registrations (hotkeys belong to the thread that registered them, so registering, unregistering
+//! and the presses all happen on it), and typing a code with SendInput Unicode keystrokes. Quick
+//! text's shortcut is registered on the same thread (`quick_text`), under its own id.
 //!
 //! The decisions live in `mod.rs`; this file only asks Windows and reports.
 
@@ -23,8 +24,25 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::{decide, judge_typing, keystrokes, newest, CodeFilled, FillOutcome, Keys, Plan, MAX_AGE_MS};
 
-/// The one hotkey tug registers.
-const HOTKEY_ID: i32 = 1;
+/// The shortcuts registered on this thread. Each has its own id, so one can change or be taken by
+/// another app without touching the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shortcut {
+    /// Type the latest code.
+    CodeFill,
+    /// Text someone from any app (`quick_text`).
+    QuickText,
+}
+
+impl Shortcut {
+    fn id(self) -> i32 {
+        match self {
+            Shortcut::CodeFill => 1,
+            Shortcut::QuickText => 2,
+        }
+    }
+}
+
 /// Posted to the hotkey thread: a registration request is waiting.
 const WM_REGISTER: u32 = WM_APP + 1;
 /// How much recent history to look through for the newest code.
@@ -34,6 +52,7 @@ const SCAN: u32 = 200;
 const RELEASE_WAIT: Duration = Duration::from_millis(1500);
 
 struct Request {
+    shortcut: Shortcut,
     keys: Option<Keys>,
     reply: mpsc::Sender<bool>,
 }
@@ -58,7 +77,7 @@ pub fn start(app: AppHandle) {
         .name("tug-hotkey".into())
         .spawn(move || run(app, ready_tx, req_rx));
     if let Err(e) = spawned {
-        return log::warn!("type-the-code shortcut unavailable: {e}");
+        return log::warn!("global shortcuts (type the code, quick text) unavailable: {e}");
     }
     match ready_rx.recv_timeout(Duration::from_secs(2)) {
         Ok(id) => {
@@ -67,13 +86,13 @@ pub fn start(app: AppHandle) {
                 requests: Mutex::new(req_tx),
             });
         }
-        Err(_) => log::warn!("type-the-code shortcut thread didn't start"),
+        Err(_) => log::warn!("global shortcut thread didn't start"),
     }
 }
 
-/// Register `keys` (replacing any earlier shortcut), or just unregister with `None`. True when
-/// the shortcut is now registered.
-pub fn register(keys: Option<Keys>) -> bool {
+/// Register `keys` as `shortcut` (replacing what it was before), or just unregister it with
+/// `None`. True when the shortcut is now registered.
+pub fn register(shortcut: Shortcut, keys: Option<Keys>) -> bool {
     let Some(thread) = THREAD.get() else {
         return false;
     };
@@ -82,7 +101,7 @@ pub fn register(keys: Option<Keys>) -> bool {
         .requests
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .send(Request { keys, reply });
+        .send(Request { shortcut, keys, reply });
     if sent.is_err() {
         return false;
     }
@@ -108,16 +127,18 @@ fn run(app: AppHandle, ready: mpsc::Sender<u32>, requests: mpsc::Receiver<Reques
             break;
         }
         match msg.message {
-            WM_HOTKEY if msg.wParam.0 == HOTKEY_ID as usize => on_press(&app),
+            WM_HOTKEY if msg.wParam.0 == Shortcut::CodeFill.id() as usize => on_press(&app),
+            WM_HOTKEY if msg.wParam.0 == Shortcut::QuickText.id() as usize => crate::quick_text::pressed(&app),
             WM_REGISTER => {
                 while let Ok(req) = requests.try_recv() {
-                    // SAFETY: the hotkey is registered to this thread (no window), id HOTKEY_ID.
+                    let id = req.shortcut.id();
+                    // SAFETY: the hotkey is registered to this thread (no window), under its own id.
                     unsafe {
-                        let _ = UnregisterHotKey(None, HOTKEY_ID);
+                        let _ = UnregisterHotKey(None, id);
                     }
                     let ok = req.keys.is_some_and(|k| {
                         // SAFETY: as above.
-                        unsafe { RegisterHotKey(None, HOTKEY_ID, HOT_KEY_MODIFIERS(k.modifiers()), k.vk()) }.is_ok()
+                        unsafe { RegisterHotKey(None, id, HOT_KEY_MODIFIERS(k.modifiers()), k.vk()) }.is_ok()
                     });
                     let _ = req.reply.send(ok);
                 }

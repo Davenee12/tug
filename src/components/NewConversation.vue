@@ -3,8 +3,8 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { Info, Phone, Search, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useFocusTrap } from "../lib/focusTrap";
-import { cleanName, formatAddress, groupConversations } from "../lib/format";
-import { normalizeAddress } from "../lib/address";
+import { formatAddress, groupConversations } from "../lib/format";
+import { contactRecipients, recentRecipients, recipientOptions, type Recipient } from "../lib/recipients";
 import AppAvatar from "./AppAvatar.vue";
 
 const tug = useTugStore();
@@ -21,59 +21,15 @@ onMounted(async () => {
   input.value?.focus();
 });
 
-interface Option {
-  key: string;
-  name: string;
-  address: string;
-  section: "Recent" | "Contacts" | "Number";
-}
+type Option = Recipient;
 
-/** Case- and accent-insensitive: "jose" finds "José". */
-const fold = (s: string) =>
-  s
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLowerCase();
-
-// People you've texted, most recent first, wherever tug knows their number. Unknown senders
-// (spam, short codes) stay out, like everywhere else Filter unknown senders applies; a number
-// can still be typed.
-const recent = computed<Option[]>(() =>
-  groupConversations(tug.notifications, tug.messages, tug.contacts)
-    .filter((c) => c.appId === "com.apple.MobileSMS" && c.address && tug.isKnown(c))
-    .map((c) => ({ key: `r:${c.address}`, name: c.contact, address: c.address!, section: "Recent" as const })),
+// The people you text first, then your contacts, or a typed number (lib/recipients; the quick text
+// composer lists the same).
+const recent = computed(() =>
+  recentRecipients(groupConversations(tug.notifications, tug.messages, tug.contacts), (c) => tug.isKnown(c)),
 );
-
-const contacts = computed<Option[]>(() =>
-  [...tug.contacts]
-    .sort((a, b) => cleanName(a.name).localeCompare(cleanName(b.name)))
-    .map((c) => ({ key: `c:${c.address}`, name: cleanName(c.name), address: c.address, section: "Contacts" as const })),
-);
-
-const options = computed<Option[]>(() => {
-  const q = fold(query.value.trim());
-  const digits = query.value.replace(/\D/g, "");
-  const seen = new Set<string>();
-  const take = (o: Option) => {
-    if (seen.has(o.address)) return false;
-    seen.add(o.address);
-    return true;
-  };
-  if (!q) {
-    // Nothing typed: the people you talk to, then everyone else.
-    return [...recent.value.slice(0, 6).filter(take), ...contacts.value.filter(take)];
-  }
-  const matches = (o: Option) => fold(o.name).includes(q) || (digits.length >= 3 && o.address.includes(digits));
-  const out = [...recent.value.filter(matches).filter(take), ...contacts.value.filter(matches).filter(take)];
-  // A typed number that isn't a saved contact can still be texted.
-  if (digits.length >= 7 && !out.some((o) => o.address.endsWith(digits.slice(-10)))) {
-    // +1 only for a bare 10-digit number on a PC in a +1 region; anything else goes as typed and
-    // the iPhone reads it the way it would a number typed there.
-    const address = normalizeAddress(query.value.trim().startsWith("+") ? `+${digits}` : digits);
-    out.unshift({ key: `n:${address}`, name: formatAddress(address), address, section: "Number" });
-  }
-  return out;
-});
+const contacts = computed(() => contactRecipients(tug.contacts));
+const options = computed<Option[]>(() => recipientOptions(query.value, recent.value, contacts.value));
 
 watch(query, () => (active.value = 0));
 

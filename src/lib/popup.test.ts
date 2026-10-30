@@ -20,6 +20,8 @@ const baseSettings: UiSettings = {
   autoCopyCodes: true,
   typeCodeHotkey: true,
   typeCodeKeys: "ctrl+shift+v",
+  quickTextHotkey: false,
+  quickTextKeys: "ctrl+shift+y",
   showGames: true,
   smartReplies: true,
   smartReplyDefaults: ["👍", "OK", "Talk soon"],

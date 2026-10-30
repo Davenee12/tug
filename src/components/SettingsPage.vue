@@ -19,6 +19,7 @@ import { formatAddress } from "../lib/format";
 import { normalizeAddress } from "../lib/address";
 import { SPOTIFY_BETA_LABEL, SPOTIFY_BETA_NOTE, SPOTIFY_RECONNECT } from "../lib/spotify";
 import { CODE_HOTKEYS, hotkeyAlternatives, hotkeyLabel, typeCodeShortcut } from "../lib/codeFill";
+import { QUICK_TEXT_HOTKEYS, quickTextAlternatives, quickTextShortcut } from "../lib/quickText";
 import { cleanReplies, DEFAULT_REPLIES, MAX_REPLIES, REPLY_MAX_CHARS } from "../lib/smartReplies";
 import AppAvatar from "./AppAvatar.vue";
 import ConnectPanel from "./ConnectPanel.vue";
@@ -202,6 +203,18 @@ const typeCodeKeys = computed({
 /** The chosen shortcut is on but another app registered it first. */
 const hotkeyInUse = computed(() => tug.settings.typeCodeHotkey && tug.codeHotkey.state === "inUse");
 
+// Quick text: a shortcut that opens a small composer from any app (lib/quickText). Off by default,
+// since while it's on those keys do this in every app.
+const quickTextHotkey = computed({
+  get: () => tug.settings.quickTextHotkey,
+  set: (v) => void tug.setQuickTextHotkey(v, tug.settings.quickTextKeys),
+});
+const quickTextKeys = computed({
+  get: () => tug.settings.quickTextKeys,
+  set: (v) => void tug.setQuickTextHotkey(true, v),
+});
+const quickTextInUse = computed(() => tug.settings.quickTextHotkey && tug.quickTextHotkey.state === "inUse");
+
 // Mute pop-ups per app: every app tug has seen in the Feed, with a toggle each.
 const seenApps = computed(() => {
   const ids = new Set<string>();
@@ -249,10 +262,11 @@ const APP_SHORTCUTS: Array<{ what: string; keys: string[] }> = [
   { what: "Settings", keys: ["Ctrl", ","] },
   { what: "Zoom in · out · reset", keys: ["Ctrl", "+  −  0"] },
 ];
-// Plus the type-the-code shortcut, as registered right now (it's configurable, and can be off).
+// Plus the type-the-code and quick text shortcuts, as registered right now (they're configurable,
+// and can be off).
 const SHORTCUTS = computed(() => {
-  const typeCode = typeCodeShortcut(tug.codeHotkey);
-  return typeCode ? [...APP_SHORTCUTS, typeCode] : APP_SHORTCUTS;
+  const global = [typeCodeShortcut(tug.codeHotkey), quickTextShortcut(tug.quickTextHotkey)];
+  return [...APP_SHORTCUTS, ...global.filter((s) => s !== null)];
 });
 
 const UNITS = ["f", "c"] as const;
@@ -841,6 +855,45 @@ function openSponsor() {
         <!-- Data & privacy -->
         <!-- Messages: the full history from an iPhone backup on this PC. -->
         <template v-else-if="current.id === 'messages'">
+          <!-- Quick text: a shortcut that opens a small composer from any app. -->
+          <div class="mb-4 rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Quick text from any app"
+              :description="`Press ${hotkeyLabel(tug.settings.quickTextKeys)} wherever you are to text someone from your iPhone without opening tug. Enter sends, Esc closes, and you're back where you were. Off unless you turn it on, because while it's on those keys do this in every app.`"
+            >
+              <SettingsSwitch v-model="quickTextHotkey" label="Quick text from any app" />
+            </SettingsRow>
+            <div v-if="tug.settings.quickTextHotkey" class="border-t border-hairline-soft px-5 py-3">
+              <label class="flex items-center gap-2 text-[13px] text-body">
+                Shortcut
+                <select
+                  v-model="quickTextKeys"
+                  class="rounded-md border border-hairline bg-canvas px-2 py-1 font-mono text-[13px] text-ink"
+                >
+                  <option v-for="h in QUICK_TEXT_HOTKEYS" :key="h" :value="h">{{ hotkeyLabel(h) }}</option>
+                </select>
+              </label>
+              <div v-if="quickTextInUse" class="mt-3 flex items-start gap-2.5 text-[13px]" role="alert">
+                <CircleAlert :size="16" class="mt-0.5 shrink-0 text-error" />
+                <div class="min-w-0 flex-1">
+                  <p class="font-medium text-body-strong">That shortcut is in use by another app</p>
+                  <p class="mt-0.5 text-muted">Pick another one:</p>
+                  <div class="mt-2 flex flex-wrap gap-1.5">
+                    <button
+                      v-for="h in quickTextAlternatives(tug.settings.quickTextKeys)"
+                      :key="h"
+                      class="btn-secondary btn-sm"
+                      :aria-label="`Use ${hotkeyLabel(h)}`"
+                      @click="quickTextKeys = h"
+                    >
+                      <span class="font-mono text-[12px]">{{ hotkeyLabel(h) }}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="divide-y divide-hairline-soft rounded-xl bg-surface-card">
             <SettingsRow
               label="Bring in your full history"

@@ -69,6 +69,13 @@
 //                                     type-the-code shortcut is "pressed" at 4 s (typed) and at 6 s (tug in
 //                                     front). Add &hotkeybusy for Ctrl+Shift+V taken by another app
 //                                     (Settings › Notifications offers the others)
+//   http://localhost:1420/?quicktext  quick text: its shortcut (switched on, Ctrl+Shift+Y) is "pressed" 1.5 s
+//                                     after load, as from another app, and the "Text someone" composer
+//                                     opens. Pick someone, type, Enter: the phone takes it 0.7 s later, the
+//                                     composer closes and the console says where the keyboard went back to.
+//                                     Add &textsoff for texts not connected (the composer says so; Send stays
+//                                     off), &quicktextbusy for Ctrl+Shift+Y taken by another app (Settings ›
+//                                     Messages offers the others), &again to press it again 8 s later
 //   http://localhost:1420/?heavy      a long history for performance work: ~2,000 texts in ~60 conversations,
 //                                     ~500 notifications, 120 calls, Spotify playing, the weather card on
 //   http://localhost:1420/?pcaudio    the iPhone's audio already playing on this PC (Now Playing says so,
@@ -111,6 +118,8 @@ const appVersion = RELEASE_NOTES[0].version;
 // jump-list task, so it's waiting when the UI first takes quick actions. &again repeats it 4 s
 // later, as a click on the task while tug is running would.
 const quickActionWaiting: string[] = params.get("quickaction") ? [String(params.get("quickaction"))] : [];
+// ?quicktext: see the list above.
+const quickText = params.has("quicktext");
 const now = Date.now();
 const min = 60_000;
 
@@ -506,6 +515,8 @@ const settings: Record<string, string> = {
 // Otherwise record the current version, as a returning user would have, so it doesn't pop every run.
 if (whatsNewPreview) settings["ui.lastSeenVersion"] = RELEASE_NOTES[2]?.version ?? "0.0.0";
 else if (!setup) settings["ui.lastSeenVersion"] = appVersion;
+// ?quicktext: the owner switched quick text on (it's off by default).
+if (quickText) settings["ui.quickTextHotkey"] = "true";
 let autostart = false;
 
 // Spotify connector: connected by default so its UI can be reviewed in the browser; ?spotifyoff
@@ -1163,6 +1174,10 @@ const shareState: ShareState = params.has("sharing")
   : { active: false, reason: null };
 
 const codeHotkey: CodeHotkeyStatus = { state: params.has("hotkeybusy") ? "inUse" : "on", keys: "ctrl+shift+v" };
+const quickTextHotkey: CodeHotkeyStatus = {
+  state: !quickText ? "off" : params.has("quicktextbusy") ? "inUse" : "on",
+  keys: "ctrl+shift+y",
+};
 // Voice typing (voice/ in Rust): off by default; `/?voice` starts it on (`&micblocked`,
 // `&nospeech` for a PC without a speech language, `&voicebusy` for a taken shortcut).
 // `?voicefail`: turning it on fails and the switch goes back off with the reason.
@@ -1414,6 +1429,17 @@ mockIPC(
         const to = String(a.address ?? ZOE);
         const m: SmsMessage = { ...sms("out", String(a.text), 0, to, contacts.find((c) => c.address === to)?.name ?? null), status: "pending" };
         messages.push(m);
+        // ?quicktext: answer once the phone took it, as the real backend does (quick text closes on "sent").
+        if (quickText) {
+          setTimeout(() => void emit("message", m), 0);
+          return new Promise((resolve) =>
+            setTimeout(() => {
+              Object.assign(m, { status: "accepted" });
+              void emit("message", { ...m });
+              resolve({ ...m });
+            }, 700),
+          );
+        }
         setTimeout(() => void emit("message", m), 0);
         setTimeout(() => void emit("message", { ...m, status: "accepted" }), 700);
         return m;
@@ -1688,6 +1714,22 @@ mockIPC(
       // Taskbar quick actions (quick_actions/ in Rust): taking them empties the queue.
       case "take_quick_actions":
         return quickActionWaiting.splice(0);
+      // Quick text (quick_text/ in Rust): the shortcut, and giving the keyboard back.
+      case "quick_text_hotkey_status":
+        return { ...quickTextHotkey };
+      case "set_quick_text_hotkey": {
+        const keys = String(a.keys);
+        const taken = params.has("quicktextbusy") && keys === "ctrl+shift+y";
+        Object.assign(quickTextHotkey, { keys, state: !a.enabled ? "off" : taken ? "inUse" : "on" });
+        return { ...quickTextHotkey };
+      }
+      case "quick_text_done":
+        console.info(
+          a.giveBack
+            ? "[devMock] quick text closed: the keyboard goes back to the app it was pressed in, and tug to how it was"
+            : "[devMock] quick text closed: tug stays in front to show the conversation",
+        );
+        return null;
       case "set_code_hotkey": {
         const keys = String(a.keys);
         const taken = params.has("hotkeybusy") && keys === "ctrl+shift+v";
@@ -1949,6 +1991,17 @@ if (params.get("quickaction") && params.has("again")) {
     quickActionWaiting.push(String(params.get("quickaction")));
     void emit("quick-action", null);
   }, 4000);
+}
+
+// ?quicktext: the shortcut is pressed from "another app" (the real one queues a quick action and
+// brings tug forward); &again presses it a second time later.
+if (quickText) {
+  const press = () => {
+    quickActionWaiting.push("quick-text");
+    void emit("quick-action", null);
+  };
+  setTimeout(press, 1500);
+  if (params.has("again")) setTimeout(press, 8000);
 }
 
 // ?codefill: a verification code arrives as an ANCS notification and as a MAP text (as a bank's

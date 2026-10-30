@@ -746,6 +746,31 @@ pub async fn set_code_hotkey(enabled: bool, keys: String) -> Result<crate::code_
         .map_err(|e| e.to_string())
 }
 
+/// The quick text shortcut's state, for Settings.
+#[tauri::command]
+pub fn quick_text_hotkey_status() -> crate::code_fill::HotkeyStatus {
+    crate::quick_text::status()
+}
+
+/// Turn the quick text shortcut on (as one of the offered shortcuts) or off. Says whether another
+/// app already holds it. Off the main thread: it waits for the hotkey thread.
+#[tauri::command]
+pub async fn set_quick_text_hotkey(enabled: bool, keys: String) -> Result<crate::code_fill::HotkeyStatus> {
+    tauri::async_runtime::spawn_blocking(move || crate::quick_text::apply(enabled, &keys))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The quick text composer closed. With `give_back` (sent, or cancelled), the app the shortcut
+/// was pressed in gets the keyboard back and tug's window goes back to how it was; without, tug
+/// stays in front (it's showing why a text didn't go). Sends nothing.
+#[tauri::command]
+pub async fn quick_text_done(app: tauri::AppHandle, give_back: bool) -> Result<()> {
+    tauri::async_runtime::spawn_blocking(move || crate::quick_text::done(&app, give_back))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Voice typing's state. With `languages` (Settings), the speech languages installed on this PC
 /// are listed too, the first time it's asked, so the list is there before voice typing is on.
 /// Off the main thread: listing recognizers waits for the voice thread.

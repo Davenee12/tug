@@ -1,0 +1,4 @@
+{
+  "about": "The shortcuts Settings › Messages offers for quick text, texting someone from any app (src/lib/quickText.ts), and the ones the backend will register (src-tauri/src/quick_text/mod.rs). Both test suites read this file, so the two lists can't drift. First is the default. No Ctrl+Alt (that's AltGr on many keyboard layouts) and nothing as well known as Ctrl+Shift+T.",
+  "hotkeys": ["ctrl+shift+y", "ctrl+shift+u", "ctrl+shift+h"]
+}

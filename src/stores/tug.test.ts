@@ -176,6 +176,62 @@ describe("a switch whose save fails goes back", () => {
     const registrations = called.filter(([name]) => name === "setCodeHotkey").map(([, args]) => args[0]);
     expect(registrations).toEqual([true, false]);
   });
+
+  it("the quick text switch starts off, and turning it on registers it and saves its own settings", async () => {
+    const tug = useTugStore();
+    expect(tug.settings.quickTextHotkey).toBe(false);
+    impl.setQuickTextHotkey = async (...args: never[]) => ({ state: args[0] ? "on" : "off", keys: args[1] });
+    await tug.setQuickTextHotkey(true, "ctrl+shift+u");
+    expect(tug.settings.quickTextHotkey).toBe(true);
+    expect(tug.settings.quickTextKeys).toBe("ctrl+shift+u");
+    expect(tug.quickTextHotkey).toEqual({ state: "on", keys: "ctrl+shift+u" });
+    const saved = called.filter(([name]) => name === "setSetting").map(([, args]) => args);
+    expect(saved).toEqual([
+      ["ui.quickTextHotkey", "true"],
+      ["ui.quickTextKeys", "ctrl+shift+u"],
+    ]);
+    // Code fill's shortcut is left alone.
+    expect(called.some(([name]) => name === "setCodeHotkey")).toBe(false);
+  });
+
+  it("the quick text switch stays on with the in-use warning, and never registers a shortcut it doesn't offer", async () => {
+    const tug = useTugStore();
+    impl.setQuickTextHotkey = async (...args: never[]) => ({ state: "inUse", keys: args[1] });
+    await tug.setQuickTextHotkey(true, "ctrl+shift+v");
+    expect(tug.settings.quickTextHotkey).toBe(true);
+    expect(tug.quickTextHotkey.state).toBe("inUse");
+    expect(called.find(([name]) => name === "setQuickTextHotkey")?.[1]).toEqual([true, "ctrl+shift+y"]);
+  });
+});
+
+describe("the quick text composer", () => {
+  it("gives the keyboard back once when it closes, and sends nothing", async () => {
+    const tug = useTugStore();
+    tug.openQuickText();
+    expect(tug.quickTextOpen).toBe(true);
+    expect(tug.overlayOpen).toBe(true);
+    tug.closeQuickText(true);
+    tug.closeQuickText(true);
+    expect(tug.quickTextOpen).toBe(false);
+    expect(called.filter(([name]) => name === "quickTextDone").map(([, args]) => args)).toEqual([[true]]);
+    expect(called.some(([name]) => name === "sendMessage")).toBe(false);
+  });
+
+  it("keeps tug in front when a text didn't go", () => {
+    const tug = useTugStore();
+    tug.openQuickText();
+    tug.closeQuickText(false);
+    expect(called.filter(([name]) => name === "quickTextDone").map(([, args]) => args)).toEqual([[false]]);
+  });
+
+  it("covers New message and search rather than opening under them", () => {
+    const tug = useTugStore();
+    tug.pickerOpen = true;
+    tug.searchOpen = true;
+    tug.openQuickText();
+    expect(tug.pickerOpen).toBe(false);
+    expect(tug.searchOpen).toBe(false);
+  });
 });
 
 describe("Spotify shuffle and repeat keep what was pressed", () => {
