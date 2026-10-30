@@ -2,6 +2,9 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import { api, errorMessage } from "../lib/ipc";
 import { defaultUnit, fetchForecast, isStale, nameFor, REFRESH_MS, type Forecast, type Place, type Unit } from "../lib/weather";
+import { rainAlert } from "../lib/rainAlert";
+import { fallKind, placeNow } from "../lib/weatherHarbor";
+import { RAIN_TOAST_ID, useTugStore } from "./tug";
 
 const CACHE_KEY = "tug.weather.v1";
 /** Shown only until the place's real name comes back ("Portland, Oregon"). */
@@ -26,6 +29,10 @@ export const useWeatherStore = defineStore("weather", () => {
    */
   const now = ref(Date.now());
   let timer: number | undefined;
+  /** "Rain soon" pop-ups (lib/rainAlert), off until turned on in Settings › Weather (`ui.rainAlert`). */
+  const rainAlerts = ref(false);
+  /** The spell last told about (`ui.rainAlertLast`), so a restart doesn't tell it again. */
+  let lastSpell: string | null = null;
 
   function readCache(p: Place) {
     try {
@@ -62,6 +69,8 @@ export const useWeatherStore = defineStore("weather", () => {
       const saved = raw["ui.weather"];
       place.value = saved === "off" ? "off" : saved ? (JSON.parse(saved) as Place) : null;
       if (raw["ui.weatherUnit"] === "f" || raw["ui.weatherUnit"] === "c") unit.value = raw["ui.weatherUnit"];
+      rainAlerts.value = raw["ui.rainAlert"] === "on";
+      lastSpell = raw["ui.rainAlertLast"] || null;
     } catch {
       place.value = null;
     }
@@ -88,6 +97,7 @@ export const useWeatherStore = defineStore("weather", () => {
     timer = window.setInterval(() => {
       now.value = Date.now();
       void refresh();
+      checkRain();
     }, REFRESH_MS);
     document.addEventListener("visibilitychange", onShow);
     window.addEventListener("focus", onShow);
@@ -125,6 +135,7 @@ export const useWeatherStore = defineStore("weather", () => {
       forecast.value = f;
       error.value = null;
       writeCache(p, f);
+      checkRain();
     } catch (e) {
       // Keep showing the last forecast if there is one; the card says how old it is.
       if (mine === generation) error.value = errorMessage(e);
@@ -178,6 +189,37 @@ export const useWeatherStore = defineStore("weather", () => {
     void api.setSetting("ui.weatherUnit", unit.value).catch(() => undefined);
   }
 
+  /**
+   * "Rain soon": a pop-up when rain is due within 20 minutes at the place, once per spell. Checked
+   * on every refresh and refresh tick (every 15 minutes, so no start in the 20-minute window is
+   * missed), from the quarters already downloaded: it asks the forecast service for nothing more.
+   */
+  function checkRain() {
+    const f = forecast.value;
+    const p = place.value;
+    if (!rainAlerts.value || !f || !p || p === "off") return;
+    const tug = useTugStore();
+    const battery = tug.status.connection === "connected" && tug.status.services.battery ? tug.status.battery : null;
+    const alert = rainAlert({
+      quarters: f.quarters,
+      nowLocal: placeNow(Date.now(), f.timezone),
+      what: fallKind(f),
+      place: p.name,
+      battery,
+      lastSpell,
+    });
+    if (!alert) return;
+    lastSpell = alert.spell;
+    void api.setSetting("ui.rainAlertLast", alert.spell).catch(() => undefined);
+    void tug.popInfo(RAIN_TOAST_ID, alert.title, alert.body);
+  }
+
+  function setRainAlerts(on: boolean) {
+    rainAlerts.value = on;
+    void api.setSetting("ui.rainAlert", on ? "on" : "off").catch(() => undefined);
+    checkRain();
+  }
+
   function dispose() {
     window.clearInterval(timer);
     timer = undefined;
@@ -185,5 +227,25 @@ export const useWeatherStore = defineStore("weather", () => {
     window.removeEventListener("focus", onShow);
   }
 
-  return { place, unit, forecast, loading, error, ready, now, init, refresh, setPlace, findMyPlace, useMyLocation, hide, reset, toggleUnit, dispose };
+  return {
+    place,
+    unit,
+    forecast,
+    loading,
+    error,
+    ready,
+    now,
+    rainAlerts,
+    init,
+    refresh,
+    setPlace,
+    findMyPlace,
+    useMyLocation,
+    hide,
+    reset,
+    toggleUnit,
+    setRainAlerts,
+    checkRain,
+    dispose,
+  };
 });

@@ -155,6 +155,8 @@ const OVERFLOW_TOAST_ID = 2_000_000_001;
 const GAP_TOAST_ID = 2_000_000_002;
 /** The type-the-code shortcut's small confirmation: one at a time (a new one replaces it); a press opens tug. */
 const CODE_FILL_TOAST_ID = 2_000_000_003;
+/** The weather card's "Rain soon" pop-up (stores/weather): one at a time; a press opens tug. */
+export const RAIN_TOAST_ID = 2_000_000_010;
 /** Reminders whose notification is gone get pop-up ids from here (a thousand, reused in turn). */
 const REMINDER_TOAST_BASE = 2_100_000_000;
 
@@ -815,6 +817,29 @@ export const useTugStore = defineStore("tug", () => {
     };
     // show_toast doesn't fail: the backend falls back to a plain pop-up itself.
     void api.showToast(spec).catch(() => undefined);
+  }
+
+  /**
+   * One of tug's own pop-ups (`info`, never hidden while the screen is shared), held like any other
+   * by pop-ups off, Do not disturb and quiet hours. A press opens tug. False when it was held.
+   */
+  async function popInfo(id: number, title: string, body: string): Promise<boolean> {
+    if (!popupAllowed({ appId: "", isCall: false, isVip: false }) || !(await hasToastPermission())) return false;
+    const spec: ToastSpec = {
+      id,
+      title,
+      body,
+      name: "",
+      replyTo: null,
+      markRead: false,
+      code: null,
+      callBack: false,
+      clear: false,
+      app: "",
+      kind: "info",
+    };
+    void api.showToast(spec).catch(() => undefined);
+    return true;
   }
 
   // A one-time code shouldn't pop up twice when it arrives on both an ANCS notification and a MAP
@@ -2354,6 +2379,7 @@ export const useTugStore = defineStore("tug", () => {
     copyCode,
     copyLatestCode,
     showReminder,
+    popInfo,
     openReminder,
     trustsLinksFrom,
     latestCode,

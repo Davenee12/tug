@@ -7,7 +7,7 @@
 //
 // Pure: the component passes the time; weatherHarborDraw draws it.
 
-import { describe, quarterOf, type Day, type Forecast, type Quarter } from "./weather";
+import { describe, quarterOf, wet, type Day, type Forecast, type Quarter } from "./weather";
 
 export type Phase = "night" | "dawn" | "day" | "dusk";
 
@@ -272,6 +272,12 @@ export function daylightLine(f: Forecast): string | null {
 }
 
 // ---- Rain to the quarter-hour ----
+
+/** "Snow" when that's what's falling or coming in the next few hours, "Rain" otherwise. */
+export function fallKind(f: Forecast): "Rain" | "Snow" {
+  const first = [f.now.code, ...f.hours.slice(0, 3).map((h) => h.code)].find(wet);
+  return first !== undefined && describe(first).sky === "snow" ? "Snow" : "Rain";
+}
 
 /** Rain this light in a quarter-hour (mm) is a few spots, not rain. */
 const WET_MM = 0.1;

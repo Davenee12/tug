@@ -134,6 +134,7 @@ async function openLogs() {
 // ---- General ----
 const toasts = computed({ get: () => tug.settings.toasts, set: (v) => void tug.setSetting("toasts", v) });
 const lowBattery = computed({ get: () => tug.settings.lowBattery, set: (v) => void tug.setSetting("lowBattery", v) });
+const rainSoon = computed({ get: () => weather.rainAlerts, set: (v) => weather.setRainAlerts(v) });
 const popupSound = computed({ get: () => tug.settings.popupSound, set: (v) => void tug.setSetting("popupSound", v) });
 const dnd = computed({ get: () => tug.settings.doNotDisturb, set: (v) => void tug.setSetting("doNotDisturb", v) });
 const closeToTray = computed({ get: () => tug.settings.closeToTray, set: (v) => void tug.setSetting("closeToTray", v) });
@@ -816,6 +817,13 @@ function openSponsor() {
                 </button>
                 <button v-if="weather.place" class="btn-secondary btn-sm" @click="weather.hide()">Hide</button>
               </div>
+            </SettingsRow>
+            <SettingsRow
+              v-if="weather.place && weather.place !== 'off'"
+              label="Rain soon"
+              :description="`A pop-up about 15 minutes before rain or snow starts in ${weather.place.name.split(',')[0]}, from the forecast the card already has. Quiet hours and Do not disturb hold it like any other.`"
+            >
+              <SettingsSwitch v-model="rainSoon" label="Rain soon" :disabled="!tug.settings.toasts" />
             </SettingsRow>
             <SettingsRow label="Units" description="Also switchable right on the card.">
               <div class="flex rounded-lg bg-canvas p-0.5">
