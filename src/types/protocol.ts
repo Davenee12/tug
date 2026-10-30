@@ -964,7 +964,7 @@ export interface DevToolsClient {
 /** What the "send this?" card has in common (`ConfirmRequest`). */
 interface DevToolsConfirmBase {
   id: number;
-  /** Who's asking, as it named itself. */
+  /** Who's asking, as tug names it for the card (`ClientInfo::asker`): "Claude Code (an AI tool)", "An AI tool", "tug command". */
   tool: string;
   /** Unix ms after which it counts as not sent. */
   expiresAt: number;

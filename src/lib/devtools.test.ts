@@ -63,7 +63,11 @@ describe("copy", () => {
   });
   it("names an unnamed asker", () => {
     expect(askerName("  ")).toBe("An AI tool");
-    expect(askerName("claude-code")).toBe("claude-code");
+  });
+  it("shows the name as tug made it, saying it's an AI tool", () => {
+    expect(askerName("Claude Code (an AI tool)")).toBe("Claude Code (an AI tool)");
+    expect(askerName(" Cursor (an AI tool) ")).toBe("Cursor (an AI tool)");
+    expect(askerName("tug command")).toBe("tug command");
   });
 });
 

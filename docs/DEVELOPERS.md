@@ -90,6 +90,12 @@ A text from an AI tool or `tug text`, and files from `send_file_to_phone` or `tu
 ever sent from tug's own card (the one exception is below):
 
 - For a text it says "*<tool>* wants to text *<name>*", with the number and the exact message.
+  An AI tool is named the way it introduces itself over MCP, tidied (`claude-code` → "Claude
+  Code (an AI tool)", `cursor-vscode` → "Cursor (an AI tool)"). If it gives no name, or only its
+  SDK's (`mcp`), tug names the app that started `tug mcp` when it's one it knows (Cursor, VS Code,
+  Windsurf, Claude, …), looked up from Windows' process list, never from anything the tool says;
+  otherwise it's "An AI tool". Any program could claim any name, so an AI tool's name always
+  comes with "(an AI tool)".
 - For files it asks "Send report.pdf (2.1 MB) to your iPhone?" (or "Send 3 files (…)"), lists each
   file with its size and the folder it's in (so you can see it's *that* `notes.txt`, or that it's
   in `.ssh`), and says who's asking. Names are shown the way the phone will get them.

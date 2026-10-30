@@ -1080,7 +1080,7 @@ if (params.has("devconfirm")) {
     devState.pending = {
       id: 1,
       kind: "text",
-      tool: "Claude Code",
+      tool: "Claude Code (an AI tool)",
       toName: "Zoe",
       toAddress: ZOE,
       message: "Running 10 minutes late, start without me!",
@@ -1097,7 +1097,7 @@ if (params.has("devconfirmfiles")) {
     devState.pending = {
       id: 2,
       kind: "files",
-      tool: "Claude Code",
+      tool: "Claude Code (an AI tool)",
       files: [
         { name: "report.pdf", size: 2_202_010, folder: "C:\\Users\\Jordan\\Projects\\harbor\\docs" },
         { name: "notes.txt", size: 1_804, folder: null },

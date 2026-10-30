@@ -57,6 +57,7 @@ fn client(kind: ClientKind) -> Result<Client, ClientError> {
     Client::for_current_user(ClientInfo {
         name: name.into(),
         kind,
+        launcher: None,
     })
 }
 
