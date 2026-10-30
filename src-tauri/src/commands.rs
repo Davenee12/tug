@@ -701,6 +701,13 @@ pub fn screen_share_watch(on: bool) -> crate::share_privacy::ShareState {
     }
 }
 
+/// Whether Focus mode is holding pop-ups right now, for the window at startup; changes come as
+/// `focus-state` events.
+#[tauri::command]
+pub fn focus_state() -> crate::focus_mode::FocusState {
+    crate::focus_mode::state()
+}
+
 /// Copy text to the clipboard. Sync on purpose: Tauri runs sync commands on the main
 /// (STA) thread, which the WinRT clipboard requires.
 #[tauri::command]
@@ -1039,6 +1046,11 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
     #[cfg(windows)]
     if key == crate::share_privacy::SETTING {
         crate::share_privacy::set_enabled(crate::share_privacy::enabled_from_setting(Some(&value)));
+    }
+    // Focus mode: the watcher starts or stops looking at once (off ends any focus now).
+    #[cfg(windows)]
+    if key == crate::focus_mode::SETTING {
+        crate::focus_mode::set_settings(crate::focus_mode::FocusSettings::from_setting(Some(&value)));
     }
     Ok(())
 }

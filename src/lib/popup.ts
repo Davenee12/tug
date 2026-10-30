@@ -7,8 +7,11 @@
 //   • An incoming call          → rings through quiet hours and DND; held only if the user mutes
 //                                 calls explicitly, and even then a VIP rings.
 //   • The app is muted          → held (muting an app wins, even for a VIP).
-//   • A VIP (text/call)         → pops up even during quiet hours or DND.
+//   • A VIP (text/call)         → pops up even during quiet hours, DND or Focus mode.
 //   • Quiet hours or DND active → held.
+//   • Focused (Focus mode)      → held for the summary at the end of the focus, except a
+//                                 verification code: it's needed now (and code fill copies it
+//                                 whatever the pop-up does).
 //   • Otherwise                 → pops up.
 
 import type { QuietHours, UiSettings } from "../types/protocol";
@@ -54,21 +57,37 @@ export interface PopupEvent {
   isCall: boolean;
   /** The sender (texter or caller) is on the "always let through" list. */
   isVip: boolean;
+  /** It carries a one-time code: time-sensitive, so Focus mode lets it through. */
+  isCode?: boolean;
 }
 
 /**
- * Should this notification or message raise a Windows pop-up, by the settings alone? `now` is the
- * local time to judge quiet hours against. See the rules at the top of the file.
+ * What happens to a pop-up: it shows, it's held (by a switch the person set), or it's held for
+ * Focus mode's summary, which counts only those.
  */
-export function shouldPopUp(event: PopupEvent, settings: UiSettings, now: Date): boolean {
-  if (!settings.toasts) return false;
+export type PopupDecision = "show" | "held" | "focus";
+
+/**
+ * What this notification or message's pop-up does, by the settings and whether Focus mode says
+ * the person is focused right now. `now` is the local time to judge quiet hours against. See the
+ * rules at the top of the file.
+ */
+export function popupDecision(event: PopupEvent, settings: UiSettings, now: Date, focused = false): PopupDecision {
+  if (!settings.toasts) return "held";
   if (event.isCall) {
-    // Calls ring through quiet hours and DND; only an explicit call mute silences them, and a VIP
-    // rings even then.
-    return event.isVip || !settings.muteCalls;
+    // Calls ring through quiet hours, DND and Focus mode; only an explicit call mute silences
+    // them, and a VIP rings even then.
+    return event.isVip || !settings.muteCalls ? "show" : "held";
   }
-  if (settings.mutedApps.includes(event.appId)) return false;
-  if (event.isVip) return true;
-  if (settings.doNotDisturb || inQuietHours(settings.quietHours, now)) return false;
-  return true;
+  if (settings.mutedApps.includes(event.appId)) return "held";
+  if (event.isVip) return "show";
+  if (settings.doNotDisturb || inQuietHours(settings.quietHours, now)) return "held";
+  // After DND and quiet hours: what they hold was never going to pop up, so the summary leaves it out.
+  if (focused && settings.focus.enabled && !event.isCode) return "focus";
+  return "show";
+}
+
+/** Should this notification or message raise a Windows pop-up right now? (`popupDecision` says why not.) */
+export function shouldPopUp(event: PopupEvent, settings: UiSettings, now: Date, focused = false): boolean {
+  return popupDecision(event, settings, now, focused) === "show";
 }

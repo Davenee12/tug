@@ -539,7 +539,7 @@ pub fn redact_note(generic_title: &str) -> (String, String) {
 }
 
 #[cfg(windows)]
-pub use win::{previews_hidden_now, set_enabled, start, watch};
+pub use win::{full_screen_now, previews_hidden_now, set_enabled, start, watch};
 
 /// Off Windows nothing is ever hidden (tug only runs on Windows; this keeps other builds honest).
 #[cfg(not(windows))]

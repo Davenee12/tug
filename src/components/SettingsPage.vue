@@ -175,6 +175,23 @@ function toggleDay(d: number) {
 }
 const muteCalls = computed({ get: () => tug.settings.muteCalls, set: (v) => void tug.setSetting("muteCalls", v) });
 
+// Focus mode: hold pop-ups while focused, then one summary (lib/focusMode). One stored value; the
+// backend watches only while it's on.
+const focus = computed(() => tug.settings.focus);
+const setFocus = (patch: Partial<typeof tug.settings.focus>) => void tug.setSetting("focus", { ...tug.settings.focus, ...patch });
+const focusEnabled = computed({ get: () => focus.value.enabled, set: (v) => setFocus({ enabled: v }) });
+const focusFullScreen = computed({ get: () => focus.value.fullScreen, set: (v) => setFocus({ fullScreen: v }) });
+const focusMeetings = computed({ get: () => focus.value.meetings, set: (v) => setFocus({ meetings: v }) });
+const focusCoding = computed({ get: () => focus.value.coding, set: (v) => setFocus({ coding: v }) });
+const focusDescription = computed(() =>
+  [
+    "Hold Windows pop-ups while you're focused, then show one pop-up of what arrived. Everything still comes into tug. Calls, verification codes and people you always let through still get through.",
+    tug.focusStatus,
+  ]
+    .filter(Boolean)
+    .join(" "),
+);
+
 // Suggested replies: on/off, and the list for texts no rule matches (lib/smartReplies). Three
 // boxes; an edit is cleaned (trimmed, no repeats) and saved when the box loses focus.
 const smartReplies = computed({ get: () => tug.settings.smartReplies, set: (v) => void tug.setSetting("smartReplies", v) });
@@ -697,11 +714,44 @@ function openSponsor() {
             </div>
           </div>
 
+          <!-- Focus mode: hold pop-ups while focused, then one summary of what came (lib/focusMode). -->
+          <div class="mb-4 rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Focus mode"
+              :description="focusDescription"
+            >
+              <SettingsSwitch v-model="focusEnabled" label="Focus mode" :disabled="!tug.settings.toasts" />
+            </SettingsRow>
+            <template v-if="focus.enabled">
+              <SettingsRow
+                class="border-t border-hairline-soft"
+                label="Full screen"
+                description="A game, a video, a slide show or any app is full screen."
+              >
+                <SettingsSwitch v-model="focusFullScreen" label="Focused when something is full screen" :disabled="!tug.settings.toasts" />
+              </SettingsRow>
+              <SettingsRow
+                class="border-t border-hairline-soft"
+                label="Meetings"
+                description="Another app is using your microphone or camera, like a call in Teams or Zoom."
+              >
+                <SettingsSwitch v-model="focusMeetings" label="Focused in meetings" :disabled="!tug.settings.toasts" />
+              </SettingsRow>
+              <SettingsRow
+                class="border-t border-hairline-soft"
+                label="Coding"
+                description="A code editor or terminal is in front."
+              >
+                <SettingsSwitch v-model="focusCoding" label="Focused while coding" :disabled="!tug.settings.toasts" />
+              </SettingsRow>
+            </template>
+          </div>
+
           <!-- Always let through (VIPs). -->
           <div class="mb-4 rounded-xl bg-surface-card px-5 py-4">
             <p class="text-[14px] font-medium text-ink">Always let through</p>
             <p class="mt-0.5 text-[13px] text-muted">
-              These people's texts and calls pop up even during quiet hours or Do not disturb.
+              These people's texts and calls pop up even during quiet hours, Do not disturb or Focus mode.
             </p>
             <ul v-if="vipList.length" class="mt-3 flex flex-wrap gap-1.5">
               <li v-for="v in vipList" :key="v.address">

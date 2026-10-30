@@ -79,6 +79,11 @@
 //   http://localhost:1420/?sharing    the screen is being shared: the Feed and Messages blur texts and names under
 //                                     the "Previews hidden" banner (Show anyway). &presenting for a slide show,
 //                                     &stop to have sharing end after 10 s (the banner clears), &call for a call
+//   http://localhost:1420/?focus      Focus mode on: a meeting starts 2 s in (pop-ups held), texts from Priya and
+//                                     Chris, a missed call and a verification code arrive (only the code pops
+//                                     up), and the meeting ends at 16 s: one "While you were focused" summary.
+//                                     In the browser a pop-up shows as tug's note, with Open as its click
+//                                     (the summary's opens the Feed). &reason=fullScreen or &reason=coding
 //   http://localhost:1420/?update     a new version has downloaded: the Update button beside tug's name and its
 //                                     "Restart tug to update?" confirm (&updatebusy: held, as during a call)
 //   http://localhost:1420/?updatecheck   updates set up, nothing found yet: Settings › About › Check for updates
@@ -90,7 +95,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { RELEASE_NOTES } from "./whatsNew";
 import { backupMock, seedImported } from "./devMockBackup";
-import type { CallRecord, CodeHotkeyStatus, VoiceStatus, Contact, DevToolsStatus, DeviceStatus, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack, UpdateStatus } from "../types/protocol";
+import type { CallRecord, CodeHotkeyStatus, VoiceStatus, Contact, DevToolsStatus, DeviceStatus, FocusState, PcAudioStatus, DiscoveredDevice, TugboatQr, TugboatStatus, NowPlaying, PhoneNotification, RepeatMode, ShareState, SmsMessage, SpotifyAlbum, SpotifyArtist, SpotifyDevice, SpotifyPlayer, SpotifyPlaylist, SpotifyStatus, SpotifyTrack, ToastSpec, UpdateStatus } from "../types/protocol";
 
 const params = new URLSearchParams(location.search);
 const setup = params.has("setup");
@@ -507,6 +512,14 @@ const settings: Record<string, string> = {
 if (whatsNewPreview) settings["ui.lastSeenVersion"] = RELEASE_NOTES[2]?.version ?? "0.0.0";
 else if (!setup) settings["ui.lastSeenVersion"] = appVersion;
 let autostart = false;
+// ?focus: Focus mode switched on, and no quiet hours in the way of the summary at night.
+const focusPreview = params.has("focus") && !noPhone;
+if (focusPreview) {
+  settings["ui.focus"] = JSON.stringify({ enabled: true, fullScreen: true, meetings: true, coding: false });
+  settings["ui.quietHours"] = "";
+}
+/** What focus_mode/ last said (see the ?focus timeline below). */
+const focusState: FocusState = { active: false, reason: null };
 
 // Spotify connector: connected by default so its UI can be reviewed in the browser; ?spotifyoff
 // starts it disconnected (to see Settings › Connectors and the empty states).
@@ -1354,6 +1367,11 @@ mockIPC(
       // a real version in the browser preview (unmocked, it rejects and both fall back to "dev").
       case "plugin:app|version":
         return appVersion;
+      // ?focus: the preview's pop-ups need Windows' permission; say it's granted rather than ask the browser.
+      case "plugin:notification|is_permission_granted":
+        return focusPreview ? true : null;
+      case "focus_state":
+        return { ...focusState };
       // Sync Contacts is read by asking the phone: ?contactsoff&flip turns it on at the next check
       // ("Check again"), as if the switch had just been flipped.
       case "check_switches":
@@ -1746,6 +1764,7 @@ mockIPC(
       // Windows pop-ups don't exist in a browser; log what tug would have shown.
       case "show_toast":
         console.info("[devMock] pop-up", a.spec);
+        if (focusPreview) void showMockPopup(a.spec as ToastSpec);
         return null;
       // --- Spotify connector ---
       // Return fresh copies (the real Rust commands serialize new objects each call), so Vue
@@ -1876,6 +1895,44 @@ if (setup && params.has("btoff")) {
     status.advertising = "on";
     void emit("device-status", { ...status });
   }, 20000);
+}
+
+// ?focus: a pop-up shows as tug's own note (Windows' can't show in a browser); Open is the click.
+async function showMockPopup(spec: ToastSpec) {
+  const { useTugStore } = await import("../stores/tug");
+  useTugStore().notify("info", `${spec.title}: ${spec.body}`, {
+    label: "Open",
+    run: () => void emit("toast-pressed", { kind: "open", id: spec.id, message: null }),
+  });
+}
+
+// ?focus: a meeting (or &reason=fullScreen, coding) from 2 s to 16 s, as focus_mode/ reports it
+// once its wait to start is over, with things arriving in between. Priya and Chris are contacts
+// and not VIPs, so their texts are held; the code rings through; the missed call is held.
+if (focusPreview) {
+  const reason = params.get("reason") === "fullScreen" ? "fullScreen" : params.get("reason") === "coding" ? "coding" : "meeting";
+  const setFocus = (active: boolean) => {
+    Object.assign(focusState, { active, reason: active ? reason : null });
+    void emit("focus-state", { ...focusState });
+  };
+  const arrive = (atMs: number, make: () => PhoneNotification) =>
+    setTimeout(() => {
+      const x = make();
+      x.receivedAt = Date.now();
+      history.unshift(x);
+      void emit("notification", x);
+    }, atMs);
+  setTimeout(() => setFocus(true), 2000);
+  arrive(4000, () => ({ ...n("com.apple.MobileSMS", "Messages", "Priya", "Lunch tomorrow? The new place on Elm opens at 11:30", 0), id: 640 }));
+  arrive(5500, () => ({ ...n("com.apple.MobileSMS", "Messages", "Chris Smith", "Pushed the fix, can you have a look?", 0), id: 641 }));
+  arrive(7000, () => ({ ...n("com.google.Gmail", "Gmail", "Google", "G-730215 is your Google verification code.", 0, { category: "email" }), id: 642 }));
+  arrive(8500, () => ({ ...n("com.apple.MobileSMS", "Messages", "Priya", "Or Friday works too", 0), id: 643 }));
+  arrive(10000, () => ({
+    ...n("com.apple.mobilephone", "Phone", "Jane Doe", "Missed Call", 0, { category: "missedCall", flags: flags({ positiveAction: true }), positiveLabel: "Dial" }),
+    id: 644,
+  }));
+  arrive(11500, () => ({ ...n("com.apple.MobileSMS", "Messages", "Chris Smith", "No rush, after your call is fine", 0), id: 645 }));
+  setTimeout(() => setFocus(false), 16000);
 }
 
 // ?sharing&stop: sharing ends 10 s in, and the banner and blur must go with it.

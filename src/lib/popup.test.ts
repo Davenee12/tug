@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inQuietHours, shouldPopUp, type PopupEvent } from "./popup";
+import { inQuietHours, popupDecision, shouldPopUp, type PopupEvent } from "./popup";
 import type { QuietHours, UiSettings } from "../types/protocol";
 
 const baseSettings: UiSettings = {
@@ -24,6 +24,7 @@ const baseSettings: UiSettings = {
   smartReplies: true,
   smartReplyDefaults: ["👍", "OK", "Talk soon"],
   hidePreviewsWhileSharing: true,
+  focus: { enabled: false, fullScreen: true, meetings: true, coding: false },
 };
 const settings = (over: Partial<UiSettings> = {}): UiSettings => ({ ...baseSettings, ...over });
 const quiet = (over: Partial<QuietHours> = {}): QuietHours => ({ enabled: true, start: "22:00", end: "07:00", days: [], ...over });
@@ -107,5 +108,43 @@ describe("shouldPopUp", () => {
     expect(shouldPopUp(event({ isCall: true, isVip: true }), muted, at("2026-10-05T12:00"))).toBe(true);
     // Texts are unaffected by Mute calls.
     expect(shouldPopUp(event(), muted, at("2026-10-05T12:00"))).toBe(true);
+  });
+});
+
+describe("popupDecision with Focus mode", () => {
+  const noon = at("2026-10-05T12:00");
+  const focusOn = settings({ focus: { enabled: true, fullScreen: true, meetings: true, coding: false } });
+
+  it("holds pop-ups for the summary while focused", () => {
+    expect(popupDecision(event(), focusOn, noon, true)).toBe("focus");
+    expect(shouldPopUp(event(), focusOn, noon, true)).toBe(false);
+    expect(popupDecision(event({ appId: "com.google.Gmail" }), focusOn, noon, true)).toBe("focus");
+    // Not focused right now: as before.
+    expect(popupDecision(event(), focusOn, noon, false)).toBe("show");
+  });
+
+  it("holds nothing while Focus mode is off, whatever the backend last said", () => {
+    expect(popupDecision(event(), settings(), noon, true)).toBe("show");
+  });
+
+  it("lets calls and verification codes through", () => {
+    expect(popupDecision(event({ isCall: true }), focusOn, noon, true)).toBe("show");
+    expect(popupDecision(event({ isCode: true }), focusOn, noon, true)).toBe("show");
+    // A muted call stays muted.
+    expect(popupDecision(event({ isCall: true }), { ...focusOn, muteCalls: true }, noon, true)).toBe("held");
+  });
+
+  it("lets VIPs through, as quiet hours and Do not disturb do", () => {
+    expect(popupDecision(event({ isVip: true }), focusOn, noon, true)).toBe("show");
+  });
+
+  it("leaves out of the summary what other switches held", () => {
+    // Muted apps, Do not disturb and quiet hours never pop up, so the summary doesn't count them.
+    expect(popupDecision(event({ appId: "com.whatsapp" }), { ...focusOn, mutedApps: ["com.whatsapp"] }, noon, true)).toBe("held");
+    expect(popupDecision(event(), { ...focusOn, doNotDisturb: true }, noon, true)).toBe("held");
+    expect(popupDecision(event(), { ...focusOn, quietHours: quiet({ start: "09:00", end: "17:00" }) }, noon, true)).toBe("held");
+    expect(popupDecision(event(), { ...focusOn, toasts: false }, noon, true)).toBe("held");
+    // A code during Do not disturb is still held, as before.
+    expect(popupDecision(event({ isCode: true }), { ...focusOn, doNotDisturb: true }, noon, true)).toBe("held");
   });
 });
