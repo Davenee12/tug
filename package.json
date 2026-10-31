@@ -23,7 +23,7 @@
     "@noble/ciphers": "^2.4.0",
     "@noble/hashes": "^2.4.0",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-notification": "^2.7.0",
+    "@tauri-apps/plugin-notification": "^2.8.0",
     "lucide-vue-next": "^1.0.0",
     "pinia": "^4.1.0",
     "vue": "^3.5.44"
@@ -31,7 +31,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@vitejs/plugin-vue": "^6.0.10",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.3",
