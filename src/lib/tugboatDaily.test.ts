@@ -154,6 +154,8 @@ describe("the streak", () => {
     expect(faster.record.bests["2026-11-01"]).toBe(91_240);
     // No time is never a best.
     expect(finishDaily(r, "2026-11-01", 0, true).newBest).toBe(false);
+    // Not even on a day with nothing yet: no best, no streak, the record unchanged.
+    expect(finishDaily(EMPTY_DAILY, "2026-11-01", 0, true)).toEqual({ record: EMPTY_DAILY, newBest: false });
     r = finishDaily(faster.record, "2026-11-02", 99_000, true).record;
     expect(r).toEqual({ streak: 2, last: "2026-11-02", bests: { "2026-11-01": 91_240, "2026-11-02": 99_000 } });
   });

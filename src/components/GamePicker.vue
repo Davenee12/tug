@@ -7,7 +7,7 @@ import { Car, Container, Flame, Gamepad2, Ship, X } from "lucide-vue-next";
 import { useGameStore } from "../stores/game";
 import { useFocusTrap } from "../lib/focusTrap";
 import { currentStreak, localDate } from "../lib/tugboatDaily";
-import { formatTime } from "../lib/deskDerby";
+import { TRACKS, formatTime } from "../lib/deskDerby";
 import type { GameId } from "../types/protocol";
 
 const game = useGameStore();
@@ -43,10 +43,16 @@ const cards = computed(() => [
     icon: Car,
     line: "Race a tiny car round the desk. Drift the corners, boost out of them.",
     // A race time: the fastest.
-    best: game.scores["desk-derby"].best > 0 ? `Best ${formatTime(game.scores["desk-derby"].best)}` : null,
+    best: derbyBestLine(game.trackBests),
     streak: currentStreak(game.scores["desk-derby"].daily, today),
   },
 ]);
+
+/** Desk Derby's tracks differ in length, so its best is named with its track. */
+function derbyBestLine(bests: Record<string, number>): string | null {
+  const fastest = TRACKS.filter((t) => (bests[t.id] ?? 0) > 0).sort((a, b) => bests[a.id] - bests[b.id])[0];
+  return fastest ? `Best ${formatTime(bests[fastest.id])} on ${fastest.name}` : null;
+}
 
 function bestLine(best: number): string | null {
   return best > 0 ? `Best ${best}` : null;

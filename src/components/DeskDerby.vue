@@ -204,7 +204,9 @@ const controller = useGameController({
 });
 const { controllerOn, controllerError, padConnected } = controller;
 
-const blocked = computed(() => tug.ringing !== null || devtools.confirm !== null || tug.pairingRequest !== null);
+const blocked = computed(
+  () => tug.ringing !== null || devtools.confirm !== null || tug.pairingRequest !== null || tug.quickTextOpen,
+);
 
 useFocusTrap(root, onEscape);
 
@@ -267,6 +269,8 @@ function preview() {
 
 function pause() {
   if (phase.value === "playing") phase.value = "paused";
+  // Keys let go while paused (under a call card, say) would otherwise stay held on resume.
+  releaseKeys();
 }
 
 function resume() {
@@ -362,7 +366,12 @@ function frame(now: number) {
   render();
   syncHud();
   if (race.over) {
-    if (endedAt === 0) endedAt = now;
+    // Kept the moment it ends (the best in the header turns at once, and Close during the pause
+    // before the results can't lose the time); the results follow a moment later.
+    if (endedAt === 0) {
+      endedAt = now;
+      recordResult();
+    }
     // A moment to see the finish before the results.
     if (now - endedAt > 1100) {
       finishGame();
@@ -408,12 +417,13 @@ function say(text: string, split: string | null, ahead: boolean | null, big: boo
   calloutTimer = window.setTimeout(() => (callout.value = null), big ? 2600 : 1800);
 }
 
-function finishGame() {
-  overAt = performance.now();
+/** The finished race's times into the scores (and its ghost), once, as soon as it ends. */
+function recordResult() {
   if (duo.value) {
     const times: [number, number] = [raceMs(race.cars[0]), raceMs(race.cars[1])];
     raceResult.value = { times, winner: derbyWinner(times) };
-    newBest.value = game.finishDuo(times, "desk-derby");
+    // A race one player left was one car driving alone: not a head to head to keep.
+    newBest.value = left[0] || left[1] ? false : game.finishDuo(times, "desk-derby", variant.track);
   } else {
     const c = race.cars[0];
     const ms = raceMs(c);
@@ -424,6 +434,10 @@ function finishGame() {
       if (run) saveGhost(run);
     }
   }
+}
+
+function finishGame() {
+  overAt = performance.now();
   // The whole desk behind the results.
   updateCamera(fx, race, 0, false);
   phase.value = "over";
@@ -446,7 +460,9 @@ function syncHud() {
     const h = hud.cars[i];
     if (!h) return;
     const lap = Math.min(LAPS, c.lap + 1);
-    const cs = Math.floor(clockOf(race, c) * 100);
+    // A finished car shows its recorded time (rounded, as the results show it), not the running
+    // clock cut down, so the header and the results never differ by a hundredth.
+    const cs = c.finished !== null && !c.dnf ? Math.round(raceMs(c) / 10) : Math.floor(clockOf(race, c) * 100);
     if (h.lap !== lap) h.lap = lap;
     if (h.cs !== cs) h.cs = cs;
     if (h.place !== order[i]) h.place = order[i];
@@ -593,7 +609,11 @@ const PALETTE_NAMES = [
 const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && t.closest("input, textarea, [contenteditable]") !== null;
 
 function onKey(e: KeyboardEvent, down: boolean) {
-  if (e.ctrlKey || e.metaKey || e.altKey || blocked.value || isTyping(e.target)) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || blocked.value || isTyping(e.target)) {
+    // A key let go while keys don't reach the game (Ctrl held, a card up, typing) is still let go.
+    if (!down) releaseKeys();
+    return;
+  }
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   // Enter or Space on a focused button is the button's.
   if ((k === "Enter" || k === " ") && e.target instanceof HTMLButtonElement && phase.value !== "playing") return;
@@ -769,7 +789,8 @@ const MODES: Array<{ id: Mode; label: string; icon: typeof Play }> = [
 const PLAYER_NAME: Record<Player, string> = { 1: "Player 1", 2: "Player 2" };
 const PLACE = ["", "1st", "2nd"];
 const leader = computed(() => raceResult.value?.winner ?? null);
-const duoBest = computed(() => scores.value.duoBest);
+/** The fastest head to head on this race's track (tracks differ in length). */
+const duoBest = computed(() => game.duoTrackBests[runTrack.value] ?? 0);
 const clock = (cs: number) => (cs > 0 ? formatTime(cs * 10) : "0:00.00");
 const lapText = (h: CarHud | undefined) => (h ? (h.finished ? "Finished" : h.dnf ? "Out" : `Lap ${h.lap}/${LAPS}`) : "");
 </script>
@@ -1008,7 +1029,7 @@ const lapText = (h: CarHud | undefined) => (h ? (h.finished ? "Finished" : h.dnf
                   <span class="ml-auto font-mono text-[20px]" :class="leader === p ? 'text-on-dark' : 'text-on-dark-soft'">{{ raceResult.times[p - 1] ? formatTime(raceResult.times[p - 1]) : "Didn't finish" }}</span>
                 </li>
               </ul>
-              <p class="mt-3 text-[13px] text-on-dark-soft">{{ newBest ? "The fastest head to head on this PC!" : `Fastest head to head on this PC: ${formatTime(duoBest)}` }}</p>
+              <p class="mt-3 text-[13px] text-on-dark-soft">{{ newBest ? `The fastest head to head on ${runTrackName} on this PC!` : `Fastest head to head on ${runTrackName} on this PC: ${formatTime(duoBest)}` }}</p>
               <div class="mt-5 flex justify-center gap-2">
                 <button class="btn-primary" @click="start">
                   <RotateCcw :size="16" />

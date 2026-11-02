@@ -179,6 +179,8 @@ export function parseDaily(raw: string | null | undefined): DailyRecord {
  */
 export function finishDaily(rec: DailyRecord, date: string, score: number, lowerIsBetter = false): { record: DailyRecord; newBest: boolean } {
   const s = Math.max(0, Math.floor(score));
+  // No time isn't a run: it's neither a best nor a day for the streak.
+  if (lowerIsBetter && s <= 0) return { record: rec, newBest: false };
   const before = rec.bests[date];
   const newBest = before === undefined || (lowerIsBetter ? s > 0 && (before <= 0 || s < before) : s > before);
   const bests = { ...rec.bests, [date]: newBest ? s : before };

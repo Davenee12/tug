@@ -20,6 +20,9 @@ export const SCORE_KEYS: Record<GameId, { best: string; daily: string; duo: stri
 };
 /** Desk Derby's Free play best on each track (`{"inbox": 92310, …}`, milliseconds). */
 export const DERBY_TRACKS_KEY = "ui.deskDerbyTracks";
+/** Desk Derby's fastest head to head on each track (tracks differ in length, so one best across
+ * them all would only ever be the shortest track's). */
+export const DERBY_DUO_TRACKS_KEY = "ui.deskDerbyDuoTracks";
 
 export const GAMES: GameId[] = ["tugboat-run", "harbor-stack", "desk-derby"];
 
@@ -76,6 +79,8 @@ export const useGameStore = defineStore("game", () => {
   });
   /** Desk Derby's Free play best on each track (milliseconds). */
   const trackBests = reactive<Record<string, number>>({});
+  /** Desk Derby's fastest head to head on each track (milliseconds). */
+  const duoTrackBests = reactive<Record<string, number>>({});
   let loaded = false;
   /** A daily finished before the saved record arrived: keep what this session knows. */
   const dailyTouched: Record<GameId, boolean> = { "tugboat-run": false, "harbor-stack": false, "desk-derby": false };
@@ -95,6 +100,9 @@ export const useGameStore = defineStore("game", () => {
       for (const [track, ms] of Object.entries(parseTrackBests(raw[DERBY_TRACKS_KEY]))) {
         trackBests[track] = better("desk-derby", trackBests[track] ?? 0, ms);
       }
+      for (const [track, ms] of Object.entries(parseTrackBests(raw[DERBY_DUO_TRACKS_KEY]))) {
+        duoTrackBests[track] = better("desk-derby", duoTrackBests[track] ?? 0, ms);
+      }
       loaded = true;
     } catch {
       /* nothing saved yet */
@@ -106,6 +114,17 @@ export const useGameStore = defineStore("game", () => {
    * picker never replaces a game that's open: a taskbar "Play a game" mid-game would otherwise
    * throw the game away.
    */
+  /**
+   * Save a score once the saved ones are in: written before they'd loaded (or when they couldn't
+   * be read), a per-track list holding only this session's tracks would replace the saved one, and
+   * a daily record its streak. `value` is read after loading, so it's the merged score.
+   */
+  async function save(key: string, value: () => string) {
+    await load();
+    if (!loaded) return;
+    await api.setSetting(key, value()).catch(() => undefined);
+  }
+
   async function show(which: GameId | "picker" = "picker") {
     if (which === "picker" && screen.value !== null) return;
     screen.value = which;
@@ -126,12 +145,12 @@ export const useGameStore = defineStore("game", () => {
     if (beats(game, score, s.best)) {
       s.best = Math.floor(score);
       newBest = true;
-      void api.setSetting(SCORE_KEYS[game].best, String(s.best)).catch(() => undefined);
+      void save(SCORE_KEYS[game].best, () => String(s.best));
     }
     if (track === undefined) return newBest;
     if (!beats(game, score, trackBests[track] ?? 0)) return false;
     trackBests[track] = Math.floor(score);
-    void api.setSetting(DERBY_TRACKS_KEY, JSON.stringify(trackBests)).catch(() => undefined);
+    void save(DERBY_TRACKS_KEY, () => JSON.stringify(trackBests));
     return true;
   }
 
@@ -140,17 +159,26 @@ export const useGameStore = defineStore("game", () => {
     const { record, newBest } = finishDaily(scores[game].daily, date, score, LOWER_IS_BETTER.has(game));
     scores[game].daily = record;
     dailyTouched[game] = true;
-    void api.setSetting(SCORE_KEYS[game].daily, JSON.stringify(record)).catch(() => undefined);
+    void save(SCORE_KEYS[game].daily, () => JSON.stringify(scores[game].daily));
     return newBest;
   }
 
-  /** Record a finished two-player game (its better score); true if it's a new best. */
-  function finishDuo(pair: readonly [number, number], game: GameId = "tugboat-run"): boolean {
-    const s = scores[game];
+  /**
+   * Record a finished two-player game (its better score); true if it's a new best. For Desk Derby,
+   * `track` keeps the best per track instead (and "new best" means that track's).
+   */
+  function finishDuo(pair: readonly [number, number], game: GameId = "tugboat-run", track?: string): boolean {
     const top = Math.floor(better(game, pair[0], pair[1]));
+    if (track !== undefined) {
+      if (!beats(game, top, duoTrackBests[track] ?? 0)) return false;
+      duoTrackBests[track] = top;
+      void save(DERBY_DUO_TRACKS_KEY, () => JSON.stringify(duoTrackBests));
+      return true;
+    }
+    const s = scores[game];
     if (!beats(game, top, s.duoBest)) return false;
     s.duoBest = top;
-    void api.setSetting(SCORE_KEYS[game].duo, String(top)).catch(() => undefined);
+    void save(SCORE_KEYS[game].duo, () => String(s.duoBest));
     return true;
   }
 
@@ -159,5 +187,5 @@ export const useGameStore = defineStore("game", () => {
   const daily = computed(() => scores["tugboat-run"].daily);
   const duoBest = computed(() => scores["tugboat-run"].duoBest);
 
-  return { screen, open, scores, trackBests, best, daily, duoBest, show, close, finish, finishDay, finishDuo };
+  return { screen, open, scores, trackBests, duoTrackBests, best, daily, duoBest, show, close, finish, finishDay, finishDuo };
 });

@@ -13,7 +13,11 @@ vi.mock("../lib/ipc", () => ({
   },
 }));
 
-const { useGameStore, parseBest, parseTrackBests, beats, SCORE_KEYS, DERBY_TRACKS_KEY, GAMES } = await import("./game");
+const { useGameStore, parseBest, parseTrackBests, beats, SCORE_KEYS, DERBY_TRACKS_KEY, DERBY_DUO_TRACKS_KEY, GAMES } =
+  await import("./game");
+
+/** Let the saves finish (a save waits for the saved scores to load first). */
+const settle = () => new Promise((r) => setTimeout(r, 0));
 
 beforeEach(() => {
   for (const k of Object.keys(saved)) delete saved[k];
@@ -58,6 +62,7 @@ describe("scores", () => {
     expect(game.finish(14, "harbor-stack")).toBe(true);
     expect(game.finish(9, "harbor-stack")).toBe(false);
     expect(game.finish(300)).toBe(true); // Tugboat Run, by default
+    await settle();
     expect(saved[SCORE_KEYS["harbor-stack"].best]).toBe("14");
     expect(saved["ui.tugboatRunBest"]).toBe("300");
     expect(game.scores["harbor-stack"].best).toBe(14);
@@ -70,6 +75,7 @@ describe("scores", () => {
     expect(game.finishDay("2026-10-16", 8, "harbor-stack")).toBe(true);
     expect(game.finishDay("2026-10-17", 12, "harbor-stack")).toBe(true);
     expect(game.finishDay("2026-10-17", 10, "harbor-stack")).toBe(false);
+    await settle();
     const rec = JSON.parse(saved["ui.harborStackDaily"]);
     expect(rec).toEqual({ streak: 2, last: "2026-10-17", bests: { "2026-10-16": 8, "2026-10-17": 12 } });
     // Tugboat Run's daily is untouched.
@@ -81,6 +87,7 @@ describe("scores", () => {
     const game = useGameStore();
     expect(game.finishDuo([7, 11], "harbor-stack")).toBe(true);
     expect(game.finishDuo([10, 3], "harbor-stack")).toBe(false);
+    await settle();
     expect(saved["ui.harborStackDuoBest"]).toBe("11");
     expect(game.scores["harbor-stack"].best).toBe(0);
   });
@@ -139,6 +146,7 @@ describe("Desk Derby: a race time, where lower is better", () => {
     expect(game.finish(91_500, "desk-derby", "inbox")).toBe(true);
     // A slower time on another track is still that track's first best (but not the overall best).
     expect(game.finish(104_000, "desk-derby", "coffee")).toBe(true);
+    await settle();
     expect(game.scores["desk-derby"].best).toBe(91_500);
     expect(saved["ui.deskDerbyBest"]).toBe("91500");
     expect(JSON.parse(saved[DERBY_TRACKS_KEY])).toEqual({ inbox: 91_500, coffee: 104_000 });
@@ -150,6 +158,7 @@ describe("Desk Derby: a race time, where lower is better", () => {
     expect(game.finishDay("2026-11-02", 93_000, "desk-derby")).toBe(true);
     expect(game.finishDay("2026-11-02", 96_000, "desk-derby")).toBe(false);
     expect(game.finishDay("2026-11-02", 90_010, "desk-derby")).toBe(true);
+    await settle();
     expect(JSON.parse(saved["ui.deskDerbyDaily"])).toEqual({ streak: 1, last: "2026-11-02", bests: { "2026-11-02": 90_010 } });
   });
 
@@ -159,7 +168,42 @@ describe("Desk Derby: a race time, where lower is better", () => {
     expect(game.finishDuo([99_000, 0], "desk-derby")).toBe(true);
     expect(game.finishDuo([101_000, 98_000], "desk-derby")).toBe(true);
     expect(game.finishDuo([99_500, 102_000], "desk-derby")).toBe(false);
+    await settle();
     expect(saved["ui.deskDerbyDuoBest"]).toBe("98000");
+  });
+
+  it("keeps a head to head best per track, since tracks differ in length", async () => {
+    const game = useGameStore();
+    await game.show("desk-derby");
+    expect(game.finishDuo([62_000, 70_000], "desk-derby", "inbox")).toBe(true);
+    // A longer track's race is its own best, not beaten by the short track's.
+    expect(game.finishDuo([81_000, 85_000], "desk-derby", "esses")).toBe(true);
+    expect(game.finishDuo([82_000, 0], "desk-derby", "esses")).toBe(false);
+    await settle();
+    expect(game.duoTrackBests).toEqual({ inbox: 62_000, esses: 81_000 });
+    expect(JSON.parse(saved[DERBY_DUO_TRACKS_KEY])).toEqual({ inbox: 62_000, esses: 81_000 });
+  });
+
+  it("never saves over the saved scores before they've been read", async () => {
+    Object.assign(saved, { [DERBY_TRACKS_KEY]: JSON.stringify({ inbox: 60_000, coffee: 70_000 }) });
+    const game = useGameStore();
+    // Finished before anything loaded: the save waits for the saved ones and keeps them all.
+    expect(game.finish(65_000, "desk-derby", "edge")).toBe(true);
+    await settle();
+    expect(JSON.parse(saved[DERBY_TRACKS_KEY])).toEqual({ inbox: 60_000, coffee: 70_000, edge: 65_000 });
+  });
+
+  it("writes nothing when the saved scores can't be read", async () => {
+    const { api } = await import("../lib/ipc");
+    vi.mocked(api.getSettings).mockRejectedValue(new Error("no settings"));
+    try {
+      const game = useGameStore();
+      game.finish(65_000, "desk-derby", "edge");
+      await settle();
+      expect(setSetting).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(api.getSettings).mockImplementation(async () => ({ ...saved }));
+    }
   });
 
   it("reads saved times back, keeping a faster one set while loading, and drops damaged track bests", async () => {
