@@ -38,6 +38,15 @@ use crate::voice::vocab::{focus_for_process, Focus};
 /// The Settings switches (Settings › Notifications › Focus mode), one JSON value written by the
 /// frontend's `setSetting`.
 pub const SETTING: &str = "ui.focus";
+/// Windows pop-ups on or off (Settings › Notifications). Off, Focus mode has nothing to hold, so
+/// the watcher sleeps however Focus mode's own switches are set.
+pub const TOASTS_SETTING: &str = "ui.toasts";
+
+/// Whether Windows pop-ups are on, from the stored `ui.toasts` (on unless it says "false", as the
+/// window reads it).
+pub fn toasts_on(raw: Option<&str>) -> bool {
+    raw != Some("false")
+}
 /// The event the window hears when a focus starts, changes reason or ends (payload: [`FocusState`]).
 pub const EVENT: &str = "focus-state";
 
@@ -292,7 +301,7 @@ pub fn transition(before: FocusState, after: FocusState, meeting_apps: usize) ->
 }
 
 #[cfg(windows)]
-pub use win::{set_settings, start, state};
+pub use win::{set_settings, set_toasts, start, state};
 
 /// Off Windows nothing is ever focused (tug only runs on Windows; this keeps other builds honest).
 #[cfg(not(windows))]

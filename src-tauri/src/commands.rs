@@ -1098,6 +1098,11 @@ pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Re
     if key == crate::focus_mode::SETTING {
         crate::focus_mode::set_settings(crate::focus_mode::FocusSettings::from_setting(Some(&value)));
     }
+    // Windows pop-ups off: Focus mode has nothing to hold, so its watcher stops looking.
+    #[cfg(windows)]
+    if key == crate::focus_mode::TOASTS_SETTING {
+        crate::focus_mode::set_toasts(crate::focus_mode::toasts_on(Some(&value)));
+    }
     Ok(())
 }
 

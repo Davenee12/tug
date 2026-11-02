@@ -5,7 +5,8 @@
 //! left it (`policy`). *When* is the window's decision (`src/lib/callPause.ts`), because the
 //! ringing call lives there.
 //!
-//! Every Windows call runs on a time-limited helper (`ble::winrt::off_thread`), so a media app
+//! Every Windows call runs on a time-limited helper (`ble::winrt::off_thread_media`, its own pool
+//! apart from Bluetooth's, so a hung media app can't use up Bluetooth's helpers), so a media app
 //! that doesn't answer can't hold a command. Nothing about what's playing (titles, artists) is
 //! logged, only which apps.
 
@@ -63,7 +64,7 @@ mod io {
     };
 
     use super::policy::{self, Playback, SessionView};
-    use crate::ble::winrt::off_thread;
+    use crate::ble::winrt::off_thread_media as off_thread;
 
     /// A whole pass over the sessions (asking each app to pause or play is a round trip to it).
     const LIMIT: Duration = Duration::from_secs(10);

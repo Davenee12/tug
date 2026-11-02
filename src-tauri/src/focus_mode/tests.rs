@@ -227,3 +227,10 @@ fn the_state_serializes_for_the_window() {
         serde_json::json!({ "active": false, "reason": null })
     );
 }
+
+#[test]
+fn pop_ups_count_as_on_unless_turned_off() {
+    assert!(toasts_on(None));
+    assert!(toasts_on(Some("true")));
+    assert!(!toasts_on(Some("false")));
+}
