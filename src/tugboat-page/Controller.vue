@@ -5,6 +5,8 @@
 //   let go) and Boost hops.
 //   Harbor Stack: the slider nudges the crane slower or faster (it springs back to the middle when
 //   let go) and Drop lets the container go.
+//   Desk Derby: the slider steers the car (it springs back to straight ahead when let go) and Drift
+//   is held round a corner; letting go of it fires the boost.
 // Held upright, the page asks to be turned (Safari has no orientation lock); "Play in portrait
 // anyway" keeps the upright layout. The PC says which game it is, at the start and in every reply,
 // so the buttons follow the game.
@@ -116,7 +118,7 @@ function onPadUp(e: PointerEvent) {
   steerPointer = null;
   dragging.value = false;
   // Tugboat Run: the knob stays where it was let go, and so does the boat. Harbor Stack: a nudge
-  // lasts as long as the thumb is on it.
+  // lasts as long as the thumb is on it. Desk Derby: the wheel straightens.
   if (controls.value.springBack) setSteer(0);
 }
 function setSteer(v: number) {
@@ -161,10 +163,10 @@ function switchGame(g: PadGame) {
 
 // --- Tilt: only where the browser really gives the page the phone's orientation ---
 // On Tugboat's plain-HTTP page it never does (Safari needs a secure connection and a permission
-// prompt), so there's no switch there at all. Only Tugboat Run steers.
+// prompt), so there's no switch there at all. Only the games that steer (not Harbor Stack's crane).
 const tilt = tiltSupport({ secure: window.isSecureContext, hasOrientation: "DeviceOrientationEvent" in window });
 const touchPhone = window.matchMedia("(pointer: coarse)").matches;
-const canTilt = computed(() => tilt === "available" && touchPhone && game.value === "tugboat-run");
+const canTilt = computed(() => tilt === "available" && touchPhone && game.value !== "harbor-stack");
 const tiltOn = ref(false);
 function onOrientation(e: DeviceOrientationEvent) {
   if (steerPointer !== null) return; // a thumb on the slider wins
@@ -293,7 +295,7 @@ function onVisibility() {
   }
   // Hidden (locked, another app): let go of the button and stop. The PC notices the silence and
   // hands the game back to the keyboard. Tugboat Run's slider keeps its place for when you come
-  // back; Harbor Stack's nudge lets go.
+  // back; Harbor Stack's nudge and Desk Derby's steering let go.
   window.clearTimeout(timer);
   steerPointer = actionPointer = null;
   dragging.value = false;

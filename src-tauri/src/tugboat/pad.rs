@@ -1,5 +1,5 @@
-//! The phone as a game controller (Tugboat Run and Harbor Stack): the input channel's rules, kept
-//! pure so they're tested without a socket.
+//! The phone as a game controller (Tugboat Run, Harbor Stack and Desk Derby): the input channel's
+//! rules, kept pure so they're tested without a socket.
 //!
 //! While tug's game has asked for a controller (`Session::pad_open`), the phone bound to the
 //! Tugboat session may `POST /api/pad`. The request is signed like every Tugboat request (same
@@ -11,8 +11,8 @@
 //! ```
 //!
 //! `steer` is where the phone's slider sits (full left to full right; in Harbor Stack it nudges the
-//! crane slower or faster), `boost` whether Boost is held (Tugboat Run's hop) and `drop` whether
-//! Drop is held (Harbor Stack's). Which game is open is the PC's to say (`GameId`, chosen when the
+//! crane slower or faster), `boost` whether Boost is held (Tugboat Run's hop, or Desk Derby's Drift,
+//! which is held round a corner) and `drop` whether Drop is held (Harbor Stack's). Which game is open is the PC's to say (`GameId`, chosen when the
 //! game opens the channel): the page hears it in `/api/state` and in every reply, so it shows that
 //! game's buttons, and an action that isn't the open game's is dropped before the game sees it. `age` and `rtt` are an optional latency probe, in milliseconds: how long the newest touch
 //! waited on the phone before this input went out, and the phone's last round trip. They're only
@@ -109,15 +109,17 @@ pub enum GameId {
     TugboatRun,
     /// Nudge the crane and Drop.
     HarborStack,
+    /// Steer and hold Drift (sent as `boost`).
+    DeskDerby,
 }
 
 impl GameId {
-    /// The input as this game may see it: Tugboat Run never sees a drop, Harbor Stack never a
-    /// boost. (A phone still showing the other game's buttons gets the right ones from its next
-    /// reply.)
+    /// The input as this game may see it: Tugboat Run and Desk Derby never see a drop, Harbor
+    /// Stack never a boost. (A phone still showing another game's buttons gets the right ones from
+    /// its next reply.)
     pub fn allow(self, input: PadInput) -> PadInput {
         match self {
-            GameId::TugboatRun => PadInput { drop: false, ..input },
+            GameId::TugboatRun | GameId::DeskDerby => PadInput { drop: false, ..input },
             GameId::HarborStack => PadInput { boost: false, ..input },
         }
     }
@@ -809,6 +811,16 @@ mod tests {
             GameId::HarborStack
         );
         assert!(serde_json::from_str::<GameId>(r#""snake""#).is_err());
+        // Desk Derby's name on the wire matches the page's and the app's.
+        p.set_game(GameId::DeskDerby);
+        assert_eq!(
+            serde_json::to_string(&p.reply(FIRST)).unwrap(),
+            r#"{"paused":false,"hits":0,"game":"desk-derby"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<GameId>(r#""desk-derby""#).unwrap(),
+            GameId::DeskDerby
+        );
     }
 
     #[test]
@@ -967,6 +979,38 @@ mod tests {
         // Switching games mid-hold lets go of the other game's action.
         run.set_game(GameId::HarborStack);
         assert!(!run.event(FIRST).boost && !run.event(FIRST).drop);
+        // Desk Derby: steering and Drift (held, on `boost`), never a drop.
+        let mut derby = Pad::new(t0, 1, GameId::DeskDerby);
+        let e = derby.input(FIRST, 1, both, t0).unwrap();
+        assert!(e.boost && !e.drop);
+        assert!((e.steer - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn desk_derbys_drift_is_held_until_let_go() {
+        let t0 = Instant::now();
+        let mut pad = Pad::new(t0, 1, GameId::DeskDerby);
+        let drift = |steer, held| Decoded {
+            input: PadInput {
+                steer,
+                boost: held,
+                drop: false,
+            },
+            probe: None,
+        };
+        // Into the corner: Drift goes down and stays down while the steering changes under it.
+        assert!(pad.input(FIRST, 1, drift(40, true), t0).unwrap().boost);
+        assert!(pad.input(FIRST, 2, drift(70, true), t0).unwrap().boost);
+        assert!(pad.event(FIRST).boost, "still held between inputs");
+        // Out of it: let go, and the game hears the release (that's when the boost fires).
+        let e = pad.input(FIRST, 3, drift(0, false), t0).unwrap();
+        assert!(!e.boost && e.connected);
+        // The phone going quiet lets go of Drift too, so a car never drifts on by itself.
+        pad.input(FIRST, 4, drift(-30, true), t0);
+        let gone = pad.tick(t0 + QUIET + Duration::from_millis(1));
+        assert!(gone
+            .iter()
+            .any(|e| !e.connected && !e.boost && e.steer.abs() < f32::EPSILON));
     }
 
     #[test]

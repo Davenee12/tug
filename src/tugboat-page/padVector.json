@@ -33,6 +33,26 @@
       "drop": true
     },
     {
+      "name": "Desk Derby: holding Drift while steering right",
+      "game": "desk-derby",
+      "steer": 0.6,
+      "held": true,
+      "pending": false,
+      "body": "{\"steer\":60,\"boost\":true}",
+      "boost": true,
+      "drop": false
+    },
+    {
+      "name": "Desk Derby: Drift let go (the boost goes now), steering straight",
+      "game": "desk-derby",
+      "steer": 0,
+      "held": false,
+      "pending": false,
+      "body": "{\"steer\":0,\"boost\":false}",
+      "boost": false,
+      "drop": false
+    },
+    {
       "name": "Tugboat Run: a quick tap of Boost (the body it always had)",
       "game": "tugboat-run",
       "steer": 0.25,

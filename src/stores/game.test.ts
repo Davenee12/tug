@@ -13,7 +13,7 @@ vi.mock("../lib/ipc", () => ({
   },
 }));
 
-const { useGameStore, parseBest, SCORE_KEYS } = await import("./game");
+const { useGameStore, parseBest, parseTrackBests, beats, SCORE_KEYS, DERBY_TRACKS_KEY, GAMES } = await import("./game");
 
 beforeEach(() => {
   for (const k of Object.keys(saved)) delete saved[k];
@@ -110,5 +110,71 @@ describe("scores", () => {
     game.finish(9, "harbor-stack");
     await loading;
     expect(game.scores["harbor-stack"].best).toBe(9);
+  });
+});
+
+describe("Desk Derby: a race time, where lower is better", () => {
+  it("is one of the games, with its own keys", () => {
+    expect(GAMES).toContain("desk-derby");
+    expect(SCORE_KEYS["desk-derby"]).toEqual({ best: "ui.deskDerbyBest", daily: "ui.deskDerbyDaily", duo: "ui.deskDerbyDuoBest" });
+    expect(new Set(GAMES.flatMap((g) => Object.values(SCORE_KEYS[g]))).size).toBe(GAMES.length * 3);
+  });
+
+  it("a faster time beats a slower one; no time (0) never beats anything; any time beats none", () => {
+    expect(beats("desk-derby", 90_000, 95_000)).toBe(true);
+    expect(beats("desk-derby", 96_000, 95_000)).toBe(false);
+    expect(beats("desk-derby", 95_000, 0)).toBe(true);
+    expect(beats("desk-derby", 0, 95_000)).toBe(false);
+    expect(beats("desk-derby", 0, 0)).toBe(false);
+    // The other games are unchanged: higher wins.
+    expect(beats("harbor-stack", 12, 9)).toBe(true);
+    expect(beats("tugboat-run", 9, 12)).toBe(false);
+  });
+
+  it("keeps the fastest Free play race, overall and on each track", async () => {
+    const game = useGameStore();
+    await game.show("desk-derby");
+    expect(game.finish(95_120, "desk-derby", "inbox")).toBe(true);
+    expect(game.finish(97_000, "desk-derby", "inbox")).toBe(false);
+    expect(game.finish(91_500, "desk-derby", "inbox")).toBe(true);
+    // A slower time on another track is still that track's first best (but not the overall best).
+    expect(game.finish(104_000, "desk-derby", "coffee")).toBe(true);
+    expect(game.scores["desk-derby"].best).toBe(91_500);
+    expect(saved["ui.deskDerbyBest"]).toBe("91500");
+    expect(JSON.parse(saved[DERBY_TRACKS_KEY])).toEqual({ inbox: 91_500, coffee: 104_000 });
+    expect(game.trackBests).toEqual({ inbox: 91_500, coffee: 104_000 });
+  });
+
+  it("today's fastest race is the day's best, and the streak counts it", async () => {
+    const game = useGameStore();
+    expect(game.finishDay("2026-11-02", 93_000, "desk-derby")).toBe(true);
+    expect(game.finishDay("2026-11-02", 96_000, "desk-derby")).toBe(false);
+    expect(game.finishDay("2026-11-02", 90_010, "desk-derby")).toBe(true);
+    expect(JSON.parse(saved["ui.deskDerbyDaily"])).toEqual({ streak: 1, last: "2026-11-02", bests: { "2026-11-02": 90_010 } });
+  });
+
+  it("head to head keeps the winner's time; a race nobody finished keeps nothing", async () => {
+    const game = useGameStore();
+    expect(game.finishDuo([0, 0], "desk-derby")).toBe(false);
+    expect(game.finishDuo([99_000, 0], "desk-derby")).toBe(true);
+    expect(game.finishDuo([101_000, 98_000], "desk-derby")).toBe(true);
+    expect(game.finishDuo([99_500, 102_000], "desk-derby")).toBe(false);
+    expect(saved["ui.deskDerbyDuoBest"]).toBe("98000");
+  });
+
+  it("reads saved times back, keeping a faster one set while loading, and drops damaged track bests", async () => {
+    Object.assign(saved, {
+      "ui.deskDerbyBest": "93000",
+      [DERBY_TRACKS_KEY]: JSON.stringify({ inbox: 93_000, edge: "88000", "<script>": 5, coffee: -3 }),
+    });
+    const game = useGameStore();
+    const loading = game.show("desk-derby");
+    game.finish(90_000, "desk-derby", "inbox");
+    await loading;
+    expect(game.scores["desk-derby"].best).toBe(90_000);
+    expect(game.trackBests).toEqual({ inbox: 90_000, edge: 88_000 });
+    expect(parseTrackBests("{oops")).toEqual({});
+    expect(parseTrackBests("[1,2]")).toEqual({});
+    expect(parseTrackBests(undefined)).toEqual({});
   });
 });
