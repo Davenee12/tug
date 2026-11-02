@@ -62,6 +62,9 @@
 //   http://localhost:1420/?games      the games picker
 //   http://localhost:1420/?stack      Harbor Stack open (?stackphone with a phone that drops every 1.6 s,
 //                                     ?stack2p a stack-off with two phones, &p2drop, &weather= as above)
+//   http://localhost:1420/?derby      Desk Derby open (?derbyphone with a phone that steers and drifts,
+//                                     ?derby2p head to head with two phones, &p2drop; &night or &day
+//                                     for the desk lamp on or off whatever the clock says)
 //   http://localhost:1420/?devtools   Settings › Developer tools, switched on, with two connected tools
 //   http://localhost:1420/?devconfirm the "wants to text" confirmation card an AI tool's send_text shows
 //   http://localhost:1420/?codefill   code fill: a bank's code arrives 1.5 s after load (as a notification and
@@ -882,7 +885,9 @@ if (dropOn || dropWait || dropNoNet) {
 // for the preview only, so the start screen and the water can be checked without real weather).
 // Harbor Stack has the same scenarios: ?stack, ?stackphone (the phone presses Drop every 1.6 s,
 // which starts the game and then stacks; a nudge now and then), ?stack2p (&p2drop) for a
-// stack-off. ?games opens the games picker.
+// stack-off. So does Desk Derby: ?derby, ?derbyphone (the phone holds Drift for a moment, which
+// starts the race, then weaves with the slider and drifts now and then), ?derby2p (&p2drop) for
+// head to head. ?games opens the games picker.
 let padOpen = false;
 let padPlayers = 1;
 /** The game that opened the controller (each game hears only its own button, like the PC). */
@@ -890,8 +895,9 @@ let padGame = "tugboat-run";
 const padScripts: number[] = [];
 const padTimers: number[] = [];
 const stackGame = params.has("stack") || params.has("stackphone") || params.has("stack2p");
-const twoPhones = params.has("game2p") || params.has("stack2p");
-const phoneParam = params.has("gamephone") || params.has("stackphone");
+const derbyGame = params.has("derby") || params.has("derbyphone") || params.has("derby2p");
+const twoPhones = params.has("game2p") || params.has("stack2p") || params.has("derby2p");
+const phoneParam = params.has("gamephone") || params.has("stackphone") || params.has("derbyphone");
 function padEvent(seat: 1 | 2, connected: boolean, steer: number, pressed: boolean) {
   const stack = padGame === "harbor-stack";
   return { seat, connected, steer: connected ? steer : 0, boost: connected && !stack && pressed, drop: connected && stack && pressed };
@@ -908,6 +914,13 @@ function phoneScript(seat: 1 | 2, phase: number, boosts: boolean) {
         const drop = (tick + phase * 4) % 16 < 2;
         const nudge = Math.sin(t * 0.7 + phase) > 0.8 ? -0.6 : 0;
         void emit("game-pad", padEvent(seat, true, nudge, drop));
+        return;
+      }
+      if (padGame === "desk-derby") {
+        // Desk Derby's Drift is the held button (boost on the wire): held at the start (which
+        // starts the race), then for a second every four while weaving.
+        const drift = boosts ? tick < 3 || tick % 40 > 30 : tick % 40 > 30;
+        void emit("game-pad", padEvent(seat, true, Math.round(Math.sin(t * 0.9 + phase) * 70) / 100, drift));
         return;
       }
       // Boost for a moment at the start (starts the run) and every few seconds after.
@@ -1048,14 +1061,14 @@ if (harborKind !== null) {
   };
   localStorage.setItem("tug.weather.v1", JSON.stringify({ place, forecast }));
 }
-if (params.has("game") || params.has("gamephone") || twoPhones || stackGame || params.has("games")) {
+if (params.has("game") || params.has("gamephone") || twoPhones || stackGame || derbyGame || params.has("games")) {
   setTimeout(async () => {
     const { useGameStore } = await import("../stores/game");
-    await useGameStore().show(params.has("games") ? "picker" : stackGame ? "harbor-stack" : "tugboat-run");
+    await useGameStore().show(params.has("games") ? "picker" : stackGame ? "harbor-stack" : derbyGame ? "desk-derby" : "tugboat-run");
     if (!phoneParam && !twoPhones) return;
     const click = (text: string) => Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes(text))?.click();
     setTimeout(() => {
-      if (twoPhones) click(stackGame ? "Stack-off" : "Two players");
+      if (twoPhones) click(stackGame ? "Stack-off" : derbyGame ? "Head to head" : "Two players");
       setTimeout(() => click(twoPhones ? "Use phones as controllers" : "Use your phone as a controller"), 100);
     }, 300);
   }, 400);

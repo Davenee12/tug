@@ -72,7 +72,7 @@ export type Action =
   | { kind: "open"; target: OpenTarget; label: string };
 
 /** Panels and screens Ctrl+K can open by name (each game by its own). */
-export type OpenTarget = "new-message" | "settings" | "spotify" | "tugboat" | "tugboat-run" | "harbor-stack";
+export type OpenTarget = "new-message" | "settings" | "spotify" | "tugboat" | "tugboat-run" | "harbor-stack" | "desk-derby";
 
 const MEDIA: Array<[string[], MediaCommand, string]> = [
   [["play", "resume"], "play", "Play"],
@@ -89,9 +89,10 @@ const OPEN: Array<[string[], OpenTarget, string]> = [
   [["spotify", "music"], "spotify", "Open Spotify"],
   // Tugboat: files and text to and from the phone over Wi-Fi.
   [["tugboat", "tug boat", "drop", "send files", "send file", "send to phone", "send to iphone", "send to android"], "tugboat", "Tugboat"],
-  // The little games, each by name; "game" offers both (below). Never "play": that word is for music.
+  // The little games, each by name; "game" offers them all (below). Never "play": that word is for music.
   [["tugboat run", "boat game"], "tugboat-run", "Tugboat Run"],
   [["harbor stack", "harbour stack", "stack", "stacking game", "container game"], "harbor-stack", "Harbor Stack"],
+  [["desk derby", "derby", "race", "racing game", "car game", "car race"], "desk-derby", "Desk Derby"],
 ];
 
 /** Words that offer every game. */
@@ -99,8 +100,9 @@ const GAMES = ["game", "games"];
 const GAME_TARGETS: Array<[OpenTarget, string]> = [
   ["tugboat-run", "Tugboat Run"],
   ["harbor-stack", "Harbor Stack"],
+  ["desk-derby", "Desk Derby"],
 ];
-const isGame = (t: OpenTarget) => t === "tugboat-run" || t === "harbor-stack";
+const isGame = (t: OpenTarget) => t === "tugboat-run" || t === "harbor-stack" || t === "desk-derby";
 
 // Exact phrases only, so "clear" or "code" inside a longer search never fire a one-off action.
 const COPY_CODE = ["copy code", "code"];

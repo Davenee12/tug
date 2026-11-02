@@ -102,11 +102,14 @@ describe("parseActions", () => {
     const games = { showGames: true };
     const run = { kind: "open", target: "tugboat-run", label: "Tugboat Run" };
     const stack = { kind: "open", target: "harbor-stack", label: "Harbor Stack" };
-    // "game" offers both.
-    for (const words of ["game", "Games"]) expect(parseActions(words, people, games)).toEqual([run, stack]);
+    const derby = { kind: "open", target: "desk-derby", label: "Desk Derby" };
+    // "game" offers them all.
+    for (const words of ["game", "Games"]) expect(parseActions(words, people, games)).toEqual([run, stack, derby]);
     for (const words of ["tugboat run", "boat game"]) expect(parseActions(words, people, games)).toEqual([run]);
     for (const words of ["harbor stack", "Harbour Stack", "stack", "stacking game"]) expect(parseActions(words, people, games)).toEqual([stack]);
     expect(parseActions("stack", people, { showGames: false })).toEqual([]);
+    for (const words of ["desk derby", "Desk Derby", "derby", "race", "racing game", "car game"]) expect(parseActions(words, people, games)).toEqual([derby]);
+    expect(parseActions("race", people, { showGames: false })).toEqual([]);
     // "play" is music's word: it never opens the game.
     expect(parseActions("play", people, games).some((a) => a.kind === "open")).toBe(false);
     expect(parseActions("play game", people, { ...games, spotifyConnected: true }).some((a) => a.kind === "open")).toBe(false);

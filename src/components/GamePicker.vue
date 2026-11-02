@@ -1,12 +1,13 @@
 <script setup lang="ts">
 // The games picker: tug's little games side by side, from the sidebar's Play button, Ctrl+K "game"
 // or the taskbar's Play a game. Each card says what the game is and where you stand today (your
-// best, a daily streak). Click a card, press 1 or 2, or Tab to it and press Enter. Esc closes.
+// best, a daily streak). Click a card, press its number, or Tab to it and press Enter. Esc closes.
 import { computed, onMounted, ref } from "vue";
-import { Container, Flame, Gamepad2, Ship, X } from "lucide-vue-next";
+import { Car, Container, Flame, Gamepad2, Ship, X } from "lucide-vue-next";
 import { useGameStore } from "../stores/game";
 import { useFocusTrap } from "../lib/focusTrap";
 import { currentStreak, localDate } from "../lib/tugboatDaily";
+import { formatTime } from "../lib/deskDerby";
 import type { GameId } from "../types/protocol";
 
 const game = useGameStore();
@@ -23,7 +24,7 @@ const cards = computed(() => [
     name: "Tugboat Run",
     icon: Ship,
     line: "Steer through the harbor, hop the buoys, collect coins.",
-    best: game.scores["tugboat-run"].best,
+    best: bestLine(game.scores["tugboat-run"].best),
     streak: currentStreak(game.scores["tugboat-run"].daily, today),
   },
   {
@@ -32,10 +33,24 @@ const cards = computed(() => [
     name: "Harbor Stack",
     icon: Container,
     line: "Drop containers from a swinging crane. Line them up; the overhang falls in.",
-    best: game.scores["harbor-stack"].best,
+    best: bestLine(game.scores["harbor-stack"].best),
     streak: currentStreak(game.scores["harbor-stack"].daily, today),
   },
+  {
+    id: "desk-derby" as GameId,
+    key: "3",
+    name: "Desk Derby",
+    icon: Car,
+    line: "Race a tiny car round the desk. Drift the corners, boost out of them.",
+    // A race time: the fastest.
+    best: game.scores["desk-derby"].best > 0 ? `Best ${formatTime(game.scores["desk-derby"].best)}` : null,
+    streak: currentStreak(game.scores["desk-derby"].daily, today),
+  },
 ]);
+
+function bestLine(best: number): string | null {
+  return best > 0 ? `Best ${best}` : null;
+}
 
 function play(id: GameId) {
   void game.show(id);
@@ -70,10 +85,10 @@ onMounted(() => cardButtons.value[0]?.focus());
       </button>
     </header>
     <div class="flex min-h-0 flex-1 overflow-y-auto p-6">
-      <div class="m-auto w-full max-w-[720px]">
+      <div class="m-auto w-full max-w-[720px] lg:max-w-[960px]">
         <p class="font-display text-[30px] leading-tight">What shall we play?</p>
-        <p class="mt-1 text-[14px] text-on-dark-soft">Both play with the keyboard, the mouse, or your phone as a controller.</p>
-        <ul class="mt-5 grid gap-3 sm:grid-cols-2">
+        <p class="mt-1 text-[14px] text-on-dark-soft">Play with the keyboard, or your phone as a controller.</p>
+        <ul class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <li v-for="c in cards" :key="c.id">
             <button
               ref="cardButtons"
@@ -89,7 +104,7 @@ onMounted(() => cardButtons.value[0]?.focus());
               </span>
               <span class="text-[14px] text-on-dark-soft">{{ c.line }}</span>
               <span class="mt-auto flex items-center gap-3 pt-1 text-[12px]">
-                <span class="text-on-dark-soft">{{ c.best > 0 ? `Best ${c.best}` : "Not played yet" }}</span>
+                <span class="text-on-dark-soft">{{ c.best ?? "Not played yet" }}</span>
                 <span v-if="c.streak > 0" class="flex items-center gap-1 text-accent-amber">
                   <Flame :size="13" />
                   {{ c.streak === 1 ? "1 day streak" : `${c.streak} day streak` }}

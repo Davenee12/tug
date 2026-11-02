@@ -317,9 +317,38 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
   - Reduce motion: no shake, the boat doesn't rock or bob (the stack still leans exactly as much as
     the game says, since that's what you aim at), still water and lighthouse, and bunting without
     confetti. Scores stay on this PC.
-- Open them from the **Play** button beside tug's name (the games picker), Ctrl+K "game" (both
-  games), "tugboat run", "harbor stack" or "stack", or **Play a game** in tug's taskbar menu. Turn
-  **Show games** off in Settings › General to hide them all.
+- **Desk Derby**, a racing game seen from above: a tiny RC car races three laps of a track laid
+  out across a cluttered desk. The car always drives itself; you steer, and holding **Drift** slides
+  the back out so it turns tighter. Hold a drift through a corner and it charges a **boost** (three
+  levels, the sparks go teal, amber, then coral), fired when you let go: drifting without letting
+  go for the boost only costs time, so the skill is drifting the corners and boosting out of them.
+  - The desk: the lane is desk mat edged with tape (the bare wood off it is slow), the keyboard
+    rattles the car a little, a spilled coffee puddle has hardly any grip, the mug, the mouse and
+    pencils laid between lanes are solid, sticky notes are the checkpoints (taken in order), a
+    stapler is a ramp (a short jump with no steering in the air, a little zip on a clean landing),
+    and paper clips are pickups (a burst of boost each, once a lap). Off the edge of the desk is a
+    fall: back at the last sticky note with 2 seconds added.
+  - Four hand-made tracks (Inbox Loop, Coffee Run, Deadline Esses, Edge Case), laps of about 20 to 35
+    seconds. Countdown 3, 2, 1, GO; each lap's time with its split against your best; skid marks,
+    dust, sparks and a boost flame; a NEW BEST at the line. In the evening the desk lamp comes on.
+  - **Controls:** ← → (or A, D) steer; hold Space, Shift or ↑ to drift. On the phone (held
+    sideways): a steering slider under your left thumb that springs back to straight ahead, and a
+    big **Drift** button under your right to hold.
+  - **Daily race**: one track for everyone that day (picked by the day, sometimes mirrored, with
+    the coffee spilled and the paper clips in their own places), and a see-through **ghost** of your
+    best run today to race. A streak and a best time for each day.
+  - **Free play** on the track you pick (or Surprise me), against a ghost of your best on it, and
+    **Head to head** for two on one desk: first across the line wins (the other then has 20
+    seconds to finish). Player 1 steers with ← → and drifts with ↑ or right Shift, Player 2 with A,
+    D and W or left Shift, or each with a phone (Tugboat's code and the Player 2 code).
+  - Scores are times, lowest best: the best on each track, each day's best and the streak, and the
+    fastest head to head, on this PC only. Ghosts are kept in tug's own browser storage.
+  - Racing alone, the camera follows your car, zoomed in and looking ahead; two players see the
+    whole desk. Reduce motion: the whole desk, no shake, no particles, no keyboard rattle and no
+    flicker; skid marks and the boost flame stay (they say what the car is doing).
+- Open them from the **Play** button beside tug's name (the games picker), Ctrl+K "game" (every
+  game), "tugboat run", "harbor stack" or "stack", "desk derby", "race" or "car game", or **Play a
+  game** in tug's taskbar menu. Turn **Show games** off in Settings › General to hide them all.
 
 ## Weather, battery & the phone card
 
