@@ -411,6 +411,8 @@ export interface UiSettings {
   showGames: boolean;
   /** One-tap suggested replies on text pop-ups and in Messages (on by default; lib/smartReplies). */
   smartReplies: boolean;
+  /** In the message boxes, ":)" becomes 🙂 and ":fire:" 🔥 as you type (on by default; lib/emoji). */
+  emojiShortcuts: boolean;
   /** The suggestions for texts no rule matches (at most 3; lib/smartReplies `DEFAULT_REPLIES` unless changed). */
   smartReplyDefaults: string[];
   /** While the screen is shared or presented, pop-ups and the window hide texts and names (on by default; read by the backend, `share_privacy/`). */

@@ -5,6 +5,8 @@
 import { computed } from "vue";
 import { Clock, SendHorizontal } from "lucide-vue-next";
 import TimeMenu from "./TimeMenu.vue";
+import { useEmojiTyping } from "../lib/emojiTyping";
+import { useTugStore } from "../stores/tug";
 
 const props = defineProps<{
   /** Every conversation's draft, by conversation key (reactive; read here, written by the parent). */
@@ -21,22 +23,38 @@ const text = computed({
   set: (value: string) => emit("update", value),
 });
 
+const tug = useTugStore();
+const emoji = useEmojiTyping(() => tug.settings.emojiShortcuts);
+
+/** An emoticon right at the end has nothing typed after it: it's finished when the text goes. */
+function finish() {
+  const done = emoji.finishForSend(text.value);
+  if (done !== text.value) text.value = done;
+}
+
+function send() {
+  finish();
+  emit("send");
+}
+
 function onKey(e: KeyboardEvent) {
+  if (emoji.onKeydown(e)) return;
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-    emit("send");
+    send();
   }
 }
 </script>
 
 <template>
-  <form class="flex items-end gap-2" @submit.prevent="emit('send')">
+  <form class="flex items-end gap-2" @submit.prevent="send">
     <textarea
       v-model="text"
       rows="1"
       class="input h-auto max-h-32 min-h-10 resize-none py-2.5 leading-snug"
       :placeholder="placeholder"
       @keydown="onKey"
+      @input="emoji.onInput"
     />
     <TimeMenu
       heading="Send later"
@@ -44,7 +62,7 @@ function onKey(e: KeyboardEvent) {
       up
       :disabled="!text.trim() || blocked"
       button-class="btn-secondary w-10 px-0"
-      @pick="(at, label) => emit('schedule', at, label)"
+      @pick="(at, label) => (finish(), emit('schedule', at, label))"
     >
       <template #button><Clock :size="16" /></template>
     </TimeMenu>
