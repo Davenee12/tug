@@ -144,6 +144,20 @@ describe("the streak", () => {
     expect(sailedToday(higher.record, "2026-10-17")).toBe(false);
   });
 
+  it("a daily scored by time (Desk Derby's): the lowest is the best, and the streak works the same", () => {
+    let r = finishDaily(EMPTY_DAILY, "2026-11-01", 95_000, true).record;
+    const slower = finishDaily(r, "2026-11-01", 97_500, true);
+    expect(slower.newBest).toBe(false);
+    expect(slower.record.bests["2026-11-01"]).toBe(95_000);
+    const faster = finishDaily(r, "2026-11-01", 91_240, true);
+    expect(faster.newBest).toBe(true);
+    expect(faster.record.bests["2026-11-01"]).toBe(91_240);
+    // No time is never a best.
+    expect(finishDaily(r, "2026-11-01", 0, true).newBest).toBe(false);
+    r = finishDaily(faster.record, "2026-11-02", 99_000, true).record;
+    expect(r).toEqual({ streak: 2, last: "2026-11-02", bests: { "2026-11-01": 91_240, "2026-11-02": 99_000 } });
+  });
+
   it("is still alive the next day (today's run can still be sailed), and broken after a missed day", () => {
     const r = play(EMPTY_DAILY, ["2026-10-15", 1], ["2026-10-16", 1]);
     expect(currentStreak(r, "2026-10-17")).toBe(2);

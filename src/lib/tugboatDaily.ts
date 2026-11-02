@@ -1,7 +1,8 @@
 // Tugboat Run's daily challenge, the pure parts: today's date and the course seed it gives (the
 // same course for everyone that day), what the player's real weather does to the water, the line
 // the start screen says about it, and the streak of days with a finished daily run. Harbor Stack's
-// daily stack uses the same date, seed (with its own name in it), weather and streak rules.
+// daily stack uses the same date, seed (with its own name in it), weather and streak rules; Desk
+// Derby's daily race the same date, seed and streak (its score is a time: the lowest is the best).
 //
 // Weather is only ever what tug's weather card already has: no forecast (weather off, not set up,
 // or nothing fresh) means calm seas, said as such, never made up.
@@ -28,7 +29,7 @@ export function dayBefore(date: string): string {
  * The course seed for a day: a 32-bit hash (FNV-1a) of the game and the date, the same on every PC.
  * Each game has its own daily (Harbor Stack's day isn't Tugboat Run's course reused).
  */
-export function dailySeed(date: string, game: "tugboat-run" | "harbor-stack" = "tugboat-run"): number {
+export function dailySeed(date: string, game: "tugboat-run" | "harbor-stack" | "desk-derby" = "tugboat-run"): number {
   let h = 0x811c9dc5;
   for (const ch of `${game}/${date}`) {
     h ^= ch.charCodeAt(0);
@@ -173,12 +174,13 @@ export function parseDaily(raw: string | null | undefined): DailyRecord {
  * A daily run finished: `date` is the day of the course it ran (the day it started, so a run
  * that ends after midnight still counts for the day it was). The day after the last one adds a
  * day to the streak; after a gap it starts again at 1; another run on a day already counted only
- * updates the best. A date older than the last (the clock went back) only records its best.
+ * updates the best. A date older than the last (the clock went back) only records its best. With
+ * `lowerIsBetter` the score is a time (Desk Derby's, in milliseconds): the lowest is the best.
  */
-export function finishDaily(rec: DailyRecord, date: string, score: number): { record: DailyRecord; newBest: boolean } {
+export function finishDaily(rec: DailyRecord, date: string, score: number, lowerIsBetter = false): { record: DailyRecord; newBest: boolean } {
   const s = Math.max(0, Math.floor(score));
   const before = rec.bests[date];
-  const newBest = before === undefined || s > before;
+  const newBest = before === undefined || (lowerIsBetter ? s > 0 && (before <= 0 || s < before) : s > before);
   const bests = { ...rec.bests, [date]: newBest ? s : before };
   // Only the newest days are kept.
   const keep = Object.keys(bests).sort().slice(-KEEP_DAYS);
