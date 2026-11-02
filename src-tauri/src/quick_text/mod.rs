@@ -19,6 +19,7 @@ mod win;
 pub(crate) use win::pressed;
 
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 
@@ -153,36 +154,54 @@ pub struct GiveBack {
     pub tug: TugWindow,
 }
 
-/// What to remember for a press. Pressed from another app: go back to it. Pressed in tug: the
-/// composer is opened (or is still open) over tug, so keep what an earlier press from another app
-/// remembered, if anything; with nothing remembered, tug stays when it closes.
+/// A press is forgotten after this long. The composer is closed long before then, unless the
+/// window reloaded while it was open (and never said it closed): then a later press made in tug
+/// mustn't send the keyboard off to that old app, whose window handle may by now be someone
+/// else's.
+pub const FORGET_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// A remembered press and when it was made.
+pub type Waiting = Option<(GiveBack, Instant)>;
+
+/// Drop a press older than [`FORGET_AFTER`].
+pub fn fresh(waiting: Waiting, now: Instant) -> Waiting {
+    waiting.filter(|(_, at)| now.saturating_duration_since(*at) < FORGET_AFTER)
+}
+
+/// What to remember for a press at `now`. Pressed from another app: go back to it. Pressed in
+/// tug: the composer is opened (or is still open) over tug, so keep what an earlier press from
+/// another app remembered, if anything still fresh; with nothing remembered, tug stays when it
+/// closes.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn remember(front: Front, tug: TugWindow, waiting: Option<GiveBack>) -> Option<GiveBack> {
+pub fn remember(front: Front, tug: TugWindow, waiting: Waiting, now: Instant) -> Waiting {
     match front {
-        Front::Tug => waiting,
-        Front::Other(window) => Some(GiveBack {
-            window: Some(window),
-            tug,
-        }),
-        Front::Nothing => Some(GiveBack { window: None, tug }),
+        Front::Tug => fresh(waiting, now),
+        Front::Other(window) => Some((
+            GiveBack {
+                window: Some(window),
+                tug,
+            },
+            now,
+        )),
+        Front::Nothing => Some((GiveBack { window: None, tug }, now)),
     }
 }
 
 /// Set by a press, taken when the composer closes.
-static WAITING: Mutex<Option<GiveBack>> = Mutex::new(None);
+static WAITING: Mutex<Waiting> = Mutex::new(None);
 
 #[cfg_attr(not(windows), allow(dead_code))]
 fn note_press(front: Front, tug: TugWindow) {
     let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
-    *waiting = remember(front, tug, *waiting);
+    *waiting = remember(front, tug, *waiting, Instant::now());
 }
 
 /// The composer closed. With `give_back` (sent, or Esc), the app the person was in gets the
 /// keyboard back and tug's window goes back to how it was; without (the text couldn't be sent and
 /// tug is showing why), tug stays. Either way the press is done with.
 pub fn done(app: &AppHandle, give_back: bool) {
-    let waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner()).take();
-    let Some(back) = waiting.filter(|_| give_back) else {
+    let waiting = fresh(WAITING.lock().unwrap_or_else(|e| e.into_inner()).take(), Instant::now());
+    let Some((back, _)) = waiting.filter(|_| give_back) else {
         return;
     };
     #[cfg(windows)]
@@ -260,21 +279,27 @@ mod tests {
 
     #[test]
     fn goes_back_only_to_an_app_the_person_was_in() {
-        let from_word = remember(Front::Other(42), TugWindow::Hidden, None);
+        let t0 = Instant::now();
+        let back = |w: Waiting| w.map(|(b, _)| b);
+        let from_word = remember(Front::Other(42), TugWindow::Hidden, None, t0);
         assert_eq!(
-            from_word,
+            back(from_word),
             Some(GiveBack {
                 window: Some(42),
                 tug: TugWindow::Hidden
             })
         );
         // Pressed in tug: tug stays when the composer closes.
-        assert_eq!(remember(Front::Tug, TugWindow::Behind, None), None);
-        // Pressed in tug again while the composer from Word is still open: still back to Word.
-        assert_eq!(remember(Front::Tug, TugWindow::Behind, from_word), from_word);
+        assert_eq!(remember(Front::Tug, TugWindow::Behind, None, t0), None);
+        // Pressed in tug again while the composer from Word is still open: still back to Word,
+        // remembered from the first press.
+        assert_eq!(
+            remember(Front::Tug, TugWindow::Behind, from_word, t0 + Duration::from_secs(30)),
+            from_word
+        );
         // A newer press from another app replaces the older one.
         assert_eq!(
-            remember(Front::Other(7), TugWindow::Minimized, from_word),
+            back(remember(Front::Other(7), TugWindow::Minimized, from_word, t0)),
             Some(GiveBack {
                 window: Some(7),
                 tug: TugWindow::Minimized
@@ -282,12 +307,25 @@ mod tests {
         );
         // Nothing in front: no app to go back to, but tug still goes back to the tray.
         assert_eq!(
-            remember(Front::Nothing, TugWindow::Hidden, None),
+            back(remember(Front::Nothing, TugWindow::Hidden, None, t0)),
             Some(GiveBack {
                 window: None,
                 tug: TugWindow::Hidden
             })
         );
+    }
+
+    #[test]
+    fn forgets_an_old_press_the_window_never_closed() {
+        // The window reloaded with the composer open, so "done" never came; much later the
+        // shortcut is pressed in tug. That old app must not get the keyboard.
+        let t0 = Instant::now();
+        let from_word = remember(Front::Other(42), TugWindow::Hidden, None, t0);
+        assert_eq!(
+            remember(Front::Tug, TugWindow::Behind, from_word, t0 + FORGET_AFTER),
+            None
+        );
+        assert_eq!(fresh(from_word, t0 + FORGET_AFTER - Duration::from_secs(1)), from_word);
     }
 
     #[test]

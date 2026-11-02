@@ -299,20 +299,28 @@ pub async fn bounded_for<T>(
 /// and this keeps a long stall from piling up threads without limit.
 const MAX_HELPERS: usize = 16;
 
+/// Most Windows media calls (Pause for calls, `pc_media`) allowed on helpers at once. Their own
+/// gate, so a media app that hangs Windows' media sessions can only use up these, never the
+/// Bluetooth operations' places.
+const MAX_MEDIA_HELPERS: usize = 4;
+
 /// Counts helper threads in flight against a limit.
 struct HelperGate {
     in_flight: AtomicUsize,
     max: usize,
+    /// What these helpers run, for the log ("Bluetooth operations").
+    what: &'static str,
 }
 
 /// One admitted helper; dropping it (when the helper finishes) frees its place.
 struct HelperPermit<'a>(&'a HelperGate);
 
 impl HelperGate {
-    const fn new(max: usize) -> Self {
+    const fn new(max: usize, what: &'static str) -> Self {
         Self {
             in_flight: AtomicUsize::new(0),
             max,
+            what,
         }
     }
 
@@ -331,7 +339,8 @@ impl Drop for HelperPermit<'_> {
     }
 }
 
-static HELPERS: HelperGate = HelperGate::new(MAX_HELPERS);
+static HELPERS: HelperGate = HelperGate::new(MAX_HELPERS, "Bluetooth operations");
+static MEDIA_HELPERS: HelperGate = HelperGate::new(MAX_MEDIA_HELPERS, "media calls");
 
 /// Run one Bluetooth operation — start it, wait for it, read its result — on a short-lived helper
 /// thread, and await that here, giving up (as timed out) after `limit`.
@@ -353,6 +362,14 @@ pub(crate) async fn off_thread<T: Send + 'static>(
     run_gated(&HELPERS, limit, op).await
 }
 
+/// [`off_thread`] for Windows media calls (`pc_media`): the same time limit, on their own gate.
+pub(crate) async fn off_thread_media<T: Send + 'static>(
+    limit: Duration,
+    op: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    run_gated(&MEDIA_HELPERS, limit, op).await
+}
+
 async fn run_gated<T: Send + 'static>(
     gate: &'static HelperGate,
     limit: Duration,
@@ -360,8 +377,9 @@ async fn run_gated<T: Send + 'static>(
 ) -> Result<T> {
     let Some(permit) = gate.try_enter() else {
         log::warn!(
-            "{} Bluetooth operations are still stuck in Windows; not starting another",
-            gate.max
+            "{} {} are still stuck in Windows; not starting another",
+            gate.max,
+            gate.what
         );
         return Err(BleError::TimedOut);
     };
@@ -497,7 +515,7 @@ mod tests {
 
     #[test]
     fn stuck_helpers_are_capped_and_their_places_come_back() {
-        static GATE: HelperGate = HelperGate::new(2);
+        static GATE: HelperGate = HelperGate::new(2, "test operations");
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()

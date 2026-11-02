@@ -411,6 +411,8 @@ export interface UiSettings {
   showGames: boolean;
   /** One-tap suggested replies on text pop-ups and in Messages (on by default; lib/smartReplies). */
   smartReplies: boolean;
+  /** In the message boxes, ":)" becomes 🙂 and ":fire:" 🔥 as you type (on by default; lib/emoji). */
+  emojiShortcuts: boolean;
   /** The suggestions for texts no rule matches (at most 3; lib/smartReplies `DEFAULT_REPLIES` unless changed). */
   smartReplyDefaults: string[];
   /** While the screen is shared or presented, pop-ups and the window hide texts and names (on by default; read by the backend, `share_privacy/`). */
@@ -778,7 +780,7 @@ export interface TugboatClipEvent {
 }
 
 /** Which of tug's games has the phone controller (`tugboat/pad.rs` `GameId`). */
-export type GameId = "tugboat-run" | "harbor-stack";
+export type GameId = "tugboat-run" | "harbor-stack" | "desk-derby";
 
 /**
  * The phone as a game's controller (`game-pad` event, `tugboat/pad.rs` `PadEvent`). Sent when
@@ -790,7 +792,7 @@ export interface GamePad {
   connected: boolean;
   /** -1 (full left) to 1 (full right); 0 whenever not connected. Harbor Stack: the crane nudge. */
   steer: number;
-  /** Tugboat Run's Boost (always false in Harbor Stack). */
+  /** Tugboat Run's Boost, or Desk Derby's Drift while it's held (always false in Harbor Stack). */
   boost: boolean;
   /** Harbor Stack's Drop (always false in Tugboat Run). */
   drop: boolean;

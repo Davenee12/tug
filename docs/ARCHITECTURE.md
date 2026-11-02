@@ -326,24 +326,27 @@ UI: take_quick_actions ─► "quick-text" ─► tug.openQuickText ─► Quick
   error (nothing recorded) ─► the composer stays open with the text
 ```
 
-**A game controller input (Tugboat Run, Harbor Stack)**
+**A game controller input (Tugboat Run, Harbor Stack, Desk Derby)**
 
 ```
 game: "Use your phone as a controller" ─► invoke game_pad_open(players, game) ─► Tugboat starts if
-  off; Session::pad_open(players, GameId)    (lib/useGameController.ts, shared by both games)
+  off; Session::pad_open(players, GameId)    (lib/useGameController.ts, shared by every game)
 phone page polls GET /api/state ─► { game: true, gameId } ─► Controller.vue with that game's buttons,
   held sideways: left thumb the slider (Tugboat Run steers; Harbor Stack nudges the crane and
-  springs back), right thumb the button (Boost / Drop); upright, "Turn your phone sideways to play"
+  springs back; Desk Derby steers and springs back), right thumb the button (Boost / Drop / Drift,
+  held); upright, "Turn your phone sideways to play"
   POST /api/pad the moment the input changes (touch, slide, button down/up), coalesced to one per
   16 ms (~60/s), up to two in flight, newest wins; a heartbeat every 200 ms while nothing changes
   signed like every request (same secret, MAC, replay window, first phone binds); body sealed to it
   ─► authorize ─► ≤ 120-byte body ─► channel open? (else 409 no-game) ─► rate limit (else 429 busy)
   ─► pad::decode: exactly {"steer": -100..=100, "boost": bool} (+ optional "drop": bool, + optional
-     "age"/"rtt" probe) ─► GameId::allow: Tugboat Run never sees a drop, Harbor Stack never a boost
+     "age"/"rtt" probe) ─► GameId::allow: Tugboat Run and Desk Derby never see a drop, Harbor
+     Stack never a boost (Desk Derby's Drift rides on "boost", so its body is Tugboat Run's shape)
   ─► older sequence numbers ignored
   ─► Pad state changed? emit "game-pad" ─► the open game applies it on the next frame. Tugboat Run:
      the slider position is the boat's target (critically damped follow, τ 50 ms); the keyboard
-     keeps inertia. Harbor Stack: a fresh Drop drops, the slider speeds or slows the crane ±35%
+     keeps inertia. Harbor Stack: a fresh Drop drops, the slider speeds or slows the crane ±35%.
+     Desk Derby: the slider is the steering, Drift held drifts and letting go fires the boost
   reply (sealed): { paused, hits, player?, game } (game_pad_feedback + the channel's GameId), so the
      phone shows Paused, buzzes, and switches buttons if another game took the channel over
 150 ms watch: no input for 700 ms ─► emit "game-pad" { connected: false } (the keyboard has it)
@@ -612,7 +615,11 @@ daily challenge: the date's seed, weather → water, the start screen's line, th
 (two players: who steers what, the result, when a dropped phone pauses the race; Harbor Stack's
 stack-off uses it too), `harborStack` (Harbor Stack's rules: slicing the overhang, perfect drops, the
 combo and width back, the crane's speed curve, the seeded sway and gusts, the daily's weather, the
-controls), `useGameController` (the phone controller's channel, shared by both games), `update` (the Update
+controls), `deskDerby` (Desk Derby's rules: the hand-made tracks and the daily's pick of one, fixed
+120 Hz car physics with grip, drifting and the charged boost, the desk's surfaces, the mug and pencils,
+the stapler's jump, falls and respawns, sticky-note checkpoints and laps, ghosts, the two-player
+result; its score is a time in milliseconds, which the games store compares lower-is-better),
+`useGameController` (the phone controller's channel, shared by every game), `update` (the Update
 button, its Restart confirm and the About row; reopening the same screen after the restart), `useCitySearch` (the
 weather card's city box), `vips`, `voice` (voice typing's Settings words and problems), `weather`, `weblinks`, `whatsNew`. Thin DOM composables such as
 `useElementSize` (an element's size in zoomed CSS pixels) and `useCallButtonGate` (a ringing call's Feed buttons) feed these rules.
@@ -691,6 +698,7 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 | `/?game&weather=rain` | The daily challenge in made-up weather for the preview: `rain`, `storm`, `snow`, `night`, `windy` or `off` |
 | `/?games` | The games picker (the Play button, Ctrl+K "game", the taskbar's Play a game) |
 | `/?stack`, `/?stackphone`, `/?stack2p` (`&p2drop`) | Harbor Stack: ready to start / with the phone controller (it drops every 1.6 s) / a stack-off with two phones; `&weather=` works here too |
+| `/?derby`, `/?derbyphone`, `/?derby2p` (`&p2drop`) | Desk Derby: ready to start / with the phone controller (it weaves and drifts) / head to head with two phones; `&night` or `&day` for the desk lamp on or off, `&track=coffee` for Free play on a track, `&bot` for the test driver at the wheel |
 | `/?devtools`, `/?devconfirm`, `/?devconfirmfiles` | Settings › Developer tools / the send-text confirmation card / the send-files card (Send opens Tugboat with the files waiting) |
 | `/?pcaudio`, `/?pcaudiofail`, `/?pcaudiodrop`, `/?pcaudioold` | iPhone audio playing on this PC / Play on this PC times out / it drops after 6 s (Reconnect) / Windows too old for it |
 | `/?whatsnew` | The What's new card for the newest release |
@@ -708,10 +716,10 @@ standing in for the backend (dev builds only, never bundled). Add a scenario to 
 
 The Tugboat phone page has its own mock: `npm run dev:tugboat`, then
 `http://localhost:1430/?mock` (`&busy`, `&offline`, `&closed`, `&game` for the controller with
-`&stack` for Harbor Stack's or `&switch` for a game change mid-way, `&clip` /
+`&stack` for Harbor Stack's, `&derby` for Desk Derby's or `&switch` for a game change mid-way, `&clip` /
 `&clipimage` for the PC's clipboard). To drive the real page against a real server (real signing and
 sealing), see `manual_page` in `tugboat/tests.rs` (`TUGBOAT_GAME=1` opens the controller channel and
-prints each input, `TUGBOAT_GAME=stack` for Harbor Stack; `TUGBOAT_CLIP=1` sends a made-up clipboard; `TUGBOAT_HOST=<LAN address>` serves
+prints each input, `TUGBOAT_GAME=stack` for Harbor Stack, `derby` for Desk Derby; `TUGBOAT_CLIP=1` sends a made-up clipboard; `TUGBOAT_HOST=<LAN address>` serves
 it where it isn't a secure context, as on a phone).
 
 ## Adding a feature safely

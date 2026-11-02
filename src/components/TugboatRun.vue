@@ -160,7 +160,9 @@ const controller = useGameController({
 const { controllerOn, controllerError, padConnected } = controller;
 
 /** Another dialog (a call, a text an AI tool wants to send, a pairing PIN) is over the game. */
-const blocked = computed(() => tug.ringing !== null || devtools.confirm !== null || tug.pairingRequest !== null);
+const blocked = computed(
+  () => tug.ringing !== null || devtools.confirm !== null || tug.pairingRequest !== null || tug.quickTextOpen,
+);
 
 useFocusTrap(root, onEscape);
 
@@ -207,6 +209,8 @@ function preview() {
 
 function pause() {
   if (phase.value === "playing") phase.value = "paused";
+  // Keys let go while paused (under a call card, say) would otherwise stay held on resume.
+  releaseKeys();
 }
 
 function resume() {
@@ -448,7 +452,11 @@ function readPalette(set: "day" | "night"): Palette | null {
 const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && t.closest("input, textarea, [contenteditable]") !== null;
 
 function onKey(e: KeyboardEvent, down: boolean) {
-  if (e.ctrlKey || e.metaKey || e.altKey || blocked.value || isTyping(e.target)) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || blocked.value || isTyping(e.target)) {
+    // A key let go while keys don't reach the game (Ctrl held, a card up, typing) is still let go.
+    if (!down) releaseKeys();
+    return;
+  }
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const race = duo.value ? raceKey(k) : null;
   if (race) {

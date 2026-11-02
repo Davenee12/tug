@@ -1610,7 +1610,8 @@ async fn start_server(
 ///   cargo test --manifest-path src-tauri/Cargo.toml manual_page -- --ignored --nocapture
 /// Received files land in a temp folder (printed); one file is on offer; TUGBOAT_SECS sets how long.
 /// TUGBOAT_GAME=1 also opens the game controller channel, and prints each controller event
-/// (TUGBOAT_GAME=stack for Harbor Stack's controls; a trailing 2 for two players).
+/// (TUGBOAT_GAME=stack for Harbor Stack's controls, derby for Desk Derby's; a trailing 2 for two
+/// players).
 /// TUGBOAT_CLIP=1 sends a made-up clipboard text (and prints when the page acknowledges it).
 /// TUGBOAT_HOST=<this PC's LAN address> serves there instead, so the page runs the way a phone
 /// sees it (not a secure context: no `navigator.clipboard`).
@@ -1633,9 +1634,12 @@ async fn manual_page() {
     session.set_pc_text("Text from the PC").unwrap();
     if let Ok(game) = std::env::var("TUGBOAT_GAME") {
         // TUGBOAT_GAME=2: a two-player game (a second browser can join as Player 2). "stack" (or
-        // "stack2") is Harbor Stack instead of Tugboat Run: the page shows Drop.
+        // "stack2") is Harbor Stack instead of Tugboat Run: the page shows Drop. "derby" (or
+        // "derby2") is Desk Derby: the page shows Drift.
         let which = if game.starts_with("stack") {
             GameId::HarborStack
+        } else if game.starts_with("derby") {
+            GameId::DeskDerby
         } else {
             GameId::TugboatRun
         };

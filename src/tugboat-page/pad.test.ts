@@ -136,6 +136,7 @@ describe("Harbor Stack's input", () => {
 describe("which game", () => {
   it("reads the PC's game id, and falls back to Tugboat Run", () => {
     expect(gameFrom("harbor-stack")).toBe("harbor-stack");
+    expect(gameFrom("desk-derby")).toBe("desk-derby");
     expect(gameFrom("tugboat-run")).toBe("tugboat-run");
     expect(gameFrom(undefined)).toBe("tugboat-run");
     expect(gameFrom("snake")).toBe("tugboat-run");
@@ -147,6 +148,27 @@ describe("which game", () => {
     const stack = controlsFor("harbor-stack");
     expect([stack.title, stack.action, stack.springBack]).toEqual(["Harbor Stack", "Drop", true]);
     expect(stack.ends).toEqual(["Slower", "Faster"]);
+    const derby = controlsFor("desk-derby");
+    expect([derby.title, derby.action, derby.springBack]).toEqual(["Desk Derby", "Drift", true]);
+    expect(derby.ends).toBeNull();
+  });
+});
+
+describe("Desk Derby's input", () => {
+  it("is the slider and Drift held, sent as Boost (so the PC hears it), never a drop", () => {
+    expect(encodeFor("desk-derby", -0.35, true)).toEqual({ steer: -35, boost: true });
+    expect(Object.keys(encodeFor("desk-derby", 0, false))).toEqual(["steer", "boost"]);
+    expect(JSON.stringify(padBody(encodeFor("desk-derby", 1, true)))).toBe('{"steer":100,"boost":true}');
+  });
+
+  it("a held Drift stays held on the wire until it's let go", () => {
+    const latch = new PressLatch();
+    latch.press(0);
+    // The PC heard the press; the finger is still down.
+    latch.heardUpTo(latch.mark(), 10);
+    for (const t of [20, 200, 2000]) expect(encodeFor("desk-derby", 0.5, latch.down(t)).boost).toBe(true);
+    latch.release(2100);
+    expect(encodeFor("desk-derby", 0.5, latch.down(2101)).boost).toBe(false);
   });
 });
 

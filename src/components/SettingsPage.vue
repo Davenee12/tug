@@ -195,6 +195,10 @@ const focusDescription = computed(() =>
 
 // Suggested replies: on/off, and the list for texts no rule matches (lib/smartReplies). Three
 // boxes; an edit is cleaned (trimmed, no repeats) and saved when the box loses focus.
+const emojiShortcuts = computed({
+  get: () => tug.settings.emojiShortcuts,
+  set: (v) => void tug.setSetting("emojiShortcuts", v),
+});
 const smartReplies = computed({ get: () => tug.settings.smartReplies, set: (v) => void tug.setSetting("smartReplies", v) });
 const replySlots = computed(() => Array.from({ length: MAX_REPLIES }, (_, i) => tug.settings.smartReplyDefaults[i] ?? ""));
 function onReplyDefault(i: number, e: Event) {
@@ -925,6 +929,15 @@ function openSponsor() {
         <!-- Data & privacy -->
         <!-- Messages: the full history from an iPhone backup on this PC. -->
         <template v-else-if="current.id === 'messages'">
+          <!-- Emoji shortcuts in the message boxes (lib/emoji). -->
+          <div class="mb-4 rounded-xl bg-surface-card">
+            <SettingsRow
+              label="Emoji shortcuts"
+              description="As you type, :) becomes 🙂, <3 becomes ❤️ and :fire: becomes 🔥. Backspace straight after puts back what you typed."
+            >
+              <SettingsSwitch v-model="emojiShortcuts" label="Emoji shortcuts" />
+            </SettingsRow>
+          </div>
           <!-- Quick text: a shortcut that opens a small composer from any app. -->
           <div class="mb-4 rounded-xl bg-surface-card">
             <SettingsRow

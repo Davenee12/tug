@@ -212,7 +212,7 @@ function actionIcon(a: Action) {
   if (a.kind === "send-clipboard") return ClipboardCopy;
   if (a.target === "spotify") return Music2;
   if (a.target === "tugboat") return QrCode;
-  if (a.target === "tugboat-run" || a.target === "harbor-stack") return Gamepad2;
+  if (a.target === "tugboat-run" || a.target === "harbor-stack" || a.target === "desk-derby") return Gamepad2;
   return a.target === "settings" ? Settings2 : Plus;
 }
 /** Several people match a "text …": Enter waits until one is picked on purpose. */
@@ -293,7 +293,7 @@ async function run(a: Action) {
     tug.pickerOpen = true;
   } else if (a.target === "tugboat") {
     void tugboat.show();
-  } else if (a.target === "tugboat-run" || a.target === "harbor-stack") {
+  } else if (a.target === "tugboat-run" || a.target === "harbor-stack" || a.target === "desk-derby") {
     void game.show(a.target);
   } else if (a.target === "spotify") {
     tug.openSpotifyPanel("search");

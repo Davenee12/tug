@@ -24,6 +24,7 @@ const baseSettings: UiSettings = {
   quickTextKeys: "ctrl+shift+y",
   showGames: true,
   smartReplies: true,
+  emojiShortcuts: true,
   smartReplyDefaults: ["👍", "OK", "Talk soon"],
   hidePreviewsWhileSharing: true,
   pauseMediaOnCall: true,

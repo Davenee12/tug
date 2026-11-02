@@ -6,6 +6,7 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { Info, Search, SendHorizontal, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
+import { useEmojiTyping } from "../lib/emojiTyping";
 import { useFocusTrap } from "../lib/focusTrap";
 import { formatAddress, groupConversations } from "../lib/format";
 import { contactRecipients, recentRecipients, recipientOptions, type Recipient } from "../lib/recipients";
@@ -14,6 +15,7 @@ import { afterQuickSend, canQuickSend } from "../lib/quickText";
 import AppAvatar from "./AppAvatar.vue";
 
 const tug = useTugStore();
+const emoji = useEmojiTyping(() => tug.settings.emojiShortcuts);
 const root = ref<HTMLElement | null>(null);
 const search = ref<HTMLInputElement | null>(null);
 const box = ref<HTMLTextAreaElement | null>(null);
@@ -84,6 +86,7 @@ function onSearchKey(e: KeyboardEvent) {
 }
 
 function onBoxKey(e: KeyboardEvent) {
+  if (emoji.onKeydown(e)) return;
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     // A held Enter from picking the person, or one that finishes an IME word, isn't a send.
@@ -96,6 +99,8 @@ function onBoxKey(e: KeyboardEvent) {
 async function send() {
   const person = to.value;
   if (!person || !canSend.value) return;
+  // An emoticon right at the end has nothing typed after it: it's finished when the text goes.
+  text.value = emoji.finishForSend(text.value);
   sending.value = true;
   const result = await tug.sendMessage(person.address, text.value);
   sending.value = false;
@@ -210,6 +215,7 @@ const sectionLabel = (s: Recipient["section"]) => ({ Recent: "Recent", Contacts:
             aria-label="Message"
             :readonly="sending"
             @keydown="onBoxKey"
+            @input="emoji.onInput"
           />
           <button type="submit" class="btn-primary shrink-0" :disabled="!canSend">
             <SendHorizontal :size="16" /> {{ sending ? "Sending…" : "Send" }}

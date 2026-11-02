@@ -1,5 +1,6 @@
-// The phone as a game's controller (Tugboat Run or Harbor Stack): the pure parts. What an input
-// says (where the slider sits and whether Boost or Drop is held, plus an optional latency probe),
+// The phone as a game's controller (Tugboat Run, Harbor Stack or Desk Derby): the pure parts. What
+// an input says (where the slider sits and whether Boost, Drop or Drift is held, plus an optional
+// latency probe),
 // which buttons each game gets, where a finger on the pad puts the slider, how often to send, what
 // to do about an error, which layout fits the phone's orientation, and whether tilt steering can
 // work.
@@ -19,6 +20,7 @@ export interface PadInput {
   /** Where the slider sits: -100 (full left) to 100 (full right), a whole number, exactly what the
    * PC accepts. */
   steer: number;
+  /** Tugboat Run's Boost, or Desk Derby's Drift (held). */
   boost: boolean;
   /** Harbor Stack's Drop. Never sent for Tugboat Run, so its inputs are exactly what they were. */
   drop?: boolean;
@@ -27,11 +29,11 @@ export interface PadInput {
 // --- Which game ---
 
 /** The game on the PC (`tugboat/pad.rs` `GameId`). */
-export type PadGame = "tugboat-run" | "harbor-stack";
+export type PadGame = "tugboat-run" | "harbor-stack" | "desk-derby";
 
 /** The game the PC names (in `/api/state` or a reply); anything else is Tugboat Run, the first. */
 export function gameFrom(value: unknown): PadGame {
-  return value === "harbor-stack" ? "harbor-stack" : "tugboat-run";
+  return value === "harbor-stack" || value === "desk-derby" ? value : "tugboat-run";
 }
 
 export interface GameControls {
@@ -61,6 +63,18 @@ export function controlsFor(game: PadGame): GameControls {
       steerHint: "Hold to nudge the crane",
       springBack: true,
       thumbs: "Left thumb nudges the crane, right thumb drops.",
+    };
+  }
+  if (game === "desk-derby") {
+    return {
+      title: "Desk Derby",
+      action: "Drift",
+      actionHint: "Hold round corners, let go to boost",
+      steerLabel: "Steer",
+      ends: null,
+      steerHint: "Slide to steer; let go to go straight",
+      springBack: true,
+      thumbs: "Left thumb steers, right thumb holds a drift.",
     };
   }
   return {
@@ -115,7 +129,11 @@ export function encodeStackPad(nudge: number, drop: boolean): PadInput {
   return { steer: encodePad(nudge, false).steer, boost: false, drop: drop === true };
 }
 
-/** The input for `game`: Tugboat Run's slider and Boost, or Harbor Stack's nudge and Drop. */
+/**
+ * The input for `game`: Tugboat Run's slider and Boost, Harbor Stack's nudge and Drop, or Desk
+ * Derby's steering and Drift. Drift is held, not tapped, so it rides on `boost` (which the PC lets
+ * through for Desk Derby): the body is Tugboat Run's shape, and the PC needs no new field.
+ */
 export function encodeFor(game: PadGame, steer: number, pressed: boolean): PadInput {
   return game === "harbor-stack" ? encodeStackPad(steer, pressed) : encodePad(steer, pressed);
 }

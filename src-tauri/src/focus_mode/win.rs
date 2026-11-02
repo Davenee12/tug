@@ -1,7 +1,7 @@
 //! The Windows side of Focus mode: one look ([`look`]) and the `tug-focus-watch` thread that turns
 //! looks into `focus-state` events.
 //!
-//! **Cost.** While Focus mode is off the thread sleeps on a condition variable and never wakes.
+//! **Cost.** While Focus mode (or Windows pop-ups) is off the thread sleeps on a condition variable and never wakes.
 //! While on, it looks every 2 s, asking only about the switches that are on: one shell call and
 //! the foreground window's size (full screen), a read of the ConsentStore's microphone and webcam
 //! keys (meetings: a few dozen small registry values), and the foreground window's program
@@ -22,14 +22,22 @@ use windows::Win32::System::Registry::{
 };
 
 use super::{
-    apps_in_use, filetime_from_unix_ms, is_coding, non_packaged_key, reason, transition, CapabilityUse, Debounce,
-    FocusSettings, FocusState, Look, EVENT, POLL, SETTING,
+    apps_in_use, filetime_from_unix_ms, is_coding, non_packaged_key, reason, toasts_on, transition, CapabilityUse,
+    Debounce, FocusSettings, FocusState, Look, EVENT, POLL, SETTING, TOASTS_SETTING,
 };
 use crate::store::Store;
 
 struct Inner {
     settings: FocusSettings,
+    /// Windows pop-ups are on: with them off there's nothing to hold, so nothing to look for.
+    toasts: bool,
     debounce: Debounce,
+}
+
+impl Inner {
+    fn watching(&self) -> bool {
+        self.toasts && self.settings.watching()
+    }
 }
 
 struct Monitor {
@@ -62,10 +70,12 @@ impl Monitor {
 /// until Focus mode is on.
 pub fn start(app: &AppHandle, store: &Store) {
     let settings = FocusSettings::from_setting(store.setting(SETTING).ok().flatten().as_deref());
+    let toasts = toasts_on(store.setting(TOASTS_SETTING).ok().flatten().as_deref());
     let monitor = Monitor {
         app: app.clone(),
         inner: Mutex::new(Inner {
             settings,
+            toasts,
             debounce: Debounce::default(),
         }),
         wake: Condvar::new(),
@@ -89,7 +99,7 @@ fn run() {
         let settings = {
             let mut g = m.lock();
             // Nothing to look for: sleep until Focus mode is switched on.
-            while !g.settings.watching() {
+            while !g.watching() {
                 g = m.wake.wait(g).unwrap_or_else(|e| e.into_inner());
             }
             g.settings
@@ -99,7 +109,7 @@ fn run() {
         {
             let mut g = m.lock();
             // Switched off (or changed) during the look: that change already said what's true.
-            if g.settings == settings {
+            if g.settings == settings && g.toasts {
                 let before = g.debounce.state();
                 let change = g.debounce.update(Instant::now(), reason(&settings, &found));
                 m.report(before, change, found.meeting_apps);
@@ -108,6 +118,22 @@ fn run() {
         let g = m.lock();
         let _ = m.wake.wait_timeout(g, POLL);
     }
+}
+
+/// Windows pop-ups were switched on or off. Off ends any focus (there's nothing to hold) and puts
+/// the watcher to sleep; on lets it look again if Focus mode is on.
+pub fn set_toasts(on: bool) {
+    let Some(m) = MONITOR.get() else { return };
+    {
+        let mut g = m.lock();
+        g.toasts = on;
+        if !on {
+            let before = g.debounce.state();
+            let change = g.debounce.reset();
+            m.report(before, change, 0);
+        }
+    }
+    m.wake.notify_all();
 }
 
 /// What the window reads at startup, before any event (focused or not right now).

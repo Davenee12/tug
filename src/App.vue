@@ -17,6 +17,7 @@ import DeviceRail from "./components/DeviceRail.vue";
 import TugboatPanel from "./components/TugboatPanel.vue";
 import TugboatRun from "./components/TugboatRun.vue";
 import HarborStack from "./components/HarborStack.vue";
+import DeskDerby from "./components/DeskDerby.vue";
 import GamePicker from "./components/GamePicker.vue";
 import FeedPanel from "./components/FeedPanel.vue";
 import IncomingCall from "./components/IncomingCall.vue";
@@ -302,6 +303,7 @@ onUnmounted(() => {
     <GamePicker v-if="game.screen === 'picker'" />
     <TugboatRun v-else-if="game.screen === 'tugboat-run'" />
     <HarborStack v-else-if="game.screen === 'harbor-stack'" />
+    <DeskDerby v-else-if="game.screen === 'desk-derby'" />
     <TugboatPanel v-if="tugboat.open" />
     <!-- Over the panels it was summoned over, from any app by its shortcut; a call or a confirmation card still comes up over it. -->
     <QuickText v-if="tug.quickTextOpen" />
