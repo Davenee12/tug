@@ -21,6 +21,15 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.24",
+    title: "Desk Derby and emoji shortcuts",
+    highlights: [
+      "Desk Derby: race a tiny RC car round a messy desk. Hold Drift through the corners and let go to boost.",
+      "Race the daily track against your own ghost, pick from four tracks, or go head to head with a friend.",
+      "Emoji shortcuts: :) becomes 🙂 and :fire: becomes 🔥 as you type a text. Backspace puts it back.",
+    ],
+  },
+  {
     version: "0.5.23",
     title: "Quick text, Focus mode and calls that pause your music",
     highlights: [

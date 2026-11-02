@@ -1,6 +1,6 @@
 # What tug can do
 
-Everything tug does today (v0.5.23), one line each. tug works with **no app on the phone**: it
+Everything tug does today (v0.5.24), one line each. tug works with **no app on the phone**: it
 uses what iOS shares with any Bluetooth accessory, like a smartwatch or a car kit. The limits that
 come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone-doesnt-allow-yet).
 
@@ -116,6 +116,9 @@ come from that are at the end, in [What iPhone doesn't allow (yet)](#what-iphone
 - **Quick text** (off until you turn it on in Settings › Messages): Ctrl+Shift+Y (or U or H) in any
   app brings up a small "Text someone" box; Enter sends through the iPhone and puts you back where
   you were, Esc closes it.
+- **Emoji shortcuts** (on by default; Settings › Messages): :) becomes 🙂, <3 becomes ❤️ and :fire:
+  becomes 🔥 as you type, in Messages and Quick text. Backspace straight after puts back what you
+  typed; links and times like 10:30 stay as they are.
 - **Send later:** the clock beside Send schedules the text (in 20 minutes up to tomorrow morning).
   It waits above the box with Send now and Cancel, and goes through your iPhone when it's due; if
   the phone isn't connected it waits, and a text more than 30 minutes late is never sent by itself:

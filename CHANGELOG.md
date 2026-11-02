@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.5.24 — 2026-11-02
+
+A third game, Desk Derby, and emoji shortcuts in your texts. It arrives through automatic updates.
+
+### New
+- **Desk Derby**, a racing game seen from above (Play in the sidebar, or Ctrl+K "race"). A tiny RC
+  car races three laps round a track laid across a messy desk: over the keyboard, through a coffee
+  spill, round the mug and off the stapler. The car drives itself; you steer, and hold Drift
+  (Shift or Space) to slide through a corner. Hold a drift long enough and it charges a boost that
+  fires when you let go. Sticky notes are the checkpoints, paper clips give a little boost, and
+  driving off the edge costs 2 seconds.
+  - **Daily:** the same track for everyone that day, against a ghost of your best run.
+  - **Free play:** four tracks (Inbox Loop, Coffee Run, Deadline Esses, Edge Case), each with its
+    own best time and ghost.
+  - **Head to head:** two cars on one desk, on one keyboard or with your phone as a controller.
+- **Emoji shortcuts.** In Messages and Quick text, :) becomes 🙂, <3 becomes ❤️ and :fire: becomes
+  🔥 as you type (about 75 names, like :thumbsup:, :joy: and :tada:). Backspace straight after puts
+  back what you typed, and links and times like 10:30 are left alone. Settings › Messages › Emoji
+  shortcuts.
+
+### Fixed
+- Focus mode stops checking your screen while Windows pop-ups are off, since there's nothing to
+  hold then.
+- Quick text no longer sends you back to an app from long ago if tug's window reloaded while it was
+  open.
+- A music or video app that stops answering Windows can no longer slow tug's Bluetooth.
+
 ## v0.5.23 — 2026-10-30
 
 Quick text from any app, Focus mode, calls that pause your PC's music, Rain soon pop-ups and voice
