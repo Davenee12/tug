@@ -21,6 +21,7 @@ import {
 import { replyAddress, replyReadsConversation, sendOutcome, toastSpec } from "../lib/toastSpec";
 import { clearHistory as clearHistoryNow } from "../lib/clearHistory";
 import { foldChatAppSeen } from "../lib/seen";
+import { isNumberList, isNumberMap, isObject, isStringList, storedJson } from "../lib/storedJson";
 import { DEFAULT_REPLIES, parseReplyDefaults } from "../lib/smartReplies";
 import { popupDecision, type PopupDecision, type PopupEvent } from "../lib/popup";
 import { DEFAULT_FOCUS, FocusSpell, focusSettingsFrom, focusStatus, focusSummary, type HeldSpell } from "../lib/focusMode";
@@ -1666,7 +1667,7 @@ export const useTugStore = defineStore("tug", () => {
     const raw = await api.getSettings();
     zoom.value = Number(raw["ui.zoom"]) || 1;
     applyZoom(zoom.value);
-    const storedSeen = raw["ui.seen"] ? (JSON.parse(raw["ui.seen"]) as Record<string, number>) : {};
+    const storedSeen = storedJson<Record<string, number>>(raw["ui.seen"], {}, isNumberMap);
     // Once, after the upgrade that moved other chat apps out of Messages: their per-person times
     // become their Feed stack's, so those stacks don't all show as new (lib/seen).
     const foldedSeen = foldChatAppSeen(storedSeen);
@@ -1683,11 +1684,12 @@ export const useTugStore = defineStore("tug", () => {
     settings.value = {
       toasts: raw["ui.toasts"] !== "false",
       doNotDisturb: raw["ui.doNotDisturb"] === "true",
-      mutedApps: raw["ui.mutedApps"] ? (JSON.parse(raw["ui.mutedApps"]) as string[]) : [],
-      quietHours: raw["ui.quietHours"]
-        ? { ...DEFAULT_QUIET_HOURS, ...(JSON.parse(raw["ui.quietHours"]) as Partial<UiSettings["quietHours"]>) }
-        : { ...DEFAULT_QUIET_HOURS },
-      vips: raw["ui.vips"] ? (JSON.parse(raw["ui.vips"]) as string[]) : [],
+      mutedApps: storedJson<string[]>(raw["ui.mutedApps"], [], isStringList),
+      quietHours: {
+        ...DEFAULT_QUIET_HOURS,
+        ...(storedJson<Record<string, unknown>>(raw["ui.quietHours"], {}, isObject) as Partial<UiSettings["quietHours"]>),
+      },
+      vips: storedJson<string[]>(raw["ui.vips"], [], isStringList),
       muteCalls: raw["ui.muteCalls"] === "true",
       closeToTray: raw["ui.closeToTray"] !== "false",
       lowBattery: raw["ui.lowBattery"] !== "false",
@@ -1696,7 +1698,7 @@ export const useTugStore = defineStore("tug", () => {
       albumArt: raw["ui.albumArt"] !== "false",
       dialing: raw["ui.dialing"] === "true",
       filterUnknown: raw["ui.filterUnknown"] !== "false",
-      knownSenders: raw["ui.knownSenders"] ? (JSON.parse(raw["ui.knownSenders"]) as string[]) : [],
+      knownSenders: storedJson<string[]>(raw["ui.knownSenders"], [], isStringList),
       autoCopyCodes: raw["ui.autoCopyCodes"] !== "false",
       typeCodeHotkey: raw["ui.typeCodeHotkey"] !== "false",
       typeCodeKeys: knownHotkey(raw["ui.typeCodeKeys"]),
@@ -1710,7 +1712,7 @@ export const useTugStore = defineStore("tug", () => {
       pauseMediaOnCall: raw["ui.pauseMediaOnCall"] !== "false",
       focus: focusSettingsFrom(raw["ui.focus"]),
     };
-    clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
+    clearedCodes.value = storedJson<number[]>(raw["ui.clearedCodes"], [], isNumberList);
     batteryAlerted = restoreBatteryAlerted(raw["ui.batteryAlerted"], Date.now());
     sentHintDismissed.value = raw["ui.sentHintDismissed"] === "true";
     // A missing key is a fresh install: null (not ""), so the first launch records the version
