@@ -26,7 +26,7 @@ use windows::Devices::Bluetooth::{
 use windows::Devices::Enumeration::{
     DeviceInformation, DeviceInformationCustomPairing, DeviceInformationKind, DeviceInformationUpdate,
     DevicePairingKinds, DevicePairingProtectionLevel, DevicePairingRequestedEventArgs, DevicePairingResultStatus,
-    DeviceWatcher,
+    DeviceUnpairingResultStatus, DeviceWatcher,
 };
 use windows::Devices::Radios::{Radio, RadioKind, RadioState as WinRadioState};
 use windows::Foundation::{IReference, TypedEventHandler};
@@ -162,6 +162,8 @@ enum Event {
     DeviceRemoved(String),
     PairingDone {
         id: String,
+        /// `Actor::pairing_epoch` when the pairing started.
+        epoch: u64,
         result: Result<(), String>,
         /// Set when the device paired was an unpaired Classic iPhone, so success adopts the LE
         /// bond cross-transport derivation creates rather than the Classic id directly. The LE bond
@@ -271,6 +273,7 @@ pub(super) async fn run(shared: Arc<Shared>, mut commands: UnboundedReceiver<Com
         advertise_failures: 0,
         advertise_gen: 0,
         carried_name: None,
+        pairing_epoch: 0,
         cccd_check_in: CCCD_CHECK_SECS,
         probe_interrupted: 0,
         routine_check_logged: None,
@@ -325,6 +328,8 @@ struct Actor {
     advertise_gen: u64,
     /// Name of a Classic-paired iPhone whose LE side is being paired on its behalf.
     carried_name: Option<String>,
+    /// Bumped by Start over, so a pairing ceremony still running then isn't adopted when it ends.
+    pairing_epoch: u64,
     /// Seconds until the ANCS subscription is verified on the iPhone again.
     cccd_check_in: u32,
     /// Authorization probes in a row the link cut off (`link_policy::next_subscription_check`).
@@ -380,6 +385,19 @@ fn now_ms() -> i64 {
 fn retry_delay(base: u32, failures: u32, cap: u32) -> u32 {
     let doublings = failures.saturating_sub(1).min(5);
     base.saturating_mul(1 << doublings).min(cap)
+}
+
+/// Seconds before advertising is started again after its `failures`-th failure in a row (a start
+/// that failed or timed out, or one Windows aborted): 3 s at first, doubling to a minute. Only
+/// advertising actually starting counts as recovered and begins the count again.
+fn advertise_retry_secs(failures: u32) -> u32 {
+    retry_delay(ADVERTISE_RETRY_SECS, failures, MAX_ADVERTISE_RETRY_SECS)
+}
+
+/// Whether a pairing that started at `started` should still be adopted now: not once Start over
+/// has run since (it bumps `Actor::pairing_epoch`).
+fn pairing_is_current(started: u64, now: u64) -> bool {
+    started == now
 }
 
 /// Whether a deferred link-down has lasted long enough to be a real disconnect rather than a
@@ -679,7 +697,13 @@ impl Actor {
                     GattServiceProviderAdvertisementStatus::Aborted
                         if !advertising_blocked(self.shared.status().radio) =>
                     {
-                        self.advertise_retry_in.get_or_insert(ADVERTISE_RETRY_SECS);
+                        // Each abort that follows a restart, with no Started in between, waits
+                        // longer: an app that holds the service aborts every start, and a fixed 3 s
+                        // rebuilt the provider (and flipped the status) every few seconds for good.
+                        if self.advertise_retry_in.is_none() {
+                            self.advertise_failures = self.advertise_failures.saturating_add(1);
+                            self.advertise_retry_in = Some(advertise_retry_secs(self.advertise_failures));
+                        }
                     }
                     GattServiceProviderAdvertisementStatus::Started
                     | GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData => {
@@ -756,11 +780,20 @@ impl Actor {
             }
             Event::PairingDone {
                 id,
+                epoch,
                 result,
                 classic,
                 reply,
             } => {
                 log::info!("pairing finished: {result:?}");
+                // Start over ran while this ceremony was still waiting (on the code, or on the
+                // phone): adopting its phone now would undo it and bring the old pairing back.
+                let result = if pairing_is_current(epoch, self.pairing_epoch) {
+                    result
+                } else {
+                    log::info!("not adopting it: Start over ran while it was pairing");
+                    Err("Pairing was cancelled".to_string())
+                };
                 // A name carried for a fallback pairing that failed mustn't name the next phone.
                 if result.is_err() {
                     self.carried_name = None;
@@ -870,7 +903,9 @@ impl Actor {
         // Within the blip grace, don't reconnect: we're waiting to see if a down is just a flap. Nor
         // while a stalled adapter settles: the link is rebuilt once it has.
         let settling = self.link_down_at.is_some() || self.wedged();
-        if self.device_id.is_none() || ready || settling || self.shared.status().radio == RadioState::Off {
+        // Bluetooth off or disabled: nothing can connect, and a failed attempt would call the phone away.
+        let no_radio = matches!(self.shared.status().radio, RadioState::Off | RadioState::Unavailable);
+        if self.device_id.is_none() || ready || settling || no_radio {
             return;
         }
         if self.retry_in > 0 {
@@ -996,10 +1031,14 @@ mod tests {
     #[test]
     fn advertising_that_times_out_keeps_retrying_backing_off_to_a_minute() {
         // The review's block: a CreateAsync timeout used to leave advertising off for good.
-        let waits: Vec<u32> = (1..=8)
-            .map(|f| retry_delay(ADVERTISE_RETRY_SECS, f, MAX_ADVERTISE_RETRY_SECS))
-            .collect();
+        // Aborts count the same way: one after another used to restart every 3 s without end.
+        let waits: Vec<u32> = (1..=8).map(advertise_retry_secs).collect();
         assert_eq!(waits, vec![3, 6, 12, 24, 48, 60, 60, 60]);
+        assert_eq!(
+            advertise_retry_secs(1),
+            ADVERTISE_RETRY_SECS,
+            "the brief abort on every start"
+        );
     }
 
     #[test]
@@ -1066,6 +1105,14 @@ mod tests {
             !advertising_event_is_current(3, None),
             "advertising turned off: a late Aborted must not restart it"
         );
+    }
+
+    #[test]
+    fn a_pairing_that_outlived_start_over_is_not_adopted() {
+        assert!(pairing_is_current(0, 0), "nothing happened in between");
+        // The bug: Start over during the wait for the code was undone when the pairing finished.
+        assert!(!pairing_is_current(0, 1));
+        assert!(!pairing_is_current(3, 5));
     }
 
     #[test]

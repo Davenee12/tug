@@ -18,9 +18,16 @@ impl Actor {
         }
         self.discovered.clear();
         for transport in [Transport::Le, Transport::Classic] {
-            let watcher = self.build_watcher(transport)?;
-            watcher.Start()?;
-            self.watchers.push((transport, watcher));
+            let started = self.build_watcher(transport).and_then(|w| w.Start().map(|()| w));
+            match started {
+                Ok(watcher) => self.watchers.push((transport, watcher)),
+                // Don't keep half a scan: with one watcher left running, the next start would
+                // take discovery for running and never look on the transport that failed.
+                Err(e) => {
+                    self.stop_discovery();
+                    return Err(e);
+                }
+            }
         }
         Ok(())
     }
@@ -207,6 +214,7 @@ impl Actor {
         log::info!("pairing started: {} ({transport:?})", device_kind::log_tag(&id));
         let shared = self.shared.clone();
         let tx = self.tx.clone();
+        let epoch = self.pairing_epoch;
         tokio::task::spawn_local(async move {
             // Pairing an unpaired Classic iPhone: note which LE devices are already bonded, so once
             // cross-transport key derivation adds the phone's LE bond we can tell it from the rest.
@@ -237,6 +245,7 @@ impl Actor {
             };
             let _ = tx.send(Event::PairingDone {
                 id,
+                epoch,
                 result,
                 classic,
                 reply,
@@ -318,12 +327,17 @@ impl Actor {
             ids.push(id);
         }
         log::debug!("removing leftover pairing: {} bond(s)", ids.len());
+        let mut removed = true;
         for bond in ids {
-            unpair_device(&bond).await;
+            removed &= unpair_device(&bond).await;
         }
         // Keep scanning so the now-unpaired phone shows up fresh, ready to pair.
         let _ = self.rescan_classic();
-        Ok(())
+        if removed {
+            Ok(())
+        } else {
+            Err(UNPAIR_REFUSED.to_string())
+        }
     }
 
     /// Adopt a device as "the iPhone": persist it and start connecting.
@@ -420,6 +434,8 @@ impl Actor {
     /// user replaced (or that forgot this PC) leaves nothing stale behind for the next pairing.
     pub(super) async fn forget(&mut self) -> Result<(), String> {
         let le_id = self.device_id.take();
+        // A pairing still waiting on its code or on the phone mustn't be adopted when it ends.
+        self.pairing_epoch += 1;
         // Read the texts device id before deleting the setting, so we can unpair it too.
         let texts_id = self.shared.store.setting(keys::TEXTS_DEVICE_ID).ok().flatten();
         self.drop_link();
@@ -463,10 +479,16 @@ impl Actor {
         }
         // Best effort: a stale Windows bond makes re-pairing fail silently. The Classic (texts)
         // bond and the LE (notifications) bond are separate Windows pairings; remove both.
+        let mut removed = true;
         for id in [le_id, texts_id].into_iter().flatten() {
-            unpair_device(&id).await;
+            removed &= unpair_device(&id).await;
         }
-        Ok(())
+        // tug has let go of the phone either way; a bond Windows kept is the user's to remove.
+        if removed {
+            Ok(())
+        } else {
+            Err(UNPAIR_REFUSED.to_string())
+        }
     }
 }
 
@@ -477,8 +499,8 @@ impl Actor {
 /// logic, pairs it with the PIN shown in tug, and remembers it. Runs as its own task (it touches no
 /// actor state), so the inquiry and the pairing ceremony never hold the actor loop.
 pub(super) async fn pair_texts(shared: Arc<Shared>) -> Result<(), String> {
-    let le_name = match shared.status().device {
-        Some(d) => d.name,
+    let (le_id, le_name) = match shared.status().device {
+        Some(d) => (d.id, d.name),
         None => return Err("Pair your iPhone for notifications first, then set up texts.".into()),
     };
     let candidates = discover_unpaired_classic().await?;
@@ -501,6 +523,11 @@ pub(super) async fn pair_texts(shared: Arc<Shared>) -> Result<(), String> {
         }
         DevicePairingResultStatus::AuthenticationTimeout => return Err("Texts pairing timed out".into()),
         other => return Err(format!("Texts pairing failed ({other:?})")),
+    }
+    // Start over (or a different phone) while this was pairing: remembering it now would hand the
+    // next phone the old one's texts device, after Start over had cleared it.
+    if shared.status().device.map(|d| d.id).as_deref() != Some(le_id.as_str()) {
+        return Err("Texts pairing was cancelled".into());
     }
     // Remember this phone as the texts device and ask the message service to connect now.
     let _ = shared.store.set_setting(keys::TEXTS_DEVICE_ID, &id);
@@ -604,21 +631,60 @@ fn real_name(info: &DeviceInformation) -> Option<String> {
     (!n.is_empty() && n != "unnamed device").then_some(n)
 }
 
+/// What Remove and Start over say when Windows kept a bond it was asked to remove.
+const UNPAIR_REFUSED: &str = "Windows couldn't remove the old pairing. Remove your iPhone under Windows Settings › Bluetooth & devices, then pair again.";
+
+/// Whether Windows' answer to an unpair means the bond is gone.
+fn unpair_done(status: DeviceUnpairingResultStatus) -> bool {
+    matches!(
+        status,
+        DeviceUnpairingResultStatus::Unpaired | DeviceUnpairingResultStatus::AlreadyUnpaired
+    )
+}
+
 /// Remove one Windows Bluetooth bond by device id. Best effort and fully bounded, so a phone
 /// that's away (CreateFromIdAsync or UnpairAsync hanging) can't park the actor loop.
-pub(super) async fn unpair_device(id: &str) {
+///
+/// False only when Windows had the device and answered that it did not remove the bond (failed,
+/// access denied, busy): a bond left behind makes the next pairing fail silently, so the caller
+/// says so. A device Windows can't find, or doesn't answer about in time, is only logged: usually
+/// there's nothing left to remove.
+pub(super) async fn unpair_device(id: &str) -> bool {
     let op = match DeviceInformation::CreateFromIdAsync(&HSTRING::from(id)) {
         Ok(op) => op,
-        Err(e) => return log::debug!("unpair {id}: {}", e.message()),
+        Err(e) => {
+            log::debug!("unpair {id}: {}", e.message());
+            return true;
+        }
     };
     let info = match winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op).await {
         Ok(info) => info,
-        Err(e) => return log::debug!("unpair {id}: {e}"),
+        Err(e) => {
+            log::debug!("unpair {id}: {e}");
+            return true;
+        }
     };
-    if let Ok(op) = info.Pairing().and_then(|p| p.UnpairAsync()) {
-        match winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op).await {
-            Ok(status) => log::info!("unpaired {id}: {:?}", status.Status()),
-            Err(e) => log::debug!("unpair {id}: {e}"),
+    let Ok(op) = info.Pairing().and_then(|p| p.UnpairAsync()) else {
+        return true;
+    };
+    match winrt::bounded_for(winrt::DISCOVERY_TIMEOUT, op).await {
+        Ok(result) => match result.Status() {
+            Ok(status) if unpair_done(status) => {
+                log::info!("unpaired {id}: {status:?}");
+                true
+            }
+            Ok(status) => {
+                log::warn!("Windows didn't unpair {id}: {status:?}");
+                false
+            }
+            Err(e) => {
+                log::debug!("unpair {id}: {}", e.message());
+                true
+            }
+        },
+        Err(e) => {
+            log::debug!("unpair {id}: {e}");
+            true
         }
     }
 }
@@ -789,7 +855,21 @@ fn texts_device_on_adopt(different_phone: bool, paired_texts: Option<&str>) -> T
 
 #[cfg(test)]
 mod tests {
-    use super::{texts_device_on_adopt, TextsDevice};
+    use super::{texts_device_on_adopt, unpair_done, DeviceUnpairingResultStatus, TextsDevice};
+
+    #[test]
+    fn only_a_bond_windows_removed_counts_as_unpaired() {
+        assert!(unpair_done(DeviceUnpairingResultStatus::Unpaired));
+        assert!(
+            unpair_done(DeviceUnpairingResultStatus::AlreadyUnpaired),
+            "nothing left to remove"
+        );
+        // The bug: these were logged as "unpaired" and Remove / Start over reported success, so the
+        // stale bond stayed and the next pairing failed with nothing to say why.
+        assert!(!unpair_done(DeviceUnpairingResultStatus::Failed));
+        assert!(!unpair_done(DeviceUnpairingResultStatus::AccessDenied));
+        assert!(!unpair_done(DeviceUnpairingResultStatus::OperationAlreadyInProgress));
+    }
 
     #[test]
     fn a_different_phone_never_keeps_the_old_phones_texts_device() {
