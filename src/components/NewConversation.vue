@@ -6,6 +6,7 @@ import { useFocusTrap } from "../lib/focusTrap";
 import { formatAddress, groupConversations } from "../lib/format";
 import { contactRecipients, recentRecipients, recipientOptions, type Recipient } from "../lib/recipients";
 import AppAvatar from "./AppAvatar.vue";
+import { imeComposing } from "../lib/ime";
 
 const tug = useTugStore();
 const query = ref("");
@@ -57,6 +58,8 @@ async function move(delta: number) {
 }
 
 function onKey(e: KeyboardEvent) {
+  // Enter and the arrows belong to an input method while it's composing a word.
+  if (imeComposing(e)) return;
   if (e.key === "ArrowDown") void move(1);
   else if (e.key === "ArrowUp") void move(-1);
   else if (e.key === "Enter") pick(options.value[active.value]);
