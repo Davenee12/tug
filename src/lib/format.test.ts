@@ -23,6 +23,7 @@ import {
   snippet,
   threadKey,
 } from "./format";
+import { setPcRegion } from "./address";
 import type { CallRecord, Contact, PhoneNotification, SmsMessage } from "../types/protocol";
 
 const T0 = Date.parse("2026-10-05T12:00:00");
@@ -87,6 +88,24 @@ describe("names and keys", () => {
   it("treats iOS inline-reply titles as the same person", () => {
     expect(cleanName("zoe 💜 replied to you")).toBe("zoe 💜");
     expect(threadKey({ appId: "x", title: "zoe 💜 replied to you" })).toBe(threadKey({ appId: "x", title: "zoe 💜" }));
+  });
+
+  it("keys a number's notification like its conversation, on a PC in any region", () => {
+    const fromNumber = note("+1 (302) 555-0199", "hi", 0);
+    const keys = () => groupConversations([fromNumber], [sms("+13025550199", "earlier", -5)], []).map((c) => c.key);
+    expect(keys()).toEqual([threadKey(fromNumber)]);
+    // The bug: outside North America the two disagreed, so the Feed row opened another conversation.
+    setPcRegion("GB");
+    try {
+      expect(keys()).toEqual([threadKey(fromNumber)]);
+      // A local number and a name are unaffected.
+      const local = note("07700 900123", "hello", 1);
+      expect(groupConversations([local], [], []).map((c) => c.key)).toEqual([threadKey(local)]);
+      const named = note("Zoe", "hello", 2);
+      expect(groupConversations([named], [], []).map((c) => c.key)).toEqual([threadKey(named)]);
+    } finally {
+      setPcRegion("US");
+    }
   });
 
   it("never splits an emoji into a broken initial", () => {
