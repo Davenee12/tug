@@ -194,11 +194,14 @@ pub struct IncomingMessage<'a> {
 
 // The contact with exactly this address; failing that, the one contact whose number matches it in
 // another format (same last 10 digits, `store::match_key`; never a guess between two names); then a
-// name the phone sent with the message, until the number is a known contact.
+// name the phone sent with the message, until the number is a known contact. Two numbers that both
+// carry a country code (`+`) are already in one format, so they only match exactly: +44 7712 345678
+// and +1 771 234 5678 share their last 10 digits and are different people.
 const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address,
             COALESCE(c.name, (
                 SELECT CASE WHEN COUNT(DISTINCT k.name) = 1 THEN MIN(k.name) END
                 FROM contacts k WHERE k.match_key = match_key(m.address)
+                    AND NOT (k.address LIKE '+%' AND m.address LIKE '+%')
             ), m.sender_name),
             m.body, m.sent_at, m.received_at, m.status, m.msg_type, m.gap_before,
             m.edited, m.unsent,
@@ -568,6 +571,7 @@ impl Store {
                  SELECT COALESCE(c.name, (
                             SELECT CASE WHEN COUNT(DISTINCT k.name) = 1 THEN MIN(k.name) END
                             FROM contacts k WHERE k.match_key = match_key(p.address)
+                                AND NOT (k.address LIKE '+%' AND p.address LIKE '+%')
                         )) AS name, p.recent, p.total, p.last
                  FROM per_address p LEFT JOIN contacts c ON c.address = p.address
              )
@@ -949,6 +953,30 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(m.contact_name, None, "never a guess between two people");
+    }
+
+    #[test]
+    fn a_number_from_another_country_is_not_a_contact_with_the_same_last_digits() {
+        let s = Store::in_memory().unwrap();
+        s.save_phonebook(&[("+447712345678".into(), "Priya".into())]).unwrap();
+        // The bug: a stranger at +1 771 234 5678 was shown as Priya.
+        let stranger = s
+            .insert_incoming(&incoming("H1", "+17712345678", "hello"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(stranger.contact_name, None);
+        // Her own number still finds her, as typed in full or the way it's dialled at home.
+        let full = s
+            .insert_incoming(&incoming("H2", "+447712345678", "hi"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(full.contact_name.as_deref(), Some("Priya"));
+        let national = s
+            .insert_incoming(&incoming("H3", "07712345678", "hi again"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(national.contact_name.as_deref(), Some("Priya"));
+        assert_eq!(s.frequent_contact_names(5, 0).unwrap(), vec!["Priya".to_string()]);
     }
 
     #[test]
