@@ -66,20 +66,16 @@ const busyId = ref<string | null>(null);
 const connectError = ref<string | null>(null);
 const scanning = ref(false);
 
+// This panel's hold on the scan (stores/tug stopDiscovery): another panel's scan outlives it.
+const scanOwner = Symbol("connect panel");
 async function startScan() {
   scanning.value = true;
-  await tug.startDiscovery();
+  await tug.startDiscovery(scanOwner);
 }
 async function stopScan() {
   scanning.value = false;
-  await tug.stopDiscovery();
+  await tug.stopDiscovery(scanOwner);
 }
-// Scan while there's no iPhone chosen; stop as soon as one is.
-watch(
-  () => s.value.device,
-  (device) => (device ? void stopScan() : void startScan()),
-  { immediate: true },
-);
 
 // Windows' own pairing dialog (phone-initiated: tapping this PC in the iPhone's Bluetooth list) can
 // create the bond before tug does, and then the code shows in Windows, not tug. Detect a device
@@ -91,10 +87,29 @@ watch(
   () => tug.discovered.map((d) => [d.id, d.paired] as const),
   (now) => {
     for (const [id, paired] of now) {
-      if (startedOutsideTug(priorPaired.get(id), paired, initiatedPair.has(id))) windowsPairing.value = true;
+      // While tug's own pairing runs, every flip is its doing: pairing the phone's Classic side
+      // makes Windows bond the Bluetooth LE entry too, under an id nobody clicked.
+      const ours = initiatedPair.has(id) || busyId.value !== null;
+      if (startedOutsideTug(priorPaired.get(id), paired, ours)) windowsPairing.value = true;
       priorPaired.set(id, paired);
     }
   },
+);
+
+// Scan while there's no iPhone chosen; stop as soon as one is.
+watch(
+  () => s.value.device,
+  (device) => {
+    if (!device) return void startScan();
+    // A phone is set up: whatever the find step was saying about the last attempt is over, so a
+    // later Start over opens on a clean find step, not "Windows is pairing…" or an old error.
+    windowsPairing.value = false;
+    priorPaired.clear();
+    initiatedPair.clear();
+    connectError.value = null;
+    void stopScan();
+  },
+  { immediate: true },
 );
 
 async function choose(d: DiscoveredDevice) {
@@ -193,7 +208,7 @@ onUnmounted(() => {
   window.clearInterval(graceTimer);
   window.clearTimeout(resetTimer);
   window.clearTimeout(removeTimer);
-  if (scanning.value) void tug.stopDiscovery();
+  if (scanning.value) void tug.stopDiscovery(scanOwner);
 });
 
 // The link in the sidebar's words: a spinner only while tug is actually connecting.

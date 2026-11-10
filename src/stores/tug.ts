@@ -97,6 +97,7 @@ import {
   type PlaybackDevice,
 } from "../lib/playback";
 import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
+import { scanOwners } from "../lib/scanOwners";
 import {
   CHECKING_MAX_MS,
   phoneSwitches,
@@ -247,6 +248,8 @@ export const useTugStore = defineStore("tug", () => {
   const calls = ref<CallRecord[]>([]);
   const hasMore = ref(true);
   const discovered = ref<DiscoveredDevice[]>([]);
+  // Which panels are scanning for the iPhone; the scan stops with the last (lib/scanOwners).
+  const scanning = scanOwners();
   const pairingRequest = ref<PairingRequest | null>(null);
   const settings = ref<UiSettings>({
     toasts: true,
@@ -2659,8 +2662,17 @@ export const useTugStore = defineStore("tug", () => {
       if (ok) savedPickup("music");
       return ok;
     },
-    startDiscovery: () => attempt(api.startDiscovery),
-    stopDiscovery: () => {
+    /** Scan for the iPhone on behalf of `owner` (a token the calling panel keeps). */
+    startDiscovery: (owner: symbol) => {
+      scanning.hold(owner);
+      return attempt(api.startDiscovery);
+    },
+    /**
+     * `owner` is done scanning. The scan (and the list) only goes when no other panel still wants
+     * it: a panel being replaced unmounts after its replacement has started scanning.
+     */
+    stopDiscovery: (owner: symbol) => {
+      if (!scanning.release(owner)) return Promise.resolve(undefined);
       discovered.value = [];
       return attempt(api.stopDiscovery);
     },
