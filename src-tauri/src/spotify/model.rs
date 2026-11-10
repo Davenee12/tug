@@ -367,6 +367,16 @@ impl ApiError {
     }
 }
 
+/// The longest tug pauses Spotify requests after a rate limit, whatever `Retry-After` asked for.
+pub const MAX_RATE_LIMIT_PAUSE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// How long to pause after a rate limit that asked for `retry_after` seconds. Capped, because the
+/// header is whatever number a server or proxy sends: added to the clock as it came, a huge one
+/// overflows, and in a release build (`panic = "abort"`) that ends tug.
+pub fn rate_limit_pause(retry_after: u64) -> std::time::Duration {
+    std::time::Duration::from_secs(retry_after).min(MAX_RATE_LIMIT_PAUSE)
+}
+
 /// Classify a non-success response. `retry_after` is the parsed `Retry-After` header, if any.
 pub fn classify(status: u16, body: &str, retry_after: Option<u64>) -> ApiError {
     let lower = body.to_lowercase();
@@ -775,6 +785,16 @@ pub fn parse_artist_albums(json: &str) -> Vec<Album> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rate_limit_pause_is_what_spotify_asked_for_up_to_a_day() {
+        use std::time::{Duration, Instant};
+        assert_eq!(rate_limit_pause(7), Duration::from_secs(7));
+        assert_eq!(rate_limit_pause(69_817), Duration::from_secs(69_817));
+        assert_eq!(rate_limit_pause(u64::MAX), MAX_RATE_LIMIT_PAUSE);
+        // The bug: this addition panicked for a huge Retry-After.
+        assert!(Instant::now().checked_add(rate_limit_pause(u64::MAX)).is_some());
+    }
 
     #[test]
     fn parses_a_page_of_playlists_and_the_next_link() {

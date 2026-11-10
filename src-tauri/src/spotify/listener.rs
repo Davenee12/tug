@@ -109,6 +109,10 @@ pub fn wait_for_callback(listener: TcpListener, timeout: Duration) -> Result<Str
 /// Read one request, and if it's the callback, answer with the done page and return its query.
 /// Any other request gets a 404 and `None` (keep waiting).
 fn handle(stream: &mut std::net::TcpStream) -> Option<String> {
+    // On Windows an accepted socket takes the listener's non-blocking mode, and a non-blocking
+    // read ignores the timeout below: a browser that had connected but not yet sent its request
+    // got no answer, and the sign-in code it carried was lost until the whole wait timed out.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf).ok()?;
@@ -151,6 +155,27 @@ mod tests {
         assert!(is_callback("/callback"));
         assert!(!is_callback("/favicon.ico"));
         assert!(!is_callback("/other?/callback"));
+    }
+
+    #[test]
+    fn a_callback_whose_request_arrives_a_moment_after_connecting_is_still_read() {
+        // Any free port: the real one may be in use on the machine running the tests.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let browser = std::thread::spawn(move || {
+            let mut stream = std::net::TcpStream::connect(addr).unwrap();
+            // Connected, but the request follows later: the listener accepts in between.
+            std::thread::sleep(Duration::from_millis(400));
+            stream
+                .write_all(b"GET /callback?code=abc&state=xyz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                .unwrap();
+            let mut answer = String::new();
+            let _ = stream.read_to_string(&mut answer);
+            answer
+        });
+        let query = wait_for_callback(listener, Duration::from_secs(10));
+        assert_eq!(query.as_deref(), Ok("code=abc&state=xyz"));
+        assert!(browser.join().unwrap().starts_with("HTTP/1.1 200"));
     }
 
     #[test]
