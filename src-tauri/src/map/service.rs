@@ -182,7 +182,7 @@ pub async fn send_text(shared: &Shared, address: &str, text: &str) -> Result<Sto
     if text.is_empty() {
         return Err("Type a message first".into());
     }
-    let address = crate::map::address::normalize(address);
+    let address = crate::map::address::normalize_party(address);
     let pending = shared
         .store
         .insert_outgoing(SOURCE_IPHONE_MAP, &address, text, crate::state::now_ms())
@@ -1937,7 +1937,8 @@ mod worker {
                         break;
                     }
                 };
-                let address = normalize(originator.as_deref().unwrap_or(&item.sender_addressing));
+                let address =
+                    crate::map::address::normalize_party(originator.as_deref().unwrap_or(&item.sender_addressing));
                 // The listing's preview stands in for a body with no words (empty, or only U+FFFD
                 // as the phone sends for some texts) when the preview has some.
                 let body =
@@ -2260,6 +2261,9 @@ mod worker {
         match (link, maybe_taken) {
             (true, false) => PushOutcome::RetryOnce,
             (true, true) => PushOutcome::MaySent,
+            // The whole text went out and an answer came back that tug couldn't read: the phone
+            // has the text. "Not sent" with Retry there could text the person twice.
+            (false, true) if matches!(e, MapError::Parse(_)) => PushOutcome::MaySent,
             (false, _) => PushOutcome::Failed,
         }
     }
@@ -2576,6 +2580,17 @@ mod worker {
             };
             assert_eq!(after_push_failure(&refused, false), PushOutcome::Failed);
             assert_eq!(after_push_failure(&MapError::Consent, false), PushOutcome::Failed);
+            // A definite refusal stays a refusal even after the last packet.
+            assert_eq!(after_push_failure(&refused, true), PushOutcome::Failed);
+        }
+
+        #[test]
+        fn an_unreadable_answer_to_the_whole_text_may_have_sent() {
+            let garbled = || MapError::Parse(crate::map::obex::ObexError::Truncated);
+            // The bug: this was "Not sent" with Retry, though the phone had the whole text.
+            assert_eq!(after_push_failure(&garbled(), true), PushOutcome::MaySent);
+            // Before the last packet the phone can't have it.
+            assert_eq!(after_push_failure(&garbled(), false), PushOutcome::Failed);
         }
 
         #[test]

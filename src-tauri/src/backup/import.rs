@@ -486,7 +486,7 @@ fn load_known(store: &Store, zone: clock::Resolver, backup_date: Option<i64>) ->
 /// The address tug uses for a backup handle: the one it already has for that person, else the
 /// handle written the way tug writes numbers.
 fn resolve(known: &Known, handle: &str) -> String {
-    let normalized = crate::map::address::normalize(handle);
+    let normalized = crate::map::address::normalize_party(handle);
     known
         .addresses
         .get(&person_key(&normalized))

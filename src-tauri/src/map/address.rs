@@ -76,11 +76,44 @@ pub fn normalize_in(raw: &str, region: Option<&str>) -> String {
     }
 }
 
+/// The address a text came from or goes to, normalised for this PC's region (see
+/// [`normalize_party_in`]).
+pub fn normalize_party(raw: &str) -> String {
+    normalize_party_in(raw, pc_region())
+}
+
+/// [`normalize_in`] for a text's sender or recipient, which unlike a phonebook entry can be a name:
+/// carriers and businesses send under one ("O2", "Info24", "HSBC"). A sender with a letter in it
+/// is kept as typed. Reading it as a number kept only its digits, so "O2" became the number 2:
+/// unrelated senders that share their digits fell into one conversation, and a reply went to that
+/// number.
+pub fn normalize_party_in(raw: &str, region: Option<&str>) -> String {
+    let trimmed = raw.trim();
+    if !trimmed.contains('@') && trimmed.chars().any(char::is_alphabetic) {
+        return trimmed.to_string();
+    }
+    normalize_in(raw, region)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const US: Option<&str> = Some("US");
+
+    #[test]
+    fn a_sender_that_is_a_name_keeps_its_digits_and_letters() {
+        // The bug: these came out as "2" and "24".
+        assert_eq!(normalize_party_in("O2", Some("GB")), "O2");
+        assert_eq!(normalize_party_in(" Info24 ", US), "Info24");
+        assert_eq!(normalize_party_in("HSBC", US), "HSBC");
+        // Numbers, short codes and emails are read as before.
+        assert_eq!(normalize_party_in("+1 (302) 555-0173", US), "+13025550173");
+        assert_eq!(normalize_party_in("302.555.0173", US), "+13025550173");
+        assert_eq!(normalize_party_in("07700 900123", Some("GB")), "07700900123");
+        assert_eq!(normalize_party_in("72975", US), "72975");
+        assert_eq!(normalize_party_in(" Zoe2@Example.com ", US), "zoe2@example.com");
+    }
 
     #[test]
     fn normalises_nanp_variants_to_one_key() {
