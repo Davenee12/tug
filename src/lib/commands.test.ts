@@ -5,6 +5,7 @@ import {
   matchCalls,
   notificationPick,
   parseActions,
+  typedNumbers,
   type ActionContext,
   type Person,
 } from "./commands";
@@ -71,6 +72,40 @@ describe("parseActions", () => {
       person: { address: "3025550100", name: "(302) 555-0100" },
       text: "on my way",
     });
+  });
+
+  it("takes a number typed with punctuation, a plus, or nothing after it", () => {
+    expect(parseActions("text (302) 555-0100 running late", people)[0]).toMatchObject({
+      person: { address: "3025550100" },
+      text: "running late",
+    });
+    expect(parseActions("text +44 7700 900123 on my way", people)).toMatchObject([
+      { kind: "send", person: { address: "+447700900123" }, text: "on my way" },
+    ]);
+    expect(parseActions("text 302 555 0100", people)).toMatchObject([
+      { kind: "open-chat", person: { address: "3025550100" } },
+    ]);
+  });
+
+  it("never swallows the start of the message into the number", () => {
+    // The bug: every leading digit group was the number, so this texted "mins away" to 30255501002.
+    const whole = parseActions("text 302 555 0100 2 mins away", people);
+    expect(whole.map((a) => (a.kind === "send" ? [a.person.address, a.text] : null))).toEqual([
+      ["3025550100", "2 mins away"],
+      ["30255501002", "mins away"],
+    ]);
+    // A 7-digit local number followed by a lone digit: both readings, to pick from.
+    const local = parseActions("text 555 0100 4 of us", people);
+    expect(local.map((a) => (a.kind === "send" ? [a.person.address, a.text] : null))).toEqual([
+      ["5550100", "4 of us"],
+      ["55501004", "of us"],
+    ]);
+  });
+
+  it("doesn't take a few digits for a phone number", () => {
+    expect(typedNumbers("2 mins away")).toEqual([]);
+    expect(typedNumbers("911 now")).toEqual([]);
+    expect(typedNumbers("zoe 302 555 0100")).toEqual([]);
   });
 
   it("knows the media and navigation verbs", () => {
