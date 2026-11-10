@@ -106,7 +106,10 @@ sealing), held for the phone for the wait (2 minutes unless asked otherwise) and
 hasn't downloaded them by then, so "timed out" is true. Turning the switch off, turning Developer
 tools off or **Revoke access** withdraws every file still held, including ones a `tug boat
 --no-wait` already left on offer. What's piped into `tug boat -` (up to
-64 MB) is held in memory, never written to disk by tug. An AI tool's paths are used exactly as
+64 MB) is saved by the `tug` command to a file in the user's temp folder, for tug to read once the
+person clicks Send. The command opens it so that Windows deletes it when the command ends, however
+it ends (finished, Ctrl+C or killed); only a power cut or a Windows crash while it runs can leave
+it behind. An AI tool's paths are used exactly as
 given, never looked up by name across the PC. Logs record counts and sizes, never names or paths.
 Tugboat's honest limit applies: an active attacker who tampered with the first page load could
 read files the person chose to send.
