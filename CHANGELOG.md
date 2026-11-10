@@ -26,6 +26,33 @@ A third game, Desk Derby, and emoji shortcuts in your texts. It arrives through 
 - Quick text no longer sends you back to an app from long ago if tug's window reloaded while it was
   open.
 - A music or video app that stops answering Windows can no longer slow tug's Bluetooth.
+- Setting up your iPhone: the list of phones no longer goes empty, still saying "Looking for your
+  iPhone…", after you close Settings or press Forget.
+- Remove and Start over tell you when Windows couldn't remove the old pairing, instead of saying it
+  worked. A pairing left behind makes the next one fail.
+- Start over while a pairing code is still waiting is no longer undone when that pairing finishes.
+- "Windows is pairing your iPhone" no longer stays on screen once it has paired, or shows for a
+  pairing tug started.
+- tug no longer restarts its Bluetooth visibility every few seconds when another app keeps
+  interrupting it.
+- A text goes to the number you picked. Choosing one of a contact's numbers in New message, or
+  pressing Text on a call, could send to their other number.
+- What you've typed in a conversation is still there after a look at the Feed, Calls or Settings.
+- Ctrl+K "text 302 555 0100 2 mins away" no longer reads the 2 as part of the number. When it
+  can't tell where the number ends, it shows both readings to pick from.
+- Senders with a name like O2 or Info24 keep it. They showed as 2 and 24, and could end up sharing
+  a conversation.
+- A number from another country no longer shows a contact's name because its last digits match.
+- On a PC set to a region outside the US and Canada, clicking a +1 number's notification opens its
+  own conversation, not someone else's.
+- Pressing Enter to finish a word on a Japanese, Chinese or Korean keyboard no longer sends the
+  message.
+- A text whose send got a garbled answer from the iPhone says "May have sent", not "Not sent", so
+  Retry can't send it twice.
+- An overdue reminder or scheduled text says which day it was due, not only the time.
+- A damaged saved setting no longer puts every setting back to its default until tug restarts.
+- Spotify sign-in no longer fails now and then with a blank page in the browser.
+- `tug text` to a name that has more than one number always asks first.
 
 ## v0.5.23 — 2026-10-30
 
