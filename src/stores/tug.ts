@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { computed, ref, watch, type Ref } from "vue";
+import { computed, reactive, ref, watch, type Ref } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -21,6 +21,7 @@ import {
 import { replyAddress, replyReadsConversation, sendOutcome, toastSpec } from "../lib/toastSpec";
 import { clearHistory as clearHistoryNow } from "../lib/clearHistory";
 import { foldChatAppSeen } from "../lib/seen";
+import { isNumberList, isNumberMap, isObject, isStringList, storedJson } from "../lib/storedJson";
 import { DEFAULT_REPLIES, parseReplyDefaults } from "../lib/smartReplies";
 import { popupDecision, type PopupDecision, type PopupEvent } from "../lib/popup";
 import { DEFAULT_FOCUS, FocusSpell, focusSettingsFrom, focusStatus, focusSummary, type HeldSpell } from "../lib/focusMode";
@@ -97,6 +98,7 @@ import {
   type PlaybackDevice,
 } from "../lib/playback";
 import { nextShowConnect, shouldWatchSwitches } from "../lib/connectFlow";
+import { scanOwners } from "../lib/scanOwners";
 import {
   CHECKING_MAX_MS,
   phoneSwitches,
@@ -247,6 +249,8 @@ export const useTugStore = defineStore("tug", () => {
   const calls = ref<CallRecord[]>([]);
   const hasMore = ref(true);
   const discovered = ref<DiscoveredDevice[]>([]);
+  // Which panels are scanning for the iPhone; the scan stops with the last (lib/scanOwners).
+  const scanning = scanOwners();
   const pairingRequest = ref<PairingRequest | null>(null);
   const settings = ref<UiSettings>({
     toasts: true,
@@ -451,6 +455,14 @@ export const useTugStore = defineStore("tug", () => {
   const selectedThread = ref<string | null>(null);
   /** A new conversation being started from the + button, before any message exists. */
   const composeTo = ref<{ address: string; name: string } | null>(null);
+  /**
+   * The number to text in a conversation, by conversation key, when one was chosen on purpose: in
+   * the To: picker, or by starting the conversation for that number (lib/replyNumber). Kept here
+   * with the drafts, not in the Messages view, so neither is lost by looking at the Feed.
+   */
+  const replyNumbers = ref<Record<string, string>>({});
+  /** What's typed and not sent, one per conversation key. */
+  const drafts = reactive(new Map<string, string>());
   /** The New message picker (+ or Ctrl+N). */
   const pickerOpen = ref(false);
   /** The quick text composer, opened by its global shortcut from any app (lib/quickText). */
@@ -1632,7 +1644,10 @@ export const useTugStore = defineStore("tug", () => {
 
   function startConversation(address: string, name: string) {
     composeTo.value = { address, name };
-    selectedThread.value = threadKey({ appId: "com.apple.MobileSMS", title: name });
+    const key = threadKey({ appId: "com.apple.MobileSMS", title: name });
+    // This number, not whichever one the name's conversation would default to.
+    replyNumbers.value[key] = address;
+    selectedThread.value = key;
     view.value = "messages";
   }
 
@@ -1663,7 +1678,7 @@ export const useTugStore = defineStore("tug", () => {
     const raw = await api.getSettings();
     zoom.value = Number(raw["ui.zoom"]) || 1;
     applyZoom(zoom.value);
-    const storedSeen = raw["ui.seen"] ? (JSON.parse(raw["ui.seen"]) as Record<string, number>) : {};
+    const storedSeen = storedJson<Record<string, number>>(raw["ui.seen"], {}, isNumberMap);
     // Once, after the upgrade that moved other chat apps out of Messages: their per-person times
     // become their Feed stack's, so those stacks don't all show as new (lib/seen).
     const foldedSeen = foldChatAppSeen(storedSeen);
@@ -1680,11 +1695,12 @@ export const useTugStore = defineStore("tug", () => {
     settings.value = {
       toasts: raw["ui.toasts"] !== "false",
       doNotDisturb: raw["ui.doNotDisturb"] === "true",
-      mutedApps: raw["ui.mutedApps"] ? (JSON.parse(raw["ui.mutedApps"]) as string[]) : [],
-      quietHours: raw["ui.quietHours"]
-        ? { ...DEFAULT_QUIET_HOURS, ...(JSON.parse(raw["ui.quietHours"]) as Partial<UiSettings["quietHours"]>) }
-        : { ...DEFAULT_QUIET_HOURS },
-      vips: raw["ui.vips"] ? (JSON.parse(raw["ui.vips"]) as string[]) : [],
+      mutedApps: storedJson<string[]>(raw["ui.mutedApps"], [], isStringList),
+      quietHours: {
+        ...DEFAULT_QUIET_HOURS,
+        ...(storedJson<Record<string, unknown>>(raw["ui.quietHours"], {}, isObject) as Partial<UiSettings["quietHours"]>),
+      },
+      vips: storedJson<string[]>(raw["ui.vips"], [], isStringList),
       muteCalls: raw["ui.muteCalls"] === "true",
       closeToTray: raw["ui.closeToTray"] !== "false",
       lowBattery: raw["ui.lowBattery"] !== "false",
@@ -1693,7 +1709,7 @@ export const useTugStore = defineStore("tug", () => {
       albumArt: raw["ui.albumArt"] !== "false",
       dialing: raw["ui.dialing"] === "true",
       filterUnknown: raw["ui.filterUnknown"] !== "false",
-      knownSenders: raw["ui.knownSenders"] ? (JSON.parse(raw["ui.knownSenders"]) as string[]) : [],
+      knownSenders: storedJson<string[]>(raw["ui.knownSenders"], [], isStringList),
       autoCopyCodes: raw["ui.autoCopyCodes"] !== "false",
       typeCodeHotkey: raw["ui.typeCodeHotkey"] !== "false",
       typeCodeKeys: knownHotkey(raw["ui.typeCodeKeys"]),
@@ -1707,7 +1723,7 @@ export const useTugStore = defineStore("tug", () => {
       pauseMediaOnCall: raw["ui.pauseMediaOnCall"] !== "false",
       focus: focusSettingsFrom(raw["ui.focus"]),
     };
-    clearedCodes.value = raw["ui.clearedCodes"] ? (JSON.parse(raw["ui.clearedCodes"]) as number[]) : [];
+    clearedCodes.value = storedJson<number[]>(raw["ui.clearedCodes"], [], isNumberList);
     batteryAlerted = restoreBatteryAlerted(raw["ui.batteryAlerted"], Date.now());
     sentHintDismissed.value = raw["ui.sentHintDismissed"] === "true";
     // A missing key is a fresh install: null (not ""), so the first launch records the version
@@ -2545,6 +2561,8 @@ export const useTugStore = defineStore("tug", () => {
     view,
     selectedThread,
     composeTo,
+    replyNumbers,
+    drafts,
     pickerOpen,
     quickTextOpen,
     openQuickText,
@@ -2659,8 +2677,17 @@ export const useTugStore = defineStore("tug", () => {
       if (ok) savedPickup("music");
       return ok;
     },
-    startDiscovery: () => attempt(api.startDiscovery),
-    stopDiscovery: () => {
+    /** Scan for the iPhone on behalf of `owner` (a token the calling panel keeps). */
+    startDiscovery: (owner: symbol) => {
+      scanning.hold(owner);
+      return attempt(api.startDiscovery);
+    },
+    /**
+     * `owner` is done scanning. The scan (and the list) only goes when no other panel still wants
+     * it: a panel being replaced unmounts after its replacement has started scanning.
+     */
+    stopDiscovery: (owner: symbol) => {
+      if (!scanning.release(owner)) return Promise.resolve(undefined);
       discovered.value = [];
       return attempt(api.stopDiscovery);
     },

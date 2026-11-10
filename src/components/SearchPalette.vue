@@ -37,6 +37,7 @@ import type { CallDirection, CallRecord, Contact, PhoneNotification, SearchResul
 import { isTugChant } from "../lib/logoTricks";
 import { logoSpins } from "../lib/logoSpin";
 import AppAvatar from "./AppAvatar.vue";
+import { imeComposing } from "../lib/ime";
 
 const tug = useTugStore();
 const tugboat = useTugboatStore();
@@ -73,6 +74,9 @@ watch(query, (q) => {
   active.value = 0;
   chose.value = false;
   window.clearTimeout(timer);
+  // What was typed has changed: a search still in flight for the old text mustn't land. It used
+  // to, once the box was emptied, and Enter then opened a result for text no longer there.
+  seq++;
   // A little secret for anyone who says the name five times: the logo spins. Not a search.
   if (isTugChant(q)) {
     logoSpins.value++;
@@ -350,6 +354,8 @@ async function move(delta: number) {
 }
 
 function onKey(e: KeyboardEvent) {
+  // Enter and the arrows belong to an input method while it's composing a word.
+  if (imeComposing(e)) return;
   if (e.key === "ArrowDown") void move(1);
   else if (e.key === "ArrowUp") void move(-1);
   else if (e.key === "Enter") {

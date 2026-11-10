@@ -53,6 +53,28 @@ beforeEach(() => {
   called.length = 0;
 });
 
+describe("starting a conversation for one number", () => {
+  it("remembers that number for the conversation, so the text can't go to the name's other one", () => {
+    const tug = useTugStore();
+    tug.startConversation("+13025550111", "John");
+    expect(tug.view).toBe("messages");
+    expect(tug.selectedThread).not.toBeNull();
+    expect(tug.replyNumbers[tug.selectedThread!]).toBe("+13025550111");
+    // Opening the conversation (which ends the draft) doesn't forget which number was asked for.
+    tug.openThread(tug.selectedThread!);
+    expect(tug.composeTo).toBeNull();
+    expect(tug.replyNumbers[tug.selectedThread!]).toBe("+13025550111");
+  });
+
+  it("keeps what was typed in a conversation while another view is open", () => {
+    const tug = useTugStore();
+    tug.drafts.set("thread", "running late, start without me");
+    tug.view = "feed";
+    tug.view = "messages";
+    expect(tug.drafts.get("thread")).toBe("running late, start without me");
+  });
+});
+
 describe("a switch whose save fails goes back", () => {
   it("setSetting reverts and says why", async () => {
     const tug = useTugStore();

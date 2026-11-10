@@ -91,10 +91,9 @@ impl Actor {
             .update_status(|s| s.advertising = AdvertisingState::Starting);
         self.advertise_gen += 1;
         match self.create_provider(self.advertise_gen).await {
-            Ok(provider) => {
-                self.provider = Some(provider);
-                self.advertise_failures = 0;
-            }
+            // Created isn't advertising yet: Windows can still abort it. The failure count (and
+            // with it the retry backoff) starts again only when it reports Started.
+            Ok(provider) => self.provider = Some(provider),
             // Bluetooth is off: there's nothing wrong with the adapter, and nothing to retry until
             // it's back (the radio coming On restarts it). Not an error, and no "may not support
             // peripheral mode" either.
@@ -110,7 +109,7 @@ impl Actor {
             // invisible, so the iPhone could never reconnect, until restarted.
             Err(e) if e.is_timeout() => {
                 self.advertise_failures = self.advertise_failures.saturating_add(1);
-                let wait = retry_delay(ADVERTISE_RETRY_SECS, self.advertise_failures, MAX_ADVERTISE_RETRY_SECS);
+                let wait = advertise_retry_secs(self.advertise_failures);
                 log::warn!(
                     "advertising didn't start in time (Bluetooth busy, {} in a row); retrying in {wait}s",
                     self.advertise_failures
@@ -121,7 +120,7 @@ impl Actor {
             // invisible to the iPhone until restarted.
             Err(e) => {
                 self.advertise_failures = self.advertise_failures.saturating_add(1);
-                let wait = retry_delay(ADVERTISE_RETRY_SECS, self.advertise_failures, MAX_ADVERTISE_RETRY_SECS);
+                let wait = advertise_retry_secs(self.advertise_failures);
                 log::error!(
                     "advertising failed ({} in a row): {e}; retrying in {wait}s",
                     self.advertise_failures

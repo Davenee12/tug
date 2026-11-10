@@ -9,8 +9,10 @@ pub enum Recipient {
     One {
         name: String,
         address: String,
-        /// Only found because the name contains what was typed ("ann" → "Joanne"), not because
-        /// it is the name, starts with it, or is a number. Such a text always gets the card.
+        /// Not certain enough to send without the card. Either the name was only found because it
+        /// contains what was typed ("ann" → "Joanne"), not because it is the name, starts with it,
+        /// or is a number; or the name has more than one number, which is as often two people
+        /// saved alike as one person with two phones, and the pick between them is a guess.
         loose: bool,
     },
     /// Several different people match: their names, so the caller can be more specific.
@@ -80,10 +82,12 @@ pub fn resolve(query: &str, contacts: &[Contact], recent: &[String]) -> Recipien
             recent.iter().position(|r| *r == a).unwrap_or(usize::MAX)
         };
         let best = hits.iter().min_by_key(|c| rank(c)).expect("non-empty");
+        let address = normalize(&best.address);
+        let several_numbers = hits.iter().any(|c| normalize(&c.address) != address);
         return Recipient::One {
             name: best.name.trim().to_string(),
-            address: normalize(&best.address),
-            loose: tier == 2,
+            address,
+            loose: tier == 2 || several_numbers,
         };
     }
     Recipient::NoMatch
@@ -118,7 +122,7 @@ mod tests {
             Recipient::One {
                 name: "Sam Rivera".into(),
                 address: "+15550100001".into(),
-                loose: false,
+                loose: true,
             }
         );
     }
@@ -149,9 +153,32 @@ mod tests {
             Recipient::One {
                 name: "Sam Rivera".into(),
                 address: "+15550100002".into(),
-                loose: false,
+                loose: true,
             }
         );
+    }
+
+    #[test]
+    fn a_name_with_several_numbers_is_never_sent_to_without_the_card() {
+        // The bug: two different people saved as "Chris Lee" look like one person with two
+        // numbers, and `tug text "Chris Lee" …` with "without asking" on went to whichever was
+        // texted last, with no card to show which.
+        let book = vec![c("Chris Lee", "+15550100011"), c("Chris Lee", "+15550100012")];
+        assert!(matches!(
+            resolve("Chris Lee", &book, &[]),
+            Recipient::One { loose: true, .. }
+        ));
+        // One number written two ways is one number.
+        let same = vec![c("Chris Lee", "+15550100011"), c("Chris Lee", "+1 (555) 010-0011")];
+        assert!(matches!(
+            resolve("Chris Lee", &same, &[]),
+            Recipient::One { loose: false, .. }
+        ));
+        // A name with a single number goes as before.
+        assert!(matches!(
+            resolve("Alex Kim", &self::book(), &[]),
+            Recipient::One { loose: false, .. }
+        ));
     }
 
     #[test]

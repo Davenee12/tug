@@ -23,13 +23,15 @@ const s = computed(() => tug.status);
 const scanning = ref(false);
 const busyId = ref<string | null>(null);
 
+// This panel's hold on the scan (stores/tug stopDiscovery): another panel's scan outlives it.
+const scanOwner = Symbol("phone setup");
 async function startScan() {
   scanning.value = true;
-  await tug.startDiscovery();
+  await tug.startDiscovery(scanOwner);
 }
 async function stopScan() {
   scanning.value = false;
-  await tug.stopDiscovery();
+  await tug.stopDiscovery(scanOwner);
 }
 
 // Scan while there's no iPhone chosen; stop as soon as one is.
@@ -39,7 +41,7 @@ watch(
   { immediate: true },
 );
 onUnmounted(() => {
-  if (scanning.value) void tug.stopDiscovery();
+  if (scanning.value) void tug.stopDiscovery(scanOwner);
   window.clearTimeout(resetTimer);
   window.clearTimeout(startOverTimer);
 });

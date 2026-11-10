@@ -279,15 +279,59 @@ function sendActions(rest: string, people: Person[]): Action[] {
   return findPeople(rest, people).map(({ person, text }) => build(person, text));
 }
 
+/** One group of a typed phone number: digits with the usual punctuation, and at least one digit. */
+const NUMBER_GROUP = /^[\d().-]*\d[\d().-]*$/;
+
+/**
+ * A number typed directly ("text 302 555 0100 on my way"): the number and the message after it.
+ *
+ * Where the number ends isn't always knowable when the message starts with a digit ("302 555 0100
+ * 2 mins away", "555 0100 4 of us"). Taking every leading group of digits made that 30255501002
+ * and sent "mins away" to it. So when the groups could be split two ways, both readings come back
+ * (the shorter number first) and the person picks one, like two people with the same name:
+ * - the first groups already make a whole number (10 digits, or 11 starting with 1) and more follow;
+ * - the last group is a single digit, and the number is long enough without it.
+ * Fewer than 7 digits in all isn't a number typed directly.
+ */
+export function typedNumbers(rest: string): Array<{ address: string; text: string }> {
+  const words = rest.trim().split(/\s+/);
+  let groups = 0;
+  while (groups < words.length && NUMBER_GROUP.test(groups === 0 ? words[0].replace(/^\+/, "") : words[groups])) {
+    groups++;
+  }
+  const address = (n: number) => words.slice(0, n).join("").replace(/[^\d+]/g, "");
+  const digits = (n: number) => address(n).replace(/\D/g, "");
+  if (groups === 0 || digits(groups).length < 7) return [];
+  // The message keeps its own spacing: drop the number's groups off the front of what was typed.
+  const reading = (n: number) => ({
+    address: address(n),
+    text: rest.trim().replace(new RegExp(`^(?:\\S+\\s*){${n}}`), "").trim(),
+  });
+  const all = reading(groups);
+  const plain = !all.address.startsWith("+") && !all.address.startsWith("0");
+  let shorter = 0;
+  if (plain) {
+    for (let n = 1; n < groups && !shorter; n++) {
+      const d = digits(n);
+      if (d.length === 10 || (d.length === 11 && d.startsWith("1"))) shorter = n;
+    }
+  }
+  if (!shorter && groups > 1 && digits(groups).length - digits(groups - 1).length === 1 && digits(groups - 1).length >= 7) {
+    shorter = groups - 1;
+  }
+  return shorter ? [reading(shorter), all] : [all];
+}
+
 /** Who "rest" starts with (and what follows the name), or a number typed directly. */
 function findPeople(rest: string, people: Person[]): Array<{ person: Person; text: string }> {
   const lowerRest = rest.toLowerCase();
   // A number typed directly: "text 302 555 0100 on my way".
-  const num = /^(\+?[\d\s().-]{7,}\d)(?:\s+(.*))?$/.exec(rest);
-  if (num) {
-    const address = num[1].replace(/[^\d+]/g, "");
-    const person = { name: formatAddress(address.length === 10 ? `+1${address}` : address), address };
-    return [{ person, text: (num[2] ?? "").trim() }];
+  const typed = typedNumbers(rest);
+  if (typed.length) {
+    return typed.map(({ address, text }) => ({
+      person: { name: formatAddress(address.length === 10 ? `+1${address}` : address), address },
+      text,
+    }));
   }
   // The longest name that starts what was typed wins; ties (two "Jo"s) all show, so
   // the right person is picked on purpose, never guessed.

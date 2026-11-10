@@ -187,9 +187,18 @@ export function senderName(title: string): string {
   return isAddressLike(title) ? formatAddress(normalizeAddress(title)) : cleanName(title);
 }
 
-/** One conversation per app + sender, however the sender's name (or number) is padded, cased or formatted. */
+/**
+ * One conversation per app + sender, however the sender's name (or number) is padded, cased or formatted.
+ *
+ * For Messages the key comes from the sender as shown (`senderName`), read once more the same way,
+ * because that is how `groupConversations` keys a conversation: it names it with `senderName`, then
+ * keys it by that name. The two readings differ for one case only: a +1 number on a PC outside
+ * North America is shown as "(302) 555-0199", which that PC reads back as the bare 3025550199. With a
+ * single reading here, such a sender's notification had a key no conversation carried, so its Feed
+ * row and pop-up opened whichever conversation was first, and marked that one read on the phone.
+ */
 export function threadKey(n: Pick<PhoneNotification, "appId" | "title">): string {
-  const name = n.appId === MESSAGES_APP ? senderName(n.title) : cleanName(n.title);
+  const name = n.appId === MESSAGES_APP ? senderName(senderName(n.title)) : cleanName(n.title);
   return `${n.appId}\u0000${nameKey(name)}`;
 }
 

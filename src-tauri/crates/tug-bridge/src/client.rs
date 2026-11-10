@@ -28,7 +28,7 @@ pub const SEND_TEXT_TIMEOUT: Duration = Duration::from_secs(210);
 
 /// What a timed-out `send_text` says: by then the text may be saved in tug and on its way, so
 /// sending it again could text the person twice.
-pub const SEND_TIMEOUT_MESSAGE: &str = "tug didn't answer in time. If you approved the text, it may still send:                                         check the conversation in tug and don't send it again.";
+pub const SEND_TIMEOUT_MESSAGE: &str = "tug didn't answer in time. If you approved the text, it may still send: check the conversation in tug and don't send it again.";
 
 pub const NOT_RUNNING: &str = "tug isn't running. Open tug and try again.";
 pub const NOT_SET_UP: &str =

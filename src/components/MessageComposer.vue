@@ -7,6 +7,7 @@ import { Clock, SendHorizontal } from "lucide-vue-next";
 import TimeMenu from "./TimeMenu.vue";
 import { useEmojiTyping } from "../lib/emojiTyping";
 import { useTugStore } from "../stores/tug";
+import { imeComposing } from "../lib/ime";
 
 const props = defineProps<{
   /** Every conversation's draft, by conversation key (reactive; read here, written by the parent). */
@@ -38,6 +39,8 @@ function send() {
 }
 
 function onKey(e: KeyboardEvent) {
+  // Enter that finishes an input method's word isn't a send.
+  if (imeComposing(e)) return;
   if (emoji.onKeydown(e)) return;
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();

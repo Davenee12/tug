@@ -313,9 +313,9 @@ impl Spotify {
         } else {
             let err = model::classify(resp.status, &resp.body, resp.retry_after);
             if let ApiError::RateLimited { retry_after } = err {
-                *lock(&self.blocked_until) =
-                    Some(std::time::Instant::now() + std::time::Duration::from_secs(retry_after));
-                log::info!("Spotify rate limit: pausing Spotify requests for {retry_after}s");
+                let pause = model::rate_limit_pause(retry_after);
+                *lock(&self.blocked_until) = Some(std::time::Instant::now() + pause);
+                log::info!("Spotify rate limit: pausing Spotify requests for {}s", pause.as_secs());
             }
             Err(err)
         }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addReminder,
   choices,
+  dueLabel,
   MAX_REMINDERS,
   parseReminders,
   reminderFor,
@@ -85,6 +86,19 @@ describe("reminders", () => {
     const x = r({ at: day(15).getTime() });
     expect(reminderTitle(x, day(15, 1).getTime())).toBe("Reminder · Jane Doe");
     expect(reminderTitle(x, day(17).getTime())).toBe(`Reminder (was due ${clockTime(day(15))}) · Jane Doe`);
+  });
+
+  it("says which day an overdue reminder was due, not just the time", () => {
+    // The bug: due yesterday at 6 PM, it popped up the next morning as "was due 6:00 PM".
+    const at = day(18).getTime();
+    const six = clockTime(day(18));
+    expect(dueLabel(at, day(22).getTime())).toBe(six);
+    expect(dueLabel(at, day(9, 0, 28).getTime())).toBe(`yesterday ${six}`);
+    expect(dueLabel(at, day(9, 0, 30).getTime())).toBe(`${day(18).toLocaleDateString([], { weekday: "short" })} ${six}`);
+    expect(dueLabel(at, new Date(2026, 10, 9, 9).getTime())).toBe(
+      `${day(18).toLocaleDateString([], { month: "short", day: "numeric" })} ${six}`,
+    );
+    expect(reminderTitle(r({ at }), day(9, 0, 28).getTime())).toBe(`Reminder (was due yesterday ${six}) · Jane Doe`);
   });
 
   it("makes distinct ids", () => {
