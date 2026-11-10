@@ -195,8 +195,8 @@ pub struct IncomingMessage<'a> {
 // The contact with exactly this address; failing that, the one contact whose number matches it in
 // another format (same last 10 digits, `store::match_key`; never a guess between two names); then a
 // name the phone sent with the message, until the number is a known contact. Two numbers that both
-// carry a country code (`+`) are already in one format, so they only match exactly: +44 7712 345678
-// and +1 771 234 5678 share their last 10 digits and are different people.
+// carry a country code (`+`) are already in one format, so they only match exactly: +44 7700 900123
+// and +33 7700 900123 share their last 10 digits and are different people.
 const SELECT: &str = "SELECT m.id, m.source, m.direction, m.address,
             COALESCE(c.name, (
                 SELECT CASE WHEN COUNT(DISTINCT k.name) = 1 THEN MIN(k.name) END
@@ -958,21 +958,21 @@ mod tests {
     #[test]
     fn a_number_from_another_country_is_not_a_contact_with_the_same_last_digits() {
         let s = Store::in_memory().unwrap();
-        s.save_phonebook(&[("+447712345678".into(), "Priya".into())]).unwrap();
-        // The bug: a stranger at +1 771 234 5678 was shown as Priya.
+        s.save_phonebook(&[("+447700900123".into(), "Priya".into())]).unwrap();
+        // The bug: a stranger at +33 7700 900123 was shown as Priya.
         let stranger = s
-            .insert_incoming(&incoming("H1", "+17712345678", "hello"))
+            .insert_incoming(&incoming("H1", "+337700900123", "hello"))
             .unwrap()
             .unwrap();
         assert_eq!(stranger.contact_name, None);
         // Her own number still finds her, as typed in full or the way it's dialled at home.
         let full = s
-            .insert_incoming(&incoming("H2", "+447712345678", "hi"))
+            .insert_incoming(&incoming("H2", "+447700900123", "hi"))
             .unwrap()
             .unwrap();
         assert_eq!(full.contact_name.as_deref(), Some("Priya"));
         let national = s
-            .insert_incoming(&incoming("H3", "07712345678", "hi again"))
+            .insert_incoming(&incoming("H3", "07700900123", "hi again"))
             .unwrap()
             .unwrap();
         assert_eq!(national.contact_name.as_deref(), Some("Priya"));
