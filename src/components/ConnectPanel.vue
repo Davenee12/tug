@@ -123,7 +123,10 @@ async function choose(d: DiscoveredDevice) {
   // A pairing that didn't take (or a bond the phone dropped mid-pairing) leaves no device: stay on
   // the find step and point back at confirming the code on the iPhone.
   if (!ok && !s.value.device) {
-    connectError.value = "Pairing didn't finish. On your iPhone keep Settings › Bluetooth open, tap Pair again, and confirm the code on both screens.";
+    // "Use" on a pairing Windows still holds has no code to confirm: say what will work instead.
+    connectError.value = d.paired
+      ? "tug couldn't use that pairing. Remove it (here, or under Windows Settings › Bluetooth & devices), then pair again with Settings › Bluetooth open on your iPhone."
+      : "Pairing didn't finish. On your iPhone keep Settings › Bluetooth open, tap Pair again, and confirm the code on both screens.";
   }
 }
 
