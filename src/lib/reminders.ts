@@ -57,18 +57,38 @@ export function choices(now: Date): Choice[] {
   return out;
 }
 
-/** When a pending reminder comes back, for the row's chip: "3:30 PM", or "Tomorrow 9:00 AM". */
-export function whenLabel(when: number, now: number): string {
-  const time = clockTime(new Date(when));
+/** Whole calendar days from `from` to `to` (negative when `to` is an earlier day). */
+function daysBetween(from: number, to: number): number {
   const day = (ms: number) => {
     const d = new Date(ms);
     d.setHours(0, 0, 0, 0);
     return d.getTime();
   };
-  const days = Math.round((day(when) - day(now)) / (24 * 60 * MINUTE));
+  return Math.round((day(to) - day(from)) / (24 * 60 * MINUTE));
+}
+
+/** When a pending reminder comes back, for the row's chip: "3:30 PM", or "Tomorrow 9:00 AM". */
+export function whenLabel(when: number, now: number): string {
+  const time = clockTime(new Date(when));
+  const days = daysBetween(now, when);
   if (days <= 0) return time;
   if (days === 1) return `Tomorrow ${time}`;
   return `${new Date(when).toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
+/**
+ * When something overdue was due, said from `now`: "6:00 PM" if that was today, else with its day
+ * ("yesterday 6:00 PM", "Mon 6:00 PM", or the date once it's a week old). A bare time for an
+ * earlier day read as today's.
+ */
+export function dueLabel(when: number, now: number): string {
+  const time = clockTime(new Date(when));
+  const ago = daysBetween(when, now);
+  if (ago <= 0) return time;
+  if (ago === 1) return `yesterday ${time}`;
+  const d = new Date(when);
+  if (ago < 7) return `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
 }
 
 /** The list with `r` added, soonest first. A second reminder for the same thing replaces the first. */
@@ -124,7 +144,7 @@ export function reminderId(now: number, random = Math.random): string {
 /** What the reminder's pop-up title says; one that came due while tug was closed says when it was due. */
 export function reminderTitle(r: Reminder, now: number): string {
   const late = now - r.at > 5 * MINUTE;
-  return late ? `Reminder (was due ${whenLabel(r.at, r.at)}) · ${r.title}` : `Reminder · ${r.title}`;
+  return late ? `Reminder (was due ${dueLabel(r.at, now)}) · ${r.title}` : `Reminder · ${r.title}`;
 }
 
 /** The saved list, whatever shape it's in: anything odd is left out. */

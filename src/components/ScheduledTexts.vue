@@ -4,7 +4,7 @@
 // Send now or Discard; tug never sends a late text by itself.
 import { computed } from "vue";
 import { Clock, TriangleAlert } from "lucide-vue-next";
-import { whenLabel } from "../lib/reminders";
+import { dueLabel, whenLabel } from "../lib/reminders";
 import { useScheduledTextsStore } from "../stores/scheduledTexts";
 import { useTugStore } from "../stores/tug";
 
@@ -20,6 +20,12 @@ function sends(at: number): string {
   if (/^\d/.test(when)) return `Sends at ${when}`;
   return `Sends ${when.startsWith("Tomorrow") ? `tomorrow${when.slice(8)}` : when}`;
 }
+
+/** "Not sent: it was due at 9:00 AM", or with its day when that wasn't today ("…due yesterday 9:00 AM"). */
+function held(at: number): string {
+  const due = dueLabel(at, Date.now());
+  return `Not sent: it was due ${/^\d/.test(due) ? `at ${due}` : due}`;
+}
 </script>
 
 <template>
@@ -33,7 +39,7 @@ function sends(at: number): string {
       <Clock v-else :size="14" class="shrink-0 text-muted" />
       <span class="min-w-0 flex-1">
         <span class="block text-[11px] text-muted">
-          {{ t.state === "held" ? `Not sent: it was due at ${whenLabel(t.at, t.at)}` : sends(t.at) }}
+          {{ t.state === "held" ? held(t.at) : sends(t.at) }}
         </span>
         <span class="preview-private block truncate text-ink">{{ t.text }}</span>
       </span>
