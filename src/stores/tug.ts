@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { computed, ref, watch, type Ref } from "vue";
+import { computed, reactive, ref, watch, type Ref } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -455,6 +455,14 @@ export const useTugStore = defineStore("tug", () => {
   const selectedThread = ref<string | null>(null);
   /** A new conversation being started from the + button, before any message exists. */
   const composeTo = ref<{ address: string; name: string } | null>(null);
+  /**
+   * The number to text in a conversation, by conversation key, when one was chosen on purpose: in
+   * the To: picker, or by starting the conversation for that number (lib/replyNumber). Kept here
+   * with the drafts, not in the Messages view, so neither is lost by looking at the Feed.
+   */
+  const replyNumbers = ref<Record<string, string>>({});
+  /** What's typed and not sent, one per conversation key. */
+  const drafts = reactive(new Map<string, string>());
   /** The New message picker (+ or Ctrl+N). */
   const pickerOpen = ref(false);
   /** The quick text composer, opened by its global shortcut from any app (lib/quickText). */
@@ -1636,7 +1644,10 @@ export const useTugStore = defineStore("tug", () => {
 
   function startConversation(address: string, name: string) {
     composeTo.value = { address, name };
-    selectedThread.value = threadKey({ appId: "com.apple.MobileSMS", title: name });
+    const key = threadKey({ appId: "com.apple.MobileSMS", title: name });
+    // This number, not whichever one the name's conversation would default to.
+    replyNumbers.value[key] = address;
+    selectedThread.value = key;
     view.value = "messages";
   }
 
@@ -2550,6 +2561,8 @@ export const useTugStore = defineStore("tug", () => {
     view,
     selectedThread,
     composeTo,
+    replyNumbers,
+    drafts,
     pickerOpen,
     quickTextOpen,
     openQuickText,

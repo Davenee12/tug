@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { ChevronRight, History, Image, Info, Phone, Plus, RotateCcw, ShieldQuestionMark, X } from "lucide-vue-next";
 import { useTugStore } from "../stores/tug";
 import { useScheduledTextsStore } from "../stores/scheduledTexts";
@@ -23,6 +23,7 @@ import ScheduledTexts from "./ScheduledTexts.vue";
 import SmartText from "./SmartText.vue";
 import { findCode } from "../lib/codes";
 import { conversationReplies } from "../lib/smartReplies";
+import { replyChoices, replyNumber } from "../lib/replyNumber";
 import type { SmsMessage } from "../types/protocol";
 
 const tug = useTugStore();
@@ -158,7 +159,10 @@ watch(convs, (list) => {
   const draft = tug.composeTo;
   if (!draft) return;
   const real = list.find((c) => c.items.length > 0 && c.addresses.includes(draft.address));
-  if (real) tug.openThread(real.key);
+  if (!real) return;
+  // The number that was asked for goes with it: the real conversation may hold others.
+  tug.replyNumbers[real.key] = draft.address;
+  tug.openThread(real.key);
 });
 
 // A long conversation renders its newest items only; scrolling up near the top reveals older ones
@@ -280,8 +284,9 @@ const statusLabel = (i: ConversationItem) => {
 // One draft per conversation: a shared box carried text typed to one person into another's
 // conversation, where Enter would send it to the wrong person.
 // Only MessageComposer reads a draft while rendering, so typing re-renders the composer alone,
-// not this whole view with the conversation in it.
-const drafts = reactive(new Map<string, string>());
+// not this whole view with the conversation in it. They live in the store: this view is unmounted
+// by the Feed, Calls and Settings, and a draft kept here was gone on coming back.
+const drafts = tug.drafts;
 const draftFor = (key: string) => drafts.get(key) ?? "";
 const setDraftFor = (key: string, text: string) => drafts.set(key, text);
 const draft = computed(() => (selected.value ? draftFor(selected.value.key) : ""));
@@ -290,24 +295,23 @@ watch(draft, (text) => {
   if (text.trim()) tug.warmTexts();
 });
 const sending = ref(false);
-/** Number chosen in the To: picker, per conversation (several numbers under one name). */
-const chosen = ref<Record<string, string>>({});
-const replyTo = computed(() => {
-  const c = selected.value;
-  if (!c) return null;
-  const pick = chosen.value[c.key];
-  return pick && c.addresses.includes(pick) ? pick : c.address;
-});
-const canPickNumber = computed(() => (selected.value?.addresses.length ?? 0) > 1);
+/**
+ * The number chosen for this conversation, in the To: picker or by opening it for one number
+ * (stores/tug replyNumbers, lib/replyNumber), and the numbers the picker offers.
+ */
+const asked = computed(() => (selected.value ? tug.replyNumbers[selected.value.key] : undefined));
+const replyTo = computed(() => (selected.value ? replyNumber(selected.value, asked.value) : null));
+const numbers = computed(() => replyChoices(selected.value?.addresses ?? [], asked.value));
+const canPickNumber = computed(() => numbers.value.length > 1);
 const canReply = computed(
-  () => (!!replyTo.value || canPickNumber.value) && tug.status.services.messages && !!selected.value?.addresses.length,
+  () => (!!replyTo.value || canPickNumber.value) && tug.status.services.messages && numbers.value.length > 0,
 );
 const replyHint = computed(() => {
   // Every conversation here is a Messages one (other chat apps stay in the Feed: lib/format).
   if (!selected.value) return "";
   const unavailable = replyUnavailable(tug.status, tug.switchContext);
   if (unavailable) return unavailable;
-  if (!selected.value.addresses.length) return "tug will learn this number when their next text arrives.";
+  if (!numbers.value.length) return "tug will learn this number when their next text arrives.";
   return "";
 });
 
@@ -533,12 +537,12 @@ async function retry(m: SmsMessage) {
           <select
             class="preview-private rounded-md border border-hairline bg-canvas px-2 py-1 font-mono text-[12px] text-ink"
             :value="replyTo ?? ''"
-            @change="chosen[selected.key] = ($event.target as HTMLSelectElement).value"
+            @change="tug.replyNumbers[selected.key] = ($event.target as HTMLSelectElement).value"
           >
             <option v-if="!replyTo" value="" disabled>Choose a number</option>
-            <option v-for="a in selected.addresses" :key="a" :value="a">{{ formatAddress(a) }}</option>
+            <option v-for="a in numbers" :key="a" :value="a">{{ formatAddress(a) }}</option>
           </select>
-          <span v-if="selected.addresses.length > 1">· {{ selected.addresses.length }} numbers under this name</span>
+          <span v-if="numbers.length > 1">· {{ numbers.length }} numbers under this name</span>
         </label>
         <ScheduledTexts :conversation="selected" />
         <SmartReplyChips
