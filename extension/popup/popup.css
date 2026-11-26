@@ -34,6 +34,14 @@ main { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .notice p { margin: 0; }
 .notice-title { color: var(--ink); font-weight: 500; font-size: 13px; }
 .notice-body { color: var(--muted); font-size: 13px; line-height: 1.45; margin-top: 2px !important; }
+.notice.success > .icon { color: var(--success-text); }
+.notice.info > .icon { color: var(--accent-text); }
+.notice.spinning > .icon { animation: spin 1.1s linear infinite; }
+.notice > div { min-width: 0; flex: 1; }
+.notice-x { width: 24px; height: 24px; margin: -2px -6px 0 0; }
+.notice-x .icon { width: 14px; height: 14px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .notice.spinning > .icon { animation: none; } }
 
 /* The code: the reason most people open the popup. */
 .code-card { padding: 14px 16px; border-radius: 12px; background: var(--surface-card); }
@@ -57,6 +65,7 @@ main { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .code-from strong { color: var(--ink); font-weight: 500; }
 .code-from span:not(:empty)::before { content: " · "; }
 .copy { min-width: 84px; }
+.copy-note { margin: 8px 0 0; font-size: 12px; color: var(--error-text); line-height: 1.45; }
 .code-card.old .copy { background: var(--canvas); color: var(--ink); border: 1px solid var(--hairline); }
 .copy.done, .code-card.old .copy.done { background: var(--success-tint); color: var(--success-text); border: 0; }
 
@@ -88,6 +97,11 @@ main { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .hit-who { min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .hit-who strong { color: var(--ink); font-weight: 500; margin-right: 6px; }
 .hit-time { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.hit-end { display: inline-flex; align-items: center; gap: 2px; }
+.hit-reply { width: 24px; height: 24px; margin: -3px -4px -3px 0; display: none; }
+.hit-reply .icon { width: 14px; height: 14px; }
+.hit.can-reply:hover .hit-reply, .hit.can-reply:focus-within .hit-reply { display: inline-grid; }
+.hit.can-reply:hover .hit-time, .hit.can-reply:focus-within .hit-time { display: none; }
 .hit-text {
   grid-column: 2 / -1; font-size: 13px; color: var(--body); line-height: 1.45;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -110,8 +124,27 @@ main { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .np-btn:hover { background: var(--media-raised); }
 .np-btn.play { width: 34px; height: 34px; background: var(--on-dark); color: var(--surface-dark); }
 .np-btn.play:hover { background: #ffffff; }
-.np-btn:disabled { opacity: 0.5; cursor: default; }
+.np-btn:disabled, .np-btn[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 .np-btn:focus-visible { outline-color: var(--on-dark); }
+/* A skip on its way: the old track fades until the phone reports the new one. */
+.np.pending .np-text { opacity: 0.45; transition: opacity 120ms ease; }
+
+/* Compose: a new text or a reply. tug's own card has the last word. */
+.compose-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.compose-title { margin: 0; font-size: 21px; line-height: 1.2; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compose-form { display: flex; flex-direction: column; gap: 10px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.textarea { height: auto; min-height: 92px; padding: 9px 12px; resize: vertical; line-height: 1.45; font: inherit; user-select: text; }
+.compose-note { margin: 0; font-size: 12px; color: var(--muted); }
+.compose-note.off { color: var(--warning-text); }
+.compose-error { margin: 0; padding: 9px 12px; border-radius: 8px; background: var(--surface-soft); border: 1px solid var(--hairline); font-size: 13px; color: var(--body); line-height: 1.45; }
+.compose-error strong { color: var(--error-text); font-weight: 500; }
+.compose-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.count { margin-right: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.count.over { color: var(--error-text); }
+.waiting { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 16px 12px 8px; }
+.waiting h1 { margin: 0 0 6px; font-size: 25px; line-height: 1.2; }
+.waiting p { margin: 0; color: var(--muted); font-size: 13px; max-width: 290px; }
 
 /* Whole-popup states. */
 .screen { align-items: center; text-align: center; padding: 28px 24px 24px; gap: 0; }
@@ -131,6 +164,8 @@ main { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px 8px 16px; border-top: 1px solid var(--hairline-soft); background: var(--surface-soft); }
 .foot-hint { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); }
 .foot-hint kbd:last-of-type { margin-right: 4px; }
+.foot-actions { display: inline-flex; align-items: center; gap: 4px; }
+.new-text { height: 30px; }
 kbd {
   font: 11px/1 var(--font-mono); padding: 3px 5px; border-radius: 4px;
   background: var(--canvas); border: 1px solid var(--hairline); border-bottom-width: 2px; color: var(--body);

@@ -45,7 +45,20 @@ const STATES = {
   off: { all: new TugError("off", "Let AI tools use tug is off.") },
   notinstalled: { all: new TugError("not_installed", "Specified native messaging host not found.") },
   wrongid: { all: new TugError("wrong_extension", "Access to the specified native messaging host is forbidden.") },
+  compose: {},
+  textsent: {},
+  textwaiting: {},
+  copyfail: { copyFails: true },
+  textsoff: { permissions: { ...permissions, send_text: false } },
 };
+
+/** The last text as the service worker would have kept it, for the states that show one. */
+export function mockLastText(name) {
+  const at = Date.now() - 30_000;
+  if (name === "textsent") return { state: "done", to: "Maya Chen", at, result: { outcome: "sent", to: "Maya Chen", detail: "" } };
+  if (name === "textwaiting") return { state: "waiting", to: "Maya Chen", at };
+  return null;
+}
 
 export function installMock(name) {
   const s = STATES[name] ?? STATES.connected;
@@ -55,16 +68,27 @@ export function installMock(name) {
     if (s.all) throw s.all;
     switch (call.tool) {
       case "status":
-        return { version: "0.5.24", permissions, phone: s.phone ?? phone };
+        return { version: "0.5.24", permissions: s.permissions ?? permissions, phone: s.phone ?? phone };
       case "get_latest_code": {
         if (s.code instanceof Error) throw s.code;
-        return { ...(s.code ?? code), copied: call.copy };
+        return { ...(s.code ?? code), copied: call.copy && !s.copyFails };
       }
       case "search_messages":
         // tug answers with the hits themselves, newest first.
         return hits.filter((h) => (h.text + h.from).toLowerCase().includes(call.query.toLowerCase()));
       case "media_control":
         return { ok: true };
+      case "send_text": {
+        // "nobody" and "sam" show tug's two answers about who it's to; anything else sends
+        // once "you" click Send on tug's card.
+        const to = String(call.to).trim();
+        if (to.toLowerCase() === "nobody") throw new TugError("not_found", `No contact named "${to}".`);
+        if (to.toLowerCase() === "sam") {
+          throw new TugError("invalid", 'More than one contact matches "Sam": Sam Ortiz, Sam Lee. Say which one.');
+        }
+        await wait(1500);
+        return { outcome: "sent", to, detail: null };
+      }
       default:
         throw new TugError("not_allowed", "Not in the mock.");
     }

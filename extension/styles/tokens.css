@@ -19,6 +19,8 @@
   --on-primary: #ffffff;
   /* The primary button: white text needs the deeper coral. */
   --button: #a9583e;
+  /* 3:1 against the cards it sits on, which --primary isn't in light mode. */
+  --focus-outline: var(--button);
   --button-hover: #9e4f37;
   --button-pressed: #8f4631;
 
@@ -110,7 +112,7 @@ body {
 }
 
 button { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
 
 .headline { font-family: var(--font-display); font-weight: 400; color: var(--ink); letter-spacing: -0.02em; }
 .caption-upper { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 1.5px; color: var(--muted); }
@@ -135,7 +137,7 @@ button { font: inherit; color: inherit; }
   border: 1px solid var(--hairline); background: var(--canvas); color: var(--ink);
   font: inherit; outline: none;
 }
-.input::placeholder { color: var(--muted-soft); }
+.input::placeholder { color: var(--muted); }
 .input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus-ring); }
 
 .icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }

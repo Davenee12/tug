@@ -55,7 +55,19 @@ $psi.UseShellExecute = $false
 $psi.RedirectStandardInput = $true
 $psi.RedirectStandardOutput = $true
 $psi.CreateNoWindow = $true
-$p = [System.Diagnostics.Process]::Start($psi)
+# The pipe to the host must carry exactly the frame. Windows PowerShell 5.1 opens it with the
+# console's input encoding, and when that's UTF-8 (chcp 65001) it writes a byte-order mark first,
+# which the host rightly reads as part of the length. PowerShell 7 can say so on the process;
+# 5.1 takes it from the console, so set that for the start and put it back.
+$utf8 = New-Object System.Text.UTF8Encoding $false
+$consoleIn = [Console]::InputEncoding
+if ($psi.PSObject.Properties.Name -contains 'StandardInputEncoding') { $psi.StandardInputEncoding = $utf8 }
+try {
+  [Console]::InputEncoding = $utf8
+  $p = [System.Diagnostics.Process]::Start($psi)
+} finally {
+  [Console]::InputEncoding = $consoleIn
+}
 
 $body = [System.Text.Encoding]::UTF8.GetBytes("{`"id`":1,`"call`":$Call}")
 $in = $p.StandardInput.BaseStream
@@ -81,7 +93,15 @@ $reply = [System.Text.Encoding]::UTF8.GetString((ReadExactly $out $len))
 if (-not $p.WaitForExit(15000)) { $p.Kill() }
 
 $r = $reply | ConvertFrom-Json
+# tug's own answers about the call (no code yet, a switch off, the phone away) mean the path from
+# the browser to tug works; anything from the host itself, or the master switch, means it doesn't.
+$appAnswers = 'not_found', 'tool_off', 'unavailable', 'rate_limited', 'busy', 'invalid'
 if ($r.error) {
+  if ($appAnswers -contains $r.error.code) {
+    Write-Output "ok    the path to tug works; tug answered $($r.error.code): $($r.error.message)"
+    if ($failed) { exit 1 }
+    exit 0
+  }
   Write-Output "FAIL  tug answered with an error: $($r.error.code): $($r.error.message)"
   exit 1
 }

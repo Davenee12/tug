@@ -2,7 +2,7 @@
 
 A Chrome and Edge extension that brings tug into the browser: the newest verification code (fill it
 into a sign-in page with a right-click or **Alt+Shift+C**), search across texts and notifications,
-the phone's status and its music controls. It's a companion to the tug app and does nothing
+send a text (or reply to one from search), the phone's status and its music controls. It's a companion to the tug app and does nothing
 without it.
 
 ## How it reaches tug
@@ -26,8 +26,19 @@ extension ──native messaging──► bin\tug.exe (native host) ──named 
 
 ## Permissions
 
-`nativeMessaging`, `contextMenus`, `activeTab`, `scripting`. No host permissions and no content
-scripts: a page is touched only when you ask to fill a code on it.
+`nativeMessaging`, `contextMenus`, `activeTab`, `scripting`, `storage`. No host permissions and no
+content scripts: a page is touched only when you ask to fill a code on it.
+
+`storage` is `chrome.storage.session` only (memory, gone when the browser closes): who the last
+text from the popup went to and how it went, so the popup can say so after it closed for tug's
+card. Never the message itself.
+
+## Texts
+
+The popup's **New text** (or a reply button on a search result) sends through tug's `send_text`,
+and the host always asks for tug's card: nothing goes until you click Send in tug. The popup closes
+when you click into tug, so the service worker holds the call open (`connectNative`, which also
+keeps it alive) and keeps the outcome; the toolbar badge shows `…` while tug waits, then `✓` or `!`.
 
 ## Develop
 
@@ -40,7 +51,8 @@ No build step: the folder is the extension.
    is forbidden".
 3. Preview any popup state without tug: `popup/popup.html?mock=connected` (also `search`, `copied`,
    `old`, `nocode`, `paused`, `connecting`, `disconnected`, `codesoff`, `notrunning`, `off`,
-   `notinstalled`, `wrongid`, `loading`), served from any static server or inside the extension.
+   `notinstalled`, `wrongid`, `loading`, `compose`, `textsent`, `textwaiting`, `textsoff`, `copyfail`;
+   in `compose`, sending to "nobody" or "sam" shows tug's two answers about who it's to), served from any static server or inside the extension.
 
 Tests:
 

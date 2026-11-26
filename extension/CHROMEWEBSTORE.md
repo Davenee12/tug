@@ -8,7 +8,7 @@
 **Extension name:** tug
 
 **Short description** (132 max):
-Fill verification codes from your iPhone, search your texts and control its music, from the tug app on your Windows PC.
+Fill verification codes from your iPhone, search and send texts and control its music, from the tug app on your Windows PC.
 
 **Detailed description:**
 
@@ -20,6 +20,8 @@ Fill a code without reaching for your phone. On a sign-in page, right-click the 
 See the newest code at a glance. Click the toolbar button to see the code, who sent it and how long ago, with a Copy button.
 
 Search your texts and notifications from the toolbar, across what tug has on your PC.
+
+Send a text, or reply to one from your search results. tug shows you the text first, and nothing is sent until you click Send there.
 
 Control your iPhone's music: play, pause and skip.
 
@@ -60,14 +62,17 @@ phone's texts.
 | `contextMenus` | permissions | Adds "Fill code from iPhone" to the right-click menu on text fields. |
 | `activeTab` | permissions | When the user picks "Fill code from iPhone" or presses its shortcut, the code is put into the page they're on, and a short confirmation is shown there. No access to any page otherwise. |
 | `scripting` | permissions | Used with activeTab, only on that gesture, to put the code into the field and show the confirmation. |
+| `storage` | permissions | `storage.session` only, kept in memory and cleared when the browser closes: who the last text sent from the popup went to and whether it was sent, so the popup can say how it went after the user confirmed it in tug. Never the message. |
 
-No `host_permissions`, no content scripts, no `tabs`, no storage.
+No `host_permissions`, no content scripts, no `tabs`, no `storage.local` or `storage.sync`.
 
 ## Privacy and data use
 
 **Does the extension collect user data?** No. The extension shows the user their own codes, texts
 and now playing, read from the tug app on the same computer at the moment they're shown. It keeps
-nothing, sends nothing off the device, and has no analytics.
+nothing on disk, sends nothing off the device, and has no analytics. After a text is sent from the
+popup, who it went to and its outcome stay in browser memory (`storage.session`) for the popup to
+show, and are gone when the browser closes.
 
 For the dashboard's form, "Personal communications" and "Authentication info" are *handled* on the
 device (text snippets in search results, verification codes) but not collected or transmitted.

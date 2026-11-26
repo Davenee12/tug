@@ -113,6 +113,95 @@ export function nowPlaying(phone) {
 }
 
 /**
+ * Now playing as the popup shows it right after a music button: the phone takes a moment to report
+ * the change, so a pressed play/pause shows at once and a skip dims the track until a new title
+ * arrives, for up to `hold.until`. `hold` is { kind: "toggle", playing } or { kind: "skip", title }.
+ * While a skip is held and the phone briefly reports nothing playing, the last shown track stays.
+ * Returns what to show, whether it's still pending, and the hold to keep (null once settled).
+ */
+export function heldNowPlaying(np, hold, now = Date.now(), shown = null) {
+  if (!hold || now > hold.until) return { np, pending: false, hold: null };
+  if (hold.kind === "toggle") {
+    if (!np || np.playing === hold.playing) return { np, pending: false, hold: null };
+    return { np: { ...np, playing: hold.playing }, pending: false, hold };
+  }
+  if (!np) return { np: shown, pending: Boolean(shown), hold };
+  if (np.title !== hold.title) return { np, pending: false, hold: null };
+  return { np, pending: true, hold };
+}
+
+/** tug's limits for a text, in characters (tug_bridge::protocol MAX_NAME_CHARS, MAX_TEXT_CHARS). */
+export const MAX_TO_CHARS = 100;
+export const MAX_TEXT_CHARS = 1000;
+
+/** Characters as tug counts them (Unicode scalar values, as Rust's `chars()`), not UTF-16 units. */
+export const charCount = (s) => [...String(s ?? "")].length;
+
+/** What stops a text going to tug as written, or null when nothing does. */
+export function composeProblem(to, message) {
+  if (!String(to ?? "").trim()) return "Who's it to?";
+  if (!String(message ?? "").trim()) return "Write a message first.";
+  if (charCount(String(to).trim()) > MAX_TO_CHARS) return `A name can be ${MAX_TO_CHARS} characters at most.`;
+  if (charCount(message) > MAX_TEXT_CHARS) return `A text can be ${MAX_TEXT_CHARS} characters at most.`;
+  return null;
+}
+
+/** A search result that can be answered: a text someone sent (not a notification, not your own). */
+export function canReply(hit) {
+  return hit?.kind === "text" && typeof hit.from === "string" && hit.from.trim() !== "" && hit.from !== "You";
+}
+
+/**
+ * What tug's answer to a text means for the person (tug_bridge::protocol SendOutcome, worded as
+ * `tug text` words it). `queued` reads as a warning, never a failure: it may still send, so it
+ * must not invite sending it again.
+ */
+export function sendOutcome(r) {
+  const to = r?.to || "them";
+  switch (r?.outcome) {
+    case "sent":
+      return { tone: "success", title: `Sent to ${to}`, body: r.detail || "" };
+    case "queued":
+      return {
+        tone: "warning",
+        title: `Queued for ${to}`,
+        body: "tug is still waiting for your iPhone, so it may still send. Check the conversation in tug, and don't send it again.",
+      };
+    case "declined":
+      return { tone: "info", title: "Not sent", body: `You chose Don't send for ${to}.` };
+    case "timed_out":
+      return { tone: "info", title: "Not sent", body: "Nobody clicked Send in tug within 2 minutes." };
+    case "cancelled":
+      return { tone: "info", title: "Not sent", body: "It was cancelled in tug." };
+    case "failed":
+      return {
+        tone: "error",
+        title: "Not sent",
+        body: `Your iPhone didn't take it${r.detail ? ` (${r.detail.replace(/\.$/, "")})` : ""}. You can retry it from the conversation in tug.`,
+      };
+    default:
+      return { tone: "warning", title: "Not sure it was sent", body: "Check the conversation in tug before sending it again." };
+  }
+}
+
+/** A failed `send_text`: who it's to went wrong, or the usual reasons a call fails. */
+export function explainSendError(code, message) {
+  switch (code) {
+    case "invalid":
+      return { title: "Check who it's to", body: message || "tug couldn't tell who to send it to." };
+    case "not_found":
+      return { title: "No contact by that name", body: message || "Use their name as it's saved on your iPhone, or a phone number." };
+    case "unavailable":
+      return { title: "Can't send right now", body: message || "Texts aren't connected in tug right now." };
+    case "failed":
+      // The host may have gone after the card was answered: never invite a second send.
+      return { title: "Couldn't reach tug", body: "If you clicked Send in tug, check the conversation there before sending it again." };
+    default:
+      return explainError(code, message);
+  }
+}
+
+/**
  * What a failed call means for the person, from the native host's error code (see
  * src-tauri/crates/tug-bridge/src/native.rs) or the browser's own failure to start the host.
  * `screen` is a whole-popup state; otherwise the message shows inline where the call was made.

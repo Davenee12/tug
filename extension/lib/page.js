@@ -4,11 +4,18 @@
 
 /**
  * Put `code` in the page's verification code field. Returns how: "field" (one box), "boxes"
- * (one digit per box), or "none" when there's no field to fill.
+ * (one digit per box), or "none" when there's no field to fill. Async so frameworks get a turn
+ * between boxes (executeScript waits for it).
  */
-export function fillCodeInPage(code) {
+export async function fillCodeInPage(code) {
   const TEXTISH = new Set(["", "text", "tel", "number", "password", "search"]);
-  const HINT = /one.?time|otp|passcode|verif|2fa|mfa|security.?code|auth.?code|sms.?code|\bcode\b|token|\bpin\b/i;
+  const HINT = /one.?time|otp|passcode|verif|2fa|mfa|auth.?code|sms.?code|\bcode\b|token|\bpin\b/i;
+  // Fields a "code" hint also matches that must never get a sign-in code (checkout pages).
+  const NOT = /zip|postal|post.?code|promo|coupon|discount|voucher|gift|referral|invite|country|area.?code|card|cvc|cvv|csc|security.?code/i;
+
+  // Focus is in a frame this script isn't running in (a bank's 3-D Secure challenge, say): the
+  // code box is in there, so guessing at fields up here could fill the wrong one.
+  if (/^(IFRAME|FRAME|OBJECT|EMBED)$/.test(document.activeElement?.tagName ?? "")) return "none";
 
   const visible = (el) => {
     const r = el.getBoundingClientRect();
@@ -41,17 +48,28 @@ export function fillCodeInPage(code) {
     el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
   };
 
+  // Up one level, out of a shadow root to its host when there's no parent left inside it.
+  const up = (n) => n.parentElement ?? (n.parentNode instanceof ShadowRoot ? n.parentNode.host : null);
+  const within = (node, el) => {
+    for (let n = el; n; n = up(n)) if (n === node) return true;
+    return false;
+  };
+
   // One box per digit: maxlength 1 inputs, grouped under the nearest ancestor that holds enough.
   const boxes = inputs.filter((el) => el.maxLength === 1);
   if (boxes.length >= code.length) {
     const start = boxes.includes(active) ? active : boxes[0];
     let group = null;
-    for (let node = start.parentElement; node && !group; node = node.parentElement) {
-      const inside = boxes.filter((b) => node.contains(b));
+    for (let node = up(start); node && !group; node = up(node)) {
+      const inside = boxes.filter((b) => within(node, b));
       if (inside.length >= code.length) group = inside;
     }
     if (group) {
-      group.slice(0, code.length).forEach((el, i) => put(el, code[i]));
+      // One digit a turn: an OTP component that rebuilds its value on render sees each one land.
+      for (const [i, el] of group.slice(0, code.length).entries()) {
+        put(el, code[i]);
+        await new Promise((r) => setTimeout(r));
+      }
       group[Math.min(code.length, group.length) - 1].blur?.();
       return "boxes";
     }
@@ -61,10 +79,12 @@ export function fillCodeInPage(code) {
     [el.name, el.id, el.placeholder, el.getAttribute("aria-label"), el.labels?.[0]?.textContent]
       .filter(Boolean)
       .join(" ");
+  // A programmatic value ignores maxlength, so a one-digit box never takes the whole code.
+  const fits = (el) => el.maxLength !== 1 || code.length === 1;
   const target =
-    (usable(active) ? active : null) ||
-    inputs.find((el) => el.autocomplete === "one-time-code") ||
-    inputs.find((el) => HINT.test(describe(el)) && el.type !== "password") ||
+    (usable(active) && fits(active) ? active : null) ||
+    inputs.find((el) => el.autocomplete === "one-time-code" && fits(el)) ||
+    inputs.find((el) => HINT.test(describe(el)) && !NOT.test(describe(el)) && el.type !== "password" && fits(el)) ||
     null;
   if (!target) return "none";
   put(target, code);
@@ -151,5 +171,12 @@ export function showToastInPage(toast) {
   card.addEventListener("mouseenter", () => clearTimeout(timer));
   card.addEventListener("mouseleave", () => (timer = setTimeout(close, 2500)));
   (document.body || document.documentElement).appendChild(host);
+  // In the top layer, so an open modal dialog (common on sign-in pages) can't cover it.
+  try {
+    host.popover = "manual";
+    host.showPopover();
+  } catch {
+    // It still shows, just not above a modal.
+  }
   timer = setTimeout(close, toast.tone === "error" ? 6000 : 4000);
 }

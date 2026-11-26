@@ -1,7 +1,26 @@
 // node --test extension/test (run by `npm run check`).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ago, codeAge, codeSource, explainError, groupCode, initial, isOldCode, nowPlaying, phoneLine, phoneNotice, shortTime } from "../lib/format.js";
+import {
+  ago,
+  canReply,
+  charCount,
+  codeAge,
+  codeSource,
+  composeProblem,
+  explainError,
+  explainSendError,
+  groupCode,
+  heldNowPlaying,
+  initial,
+  isOldCode,
+  nowPlaying,
+  phoneLine,
+  phoneNotice,
+  sendOutcome,
+  shortTime,
+} from "../lib/format.js";
+import { lastTextNotice, SHOW_RESULT_MS, WAITING_MAX_MS } from "../lib/texts.js";
 import { hostError } from "../lib/tug.js";
 
 test("codes are grouped the way people read them", () => {
@@ -102,4 +121,102 @@ test("a notice shows only when the phone needs attention", () => {
   assert.equal(phoneNotice({ ...p, connection: "disconnected" }).tone, "warning");
   assert.equal(phoneNotice({ connection: "connecting" }).title, "Connecting to your iPhone…");
   assert.equal(phoneNotice({ connection: "no_phone" }).title, "No iPhone set up yet");
+});
+
+test("a pressed play or pause shows at once, until the phone agrees", () => {
+  const np = { title: "Harbour Lights", subtitle: "", playing: true };
+  const hold = { kind: "toggle", playing: false, until: 1000 };
+  // The phone still says playing: show paused, keep holding.
+  assert.deepEqual(heldNowPlaying(np, hold, 500), { np: { ...np, playing: false }, pending: false, hold });
+  // The phone caught up: let go.
+  assert.deepEqual(heldNowPlaying({ ...np, playing: false }, hold, 600), { np: { ...np, playing: false }, pending: false, hold: null });
+  // Too long: believe the phone.
+  assert.deepEqual(heldNowPlaying(np, hold, 1001), { np, pending: false, hold: null });
+  assert.deepEqual(heldNowPlaying(np, null, 0), { np, pending: false, hold: null });
+});
+
+test("a skip dims the old track until a new title arrives", () => {
+  const np = { title: "Harbour Lights", subtitle: "", playing: true };
+  const hold = { kind: "skip", title: "Harbour Lights", until: 1000 };
+  assert.deepEqual(heldNowPlaying(np, hold, 100), { np, pending: true, hold });
+  // Between tracks the phone may report nothing: keep what was shown.
+  assert.deepEqual(heldNowPlaying(null, hold, 100, np), { np, pending: true, hold });
+  const next = { ...np, title: "Low Tide" };
+  assert.deepEqual(heldNowPlaying(next, hold, 200), { np: next, pending: false, hold: null });
+  assert.deepEqual(heldNowPlaying(np, hold, 2000), { np, pending: false, hold: null });
+});
+
+test("characters are counted as tug counts them", () => {
+  assert.equal(charCount("hi"), 2);
+  assert.equal(charCount("👍🏽"), 2); // Two scalar values, four UTF-16 units.
+  assert.equal(charCount(undefined), 0);
+});
+
+test("a text needs someone to go to and something to say, within tug's limits", () => {
+  assert.equal(composeProblem("", "hi"), "Who's it to?");
+  assert.equal(composeProblem("   ", "hi"), "Who's it to?");
+  assert.equal(composeProblem("Maya", "  "), "Write a message first.");
+  assert.equal(composeProblem("x".repeat(101), "hi"), "A name can be 100 characters at most.");
+  assert.equal(composeProblem("Maya", "x".repeat(1001)), "A text can be 1000 characters at most.");
+  assert.equal(composeProblem("Maya", "😀".repeat(1000)), null); // 2000 UTF-16 units, 1000 characters.
+  assert.equal(composeProblem(" Maya ", "hi"), null);
+});
+
+test("only a text someone else sent can be replied to", () => {
+  assert.equal(canReply({ kind: "text", from: "Maya Chen" }), true);
+  assert.equal(canReply({ kind: "text", from: "You" }), false);
+  assert.equal(canReply({ kind: "notification", from: "OpenTable" }), false);
+  assert.equal(canReply({ kind: "text", from: " " }), false);
+  assert.equal(canReply(null), false);
+});
+
+test("each way a text can end reads plainly, and none invites a second send when unsure", () => {
+  assert.deepEqual(sendOutcome({ outcome: "sent", to: "Maya", detail: null }), { tone: "success", title: "Sent to Maya", body: "" });
+  assert.equal(sendOutcome({ outcome: "queued", to: "Maya" }).tone, "warning");
+  assert.match(sendOutcome({ outcome: "queued", to: "Maya" }).body, /don't send it again/);
+  assert.equal(sendOutcome({ outcome: "declined", to: "Maya" }).body, "You chose Don't send for Maya.");
+  assert.match(sendOutcome({ outcome: "timed_out", to: "Maya" }).body, /2 minutes/);
+  assert.equal(sendOutcome({ outcome: "cancelled", to: "Maya" }).tone, "info");
+  assert.equal(
+    sendOutcome({ outcome: "failed", to: "Maya", detail: "Not delivered." }).body,
+    "Your iPhone didn't take it (Not delivered). You can retry it from the conversation in tug.",
+  );
+  assert.equal(sendOutcome(null).title, "Not sure it was sent");
+  assert.equal(sendOutcome({ outcome: "something_new" }).title, "Not sure it was sent");
+});
+
+test("a failed send says what to fix, and never to just send it again", () => {
+  assert.equal(explainSendError("not_found", "").title, "No contact by that name");
+  assert.equal(explainSendError("invalid", "More than one contact matches").body, "More than one contact matches");
+  assert.equal(explainSendError("unavailable", "").title, "Can't send right now");
+  assert.match(explainSendError("failed", "port closed").body, /check the conversation there/);
+  assert.equal(explainSendError("not_running", "").screen, "closed");
+  assert.equal(explainSendError("tool_off", "").title, "Switched off in tug");
+});
+
+test("the popup remembers the last text only as long as it helps", () => {
+  const now = 10_000_000;
+  assert.equal(lastTextNotice(null, now), null);
+  assert.equal(lastTextNotice({ state: "waiting", to: "Maya" }, now), null); // No time: ignore.
+
+  const waiting = lastTextNotice({ state: "waiting", to: "Maya", at: now - 1000 }, now);
+  assert.equal(waiting.waiting, true);
+  assert.equal(waiting.dismissable, false);
+  assert.equal(waiting.icon, "loader-circle");
+
+  // A wait that outlived any send: unsure, not "waiting" forever.
+  const cutOff = lastTextNotice({ state: "waiting", to: "Maya", at: now - WAITING_MAX_MS - 1 }, now);
+  assert.equal(cutOff.title, "Not sure it was sent");
+  assert.equal(cutOff.waiting, false);
+  assert.equal(lastTextNotice({ state: "waiting", to: "Maya", at: now - WAITING_MAX_MS - SHOW_RESULT_MS - 1 }, now), null);
+
+  const sent = lastTextNotice({ state: "done", to: "Maya", at: now - 1000, result: { outcome: "sent", to: "Maya" } }, now);
+  assert.equal(sent.title, "Sent to Maya");
+  assert.equal(sent.icon, "check");
+  assert.equal(sent.dismissable, true);
+  assert.equal(lastTextNotice({ state: "done", to: "Maya", at: now - SHOW_RESULT_MS - 1, result: { outcome: "sent" } }, now), null);
+
+  const failed = lastTextNotice({ state: "error", to: "Maya", at: now - 1000, error: { code: "not_found", message: "" } }, now);
+  assert.equal(failed.tone, "error");
+  assert.equal(failed.title, "No contact by that name");
 });

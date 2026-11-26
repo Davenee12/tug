@@ -22,6 +22,18 @@
 
     <!-- Everything below the header while tug answers. -->
     <main data-view="ready" hidden>
+      <!-- The last text sent from here: waiting in tug, or how it went. -->
+      <div class="notice" data-text-notice role="status" hidden>
+        <svg class="icon"><use data-text-notice-icon href="../styles/icons.svg#message-square" /></svg>
+        <div>
+          <p class="notice-title" data-text-notice-title></p>
+          <p class="notice-body" data-text-notice-body></p>
+        </div>
+        <button class="icon-btn notice-x" data-text-notice-dismiss aria-label="Dismiss" title="Dismiss">
+          <svg class="icon"><use href="../styles/icons.svg#x" /></svg>
+        </button>
+      </div>
+
       <div class="notice" data-notice hidden>
         <svg class="icon"><use data-notice-icon href="../styles/icons.svg#bluetooth-off" /></svg>
         <div>
@@ -45,6 +57,7 @@
             <svg class="icon"><use href="../styles/icons.svg#copy" /></svg><span>Copy</span>
           </button>
         </div>
+        <p class="copy-note" data-copy-note role="status" hidden></p>
       </section>
 
       <section class="empty" data-code-empty hidden>
@@ -79,6 +92,40 @@
       </section>
     </main>
 
+    <!-- A new text, or a reply from search. tug's card has the last word: nothing sends without it. -->
+    <main class="compose" data-view="compose" hidden>
+      <div class="compose-head">
+        <h1 class="headline compose-title" data-compose-title>New text</h1>
+        <button class="icon-btn" data-compose-close aria-label="Close" title="Close">
+          <svg class="icon"><use href="../styles/icons.svg#x" /></svg>
+        </button>
+      </div>
+      <form class="compose-form" data-compose novalidate>
+        <label class="field">
+          <span class="caption-upper">To</span>
+          <input class="input" data-to name="to" maxlength="100" autocomplete="off" spellcheck="false" placeholder="A name on your iPhone, or a number" />
+        </label>
+        <label class="field">
+          <span class="caption-upper">Message</span>
+          <textarea class="input textarea" data-message name="message" rows="4" placeholder="Message"></textarea>
+        </label>
+        <p class="compose-note" data-compose-note>tug asks you to confirm before anything is sent.</p>
+        <p class="compose-error" data-compose-error role="alert" hidden></p>
+        <div class="compose-actions">
+          <span class="count" data-count aria-live="polite"></span>
+          <button type="button" class="btn btn-sm btn-secondary" data-compose-cancel>Cancel</button>
+          <button type="submit" class="btn btn-sm btn-primary" data-send disabled>
+            <svg class="icon"><use href="../styles/icons.svg#send" /></svg><span>Send</span>
+          </button>
+        </div>
+      </form>
+      <div class="waiting" data-compose-waiting role="status" hidden>
+        <div class="screen-art"><svg class="icon"><use href="../styles/icons.svg#message-square" /></svg></div>
+        <h1 class="headline">Check tug</h1>
+        <p data-waiting-body></p>
+      </div>
+    </main>
+
     <!-- A whole-popup state: tug not installed, not running, or not letting the extension in. -->
     <main class="screen" data-view="screen" hidden>
       <div class="screen-art" data-screen-art></div>
@@ -95,9 +142,14 @@
 
     <footer class="foot">
       <span class="foot-hint" data-foot-hint><kbd>Alt</kbd><kbd>Shift</kbd><kbd>C</kbd> fills a code</span>
-      <a class="icon-btn" href="../options/options.html" target="_blank" title="Settings" aria-label="Settings">
-        <svg class="icon"><use href="../styles/icons.svg#settings" /></svg>
-      </a>
+      <span class="foot-actions">
+        <button class="btn btn-sm btn-secondary new-text" data-new-text hidden>
+          <svg class="icon"><use href="../styles/icons.svg#square-pen" /></svg><span>New text</span>
+        </button>
+        <a class="icon-btn" href="../options/options.html" target="_blank" title="Settings" aria-label="Settings">
+          <svg class="icon"><use href="../styles/icons.svg#settings" /></svg>
+        </a>
+      </span>
     </footer>
   </body>
 </html>

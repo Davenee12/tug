@@ -1,31 +1,43 @@
-// The toolbar popup: the phone, the newest verification code, search, and now playing. It asks
-// tug when it opens and every few seconds while it stays open, and keeps nothing afterwards.
+// The toolbar popup: the phone, the newest verification code, search, now playing, and texting.
+// It asks tug when it opens and every few seconds while it stays open, and keeps nothing
+// afterwards (a text's outcome is kept by the service worker; see lib/texts.js).
 
 import { tug, TugError } from "../lib/tug.js";
 import {
-  ago,
+  canReply,
+  charCount,
   codeAge,
+  composeProblem,
   explainError,
+  explainSendError,
   groupCode,
+  heldNowPlaying,
   initial,
   isOldCode,
+  MAX_TEXT_CHARS,
   nowPlaying,
   phoneLine,
   phoneNotice,
   shortTime,
 } from "../lib/format.js";
+import { LAST_TEXT, MESSAGE_SEND_TEXT, lastTextNotice } from "../lib/texts.js";
 
 const $ = (sel) => document.querySelector(sel);
-const REFRESH_MS = 5000;
+const TICK_MS = 2500; // Status while music plays; everything else every other tick (5 s).
 const ICONS = "../styles/icons.svg";
 
 const mock = new URLSearchParams(location.search).get("mock");
+let mockLast = null;
 if (mock) {
-  const { installMock } = await import("../lib/mock.js");
+  const { installMock, mockLastText } = await import("../lib/mock.js");
   installMock(mock);
+  mockLast = mockLastText(mock);
 }
 
 let lastCode = null;
+let permissions = null;
+let composing = false;
+let sending = false;
 
 function show(view) {
   for (const el of document.querySelectorAll("[data-view]")) el.hidden = el.dataset.view !== view;
@@ -48,6 +60,7 @@ function showScreen(why) {
   $("[data-screen-title]").textContent = why.title;
   $("[data-screen-body]").textContent = why.body;
   const actions = $("[data-screen-actions]");
+  const hadFocus = actions.contains(document.activeElement);
   actions.replaceChildren();
   if (why.screen === "install") {
     const a = Object.assign(document.createElement("a"), {
@@ -62,12 +75,35 @@ function showScreen(why) {
     retry.prepend(icon("refresh-cw"));
     retry.addEventListener("click", () => void refresh());
     actions.append(retry);
+    if (hadFocus) retry.focus(); // Pressing it again from the keyboard keeps working.
   }
   $("[data-pill]").hidden = true;
+  $("[data-new-text]").hidden = true;
+  composing = false;
   show("screen");
 }
 
-function renderPhone(phone, permissions) {
+// Now playing, with what a music button just asked for shown before the phone reports it.
+let mediaHold = null;
+let shownNp = null;
+let phoneNp = null; // What the phone last said, before any hold.
+let holdTimer;
+
+function paintNowPlaying(np) {
+  phoneNp = np;
+  const held = heldNowPlaying(np, mediaHold, Date.now(), shownNp);
+  mediaHold = held.hold;
+  shownNp = held.np;
+  const strip = $("[data-np]");
+  strip.hidden = !shownNp;
+  strip.classList.toggle("pending", held.pending);
+  if (!shownNp) return;
+  $("[data-np-title]").textContent = shownNp.title;
+  $("[data-np-sub]").textContent = shownNp.subtitle;
+  $("[data-np-icon]").setAttribute("href", `${ICONS}#${shownNp.playing ? "pause" : "play"}`);
+}
+
+function renderPhone(phone, perms) {
   const pill = $("[data-pill]");
   pill.hidden = !phone;
   const notice = $("[data-notice]");
@@ -90,15 +126,7 @@ function renderPhone(phone, permissions) {
       $("[data-notice-body]").textContent = n.body;
     }
   }
-
-  const np = phone && permissions?.media !== false ? nowPlaying(phone) : null;
-  const strip = $("[data-np]");
-  strip.hidden = !np;
-  if (np) {
-    $("[data-np-title]").textContent = np.title;
-    $("[data-np-sub]").textContent = np.subtitle;
-    $("[data-np-icon]").setAttribute("href", `${ICONS}#${np.playing ? "pause" : "play"}`);
-  }
+  paintNowPlaying(phone && perms?.media !== false ? nowPlaying(phone) : null);
 }
 
 function renderCode(result, error) {
@@ -128,13 +156,41 @@ function renderCode(result, error) {
 }
 
 function resetCopy() {
+  $("[data-copy-note]").hidden = true;
   const btn = $("[data-copy]");
   btn.classList.remove("done");
   btn.querySelector("use").setAttribute("href", `${ICONS}#copy`);
   btn.querySelector("span").textContent = "Copy";
 }
 
-async function refresh() {
+// One refresh at a time: the timer, the music buttons and Try again can all ask at once, and an
+// older answer landing after a newer one would show stale state. Asks made meanwhile run once
+// more when it's done (with the code too if any of them wanted it).
+let refreshing = null;
+let againWithCode = null;
+
+function refresh({ code = true } = {}) {
+  if (refreshing) {
+    againWithCode = Boolean(againWithCode) || code;
+    return refreshing;
+  }
+  refreshing = (async () => {
+    try {
+      let withCode = code;
+      for (;;) {
+        await refreshOnce(withCode);
+        if (againWithCode === null) break;
+        withCode = againWithCode;
+        againWithCode = null;
+      }
+    } finally {
+      refreshing = null;
+    }
+  })();
+  return refreshing;
+}
+
+async function refreshOnce(withCode) {
   let status;
   try {
     status = await tug.status();
@@ -143,45 +199,81 @@ async function refresh() {
     if (why.screen) return showScreen(why);
     status = null;
   }
+  permissions = status?.permissions ?? permissions;
   renderPhone(status?.phone ?? null, status?.permissions);
-  try {
-    renderCode(await tug.latestCode(false));
-  } catch (e) {
-    const err = e instanceof TugError ? e : new TugError("failed", e.message);
-    const why = explainError(err.code);
-    if (why.screen) return showScreen(why);
-    renderCode(null, err);
+  if (withCode) {
+    try {
+      renderCode(await tug.latestCode(false));
+    } catch (e) {
+      const err = e instanceof TugError ? e : new TugError("failed", e.message);
+      const why = explainError(err.code, err.message);
+      if (why.screen) return showScreen(why);
+      renderCode(null, err);
+    }
   }
-  show("ready");
+  $("[data-new-text]").hidden = composing;
+  if (composing) updateCompose();
+  show(composing ? "compose" : "ready");
 }
 
+let copyTimer;
 $("[data-copy]").addEventListener("click", async () => {
   const btn = $("[data-copy]");
+  const note = $("[data-copy-note]");
+  clearTimeout(copyTimer);
+  resetCopy();
   try {
-    // tug puts it on the clipboard itself, kept out of clipboard history and sync.
-    await tug.latestCode(true);
+    // tug puts it on the clipboard itself, kept out of clipboard history and sync. It answers
+    // with the code it copied, which may be newer than the one on screen.
+    const r = await tug.latestCode(true);
+    renderCode(r);
+    if (!r?.copied) {
+      note.textContent = "tug couldn't put it on the clipboard. Try again, or type it in.";
+      note.hidden = false;
+      return;
+    }
     btn.classList.add("done");
     btn.querySelector("use").setAttribute("href", `${ICONS}#check`);
     btn.querySelector("span").textContent = "Copied";
-    setTimeout(resetCopy, 2400);
+    copyTimer = setTimeout(resetCopy, 2400);
   } catch (e) {
-    const why = explainError(e.code, e.message);
-    $("[data-code-from]").textContent = why.title;
-    $("[data-code-app]").textContent = "";
+    const err = e instanceof TugError ? e : new TugError("failed", e.message);
+    const why = explainError(err.code, err.message);
+    if (why.screen) return showScreen(why);
+    note.textContent = `${why.title}. ${why.body}`;
+    note.hidden = false;
   }
 });
 
+// Music: show what was pressed at once, then ask the phone a few times as it catches up.
+const MEDIA_HOLD_MS = { toggle: 3000, skip: 4000 };
+const MEDIA_FOLLOW_UP_MS = [150, 600, 1500, 3000];
+
 for (const btn of document.querySelectorAll("[data-media]")) {
   btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    try {
-      await tug.media(btn.dataset.media);
-      setTimeout(() => void refresh(), 400);
-    } catch {
-      // The strip disappears on the next refresh if the phone went away.
-    } finally {
-      btn.disabled = false;
+    // aria-disabled, not disabled: a disabled button drops keyboard focus to the page.
+    if (btn.getAttribute("aria-disabled") === "true") return;
+    const action = btn.dataset.media;
+    if (shownNp) {
+      mediaHold =
+        action === "toggle"
+          ? { kind: "toggle", playing: !shownNp.playing, until: Date.now() + MEDIA_HOLD_MS.toggle }
+          : { kind: "skip", title: shownNp.title, until: Date.now() + MEDIA_HOLD_MS.skip };
+      paintNowPlaying(phoneNp ?? shownNp);
+      // If the phone never comes round, stop pretending once the hold runs out.
+      clearTimeout(holdTimer);
+      holdTimer = setTimeout(() => paintNowPlaying(phoneNp), MEDIA_HOLD_MS[action === "toggle" ? "toggle" : "skip"] + 50);
     }
+    btn.setAttribute("aria-disabled", "true");
+    try {
+      await tug.media(action);
+    } catch {
+      // The phone didn't take it: drop what was shown and let the next answer say how it is.
+      mediaHold = null;
+    } finally {
+      btn.removeAttribute("aria-disabled");
+    }
+    for (const ms of MEDIA_FOLLOW_UP_MS) setTimeout(() => void refresh({ code: false }), ms);
   });
 }
 
@@ -216,11 +308,20 @@ function renderHits(hits, query) {
       // The app only when it adds something ("OpenTable OpenTable" says nothing twice).
       const app = h.app && h.app.toLowerCase() !== String(h.from).toLowerCase() ? h.app : "";
       who.append(Object.assign(document.createElement("strong"), { textContent: h.from }), app);
-      const time = Object.assign(document.createElement("span"), { className: "hit-time", textContent: shortTime(h.time) });
+      const end = Object.assign(document.createElement("span"), { className: "hit-end" });
+      end.append(Object.assign(document.createElement("span"), { className: "hit-time", textContent: shortTime(h.time) }));
+      if (canReply(h)) {
+        li.classList.add("can-reply");
+        const reply = Object.assign(document.createElement("button"), { className: "icon-btn hit-reply", title: `Reply to ${h.from}` });
+        reply.setAttribute("aria-label", `Reply to ${h.from}`);
+        reply.append(icon("reply"));
+        reply.addEventListener("click", () => openCompose(h.from));
+        end.append(reply);
+      }
       const text = document.createElement("span");
       text.className = "hit-text";
       text.append(highlighted(h.text, query));
-      li.append(avatar, who, time, text);
+      li.append(avatar, who, end, text);
       return li;
     }),
   );
@@ -231,6 +332,8 @@ function renderHits(hits, query) {
 
 input.addEventListener("input", () => {
   clearTimeout(searchTimer);
+  // Any answer still on its way is for a search that's gone, even if the box is now empty.
+  const seq = ++searchSeq;
   const query = input.value.trim();
   if (query.length < 2) {
     list.hidden = true;
@@ -238,7 +341,6 @@ input.addEventListener("input", () => {
     return;
   }
   searchTimer = setTimeout(async () => {
-    const seq = ++searchSeq;
     try {
       const hits = await tug.search(query);
       if (seq === searchSeq) renderHits(Array.isArray(hits) ? hits : [], query);
@@ -251,12 +353,190 @@ input.addEventListener("input", () => {
   }, 350);
 });
 
-// "/" jumps to search, as in most apps with one search box.
+// "/" jumps to search, as in most apps with one search box, unless you're typing somewhere.
 document.addEventListener("keydown", (e) => {
-  if (e.key === "/" && document.activeElement !== input && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  const typing = e.target instanceof HTMLElement && (e.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName));
+  if (e.key === "/" && !typing && !composing && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     input.focus();
   }
+});
+
+// The last text sent from here, as the service worker kept it.
+const textStore = globalThis.chrome?.storage?.session ?? null;
+
+async function readLastText() {
+  if (!textStore) return mockLast;
+  try {
+    return (await textStore.get(LAST_TEXT))[LAST_TEXT] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function clearBadge() {
+  try {
+    await chrome.action.setBadgeText({ text: "" });
+  } catch {
+    // Previewed outside the extension.
+  }
+}
+
+async function forgetLastText() {
+  mockLast = null;
+  try {
+    await textStore?.remove(LAST_TEXT);
+  } catch {
+    // Gone with the browser session anyway.
+  }
+  await clearBadge();
+}
+
+const TEXT_NOTICE_ICON_SPIN = "loader-circle";
+
+async function renderLastText() {
+  const n = lastTextNotice(await readLastText());
+  const el = $("[data-text-notice]");
+  el.hidden = !n;
+  if (!n) return;
+  el.className = `notice ${n.tone}${n.icon === TEXT_NOTICE_ICON_SPIN ? " spinning" : ""}`;
+  $("[data-text-notice-icon]").setAttribute("href", `${ICONS}#${n.icon}`);
+  $("[data-text-notice-title]").textContent = n.title;
+  const body = $("[data-text-notice-body]");
+  body.textContent = n.body;
+  body.hidden = !n.body;
+  $("[data-text-notice-dismiss]").hidden = !n.dismissable;
+  if (!n.waiting) void clearBadge(); // Seen: the badge has said its piece.
+}
+
+$("[data-text-notice-dismiss]").addEventListener("click", async () => {
+  await forgetLastText();
+  $("[data-text-notice]").hidden = true;
+});
+
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "session" && LAST_TEXT in changes) void renderLastText();
+  });
+} catch {
+  // Previewed outside the extension.
+}
+
+// Compose: a new text, or a reply from search.
+const form = $("[data-compose]");
+const toInput = $("[data-to]");
+const msgInput = $("[data-message]");
+const sendBtn = $("[data-send]");
+const countEl = $("[data-count]");
+const errEl = $("[data-compose-error]");
+const noteEl = $("[data-compose-note]");
+const waitingEl = $("[data-compose-waiting]");
+
+function openCompose(to) {
+  composing = true;
+  if (typeof to === "string") toInput.value = to;
+  $("[data-compose-title]").textContent = typeof to === "string" && to ? `Reply to ${to}` : "New text";
+  form.hidden = false;
+  waitingEl.hidden = true;
+  errEl.hidden = true;
+  updateCompose();
+  $("[data-new-text]").hidden = true;
+  show("compose");
+  (toInput.value.trim() ? msgInput : toInput).focus();
+}
+
+function closeCompose() {
+  composing = false;
+  $("[data-new-text]").hidden = false;
+  show("ready");
+}
+
+function updateCompose() {
+  const off = permissions?.send_text === false;
+  noteEl.textContent = off
+    ? "Sending texts is switched off in tug › Settings › Developer tools › Send texts."
+    : "tug asks you to confirm before anything is sent.";
+  noteEl.classList.toggle("off", off);
+  const n = charCount(msgInput.value);
+  countEl.textContent = n > MAX_TEXT_CHARS - 100 ? `${n} / ${MAX_TEXT_CHARS}` : "";
+  countEl.classList.toggle("over", n > MAX_TEXT_CHARS);
+  sendBtn.disabled = off || sending || composeProblem(toInput.value, msgInput.value) !== null;
+}
+
+function showComposeError(title, body) {
+  errEl.replaceChildren(Object.assign(document.createElement("strong"), { textContent: title }), body ? ` ${body}` : "");
+  errEl.hidden = false;
+}
+
+function showWaiting(to) {
+  form.hidden = true;
+  waitingEl.hidden = false;
+  $("[data-waiting-body]").textContent =
+    `tug is showing a card for your text to ${to}. Click Send there. This popup closes when you do; the tug button shows ✓ once it's sent.`;
+}
+
+/** Hand the text to the service worker, which waits for tug's card even after this popup closes. */
+async function requestSend(to, message) {
+  if (globalThis.__tugMock) {
+    try {
+      const ok = await tug.sendText(to, message);
+      mockLast = { state: "done", to, at: Date.now(), result: ok };
+      return { ok };
+    } catch (e) {
+      return { error: { code: e.code ?? "failed", message: e.message } };
+    }
+  }
+  try {
+    return (await chrome.runtime.sendMessage({ type: MESSAGE_SEND_TEXT, to, message })) ?? { error: { code: "failed", message: "" } };
+  } catch (e) {
+    return { error: { code: "failed", message: String(e?.message ?? e) } };
+  }
+}
+
+toInput.addEventListener("input", updateCompose);
+msgInput.addEventListener("input", updateCompose);
+msgInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    form.requestSubmit();
+  }
+});
+$("[data-new-text]").addEventListener("click", () => openCompose(""));
+$("[data-compose-close]").addEventListener("click", closeCompose);
+$("[data-compose-cancel]").addEventListener("click", closeCompose);
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (sending) return;
+  const to = toInput.value.trim();
+  const message = msgInput.value;
+  const problem = composeProblem(to, message);
+  if (problem) return showComposeError(problem);
+  sending = true;
+  errEl.hidden = true;
+  updateCompose();
+  // tug answers at once when it can't tell who it's to; otherwise its card is up by now.
+  const waitTimer = setTimeout(() => showWaiting(to), 800);
+  const reply = await requestSend(to, message);
+  clearTimeout(waitTimer);
+  sending = false;
+  if (reply?.error) {
+    await forgetLastText(); // Said here, so not again next time.
+    const why = explainSendError(reply.error.code, reply.error.message);
+    if (why.screen) return showScreen(why);
+    form.hidden = false;
+    waitingEl.hidden = true;
+    showComposeError(why.title, why.body);
+    updateCompose();
+    return;
+  }
+  // tug answered while the popup was still open: say how it went on the main view.
+  toInput.value = "";
+  msgInput.value = "";
+  form.hidden = false;
+  waitingEl.hidden = true;
+  closeCompose();
+  await renderLastText();
 });
 
 // The shortcut as the person has set it (chrome://extensions/shortcuts), not the default.
@@ -276,8 +556,15 @@ if (mock === "search") {
   input.value = "dinner";
   input.dispatchEvent(new Event("input"));
 }
+await renderLastText();
 await refresh();
 if (mock === "copied") $("[data-copy]").click();
+if (mock === "compose") openCompose("Maya Chen");
+
+let tick = 0;
 setInterval(() => {
-  if (!document.hidden) void refresh();
-}, REFRESH_MS);
+  if (document.hidden || composing) return;
+  tick += 1;
+  if (tick % 2 === 0) void refresh();
+  else if (shownNp) void refresh({ code: false });
+}, TICK_MS);

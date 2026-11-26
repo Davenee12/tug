@@ -54,6 +54,41 @@ const CASES = [
     how: "none",
     check: () => document.querySelector("input").value === "",
   },
+  {
+    name: "checkout fields that mention a code are left alone",
+    html: `<label>Promo code <input id="p"></label><label>Security code <input id="cvc"></label><label>ZIP code <input id="z"></label>`,
+    how: "none",
+    check: () => ["p", "cvc", "z"].every((id) => document.getElementById(id).value === ""),
+  },
+  {
+    name: "focus in a frame (a bank's challenge): nothing up here is filled",
+    html: `<label>Promo code <input id="p"></label><input name="otp_code" id="o"><iframe id="f" srcdoc="<input>"></iframe>`,
+    focus: "#f",
+    how: "none",
+    check: () => document.getElementById("o").value === "" && document.getElementById("p").value === "",
+  },
+  {
+    name: "one box per digit, each in its own shadow root",
+    html: `<div class="otp">${"<otp-box></otp-box>".repeat(6)}</div><script>customElements.define('otp-box',class extends HTMLElement{connectedCallback(){this.attachShadow({mode:'open'}).innerHTML='<input maxlength="1">'}})</script>`,
+    how: "boxes",
+    check: () => [...document.querySelectorAll("otp-box")].map((b) => b.shadowRoot.querySelector("input").value).join("") === "482913",
+  },
+  {
+    name: "one box per digit, rebuilt from state on each render (React-style)",
+    html: `<div class="otp">${'<input maxlength="1">'.repeat(6)}</div>
+      <script>
+        let state = Array(6).fill("");
+        const boxes = [...document.querySelectorAll(".otp input")];
+        const render = () => boxes.forEach((b, i) => {
+          b.value = state[i];
+          const seen = state; // What this render saw, as a component's closure would.
+          b.oninput = (e) => { const next = [...seen]; next[i] = e.target.value; queueMicrotask(() => { state = next; render(); }); };
+        });
+        render();
+      </script>`,
+    how: "boxes",
+    check: () => [...document.querySelectorAll(".otp input")].map((i) => i.value).join("") === "482913",
+  },
 ];
 
 (async () => {
@@ -90,6 +125,14 @@ const CASES = [
     failed++;
     console.log("FAIL the toast", toast);
   }
+
+  // Above an open modal dialog, which would otherwise cover it and make it inert.
+  await page.setContent(`<!doctype html><body><dialog id="d">Sign in</dialog><script>d.showModal()</script></body>`);
+  await page.addScriptTag({ content: source });
+  await page.evaluate(() => showToastInPage({ tone: "success", title: "Filled 482 913" }));
+  const onTop = await page.evaluate(() => document.getElementById("tug-extension-toast").matches(":popover-open"));
+  console.log(`${onTop ? "ok  " : "FAIL"} the toast shows above a modal dialog`);
+  if (!onTop) failed++;
   await browser.close();
   process.exit(failed ? 1 : 0);
 })();

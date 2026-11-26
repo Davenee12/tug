@@ -19,6 +19,7 @@ const SWITCHES = [
   ["search", "Search texts and notifications"],
   ["media", "Music controls"],
   ["phone_status", "Phone status"],
+  ["send_text", "Send texts"],
 ];
 
 function row(kind, what, why = "") {
@@ -45,7 +46,9 @@ async function check() {
   const btn = $("[data-check]");
   const list = $("[data-checks]");
   const summary = $("[data-check-summary]");
-  btn.disabled = true;
+  // aria-disabled, not disabled: a disabled button drops keyboard focus to the page.
+  if (btn.getAttribute("aria-disabled") === "true") return;
+  btn.setAttribute("aria-disabled", "true");
   summary.textContent = "Checking…";
   try {
     const s = await tug.status();
@@ -65,7 +68,7 @@ async function check() {
     summary.textContent = why.body;
   } finally {
     list.hidden = false;
-    btn.disabled = false;
+    btn.removeAttribute("aria-disabled");
   }
 }
 
@@ -78,6 +81,7 @@ try {
   $("[data-version]").textContent = `Version ${chrome.runtime.getManifest().version}`;
   const fill = (await chrome.commands.getAll()).find((c) => c.name === "fill-code");
   if (fill?.shortcut) $("[data-shortcut]").textContent = fill.shortcut;
+  else if (fill) $("[data-shortcut-or]").textContent = "(no keyboard shortcut is set: add one with Change shortcuts below)";
 } catch {
   // Previewed outside the extension.
 }

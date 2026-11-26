@@ -41,9 +41,50 @@ export async function callTug(call) {
   return reply.ok;
 }
 
+/**
+ * One call over a port held open until tug answers. For a text: it waits (up to 3½ minutes) for
+ * the person to click Send on tug's card, and an open native port keeps the service worker alive
+ * for that long, where a one-off message might not.
+ */
+export function callTugOverPort(call) {
+  if (globalThis.__tugMock) return globalThis.__tugMock(call);
+  return new Promise((resolve, reject) => {
+    const id = nextId++;
+    let port;
+    try {
+      port = chrome.runtime.connectNative(HOST);
+    } catch (e) {
+      reject(hostError(String(e?.message || e)));
+      return;
+    }
+    let settled = false;
+    const settle = (then) => {
+      if (settled) return;
+      settled = true;
+      try {
+        port.disconnect();
+      } catch {
+        // Already gone.
+      }
+      then();
+    };
+    port.onMessage.addListener((reply) => {
+      if (!reply || typeof reply !== "object" || reply.id !== id) return;
+      settle(() => (reply.error ? reject(new TugError(reply.error.code, reply.error.message)) : resolve(reply.ok)));
+    });
+    port.onDisconnect.addListener(() => {
+      const text = chrome.runtime.lastError?.message || "tug closed before it answered.";
+      settle(() => reject(hostError(text)));
+    });
+    port.postMessage({ id, call });
+  });
+}
+
 export const tug = {
   status: () => callTug({ tool: "status" }),
   latestCode: (copy = false) => callTug({ tool: "get_latest_code", copy }),
   search: (query, limit = 8) => callTug({ tool: "search_messages", query, limit }),
   media: (action) => callTug({ tool: "media_control", action }),
+  // Always through tug's card: the host takes out anything that could skip it.
+  sendText: (to, message) => callTugOverPort({ tool: "send_text", to, message }),
 };

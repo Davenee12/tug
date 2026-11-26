@@ -40,7 +40,7 @@ kbd {
   background: var(--surface-soft); border: 1px solid var(--hairline); color: var(--body);
 }
 
-.foot { display: flex; gap: 8px; justify-content: center; margin-top: 28px; font-size: 13px; color: var(--muted-soft); }
+.foot { display: flex; gap: 8px; justify-content: center; margin-top: 28px; font-size: 13px; color: var(--muted); }
 .foot a { color: var(--muted); text-decoration: none; }
 .foot a:hover { color: var(--ink); text-decoration: underline; }
 
