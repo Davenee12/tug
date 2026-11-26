@@ -237,6 +237,31 @@ export function whisperBuildProblems(cacheText, vcxprojText) {
 }
 
 /** One line of `sha256sum` output. */
+/**
+ * Every whisper.cpp CMakeCache.txt under a profile's build folder, in either of Cargo's layouts:
+ * `build/whisper-rs-sys-<hash>/out/build` (before Rust 1.100) and
+ * `build/whisper-rs-sys/<hash>/out/build` (Rust 1.100's build-dir layout, one folder per package
+ * with a folder per build inside). Only the old one was looked for, so with Rust 1.100 on the CI
+ * runners the check found nothing and failed every run, however whisper.cpp was built.
+ */
+export function whisperCmakeCaches(buildDir) {
+  const list = (dir) => {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    } catch {
+      return [];
+    }
+  };
+  const outs = [];
+  for (const name of list(buildDir)) {
+    if (name.startsWith("whisper-rs-sys-")) outs.push(path.join(buildDir, name, "out"));
+    else if (name === "whisper-rs-sys") {
+      for (const hash of list(path.join(buildDir, name))) outs.push(path.join(buildDir, name, hash, "out"));
+    }
+  }
+  return outs.map((out) => path.join(out, "build", "CMakeCache.txt")).filter((f) => fs.existsSync(f));
+}
+
 export function sha256Line(bytes, name) {
   return `${crypto.createHash("sha256").update(bytes).digest("hex")}  ${name}`;
 }
@@ -416,11 +441,7 @@ function main([cmd, ...args]) {
       // The newest whisper.cpp build in <target>/<profile> (an old one can linger in a cache).
       const [profile = "release"] = args;
       const build = path.join(targetDir(), profile, "build");
-      const caches = (fs.existsSync(build) ? fs.readdirSync(build) : [])
-        .filter((d) => d.startsWith("whisper-rs-sys-"))
-        .map((d) => path.join(build, d, "out", "build", "CMakeCache.txt"))
-        .filter((f) => fs.existsSync(f))
-        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+      const caches = whisperCmakeCaches(build).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
       if (!caches.length) throw new Error(`no whisper.cpp build under ${build}: build tug (${profile}) first`);
       const cachePath = caches[0];
       const cacheText = fs.readFileSync(cachePath, "utf8");

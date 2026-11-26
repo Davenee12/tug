@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   changelogSection,
   DOWNLOAD_BASE,
@@ -17,6 +20,7 @@ import {
   unexpectedImports,
   versionFromTag,
   whisperBuildProblems,
+  whisperCmakeCaches,
 } from "./release-assets.mjs";
 
 const files = (v) => ({ "package.json": v, "src-tauri/tauri.conf.json": v, "src-tauri/Cargo.toml": v });
@@ -279,4 +283,29 @@ test("whisper.cpp's instruction set stays the fixed AVX2 one", () => {
   assert.deepEqual(whisperBuildProblems(cacheWith(OPTIMISED, OPTIMISED), "<Project/>"), [
     "ggml-cpu.vcxproj has no Release|x64 configuration",
   ]);
+});
+
+test("whisper.cpp's CMake build is found in both of Cargo's build-folder layouts", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tug-whisper-"));
+  const cache = (...parts) => {
+    const dir = path.join(root, ...parts, "out", "build");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "CMakeCache.txt"), "");
+    return path.join(dir, "CMakeCache.txt");
+  };
+  try {
+    assert.deepEqual(whisperCmakeCaches(root), []);
+    // Before Rust 1.100: build/<package>-<hash>/out.
+    const old = cache("whisper-rs-sys-c6111eb36172d3cd");
+    // Rust 1.100: build/<package>/<hash>/out.
+    const next = cache("whisper-rs-sys", "8c88e79794d4d2b1");
+    // Other packages, and a whisper-rs-sys build that never ran CMake, don't count.
+    cache("libc", "ee93e268371dddb0");
+    cache("whisper-rs-0123456789abcdef");
+    fs.mkdirSync(path.join(root, "whisper-rs-sys", "5173b18be4158b34", "out"), { recursive: true });
+    assert.deepEqual(whisperCmakeCaches(root).sort(), [old, next].sort());
+    assert.deepEqual(whisperCmakeCaches(path.join(root, "missing")), []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
