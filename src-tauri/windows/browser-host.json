@@ -1,0 +1,7 @@
+{
+  "name": "dev.davejames.tug.browser",
+  "description": "Lets tug's browser extension reach the tug app on this PC",
+  "path": "tug.exe",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://fdlhifdliipbdojnokcjdomknldbejbg/"]
+}

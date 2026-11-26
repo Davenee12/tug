@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>tug</title>
+    <link rel="stylesheet" href="../styles/tokens.css" />
+    <link rel="stylesheet" href="popup.css" />
+    <script type="module" src="popup.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <img class="mark" src="../assets/mark.svg" alt="" width="28" height="28" />
+      <div class="phone">
+        <span class="phone-name" data-phone-name>iPhone</span>
+        <span class="phone-state" data-phone-state data-state="unknown">
+          <span class="dot" aria-hidden="true"></span><span data-phone-detail>Checking…</span>
+        </span>
+      </div>
+      <a class="icon-btn" href="../options/options.html" target="_blank" title="Settings" aria-label="Settings">
+        <svg class="icon"><use href="../styles/icons.svg#settings" /></svg>
+      </a>
+    </header>
+
+    <!-- Everything below the header while tug answers. -->
+    <main data-view="ready" hidden>
+      <section class="code-card" data-code aria-live="polite">
+        <div class="code-head">
+          <span class="caption-upper">Verification code</span>
+          <span class="code-age" data-code-age></span>
+        </div>
+        <div class="code-body" data-code-body>
+          <output class="code" data-code-value></output>
+          <button class="btn btn-primary copy" data-copy>
+            <svg class="icon"><use href="../styles/icons.svg#copy" /></svg><span>Copy</span>
+          </button>
+        </div>
+        <p class="code-from" data-code-from></p>
+        <p class="code-empty" data-code-empty hidden></p>
+      </section>
+
+      <section class="search">
+        <label class="search-field">
+          <svg class="icon"><use href="../styles/icons.svg#search" /></svg>
+          <input class="input" type="search" placeholder="Search texts and notifications" data-search autocomplete="off" spellcheck="false" />
+        </label>
+        <ul class="hits" data-hits hidden></ul>
+        <p class="hint" data-search-note hidden></p>
+      </section>
+
+      <section class="np" data-np hidden>
+        <div class="np-art" aria-hidden="true">
+          <span></span><span></span><span></span><span></span>
+        </div>
+        <div class="np-text">
+          <span class="np-title" data-np-title></span>
+          <span class="np-sub" data-np-sub></span>
+        </div>
+        <div class="np-controls">
+          <button class="icon-btn" data-media="previous" aria-label="Previous"><svg class="icon"><use href="../styles/icons.svg#skip-back" /></svg></button>
+          <button class="icon-btn play" data-media="toggle" aria-label="Play or pause"><svg class="icon"><use data-np-icon href="../styles/icons.svg#pause" /></svg></button>
+          <button class="icon-btn" data-media="next" aria-label="Next"><svg class="icon"><use href="../styles/icons.svg#skip-forward" /></svg></button>
+        </div>
+      </section>
+    </main>
+
+    <!-- A whole-popup state: tug not installed, not running, or not letting the extension in. -->
+    <main class="screen" data-view="screen" hidden>
+      <div class="screen-art" data-screen-art></div>
+      <h1 class="headline" data-screen-title></h1>
+      <p data-screen-body></p>
+      <div class="screen-actions" data-screen-actions></div>
+    </main>
+
+    <main class="loading" data-view="loading">
+      <div class="skeleton tall"></div>
+      <div class="skeleton"></div>
+      <div class="skeleton short"></div>
+    </main>
+
+    <footer class="foot">
+      <span><kbd data-shortcut>Alt+Shift+C</kbd> fills a code on any page</span>
+    </footer>
+  </body>
+</html>

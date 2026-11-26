@@ -9,8 +9,21 @@
 ;     itself before its files go ("tug.exe --remove-from-path", any PATH length); the NSIS
 ;     fallback below only handles a PATH NSIS can hold, and finds nothing left to do normally,
 ;   - the Spotify sign-in token in Credential Manager (tug/spotify-refresh-token).
+;   - the browser extension's native messaging host registration (Chrome and Edge).
 ; User data (history, settings) is only removed when the user ticks Tauri's own "Delete the
 ; application data" box; that stays Tauri's job.
+
+; tug's browser extension reaches tug through bin\tug.exe as its native messaging host. Chrome and
+; Edge find the host's manifest (bin\browser-host.json: which exe, and which extension may start
+; it) through these per-user keys. Written on every install and update, so they follow the
+; install folder; they start nothing until the extension asks, and tug answers only while
+; Settings > Developer tools is on.
+!define TUG_BROWSER_HOST "dev.davejames.tug.browser"
+
+!macro NSIS_HOOK_POSTINSTALL
+  WriteRegStr HKCU "Software\Google\Chrome\NativeMessagingHosts\${TUG_BROWSER_HOST}" "" "$INSTDIR\bin\browser-host.json"
+  WriteRegStr HKCU "Software\Microsoft\Edge\NativeMessagingHosts\${TUG_BROWSER_HOST}" "" "$INSTDIR\bin\browser-host.json"
+!macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
   ${If} $UpdateMode <> 1
@@ -26,6 +39,8 @@
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "tug"
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "tug"
     Call un.TugRemoveBinFromPath
+    DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\${TUG_BROWSER_HOST}"
+    DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\${TUG_BROWSER_HOST}"
     ; cmdkey ships with Windows; no window, and a missing entry is fine.
     nsExec::Exec '"$SYSDIR\cmdkey.exe" /delete:tug/spotify-refresh-token'
     Pop $0

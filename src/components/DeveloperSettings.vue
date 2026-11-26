@@ -2,16 +2,23 @@
 // Settings › Developer tools: the master switch with its consent line, what AI tools may do,
 // who has connected, Revoke access, copy-paste setup for each AI tool, and the `tug` command.
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { Check, CircleAlert, Copy, KeyRound, Terminal } from "lucide-vue-next";
+import { Check, CircleAlert, Copy, Globe, KeyRound, Terminal } from "lucide-vue-next";
 import { useDevToolsStore } from "../stores/devtools";
 import { useTugStore } from "../stores/tug";
 import { copyText } from "../lib/clipboard";
 import { lastUsedLabel, PERMISSION_HELP, setupSnippets, type SetupSnippet } from "../lib/devtools";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsSwitch from "./SettingsSwitch.vue";
+import type { DevToolsClient } from "../types/protocol";
 
 const devtools = useDevToolsStore();
 const tug = useTugStore();
+
+const CLIENT_KIND_LABEL: Record<DevToolsClient["kind"], string> = {
+  mcp: "AI tool",
+  cli: "tug command",
+  browser: "Browser extension",
+};
 
 const now = ref(Date.now());
 let clock: number | undefined;
@@ -121,9 +128,10 @@ const COMMANDS = computed<Array<[string, string]>>(() => [
         <ul v-if="s.clients.length" class="divide-y divide-hairline-soft">
           <li v-for="c in s.clients" :key="`${c.kind}:${c.name}`" class="flex items-center gap-3 px-5 py-2.5 text-[14px]">
             <Terminal v-if="c.kind === 'cli'" :size="15" class="shrink-0 text-muted" />
+            <Globe v-else-if="c.kind === 'browser'" :size="15" class="shrink-0 text-muted" />
             <KeyRound v-else :size="15" class="shrink-0 text-muted" />
             <span class="min-w-0 flex-1 truncate text-ink">{{ c.name }}</span>
-            <span class="shrink-0 text-[12px] text-muted-soft">{{ c.kind === "cli" ? "tug command" : "AI tool" }} · {{ lastUsedLabel(c.lastUsed, now) }}</span>
+            <span class="shrink-0 text-[12px] text-muted-soft">{{ CLIENT_KIND_LABEL[c.kind] }} · {{ lastUsedLabel(c.lastUsed, now) }}</span>
           </li>
         </ul>
         <p v-else class="px-5 py-3 text-[13px] text-muted">No tools have connected yet.</p>

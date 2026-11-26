@@ -989,7 +989,8 @@ export interface DevToolsPermission {
 /** A tool that has used tug (`ClientRecord`). `name` is what it called itself. */
 export interface DevToolsClient {
   name: string;
-  kind: "mcp" | "cli";
+  /** "browser": tug's browser extension, through its native messaging host. */
+  kind: "mcp" | "cli" | "browser";
   /** Unix ms. */
   lastUsed: number;
 }

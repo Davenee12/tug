@@ -68,7 +68,13 @@ pub enum ClientKind {
     Mcp,
     /// The `tug` command in a terminal.
     Cli,
+    /// tug's browser extension, through `tug.exe` started by Chrome or Edge as its native
+    /// messaging host (`native.rs`).
+    Browser,
 }
+
+/// What the browser extension is called everywhere, whatever name it sends.
+pub const BROWSER_EXTENSION: &str = "Browser extension";
 
 /// Who's calling. The name is what the MCP client calls itself (`claude-code`, `cursor`), so
 /// it's informational: anything running as the user could claim any name.
@@ -182,6 +188,7 @@ impl ClientInfo {
         self.named().unwrap_or_else(|| match self.kind {
             ClientKind::Mcp => UNNAMED_AI_TOOL.into(),
             ClientKind::Cli => "tug command".into(),
+            ClientKind::Browser => BROWSER_EXTENSION.into(),
         })
     }
 
@@ -192,12 +199,18 @@ impl ClientInfo {
     pub fn asker(&self) -> String {
         match (self.kind, self.named()) {
             (ClientKind::Mcp, Some(name)) => format!("{name} (an AI tool)"),
+            (ClientKind::Browser, _) => "tug's browser extension".into(),
             _ => self.display_name(),
         }
     }
 
     /// The tamed name, or `None` when there's nothing usable to show.
     fn named(&self) -> Option<String> {
+        // Only tug's own native host introduces itself as the extension, but any program running
+        // as the person could claim to be it, so the name it sends is never shown.
+        if self.kind == ClientKind::Browser {
+            return Some(BROWSER_EXTENSION.into());
+        }
         let printable: String = self
             .name
             .chars()
@@ -207,7 +220,7 @@ impl ClientInfo {
         let named = match self.kind {
             ClientKind::Mcp if is_generic_name(&printable) => String::new(),
             ClientKind::Mcp => friendly_client_name(printable.trim()),
-            ClientKind::Cli => printable,
+            ClientKind::Cli | ClientKind::Browser => printable,
         };
         let clean = named.chars().take(40).collect::<String>().trim().to_string();
         if !clean.is_empty() {
@@ -219,7 +232,7 @@ impl ClientInfo {
                 .as_deref()
                 .and_then(crate::launcher::app_name)
                 .map(str::to_string),
-            ClientKind::Cli => None,
+            ClientKind::Cli | ClientKind::Browser => None,
         }
     }
 }
@@ -1462,5 +1475,24 @@ mod tests {
             launcher: None,
         };
         assert_eq!(cli.asker(), "tug command");
+    }
+
+    #[test]
+    fn the_browser_extension_is_always_called_the_same() {
+        let b = |name: &str| ClientInfo {
+            name: name.into(),
+            kind: ClientKind::Browser,
+            launcher: Some("Cursor.exe".into()),
+        };
+        // Whatever it claims, it reads as the extension: it can't borrow another app's name.
+        for name in ["", "Windows Security", "claude-code", "evil\nname"] {
+            assert_eq!(b(name).display_name(), BROWSER_EXTENSION);
+            assert_eq!(b(name).asker(), "tug's browser extension");
+        }
+        let hello = r#"{"name":"x","kind":"browser"}"#;
+        assert_eq!(
+            serde_json::from_str::<ClientInfo>(hello).unwrap().kind,
+            ClientKind::Browser
+        );
     }
 }

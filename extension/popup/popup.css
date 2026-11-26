@@ -1,0 +1,118 @@
+/* The toolbar popup: 360 wide, height follows what's in it. */
+
+body { width: 360px; min-height: 120px; user-select: none; }
+[hidden] { display: none !important; }
+
+.top {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 14px 12px 16px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.mark { width: 28px; height: 28px; border-radius: 7px; flex: none; }
+.phone { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
+.phone-name { color: var(--ink); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.phone-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-soft); }
+[data-state="connected"] .dot { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent); }
+[data-state="connecting"] .dot { background: var(--accent-amber); animation: pulse 1.4s ease-in-out infinite; }
+[data-state="disconnected"] .dot, [data-state="none"] .dot { background: var(--muted-soft); }
+@keyframes pulse { 50% { opacity: 0.35; } }
+
+.icon-btn {
+  display: inline-grid; place-items: center; width: 32px; height: 32px; flex: none;
+  border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.icon-btn:hover { background: var(--surface-soft); color: var(--ink); }
+.icon-btn:active { background: var(--surface-card); }
+.icon-btn:disabled { opacity: 0.45; cursor: default; }
+
+main { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+
+/* The code: the reason most people open the popup. */
+.code-card { padding: 14px 16px 14px; border-radius: 12px; background: var(--surface-card); }
+.code-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.code-age { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.code-card.old .code-age { color: var(--warning); }
+.code-body { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; }
+.code {
+  font-family: var(--font-mono); font-size: 32px; line-height: 1.1; letter-spacing: 0.04em;
+  color: var(--ink); font-variant-numeric: tabular-nums; user-select: text; white-space: nowrap;
+}
+.code-card.old .code { color: var(--body); }
+.copy { min-width: 92px; }
+.copy.done { background: var(--success); color: #fff; }
+.code-from { margin: 6px 0 0; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.code-empty { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.code-card.empty .code-body, .code-card.empty .code-from { display: none; }
+.code-card.empty .code-empty { display: block; }
+
+/* Search. */
+.search-field { position: relative; display: block; }
+.search-field .icon { position: absolute; left: 12px; top: 12px; color: var(--muted-soft); pointer-events: none; }
+.search-field .input { padding-left: 36px; }
+.search-field .input::-webkit-search-cancel-button { filter: grayscale(1); opacity: 0.5; }
+.hits { list-style: none; margin: 4px 0 0; padding: 0; max-height: 236px; overflow-y: auto; }
+.hit { display: grid; grid-template-columns: 1fr auto; gap: 1px 8px; padding: 8px 6px; user-select: text; }
+.hit + .hit { border-top: 1px solid var(--hairline-soft); }
+.hit-from { color: var(--ink); font-weight: 500; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hit-time { font-size: 12px; color: var(--muted-soft); }
+.hit-text {
+  grid-column: 1 / -1; font-size: 13px; color: var(--body);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.hit-text mark { background: color-mix(in srgb, var(--primary) 22%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
+.hit-app { font-size: 11px; color: var(--muted-soft); }
+.hint { margin: 6px 4px 0; font-size: 12px; color: var(--muted); }
+
+/* Now playing: a dark strip, like the device chrome in the app. */
+.np {
+  display: flex; align-items: center; gap: 12px; padding: 10px 8px 10px 12px;
+  border-radius: 12px; background: var(--surface-dark); color: var(--on-dark);
+}
+.np-art { width: 32px; height: 32px; border-radius: 8px; background: var(--surface-dark-elevated); display: flex; align-items: flex-end; justify-content: center; gap: 2px; padding: 8px 0; flex: none; }
+.np-art span { width: 3px; border-radius: 2px; background: var(--primary); height: 40%; }
+.np.playing .np-art span { animation: bar 1.1s ease-in-out infinite; }
+.np-art span:nth-child(2) { height: 75%; animation-delay: -0.3s; }
+.np-art span:nth-child(3) { height: 55%; animation-delay: -0.6s; }
+.np-art span:nth-child(4) { height: 30%; animation-delay: -0.15s; }
+@keyframes bar { 50% { height: 90%; } }
+.np-text { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.3; }
+.np-title { font-weight: 500; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-sub { font-size: 12px; color: var(--on-dark-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-controls { display: flex; gap: 2px; }
+.np .icon-btn { color: var(--on-dark-soft); }
+.np .icon-btn:hover { background: var(--surface-dark-elevated); color: var(--on-dark); }
+.np .icon-btn.play { color: var(--on-dark); }
+.np .icon-btn.play .icon { fill: currentColor; }
+
+/* Whole-popup states. */
+.screen { align-items: center; text-align: center; padding: 28px 24px 24px; gap: 0; }
+.screen-art { width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center; background: var(--surface-card); color: var(--primary); margin-bottom: 16px; }
+.screen-art .icon { width: 24px; height: 24px; }
+.screen h1 { margin: 0 0 6px; font-size: 24px; line-height: 1.2; }
+.screen p { margin: 0; color: var(--muted); font-size: 13px; max-width: 280px; }
+.screen-actions { display: flex; gap: 8px; margin-top: 18px; }
+
+/* First paint, while the first answers come. */
+.skeleton { height: 40px; border-radius: 10px; background: var(--surface-soft); animation: shimmer 1.2s ease-in-out infinite; }
+.skeleton.tall { height: 108px; background: var(--surface-card); }
+.skeleton.short { height: 52px; }
+@keyframes shimmer { 50% { opacity: 0.55; } }
+
+.foot {
+  padding: 10px 16px 12px; border-top: 1px solid var(--hairline-soft);
+  font-size: 12px; color: var(--muted-soft); text-align: center;
+}
+kbd {
+  font: 11px/1 var(--font-mono); padding: 3px 5px; border-radius: 4px;
+  background: var(--surface-soft); border: 1px solid var(--hairline); color: var(--body);
+}
+
+/* In dark mode the canvas is already the device-chrome dark: lift the strip and edge the mark. */
+@media (prefers-color-scheme: dark) {
+  .np { background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--hairline-soft); }
+  .np-art { background: var(--surface-cream-strong); }
+  .np .icon-btn:hover { background: var(--surface-cream-strong); }
+  .mark { box-shadow: 0 0 0 1px var(--hairline); }
+}

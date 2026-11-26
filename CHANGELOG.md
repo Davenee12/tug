@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **A browser extension for Chrome and Edge** (in `extension/`, not in the store yet). Right-click
+  a sign-in page's code box and choose **Fill code from iPhone**, or press Alt+Shift+C, and the
+  newest verification code goes straight in. The toolbar button shows the code with a Copy button,
+  searches your texts and notifications, and controls your iPhone's music. It talks only to tug on
+  your PC, through the switches in Settings › Developer tools, and shows as "Browser extension" in
+  Connected tools. The installer registers it with Chrome and Edge.
+
 ## v0.5.24 — 2026-11-02
 
 A third game, Desk Derby, and emoji shortcuts in your texts. It arrives through automatic updates.

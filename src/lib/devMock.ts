@@ -1092,6 +1092,7 @@ const devState: DevToolsStatus = {
   clients: params.has("devtools")
     ? [
         { name: "Claude Code", kind: "mcp", lastUsed: Date.now() - 4 * 60_000 },
+        { name: "Browser extension", kind: "browser", lastUsed: Date.now() - 40 * 60_000 },
         { name: "tug command", kind: "cli", lastUsed: Date.now() - 3 * 3_600_000 },
       ]
     : [],
