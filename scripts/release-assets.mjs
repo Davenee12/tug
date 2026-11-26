@@ -236,6 +236,25 @@ export function whisperBuildProblems(cacheText, vcxprojText) {
   return problems;
 }
 
+/**
+ * Every whisper.cpp CMakeCache.txt under <target>/<profile>/build, newest first (an old build can
+ * linger in a cache). Cargo keeps a build script's OUT_DIR at build/whisper-rs-sys-<hash>/out up to
+ * Rust 1.99 and at build/whisper-rs-sys/<hash>/out from 1.100, so both are looked in: the
+ * v0.5.24-era check knew only the first and failed every release build on 1.100.
+ */
+export function whisperCaches(build) {
+  const dirs = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()) : []);
+  const outs = [];
+  for (const e of dirs(build)) {
+    if (e.name.startsWith("whisper-rs-sys-")) outs.push(path.join(build, e.name));
+    else if (e.name === "whisper-rs-sys") for (const h of dirs(path.join(build, e.name))) outs.push(path.join(build, e.name, h.name));
+  }
+  return outs
+    .map((d) => path.join(d, "out", "build", "CMakeCache.txt"))
+    .filter((f) => fs.existsSync(f))
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+}
+
 /** One line of `sha256sum` output. */
 export function sha256Line(bytes, name) {
   return `${crypto.createHash("sha256").update(bytes).digest("hex")}  ${name}`;
@@ -413,14 +432,9 @@ function main([cmd, ...args]) {
       return;
     }
     case "whisper": {
-      // The newest whisper.cpp build in <target>/<profile> (an old one can linger in a cache).
       const [profile = "release"] = args;
       const build = path.join(targetDir(), profile, "build");
-      const caches = (fs.existsSync(build) ? fs.readdirSync(build) : [])
-        .filter((d) => d.startsWith("whisper-rs-sys-"))
-        .map((d) => path.join(build, d, "out", "build", "CMakeCache.txt"))
-        .filter((f) => fs.existsSync(f))
-        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+      const caches = whisperCaches(build);
       if (!caches.length) throw new Error(`no whisper.cpp build under ${build}: build tug (${profile}) first`);
       const cachePath = caches[0];
       const cacheText = fs.readFileSync(cachePath, "utf8");
