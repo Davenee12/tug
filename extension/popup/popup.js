@@ -54,7 +54,7 @@ function showScreen(why) {
       className: "btn btn-primary",
       href: "https://davenee12.github.io/tug/",
       target: "_blank",
-      textContent: "Get tug for Windows",
+      textContent: "Get the latest tug",
     });
     actions.append(a);
   } else {

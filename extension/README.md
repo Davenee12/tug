@@ -40,7 +40,7 @@ No build step: the folder is the extension.
    is forbidden".
 3. Preview any popup state without tug: `popup/popup.html?mock=connected` (also `search`, `copied`,
    `old`, `nocode`, `paused`, `connecting`, `disconnected`, `codesoff`, `notrunning`, `off`,
-   `notinstalled`, `loading`), served from any static server or inside the extension.
+   `notinstalled`, `wrongid`, `loading`), served from any static server or inside the extension.
 
 Tests:
 

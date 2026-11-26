@@ -120,10 +120,17 @@ export function nowPlaying(phone) {
 export function explainError(code, message) {
   switch (code) {
     case "not_installed":
+      // Also what a tug from before the extension looks like, so it can't say tug isn't here.
       return {
         screen: "install",
-        title: "tug isn't on this PC yet",
-        body: "This extension works with tug, the free Windows app that brings your iPhone to your PC. Install it, then come back.",
+        title: "This needs the latest tug",
+        body: "The extension works with tug, the free Windows app that brings your iPhone to your PC. Install tug, or update it if you already have it, then come back.",
+      };
+    case "wrong_extension":
+      return {
+        screen: "wrong_extension",
+        title: "tug doesn't recognise this copy of the extension",
+        body: "tug answers only the copies of the extension it trusts. Update tug, or use the tug extension from the Chrome Web Store, then try again.",
       };
     case "not_running":
       return {

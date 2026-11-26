@@ -14,6 +14,18 @@ export class TugError extends Error {
 
 let nextId = 1;
 
+/**
+ * Why the browser couldn't start the host, from its own error text. "Specified native messaging
+ * host not found" means no tug, or a tug from before the installer registered the host (0.5.24 and
+ * earlier), which the browser can't tell apart. "Access to the specified native messaging host is
+ * forbidden" means tug is there but this copy of the extension has another ID (README › Develop).
+ */
+export function hostError(text) {
+  if (/forbidden/i.test(text)) return new TugError("wrong_extension", text);
+  if (/not found|not installed/i.test(text)) return new TugError("not_installed", text);
+  return new TugError("failed", text);
+}
+
 /** Make one call; resolves with tug's answer or throws a TugError. */
 export async function callTug(call) {
   if (globalThis.__tugMock) return globalThis.__tugMock(call);
@@ -22,10 +34,7 @@ export async function callTug(call) {
   try {
     reply = await chrome.runtime.sendNativeMessage(HOST, { id, call });
   } catch (e) {
-    // The browser couldn't start the host: tug isn't installed (or installed without it).
-    const text = String(e?.message || e);
-    if (/not found|not installed|forbidden/i.test(text)) throw new TugError("not_installed", text);
-    throw new TugError("failed", text);
+    throw hostError(String(e?.message || e));
   }
   if (!reply || typeof reply !== "object") throw new TugError("failed", "tug sent an empty answer.");
   if (reply.error) throw new TugError(reply.error.code, reply.error.message);

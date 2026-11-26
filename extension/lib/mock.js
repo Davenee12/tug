@@ -44,6 +44,7 @@ const STATES = {
   notrunning: { all: new TugError("not_running", "tug isn't running. Open tug and try again.") },
   off: { all: new TugError("off", "Let AI tools use tug is off.") },
   notinstalled: { all: new TugError("not_installed", "Specified native messaging host not found.") },
+  wrongid: { all: new TugError("wrong_extension", "Access to the specified native messaging host is forbidden.") },
 };
 
 export function installMock(name) {

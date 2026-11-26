@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ago, codeAge, codeSource, explainError, groupCode, initial, isOldCode, nowPlaying, phoneLine, phoneNotice, shortTime } from "../lib/format.js";
+import { hostError } from "../lib/tug.js";
 
 test("codes are grouped the way people read them", () => {
   assert.equal(groupCode("482913"), "482 913");
@@ -54,7 +55,7 @@ test("now playing hides when there's nothing to control", () => {
 });
 
 test("errors that block everything become a whole-popup screen", () => {
-  for (const code of ["not_installed", "not_running", "off", "not_set_up"]) {
+  for (const code of ["not_installed", "wrong_extension", "not_running", "off", "not_set_up"]) {
     assert.ok(explainError(code).screen, code);
   }
   for (const code of ["tool_off", "unavailable", "not_found", "rate_limited", "busy", "timeout", "failed", "whatever"]) {
@@ -62,6 +63,21 @@ test("errors that block everything become a whole-popup screen", () => {
     assert.ok(explainError(code).title, code);
   }
   assert.equal(explainError("tool_off", "Codes is off.").body, "Codes is off.");
+});
+
+test("the browser's own errors are told apart: no host, another extension ID, anything else", () => {
+  assert.equal(hostError("Specified native messaging host not found.").code, "not_installed");
+  assert.equal(hostError("Access to the specified native messaging host is forbidden.").code, "wrong_extension");
+  assert.equal(hostError("Native host has exited.").code, "failed");
+  assert.equal(hostError("Native host has exited.").message, "Native host has exited.");
+});
+
+test("a missing host doesn't claim tug isn't installed: an older tug looks the same", () => {
+  const why = explainError("not_installed");
+  assert.equal(why.screen, "install");
+  assert.doesNotMatch(`${why.title} ${why.body}`, /isn't on this PC|not installed/i);
+  assert.match(why.body, /update it if you already have it/);
+  assert.match(explainError("wrong_extension").body, /Update tug/);
 });
 
 test("an old code says it may have expired", () => {
