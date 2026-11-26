@@ -17,7 +17,11 @@ import {
   unexpectedImports,
   versionFromTag,
   whisperBuildProblems,
+  whisperCaches,
 } from "./release-assets.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const files = (v) => ({ "package.json": v, "src-tauri/tauri.conf.json": v, "src-tauri/Cargo.toml": v });
 
@@ -279,4 +283,32 @@ test("whisper.cpp's instruction set stays the fixed AVX2 one", () => {
   assert.deepEqual(whisperBuildProblems(cacheWith(OPTIMISED, OPTIMISED), "<Project/>"), [
     "ggml-cpu.vcxproj has no Release|x64 configuration",
   ]);
+});
+
+test("whisper.cpp's CMake cache is found in Cargo's old and new build layouts, newest first", () => {
+  const build = fs.mkdtempSync(path.join(os.tmpdir(), "tug-whisper-"));
+  try {
+    const cache = (...parts) => {
+      const f = path.join(build, ...parts, "out", "build", "CMakeCache.txt");
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, "CMAKE_BUILD_TYPE:STRING=Release\n");
+      return f;
+    };
+    const age = (f, secondsAgo) => fs.utimesSync(f, new Date(), new Date(Date.now() - secondsAgo * 1000));
+    assert.deepEqual(whisperCaches(build), [], "nothing built yet");
+
+    const old = cache("whisper-rs-sys-00223d5f7c0b36fb"); // Rust 1.99: build/<crate>-<hash>/out
+    const current = cache("whisper-rs-sys", "4b79b4c2d8c128b7"); // Rust 1.100: build/<crate>/<hash>/out
+    const stale = cache("whisper-rs-sys", "0ef1bc3860000000");
+    cache("whisper-rs-0123456789abcdef"); // whisper-rs itself, not the -sys crate that runs CMake
+    fs.mkdirSync(path.join(build, "whisper-rs-sys", "nocache"), { recursive: true });
+    age(old, 300);
+    age(stale, 600);
+    age(current, 0);
+
+    assert.deepEqual(whisperCaches(build), [current, old, stale]);
+    assert.deepEqual(whisperCaches(path.join(build, "missing")), []);
+  } finally {
+    fs.rmSync(build, { recursive: true, force: true });
+  }
 });
