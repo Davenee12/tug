@@ -77,6 +77,10 @@ const withoutAsking = computed({
   get: () => s.value?.textsWithoutAsking ?? false,
   set: (v) => void devtools.setTextsWithoutAsking(v),
 });
+const browserWithoutAsking = computed({
+  get: () => s.value?.browserTextsWithoutAsking ?? false,
+  set: (v) => void devtools.setBrowserTextsWithoutAsking(v),
+});
 
 const COMMANDS = computed<Array<[string, string]>>(() => [
   ["tug code", "Print the newest verification code (add --copy to put it on the clipboard)"],
@@ -119,6 +123,20 @@ const COMMANDS = computed<Array<[string, string]>>(() => [
             :label="p.label"
             :disabled="devtools.working"
             @update:model-value="(v: boolean) => devtools.setPermission(p.key, v)"
+          />
+        </SettingsRow>
+        <SettingsRow
+          label="Send texts from the browser extension without asking"
+          :description="
+            textsOn
+              ? 'Texts you send from tug\'s browser extension go as soon as you click Send there, without tug\'s Send card, when the name matches one person. AI tools connected to tug still ask, but a program on this PC that pretends to be the extension (an AI agent that runs commands, say) could text without asking.'
+              : 'Turn on Send texts above first.'
+          "
+        >
+          <SettingsSwitch
+            v-model="browserWithoutAsking"
+            label="Send texts from the browser extension without asking"
+            :disabled="devtools.working || !textsOn"
           />
         </SettingsRow>
       </div>

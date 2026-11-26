@@ -254,6 +254,8 @@ export const api = {
   devtoolsSetPermission: (key: string, on: boolean) => invoke<DevToolsStatus>("devtools_set_permission", { key, on }),
   /** Settings › Developer tools › "Send tug text without asking". */
   devtoolsSetTextsWithoutAsking: (on: boolean) => invoke<DevToolsStatus>("devtools_set_texts_without_asking", { on }),
+  devtoolsSetBrowserTextsWithoutAsking: (on: boolean) =>
+    invoke<DevToolsStatus>("devtools_set_browser_texts_without_asking", { on }),
   /** A new token: connected AI tools must be restarted. */
   devtoolsRevoke: () => invoke<DevToolsStatus>("devtools_revoke"),
   /** The confirmation card's Send (true) or Don't send. */

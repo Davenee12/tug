@@ -848,6 +848,10 @@ pub struct StatusResult {
     /// needs only the master switch, so it mustn't hand out what `phone_status` guards.
     #[serde(default)]
     pub phone: Option<PhoneStatus>,
+    /// For the browser extension only: "Send texts from the browser extension without asking" is
+    /// on (with Send texts), so its texts go without tug's card unless the name is a loose match.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sends_without_asking: bool,
 }
 
 impl StatusResult {
@@ -866,6 +870,7 @@ impl StatusResult {
             version,
             permissions,
             phone,
+            sends_without_asking: false,
         }
     }
 }

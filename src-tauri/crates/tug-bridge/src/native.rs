@@ -174,7 +174,8 @@ pub fn allowed_call(call: Call) -> Result<Call, &'static str> {
     match call {
         Call::Status | Call::PhoneStatus | Call::GetLatestCode { .. } | Call::MediaControl { .. } => Ok(call),
         Call::SearchMessages { .. } => Ok(call),
-        // Always through tug's card: `typed` would let the "without asking" switch skip it.
+        // Never `typed`: that's the terminal's switch. The browser has its own, which tug checks
+        // against the kind of caller (a browser client), not anything in the call.
         Call::SendText { to, message, .. } => Ok(Call::SendText {
             to,
             message,

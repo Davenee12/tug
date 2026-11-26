@@ -21,7 +21,7 @@ See the newest code at a glance. Click the toolbar button to see the code, who s
 
 Search your texts and notifications from the toolbar, across what tug has on your PC.
 
-Send a text, or reply to one from your search results. tug shows you the text first, and nothing is sent until you click Send there.
+Send a text, or reply to one from your search results. tug shows you the text first and nothing is sent until you click Send there, or turn on sending straight from the extension in tug's settings.
 
 Control your iPhone's music: play, pause and skip.
 
@@ -30,7 +30,7 @@ How to start:
 2. In tug, open Settings › Developer tools and turn on "Let AI tools use tug".
 3. Click the tug button in your toolbar.
 
-Private by design: the extension talks only to the tug app on your own computer. Nothing is sent to any server, there's no account and no tracking. It doesn't read the pages you visit; it touches a page only when you ask it to fill a code there. tug has a switch for each feature, and the extension can't send a text without you clicking Send in tug.
+Private by design: the extension talks only to the tug app on your own computer. Nothing is sent to any server, there's no account and no tracking. It doesn't read the pages you visit; it touches a page only when you ask it to fill a code there. tug has a switch for each feature, and the extension can't send a text without you clicking Send, in tug or (if you turn that on in tug) in the extension.
 
 tug is free and open source. Questions or problems: https://github.com/Davenee12/tug/issues
 ```

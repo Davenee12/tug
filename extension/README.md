@@ -36,8 +36,12 @@ card. Never the message itself.
 ## Texts
 
 The popup's **New text** (or a reply button on a search result) sends through tug's `send_text`,
-and the host always asks for tug's card: nothing goes until you click Send in tug. The popup closes
-when you click into tug, so the service worker holds the call open (`connectNative`, which also
+and by default tug shows its card: nothing goes until you click Send in tug. With tug › Settings ›
+Developer tools › **Send texts from the browser extension without asking** on (off by default), the
+popup's own Send is the confirmation and tug sends straight away, unless the name is only a loose
+match for a contact. tug decides that from who's calling (a browser client), never from anything
+the extension says; `status` answers `sends_without_asking` so the popup can say which it is.
+While tug's card is up the popup closes when you click into tug, so the service worker holds the call open (`connectNative`, which also
 keeps it alive) and keeps the outcome; the toolbar badge shows `…` while tug waits, then `✓` or `!`.
 
 ## Develop
@@ -51,7 +55,7 @@ No build step: the folder is the extension.
    is forbidden".
 3. Preview any popup state without tug: `popup/popup.html?mock=connected` (also `search`, `copied`,
    `old`, `nocode`, `paused`, `connecting`, `disconnected`, `codesoff`, `notrunning`, `off`,
-   `notinstalled`, `wrongid`, `loading`, `compose`, `textsent`, `textwaiting`, `textsoff`, `copyfail`;
+   `notinstalled`, `wrongid`, `loading`, `compose`, `textsent`, `textwaiting`, `textsoff`, `textsnow`, `copyfail`;
    in `compose`, sending to "nobody" or "sam" shows tug's two answers about who it's to), served from any static server or inside the extension.
 
 Tests:

@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tug_bridge::protocol::{
-    BridgeError, ClientInfo, CodeResult, ErrorCode, HitKind, MediaAction, MessageHit, NowPlayingInfo, PhoneStatus,
-    Request, StatusResult, StdinFile,
+    BridgeError, ClientInfo, ClientKind, CodeResult, ErrorCode, HitKind, MediaAction, MessageHit, NowPlayingInfo,
+    Permission, PhoneStatus, Request, StatusResult, StdinFile,
 };
 use tug_bridge::server::ProgressSink;
 use tug_bridge::time::iso_utc;
@@ -125,11 +125,16 @@ pub(super) async fn run(
             progress: _,
         } => offer_files(dt, client, paths, stdin, hold_secs, no_wait, progress).await,
         // The phone's state only with the Phone status switch on, as for `phone_status`.
-        Request::Status => json(StatusResult::new(
-            dt.app.package_info().version.to_string(),
-            dt.permissions(),
-            || phone_status(dt),
-        )),
+        Request::Status => {
+            let permissions = dt.permissions();
+            let texts_on = permissions.get(&Permission::SendText).copied().unwrap_or(false);
+            let mut status = StatusResult::new(dt.app.package_info().version.to_string(), permissions, || {
+                phone_status(dt)
+            });
+            // Only the extension hears about its own switch, so its popup can say what Send does.
+            status.sends_without_asking = client.kind == ClientKind::Browser && texts_on && dt.without_asking().browser;
+            json(status)
+        }
     }
 }
 
@@ -392,7 +397,7 @@ async fn send_text(
             name,
             address,
             message,
-            settings::skips_card(dt.texts_without_asking(), client, typed, loose),
+            settings::skips_card(dt.without_asking(), client, typed, loose),
             progress,
         )
         .await?,

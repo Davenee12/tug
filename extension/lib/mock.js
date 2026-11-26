@@ -49,6 +49,7 @@ const STATES = {
   textsent: {},
   textwaiting: {},
   copyfail: { copyFails: true },
+  textsnow: { sendsNow: true },
   textsoff: { permissions: { ...permissions, send_text: false } },
 };
 
@@ -68,7 +69,12 @@ export function installMock(name) {
     if (s.all) throw s.all;
     switch (call.tool) {
       case "status":
-        return { version: "0.5.24", permissions: s.permissions ?? permissions, phone: s.phone ?? phone };
+        return {
+          version: "0.5.24",
+          permissions: s.permissions ?? permissions,
+          phone: s.phone ?? phone,
+          ...(s.sendsNow ? { sends_without_asking: true } : {}),
+        };
       case "get_latest_code": {
         if (s.code instanceof Error) throw s.code;
         return { ...(s.code ?? code), copied: call.copy && !s.copyFails };

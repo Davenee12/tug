@@ -36,6 +36,8 @@ if (mock) {
 
 let lastCode = null;
 let permissions = null;
+// tug › Settings › Developer tools › "Send texts from the browser extension without asking".
+let sendsNow = false;
 let composing = false;
 let sending = false;
 
@@ -200,6 +202,7 @@ async function refreshOnce(withCode) {
     status = null;
   }
   permissions = status?.permissions ?? permissions;
+  if (status) sendsNow = status.sends_without_asking === true;
   renderPhone(status?.phone ?? null, status?.permissions);
   if (withCode) {
     try {
@@ -455,12 +458,15 @@ function updateCompose() {
   const off = permissions?.send_text === false;
   noteEl.textContent = off
     ? "Sending texts is switched off in tug › Settings › Developer tools › Send texts."
-    : "tug asks you to confirm before anything is sent.";
+    : sendsNow
+      ? "Sends as soon as you click Send. tug asks only if the name could be someone else."
+      : "tug asks you to confirm before anything is sent.";
   noteEl.classList.toggle("off", off);
   const n = charCount(msgInput.value);
   countEl.textContent = n > MAX_TEXT_CHARS - 100 ? `${n} / ${MAX_TEXT_CHARS}` : "";
   countEl.classList.toggle("over", n > MAX_TEXT_CHARS);
   sendBtn.disabled = off || sending || composeProblem(toInput.value, msgInput.value) !== null;
+  sendBtn.querySelector("span").textContent = sending ? "Sending…" : "Send";
 }
 
 function showComposeError(title, body) {
@@ -515,11 +521,14 @@ form.addEventListener("submit", async (e) => {
   sending = true;
   errEl.hidden = true;
   updateCompose();
-  // tug answers at once when it can't tell who it's to; otherwise its card is up by now.
-  const waitTimer = setTimeout(() => showWaiting(to), 800);
+  // tug answers at once when it can't tell who it's to; otherwise its card is up by now. Sending
+  // straight away takes a few seconds while the phone sends it, and the card only comes for a
+  // name that might be someone else, so wait longer before pointing at tug.
+  const waitTimer = setTimeout(() => showWaiting(to), sendsNow ? 6000 : 800);
   const reply = await requestSend(to, message);
   clearTimeout(waitTimer);
   sending = false;
+  updateCompose();
   if (reply?.error) {
     await forgetLastText(); // Said here, so not again next time.
     const why = explainSendError(reply.error.code, reply.error.message);

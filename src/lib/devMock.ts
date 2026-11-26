@@ -1089,6 +1089,7 @@ const devState: DevToolsStatus = {
   enabled: params.has("devtools") || params.has("devconfirm") || params.has("devconfirmfiles"),
   permissions: DEV_LABELS.map(([key, label, on]) => ({ key, label, on })),
   textsWithoutAsking: false,
+  browserTextsWithoutAsking: false,
   clients: params.has("devtools")
     ? [
         { name: "Claude Code", kind: "mcp", lastUsed: Date.now() - 4 * 60_000 },
@@ -1582,6 +1583,9 @@ mockIPC(
       }
       case "devtools_set_texts_without_asking":
         devState.textsWithoutAsking = Boolean(a.on);
+        return sendDev();
+      case "devtools_set_browser_texts_without_asking":
+        devState.browserTextsWithoutAsking = Boolean(a.on);
         return sendDev();
       case "devtools_revoke":
         devState.clients = [];

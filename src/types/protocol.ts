@@ -1037,6 +1037,8 @@ export interface DevToolsStatus {
   permissions: DevToolsPermission[];
   /** "Send tug text without asking": `tug text` typed in a terminal sends with no card. */
   textsWithoutAsking: boolean;
+  /** "Send texts from the browser extension without asking": the extension's texts send with no card. */
+  browserTextsWithoutAsking: boolean;
   clients: DevToolsClient[];
   /** Full path of the tug command (`...\bin\tug.exe`), or null if it isn't installed. */
   cliPath: string | null;
