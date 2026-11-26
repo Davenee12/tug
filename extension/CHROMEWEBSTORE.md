@@ -43,7 +43,7 @@ tug is free and open source. Questions or problems: https://github.com/Davenee12
 
 | Asset | Dimensions | Status | File |
 |---|---|---|---|
-| Store icon | 128×128 PNG | 🟡 From the design hand-off | `icons/icon-128.png` |
+| Store icon | 128×128 PNG | ✅ | `icons/icon-128.png` |
 | Screenshot 1: the popup with a code | 1280×800 | ⬜ | |
 | Screenshot 2: filling a code on a sign-in page | 1280×800 | ⬜ | |
 | Screenshot 3: search | 1280×800 | ⬜ | |

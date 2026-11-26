@@ -1,7 +1,7 @@
 // node --test extension/test (run by `npm run check`).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ago, codeSource, explainError, groupCode, isOldCode, nowPlaying, phoneLine, shortTime } from "../lib/format.js";
+import { ago, codeAge, codeSource, explainError, groupCode, initial, isOldCode, nowPlaying, phoneLine, phoneNotice, shortTime } from "../lib/format.js";
 
 test("codes are grouped the way people read them", () => {
   assert.equal(groupCode("482913"), "482 913");
@@ -62,4 +62,28 @@ test("errors that block everything become a whole-popup screen", () => {
     assert.ok(explainError(code).title, code);
   }
   assert.equal(explainError("tool_off", "Codes is off.").body, "Codes is off.");
+});
+
+test("an old code says it may have expired", () => {
+  assert.equal(codeAge(120), "2 min ago");
+  assert.equal(codeAge(7 * 60), "7 min ago · may have expired");
+});
+
+test("avatars take the first letter or digit", () => {
+  assert.equal(initial("Chase"), "C");
+  assert.equal(initial("élodie"), "É");
+  assert.equal(initial("+1 555-0123"), "1");
+  assert.equal(initial("💬 Group"), "G");
+  assert.equal(initial(""), "#");
+  assert.equal(initial(undefined), "#");
+});
+
+test("a notice shows only when the phone needs attention", () => {
+  const p = { model: "iPhone 15 Pro" };
+  assert.equal(phoneNotice({ ...p, connection: "connected" }), null);
+  assert.equal(phoneNotice(null), null);
+  assert.equal(phoneNotice({ ...p, connection: "disconnected" }).title, "iPhone 15 Pro isn't connected");
+  assert.equal(phoneNotice({ ...p, connection: "disconnected" }).tone, "warning");
+  assert.equal(phoneNotice({ connection: "connecting" }).title, "Connecting to your iPhone…");
+  assert.equal(phoneNotice({ connection: "no_phone" }).title, "No iPhone set up yet");
 });

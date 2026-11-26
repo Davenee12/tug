@@ -1,5 +1,8 @@
 /* tug's design tokens (src/style.css), shared by the popup and the options page, with a warm
-   dark theme for browsers in dark mode. Components use these names only, never hex. */
+   dark theme for browsers in dark mode. Components use these names only, never hex.
+   Contrast-checked in the design pass ("tug for Chrome" in Figma): body and muted text are at
+   least 4.5:1 on every surface they sit on, and the primary button rests on the deeper coral
+   (white on #cc785c is 3.28:1; on #a9583e it's 5.06:1), as tug's website does in light mode. */
 
 @font-face { font-family: "Inter"; font-weight: 400; font-display: swap; src: url("../fonts/inter-latin-400-normal.woff2") format("woff2"); }
 @font-face { font-family: "Inter"; font-weight: 500; font-display: swap; src: url("../fonts/inter-latin-500-normal.woff2") format("woff2"); }
@@ -14,11 +17,15 @@
   --primary-active: #a9583e;
   --primary-disabled: #e6dfd8;
   --on-primary: #ffffff;
+  /* The primary button: white text needs the deeper coral. */
+  --button: #a9583e;
+  --button-hover: #9e4f37;
+  --button-pressed: #8f4631;
 
   --ink: #141413;
   --body: #3d3d3a;
   --body-strong: #252523;
-  --muted: #6c6a64;
+  --muted: #64625c;
   --muted-soft: #8e8b82;
   --hairline: #e6dfd8;
   --hairline-soft: #ebe6df;
@@ -39,6 +46,19 @@
   --warning: #d4a017;
   --error: #c64545;
 
+  /* Text and tints for states, each readable on the canvas and the cards. */
+  --accent-text: #9e4f37;
+  --accent-tint: #f3e3da;
+  --success-text: #2a6e3c;
+  --success-tint: #e6f1e8;
+  --warning-text: #8a5a0f;
+  --warning-tint: #f6ead3;
+  --error-text: #a33a3a;
+  --error-tint: #f6e1de;
+  /* The now playing strip: device-chrome dark in both themes. */
+  --media-bg: #181715;
+  --media-raised: #252320;
+
   --focus-ring: color-mix(in srgb, var(--primary) 22%, transparent);
   --shadow-card: 0 1px 2px rgb(20 20 19 / 0.06);
 
@@ -55,14 +75,25 @@
     --muted: #a09d96;
     --muted-soft: #85827b;
     --hairline: #34312c;
-    --hairline-soft: #2c2a26;
+    --hairline-soft: #2a2824;
 
     --canvas: #181715;
     --surface-soft: #1f1e1b;
     --surface-card: #252320;
-    --surface-cream-strong: #302d29;
+    --surface-cream-strong: #2e2b27;
 
     --primary-disabled: #3a3631;
+
+    --accent-text: #e08f73;
+    --accent-tint: #4a3328;
+    --success-text: #6fcf87;
+    --success-tint: #1f3325;
+    --warning-text: #e8a55a;
+    --warning-tint: #3a2f1e;
+    --error-text: #e88080;
+    --error-tint: #3a2220;
+    --media-bg: #252320;
+    --media-raised: #2e2b27;
     --focus-ring: color-mix(in srgb, var(--primary) 35%, transparent);
     --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3);
   }
@@ -91,12 +122,13 @@ button { font: inherit; color: inherit; }
   transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 .btn-sm { height: 32px; padding: 0 12px; border-radius: 6px; font-size: 13px; }
-.btn-primary { background: var(--primary); color: var(--on-primary); }
-.btn-primary:hover { background: color-mix(in srgb, var(--primary) 88%, var(--ink)); }
-.btn-primary:active { background: var(--primary-active); }
+.btn-primary { background: var(--button); color: var(--on-primary); }
+.btn-primary:hover { background: var(--button-hover); }
+.btn-primary:active { background: var(--button-pressed); }
 .btn-primary:disabled { background: var(--primary-disabled); color: var(--muted); cursor: not-allowed; }
 .btn-secondary { background: var(--canvas); color: var(--ink); border: 1px solid var(--hairline); }
 .btn-secondary:hover { background: var(--surface-soft); }
+.btn-success { background: var(--success-tint); color: var(--success-text); }
 
 .input {
   height: 40px; width: 100%; padding: 0 14px; border-radius: 8px;

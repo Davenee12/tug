@@ -67,5 +67,6 @@ ones, and the toast) needs Playwright with Chromium, which isn't a project depen
 | `lib/mock.js` | Made-up answers for `?mock=` previews |
 | `popup/`, `options/` | The toolbar popup and the options page |
 | `styles/` | tug's design tokens (light and dark), the Lucide icon sprite |
-| `fonts/`, `assets/` | Inter, EB Garamond, JetBrains Mono (OFL), tug's mark |
+| `fonts/`, `assets/`, `icons/` | Inter, EB Garamond, JetBrains Mono (OFL), tug's mark, the toolbar icons |
+| `design/` | The design record: decisions and screenshots of every state (not shipped) |
 | `CHROMEWEBSTORE.md` | Everything the store listing needs |

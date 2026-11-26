@@ -2,7 +2,18 @@
 // tug when it opens and every few seconds while it stays open, and keeps nothing afterwards.
 
 import { tug, TugError } from "../lib/tug.js";
-import { ago, codeSource, explainError, groupCode, isOldCode, nowPlaying, phoneLine, shortTime } from "../lib/format.js";
+import {
+  ago,
+  codeAge,
+  explainError,
+  groupCode,
+  initial,
+  isOldCode,
+  nowPlaying,
+  phoneLine,
+  phoneNotice,
+  shortTime,
+} from "../lib/format.js";
 
 const $ = (sel) => document.querySelector(sel);
 const REFRESH_MS = 5000;
@@ -33,8 +44,7 @@ function icon(name) {
 const SCREEN_ICON = { install: "download", closed: "power", off: "shield-check" };
 
 function showScreen(why) {
-  const art = $("[data-screen-art]");
-  art.replaceChildren(icon(SCREEN_ICON[why.screen] ?? "circle-alert"));
+  $("[data-screen-art]").replaceChildren(icon(SCREEN_ICON[why.screen] ?? "circle-alert"));
   $("[data-screen-title]").textContent = why.title;
   $("[data-screen-body]").textContent = why.body;
   const actions = $("[data-screen-actions]");
@@ -53,25 +63,38 @@ function showScreen(why) {
     retry.addEventListener("click", () => void refresh());
     actions.append(retry);
   }
-  $("[data-phone-state]").dataset.state = "unknown";
-  $("[data-phone-detail]").textContent = why.screen === "install" ? "Not installed" : "Not available";
+  $("[data-pill]").hidden = true;
   show("screen");
 }
 
 function renderPhone(phone, permissions) {
-  const p = phoneLine(phone);
-  $("[data-phone-name]").textContent = p.label;
-  const state = $("[data-phone-state]");
-  state.dataset.state = phone ? p.state : "unknown";
-  $("[data-phone-detail]").textContent = phone
-    ? p.state === "connected" ? `Connected${p.detail ? ` · ${p.detail}` : ""}` : p.detail
-    : permissions?.phone_status === false ? "Phone status is off in tug" : "";
+  const pill = $("[data-pill]");
+  pill.hidden = !phone;
+  const notice = $("[data-notice]");
+  notice.hidden = true;
+  if (phone) {
+    const p = phoneLine(phone);
+    pill.dataset.state = p.state;
+    $("[data-pill-name]").textContent =
+      p.state === "connected" ? p.label : p.state === "connecting" ? "Connecting…" : p.state === "none" ? "No iPhone yet" : "iPhone offline";
+    const battery = $("[data-pill-battery]");
+    battery.hidden = !(p.state === "connected" && phone.battery_percent != null);
+    $("[data-pill-pct]").textContent = `${phone.battery_percent}%`;
+
+    const n = phoneNotice(phone);
+    if (n) {
+      notice.hidden = false;
+      notice.className = `notice ${n.tone}`;
+      $("[data-notice-icon]").setAttribute("href", `${ICONS}#${n.icon}`);
+      $("[data-notice-title]").textContent = n.title;
+      $("[data-notice-body]").textContent = n.body;
+    }
+  }
 
   const np = phone && permissions?.media !== false ? nowPlaying(phone) : null;
   const strip = $("[data-np]");
   strip.hidden = !np;
   if (np) {
-    strip.classList.toggle("playing", np.playing);
     $("[data-np-title]").textContent = np.title;
     $("[data-np-sub]").textContent = np.subtitle;
     $("[data-np-icon]").setAttribute("href", `${ICONS}#${np.playing ? "pause" : "play"}`);
@@ -83,20 +106,24 @@ function renderCode(result, error) {
   const empty = $("[data-code-empty]");
   if (error) {
     lastCode = null;
-    card.classList.add("empty");
-    card.classList.remove("old");
-    $("[data-code-age]").textContent = "";
+    card.hidden = true;
+    empty.hidden = false;
     const why = explainError(error.code, error.message);
-    empty.textContent = error.code === "not_found" ? "No code in the last 10 minutes. New ones show up here as they arrive." : why.body;
+    $(".empty-title").textContent = error.code === "not_found" ? "No recent codes" : why.title;
+    $("[data-code-empty-body]").textContent =
+      error.code === "not_found" ? "Sign-in codes texted to your iPhone show up here, ready to copy." : why.body;
     return;
   }
   const changed = lastCode?.code !== result.code;
   lastCode = result;
-  card.classList.remove("empty");
+  card.hidden = false;
+  empty.hidden = true;
   card.classList.toggle("old", isOldCode(result.age_seconds));
   $("[data-code-value]").textContent = groupCode(result.code);
-  $("[data-code-age]").textContent = ago(result.age_seconds);
-  $("[data-code-from]").textContent = `From ${codeSource(result.from, result.app)}`;
+  $("[data-code-age-text]").textContent = codeAge(result.age_seconds);
+  $("[data-code-initial]").textContent = initial(result.from || result.app);
+  $("[data-code-from]").textContent = result.from || result.app;
+  $("[data-code-app]").textContent = result.from && result.app && result.app.toLowerCase() !== result.from.toLowerCase() ? result.app : "";
   if (changed) resetCopy();
 }
 
@@ -140,6 +167,7 @@ $("[data-copy]").addEventListener("click", async () => {
   } catch (e) {
     const why = explainError(e.code, e.message);
     $("[data-code-from]").textContent = why.title;
+    $("[data-code-app]").textContent = "";
   }
 });
 
@@ -182,15 +210,17 @@ function renderHits(hits, query) {
     ...hits.map((h) => {
       const li = document.createElement("li");
       li.className = "hit";
-      const from = Object.assign(document.createElement("span"), { className: "hit-from", textContent: h.from });
+      const avatar = Object.assign(document.createElement("span"), { className: "avatar", textContent: initial(h.from) });
+      avatar.setAttribute("aria-hidden", "true");
+      const who = Object.assign(document.createElement("span"), { className: "hit-who" });
+      // The app only when it adds something ("OpenTable OpenTable" says nothing twice).
+      const app = h.app && h.app.toLowerCase() !== String(h.from).toLowerCase() ? h.app : "";
+      who.append(Object.assign(document.createElement("strong"), { textContent: h.from }), app);
       const time = Object.assign(document.createElement("span"), { className: "hit-time", textContent: shortTime(h.time) });
       const text = document.createElement("span");
       text.className = "hit-text";
       text.append(highlighted(h.text, query));
-      li.append(from, time, text);
-      if (h.kind === "notification" && h.app && h.app !== h.from) {
-        li.append(Object.assign(document.createElement("span"), { className: "hit-app", textContent: h.app }));
-      }
+      li.append(avatar, who, time, text);
       return li;
     }),
   );
@@ -221,11 +251,23 @@ input.addEventListener("input", () => {
   }, 350);
 });
 
+// "/" jumps to search, as in most apps with one search box.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && document.activeElement !== input && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    input.focus();
+  }
+});
+
 // The shortcut as the person has set it (chrome://extensions/shortcuts), not the default.
 try {
   const fill = (await chrome.commands.getAll()).find((c) => c.name === "fill-code");
-  if (fill?.shortcut) $("[data-shortcut]").textContent = fill.shortcut;
-  else $(".foot").textContent = "Right-click a code field to fill it from your iPhone";
+  const hint = $("[data-foot-hint]");
+  if (fill?.shortcut) {
+    hint.replaceChildren(...fill.shortcut.split("+").map((k) => Object.assign(document.createElement("kbd"), { textContent: k })), " fills a code");
+  } else {
+    hint.textContent = "Right-click a code box to fill it";
+  }
 } catch {
   // Previewed outside the extension.
 }

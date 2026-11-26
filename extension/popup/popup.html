@@ -9,56 +9,72 @@
   </head>
   <body>
     <header class="top">
-      <img class="mark" src="../assets/mark.svg" alt="" width="28" height="28" />
-      <div class="phone">
-        <span class="phone-name" data-phone-name>iPhone</span>
-        <span class="phone-state" data-phone-state data-state="unknown">
-          <span class="dot" aria-hidden="true"></span><span data-phone-detail>Checking…</span>
+      <img class="mark" src="../assets/mark.svg" alt="" width="24" height="24" />
+      <span class="wordmark">tug</span>
+      <span class="pill" data-pill data-state="unknown" hidden>
+        <span class="dot" aria-hidden="true"></span>
+        <span class="pill-name" data-pill-name>iPhone</span>
+        <span class="pill-battery" data-pill-battery hidden>
+          <svg class="icon"><use href="../styles/icons.svg#battery-medium" /></svg><span data-pill-pct></span>
         </span>
-      </div>
-      <a class="icon-btn" href="../options/options.html" target="_blank" title="Settings" aria-label="Settings">
-        <svg class="icon"><use href="../styles/icons.svg#settings" /></svg>
-      </a>
+      </span>
     </header>
 
     <!-- Everything below the header while tug answers. -->
     <main data-view="ready" hidden>
+      <div class="notice" data-notice hidden>
+        <svg class="icon"><use data-notice-icon href="../styles/icons.svg#bluetooth-off" /></svg>
+        <div>
+          <p class="notice-title" data-notice-title></p>
+          <p class="notice-body" data-notice-body></p>
+        </div>
+      </div>
+
       <section class="code-card" data-code aria-live="polite">
         <div class="code-head">
-          <span class="caption-upper">Verification code</span>
-          <span class="code-age" data-code-age></span>
+          <span class="caption-upper">Latest code</span>
+          <span class="code-age" data-code-age>
+            <svg class="icon"><use href="../styles/icons.svg#clock" /></svg><span data-code-age-text></span>
+          </span>
         </div>
-        <div class="code-body" data-code-body>
-          <output class="code" data-code-value></output>
-          <button class="btn btn-primary copy" data-copy>
+        <output class="code" data-code-value></output>
+        <div class="code-foot">
+          <span class="avatar" data-code-initial aria-hidden="true"></span>
+          <span class="code-from"><strong data-code-from></strong><span data-code-app></span></span>
+          <button class="btn btn-sm btn-primary copy" data-copy>
             <svg class="icon"><use href="../styles/icons.svg#copy" /></svg><span>Copy</span>
           </button>
         </div>
-        <p class="code-from" data-code-from></p>
-        <p class="code-empty" data-code-empty hidden></p>
+      </section>
+
+      <section class="empty" data-code-empty hidden>
+        <span class="empty-icon"><svg class="icon"><use href="../styles/icons.svg#key-round" /></svg></span>
+        <div>
+          <p class="empty-title">No recent codes</p>
+          <p class="empty-body" data-code-empty-body>Sign-in codes texted to your iPhone show up here, ready to copy.</p>
+        </div>
       </section>
 
       <section class="search">
         <label class="search-field">
           <svg class="icon"><use href="../styles/icons.svg#search" /></svg>
-          <input class="input" type="search" placeholder="Search texts and notifications" data-search autocomplete="off" spellcheck="false" />
+          <input class="input" type="search" placeholder="Search texts and notifications" data-search autocomplete="off" spellcheck="false" aria-label="Search texts and notifications" />
+          <kbd class="slash" aria-hidden="true">/</kbd>
         </label>
         <ul class="hits" data-hits hidden></ul>
         <p class="hint" data-search-note hidden></p>
       </section>
 
       <section class="np" data-np hidden>
-        <div class="np-art" aria-hidden="true">
-          <span></span><span></span><span></span><span></span>
-        </div>
+        <span class="np-art" aria-hidden="true"><svg class="icon"><use href="../styles/icons.svg#music" /></svg></span>
         <div class="np-text">
           <span class="np-title" data-np-title></span>
           <span class="np-sub" data-np-sub></span>
         </div>
         <div class="np-controls">
-          <button class="icon-btn" data-media="previous" aria-label="Previous"><svg class="icon"><use href="../styles/icons.svg#skip-back" /></svg></button>
-          <button class="icon-btn play" data-media="toggle" aria-label="Play or pause"><svg class="icon"><use data-np-icon href="../styles/icons.svg#pause" /></svg></button>
-          <button class="icon-btn" data-media="next" aria-label="Next"><svg class="icon"><use href="../styles/icons.svg#skip-forward" /></svg></button>
+          <button class="np-btn" data-media="previous" aria-label="Previous"><svg class="icon"><use href="../styles/icons.svg#skip-back" /></svg></button>
+          <button class="np-btn play" data-media="toggle" aria-label="Play or pause"><svg class="icon"><use data-np-icon href="../styles/icons.svg#pause" /></svg></button>
+          <button class="np-btn" data-media="next" aria-label="Next"><svg class="icon"><use href="../styles/icons.svg#skip-forward" /></svg></button>
         </div>
       </section>
     </main>
@@ -78,7 +94,10 @@
     </main>
 
     <footer class="foot">
-      <span><kbd data-shortcut>Alt+Shift+C</kbd> fills a code on any page</span>
+      <span class="foot-hint" data-foot-hint><kbd>Alt</kbd><kbd>Shift</kbd><kbd>C</kbd> fills a code</span>
+      <a class="icon-btn" href="../options/options.html" target="_blank" title="Settings" aria-label="Settings">
+        <svg class="icon"><use href="../styles/icons.svg#settings" /></svg>
+      </a>
     </footer>
   </body>
 </html>

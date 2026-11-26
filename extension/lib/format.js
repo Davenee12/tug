@@ -37,6 +37,17 @@ export function isOldCode(seconds) {
   return Number(seconds) >= CODE_OLD_SECONDS;
 }
 
+/** The code card's age: past 5 minutes, a site may already have expired the code. */
+export function codeAge(seconds) {
+  return isOldCode(seconds) ? `${ago(seconds)} · may have expired` : ago(seconds);
+}
+
+/** The letter in a sender's avatar: the first letter or digit, uppercased ("#" for none). */
+export function initial(name) {
+  const m = String(name ?? "").match(/[\p{L}\p{N}]/u);
+  return m ? m[0].toLocaleUpperCase() : "#";
+}
+
 /** Where the popup's code came from: "Chase · Messages", or just the app when they're the same. */
 export function codeSource(from, app) {
   const f = String(from ?? "").trim();
@@ -62,6 +73,32 @@ export function phoneLine(phone) {
           ? "No iPhone set up"
           : "Not connected";
   return { label, state, detail };
+}
+
+/** A notice above the code when the phone isn't connected, or null when all is well. */
+export function phoneNotice(phone) {
+  if (!phone) return null;
+  const name = phone.model || "Your iPhone";
+  switch (phone.connection) {
+    case "connected":
+      return null;
+    case "connecting":
+      return {
+        tone: "neutral",
+        icon: "loader-circle",
+        title: `Connecting to ${phone.model || "your iPhone"}…`,
+        body: "Codes and texts arrive once it's connected.",
+      };
+    case "no_phone":
+      return { tone: "neutral", icon: "smartphone", title: "No iPhone set up yet", body: "Connect your iPhone in tug first." };
+    default:
+      return {
+        tone: "warning",
+        icon: "bluetooth-off",
+        title: `${name} isn't connected`,
+        body: "Keep it nearby with Bluetooth on. tug reconnects by itself.",
+      };
+  }
 }
 
 /** Now playing, or null when there's nothing to show. */

@@ -84,8 +84,12 @@ export function showToastInPage(toast) {
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const c = dark
     ? { bg: "#252320", text: "#faf9f5", soft: "#a09d96", line: "rgba(250,249,245,0.08)" }
-    : { bg: "#faf9f5", text: "#141413", soft: "#6c6a64", line: "#e6dfd8" };
-  const tone = { success: "#5db872", info: "#cc785c", error: "#c64545" }[toast.tone] || "#cc785c";
+    : { bg: "#faf9f5", text: "#141413", soft: "#64625c", line: "#e6dfd8" };
+  // Icon colours readable on their own tint, light and dark (the design pass's state tokens).
+  const tones = dark
+    ? { success: "#6fcf87", info: "#e08f73", error: "#e88080" }
+    : { success: "#2a6e3c", info: "#9e4f37", error: "#a33a3a" };
+  const tone = tones[toast.tone] || tones.info;
   const icon = {
     success: '<path d="M20 6 9 17l-5-5"/>',
     info: '<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
@@ -108,7 +112,7 @@ export function showToastInPage(toast) {
       @keyframes in { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
       @keyframes out { to { opacity: 0; transform: translateY(-4px); } }
       .icon { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
-        background: color-mix(in srgb, ${tone} 16%, transparent); color: ${tone}; }
+        background: color-mix(in srgb, ${tone} ${dark ? "18%" : "12%"}, transparent); color: ${tone}; }
       .icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;
         stroke-linecap: round; stroke-linejoin: round; }
       .body { min-width: 0; flex: 1; }
