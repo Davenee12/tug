@@ -36,7 +36,7 @@ CMAKE_CXX_FLAGS_RELEASE = "/MT /O2 /Ob2 /DNDEBUG"
 # whisper.cpp it built before. BINDGEN_EXTRA_CLANG_ARGS is one it watches, so this harmless define
 # (it only reaches bindgen's reading of whisper.h) is the rebuild switch: bump the number whenever
 # you change anything above.
-BINDGEN_EXTRA_CLANG_ARGS = "-DTUG_WHISPER_BUILD=2"
+BINDGEN_EXTRA_CLANG_ARGS = "-DTUG_WHISPER_BUILD=3"
 # A fixed instruction set instead of "whatever the build machine has": a release built on a CI
 # runner with AVX-512 must still run on a laptop without it. AVX2 + FMA + F16C (+ BMI2) is every
 # Intel CPU since Haswell (2013) and every AMD Ryzen; tug checks for them at run time and keeps the
