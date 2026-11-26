@@ -52,6 +52,13 @@ node --test extension/test/format.test.mjs
 node extension/test/page.e2e.cjs
 ```
 
+On Windows, with tug installed and running, check the registration and one call through
+`bin\tug.exe` exactly as the browser makes it, without a browser:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File extension\test\host-check.ps1
+```
+
 The first runs in `npm run check`. The second (Fill code against sign-in pages shaped like real
 ones, and the toast) needs Playwright with Chromium, which isn't a project dependency.
 
