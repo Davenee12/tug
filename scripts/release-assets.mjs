@@ -64,14 +64,20 @@ export function releaseVersion({ ref, input, files, fromFiles = false }) {
   return wanted;
 }
 
-/** The versions tug's files carry (see CONTRIBUTING.md › Releases). */
+/**
+ * The versions tug's files carry (see CONTRIBUTING.md › Releases). tug-cli's is one of them because
+ * the installer checks that bin\tug.exe really was replaced by running `tug --version` and
+ * comparing it with the app's version (src-tauri/windows/hooks.nsh, NSIS_HOOK_POSTINSTALL).
+ */
 export function readVersions(root = repo) {
   const json = (f) => JSON.parse(fs.readFileSync(path.join(root, f), "utf8"));
-  const cargo = fs.readFileSync(path.join(root, "src-tauri/Cargo.toml"), "utf8");
+  const cargo = (f) =>
+    /^\[package\][^[]*?^version\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(root, f), "utf8"))?.[1] ?? "(none)";
   return {
     "package.json": json("package.json").version,
     "src-tauri/tauri.conf.json": json("src-tauri/tauri.conf.json").version,
-    "src-tauri/Cargo.toml": /^\[package\][^[]*?^version\s*=\s*"([^"]+)"/m.exec(cargo)?.[1] ?? "(none)",
+    "src-tauri/Cargo.toml": cargo("src-tauri/Cargo.toml"),
+    "src-tauri/crates/tug-cli/Cargo.toml": cargo("src-tauri/crates/tug-cli/Cargo.toml"),
   };
 }
 

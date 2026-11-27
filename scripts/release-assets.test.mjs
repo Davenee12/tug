@@ -22,8 +22,15 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const files = (v) => ({ "package.json": v, "src-tauri/tauri.conf.json": v, "src-tauri/Cargo.toml": v });
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const files = (v) => ({
+  "package.json": v,
+  "src-tauri/tauri.conf.json": v,
+  "src-tauri/Cargo.toml": v,
+  "src-tauri/crates/tug-cli/Cargo.toml": v,
+});
 
 test("the tag names the version, and only a version tag does", () => {
   assert.equal(versionFromTag("v0.5.19"), "0.5.19");
@@ -53,6 +60,55 @@ test("the release version must match every version file", () => {
 test("this checkout's version files agree with each other", () => {
   const v = readVersions();
   assert.equal(new Set(Object.values(v)).size, 1, JSON.stringify(v));
+  // The installer checks bin\tug.exe by its --version, so tug-cli's version must be checked too.
+  assert.ok("src-tauri/crates/tug-cli/Cargo.toml" in v, JSON.stringify(v));
+});
+
+test("a release stops when tug-cli's version wasn't bumped", () => {
+  assert.throws(
+    () => releaseVersion({ ref: "v0.5.25", files: { ...files("0.5.25"), "src-tauri/crates/tug-cli/Cargo.toml": "0.5.24" } }),
+    /tug-cli\/Cargo\.toml \(0\.5\.24\)/,
+  );
+});
+
+// src-tauri/windows/hooks.nsh: the installer must replace bin\tug.exe even while `tug mcp` or the
+// browser extension's native host runs it, and fail (not report success) when it can't.
+const hooks = () => fs.readFileSync(path.join(repo, "src-tauri/windows/hooks.nsh"), "utf8").replace(/\r\n/g, "\n");
+/** hooks.nsh without its macros and comments: what NSIS compiles where the template includes it. */
+const outsideMacros = (nsh) =>
+  nsh
+    .replace(/^!macro [\s\S]*?^!macroend$/gm, "")
+    .split("\n")
+    .filter((l) => !/^\s*;/.test(l))
+    .join("\n");
+
+test("the installer hooks stop and check the tug command the bundle installs", () => {
+  const nsh = hooks();
+  const conf = JSON.parse(fs.readFileSync(path.join(repo, "src-tauri/tauri.conf.json"), "utf8"));
+  assert.equal(conf.bundle.windows.nsis.installerHooks, "./windows/hooks.nsh");
+  const target = conf.bundle.resources["binaries/tug-cli.exe"];
+  assert.equal(target, "bin/tug.exe");
+  const command = `$INSTDIR\\${target.replaceAll("/", "\\")}`;
+  assert.ok(nsh.includes(`!define TUG_COMMAND "${command}"`), `TUG_COMMAND is ${command}`);
+  assert.match(nsh, /^!macro NSIS_HOOK_PREINSTALL$[\s\S]*?Call TugStopCommand[\s\S]*?^!macroend$/m);
+  assert.match(nsh, /^!macro NSIS_HOOK_POSTINSTALL$[\s\S]*?--version[\s\S]*?^!macroend$/m);
+  // A failure must reach a silent install's exit code.
+  assert.match(nsh, /^!macro TugFail [\s\S]*?SetErrorLevel 2[\s\S]*?Abort[\s\S]*?^!macroend$/m);
+});
+
+test("the post-install check expects exactly what tug --version prints", () => {
+  const main = fs.readFileSync(path.join(repo, "src-tauri/crates/tug-cli/src/main.rs"), "utf8");
+  assert.ok(main.includes('println!("tug {}", env!("CARGO_PKG_VERSION"));'), "tug-cli prints `tug <version>`");
+  assert.ok(hooks().includes('$1 != "tug ${VERSION}"'), "hooks.nsh compares with `tug ${VERSION}`");
+});
+
+test("the installer hooks only use the template's defines and variables inside macros", () => {
+  // The template includes hooks.nsh before it declares these, so a function using one won't build.
+  const outside = outsideMacros(hooks());
+  for (const name of ["${VERSION}", "${PRODUCTNAME}", "${MAINBINARYNAME}", "$PassiveMode", "$UpdateMode"]) {
+    assert.ok(!outside.includes(name), `${name} is used outside a macro in hooks.nsh`);
+  }
+  assert.equal(outsideMacros("!macro A\n  $PassiveMode\n!macroend\n; $UpdateMode\nFunction F\nFunctionEnd").trim(), "Function F\nFunctionEnd");
 });
 
 const CHANGELOG = `# Changelog
