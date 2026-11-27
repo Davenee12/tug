@@ -146,6 +146,35 @@ export function composeProblem(to, message) {
   return null;
 }
 
+/**
+ * The contacts the To field offers for what's typed so far (`list` as tug's `list_contacts`
+ * gives it: people texted lately first, then A to Z). Nothing typed: everyone, in that order.
+ * Otherwise names where every typed word starts a word of the name come first ("sam r" →
+ * "Sam Rivera"), then names that merely contain it, each keeping tug's order.
+ */
+export function matchContacts(list, query) {
+  const fold = (s) => String(s ?? "").toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const q = fold(query);
+  if (!Array.isArray(list)) return [];
+  if (!q.length) return list;
+  const starts = [];
+  const contains = [];
+  const joined = q.join(" ");
+  for (const c of list) {
+    const words = fold(c.name);
+    let i = 0;
+    const prefix = q.every((part) => {
+      const at = words.slice(i).findIndex((w) => w.startsWith(part));
+      if (at === -1) return false;
+      i += at + 1;
+      return true;
+    });
+    if (prefix) starts.push(c);
+    else if (words.join(" ").includes(joined)) contains.push(c);
+  }
+  return [...starts, ...contains];
+}
+
 /** A search result that can be answered: a text someone sent (not a notification, not your own). */
 export function canReply(hit) {
   return hit?.kind === "text" && typeof hit.from === "string" && hit.from.trim() !== "" && hit.from !== "You";

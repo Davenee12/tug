@@ -14,6 +14,7 @@ import {
   heldNowPlaying,
   initial,
   isOldCode,
+  matchContacts,
   MAX_TEXT_CHARS,
   nowPlaying,
   phoneLine,
@@ -435,8 +436,143 @@ const errEl = $("[data-compose-error]");
 const noteEl = $("[data-compose-note]");
 const waitingEl = $("[data-compose-waiting]");
 
+// Who to text: the phone's contacts as a dropdown under To, fetched once per popup.
+const contactsEl = $("[data-contacts]");
+const contactsToggle = $("[data-contacts-toggle]");
+const SHOW_CONTACTS = 150; // More than this and typing a few letters finds them faster.
+let contactList = null;
+let contactsLoad = null;
+let shownContacts = [];
+let activeContact = -1;
+let showAll = false; // Opened with the arrow: everyone, whatever's in the field.
+
+function loadContacts() {
+  contactsLoad ??= tug
+    .contacts()
+    .then((list) => (Array.isArray(list) ? list.filter((c) => c && typeof c.name === "string" && c.name) : []))
+    .catch(() => []) // Switched off, or a tug from before the picker: the field still takes a name.
+    .then((list) => {
+      contactList = list;
+      contactsToggle.hidden = list.length === 0;
+      if (document.activeElement === toInput) openContacts();
+    });
+  return contactsLoad;
+}
+
+function highlightedName(name, query) {
+  const frag = document.createDocumentFragment();
+  const q = query.trim().toLocaleLowerCase();
+  const at = q ? name.toLocaleLowerCase().indexOf(q) : -1;
+  if (at === -1) {
+    frag.append(name);
+    return frag;
+  }
+  frag.append(name.slice(0, at), Object.assign(document.createElement("mark"), { textContent: name.slice(at, at + q.length) }), name.slice(at + q.length));
+  return frag;
+}
+
+function renderContacts() {
+  const query = showAll ? "" : toInput.value;
+  const matches = matchContacts(contactList ?? [], query);
+  shownContacts = matches.slice(0, SHOW_CONTACTS);
+  if (activeContact >= shownContacts.length) activeContact = shownContacts.length - 1;
+  const items = [];
+  const header = (text) => Object.assign(document.createElement("li"), { className: "group", textContent: text, role: "presentation" });
+  const grouped = !query.trim();
+  shownContacts.forEach((c, i) => {
+    if (grouped && i === 0 && c.recent) items.push(header("Recent"));
+    if (grouped && !c.recent && (i === 0 || shownContacts[i - 1].recent)) items.push(header("All contacts"));
+    const li = document.createElement("li");
+    li.className = `contact${i === activeContact ? " active" : ""}`;
+    li.id = `contact-${i}`;
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-selected", String(i === activeContact));
+    const avatar = Object.assign(document.createElement("span"), { className: "avatar", textContent: initial(c.name) });
+    avatar.setAttribute("aria-hidden", "true");
+    const name = Object.assign(document.createElement("span"), { className: "contact-name" });
+    name.append(highlightedName(c.name, query));
+    li.append(avatar, name);
+    // mousedown, not click: keep focus in the field so it doesn't close first.
+    li.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      pickContact(c.name);
+    });
+    items.push(li);
+  });
+  if (matches.length > shownContacts.length) {
+    items.push(Object.assign(document.createElement("li"), { className: "more", role: "presentation", textContent: `Type to find the other ${matches.length - shownContacts.length}` }));
+  }
+  contactsEl.replaceChildren(...items);
+  const open = shownContacts.length > 0;
+  contactsEl.hidden = !open;
+  toInput.setAttribute("aria-expanded", String(open));
+  if (open && activeContact >= 0) {
+    toInput.setAttribute("aria-activedescendant", `contact-${activeContact}`);
+    $(`#contact-${activeContact}`)?.scrollIntoView({ block: "nearest" });
+  } else {
+    toInput.removeAttribute("aria-activedescendant");
+  }
+}
+
+function openContacts() {
+  if (!contactList?.length) return;
+  renderContacts();
+}
+
+function closeContacts() {
+  showAll = false;
+  contactsEl.hidden = true;
+  activeContact = -1;
+  toInput.setAttribute("aria-expanded", "false");
+  toInput.removeAttribute("aria-activedescendant");
+}
+
+function pickContact(name) {
+  toInput.value = name;
+  closeContacts();
+  updateCompose();
+  msgInput.focus();
+}
+
+toInput.addEventListener("focus", openContacts);
+toInput.addEventListener("blur", closeContacts);
+toInput.addEventListener("input", () => {
+  showAll = false;
+  activeContact = toInput.value.trim() ? 0 : -1;
+  openContacts();
+});
+toInput.addEventListener("keydown", (e) => {
+  const open = !contactsEl.hidden;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (!contactList?.length) return;
+    e.preventDefault();
+    if (!open) activeContact = -1;
+    const n = matchContacts(contactList, showAll ? "" : toInput.value).slice(0, SHOW_CONTACTS).length;
+    if (!n) return;
+    activeContact = e.key === "ArrowDown" ? (activeContact + 1) % n : (activeContact <= 0 ? n - 1 : activeContact - 1);
+    renderContacts();
+  } else if (e.key === "Enter" && open && activeContact >= 0) {
+    e.preventDefault(); // Pick, don't send.
+    pickContact(shownContacts[activeContact].name);
+  } else if (e.key === "Escape" && open) {
+    e.preventDefault(); // Close the list, not the popup.
+    closeContacts();
+  }
+});
+contactsToggle.addEventListener("mousedown", (e) => e.preventDefault());
+contactsToggle.addEventListener("click", () => {
+  if (contactsEl.hidden) {
+    toInput.focus();
+    showAll = true;
+    openContacts();
+  } else {
+    closeContacts();
+  }
+});
+
 function openCompose(to) {
   composing = true;
+  void loadContacts();
   if (typeof to === "string") toInput.value = to;
   $("[data-compose-title]").textContent = typeof to === "string" && to ? `Reply to ${to}` : "New text";
   form.hidden = false;

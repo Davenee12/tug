@@ -12,7 +12,7 @@ use tug_bridge::protocol::{
 use tug_bridge::server::ProgressSink;
 use tug_bridge::time::iso_utc;
 
-use super::recipient::{resolve, Recipient};
+use super::recipient::{contact_names, resolve, Recipient};
 use super::{dev_apps, files, outgoing, phone_model, settings, DevTools};
 use crate::ams::{PlaybackState, RemoteCommand};
 use crate::ble::Command;
@@ -110,6 +110,7 @@ pub(super) async fn run(
             json(got.map_err(|e| BridgeError::new(ErrorCode::NotFound, e))?)
         }
         Request::PhoneStatus => json(phone_status(dt)),
+        Request::Contacts { limit } => on_store(dt, move |store, _| contacts(store, limit as usize)).await,
         Request::Media(action) => media(dt, action).await,
         Request::SendText {
             to,
@@ -148,6 +149,23 @@ async fn on_store<T: Send + 'static>(
     tokio::task::spawn_blocking(move || f(&store, live.as_deref()))
         .await
         .map_err(internal)?
+}
+
+/// Addresses with texts, newest first (as `resolve` and `contact_names` take them).
+fn recent_addresses(store: &Store) -> Result<Vec<String>, BridgeError> {
+    let mut recent: Vec<String> = Vec::new();
+    for m in store.recent_messages(SCAN).map_err(internal)?.iter().rev() {
+        if !recent.contains(&m.address) {
+            recent.push(m.address.clone());
+        }
+    }
+    Ok(recent)
+}
+
+/// `list_contacts`: the names to pick who to text from.
+fn contacts(store: &Store, limit: usize) -> Result<serde_json::Value, BridgeError> {
+    let contacts = store.contacts().map_err(internal)?;
+    json(contact_names(&contacts, &recent_addresses(store)?, limit))
 }
 
 /// The newest code since since: (received at, code, from, app).

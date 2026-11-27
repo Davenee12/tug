@@ -85,6 +85,8 @@ export const tug = {
   latestCode: (copy = false) => callTug({ tool: "get_latest_code", copy }),
   search: (query, limit = 8) => callTug({ tool: "search_messages", query, limit }),
   media: (action) => callTug({ tool: "media_control", action }),
+  // Names only, people texted lately first. Needs the Send texts switch (and a tug that has it).
+  contacts: () => callTug({ tool: "list_contacts" }),
   // Always through tug's card: the host takes out anything that could skip it.
   sendText: (to, message) => callTugOverPort({ tool: "send_text", to, message }),
 };

@@ -21,7 +21,7 @@ See the newest code at a glance. Click the toolbar button to see the code, who s
 
 Search your texts and notifications from the toolbar, across what tug has on your PC.
 
-Send a text, or reply to one from your search results. tug shows you the text first and nothing is sent until you click Send there, or turn on sending straight from the extension in tug's settings.
+Send a text to anyone in your iPhone's contacts (pick them from the list), or reply to one from your search results. tug shows you the text first and nothing is sent until you click Send there, or turn on sending straight from the extension in tug's settings.
 
 Control your iPhone's music: play, pause and skip.
 
@@ -75,7 +75,8 @@ popup, who it went to and its outcome stay in browser memory (`storage.session`)
 show, and are gone when the browser closes.
 
 For the dashboard's form, "Personal communications" and "Authentication info" are *handled* on the
-device (text snippets in search results, verification codes) but not collected or transmitted.
+device (text snippets in search results, contact names for picking who to text, verification codes)
+but not collected or transmitted.
 
 - [x] Data is not sold to third parties
 - [x] Data is not used for purposes unrelated to the extension's core functionality

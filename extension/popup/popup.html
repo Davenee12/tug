@@ -101,10 +101,29 @@
         </button>
       </div>
       <form class="compose-form" data-compose novalidate>
-        <label class="field">
-          <span class="caption-upper">To</span>
-          <input class="input" data-to name="to" maxlength="100" autocomplete="off" spellcheck="false" placeholder="A name on your iPhone, or a number" />
-        </label>
+        <div class="field">
+          <label class="caption-upper" for="compose-to">To</label>
+          <div class="combo">
+            <input
+              class="input"
+              id="compose-to"
+              data-to
+              name="to"
+              maxlength="100"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Pick a contact, or type a name or number"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded="false"
+              aria-controls="compose-contacts"
+            />
+            <button type="button" class="icon-btn combo-toggle" data-contacts-toggle tabindex="-1" aria-label="Show contacts" title="Show contacts" hidden>
+              <svg class="icon"><use href="../styles/icons.svg#chevron-down" /></svg>
+            </button>
+          </div>
+          <ul class="contacts" id="compose-contacts" role="listbox" aria-label="Contacts" data-contacts hidden></ul>
+        </div>
         <label class="field">
           <span class="caption-upper">Message</span>
           <textarea class="input textarea" data-message name="message" rows="4" placeholder="Message"></textarea>

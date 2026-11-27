@@ -173,7 +173,7 @@ pub fn parse_request(bytes: &[u8]) -> Result<(u64, Call), BrowserReply> {
 pub fn allowed_call(call: Call) -> Result<Call, &'static str> {
     match call {
         Call::Status | Call::PhoneStatus | Call::GetLatestCode { .. } | Call::MediaControl { .. } => Ok(call),
-        Call::SearchMessages { .. } => Ok(call),
+        Call::SearchMessages { .. } | Call::ListContacts { .. } => Ok(call),
         // Never `typed`: that's the terminal's switch. The browser has its own, which tug checks
         // against the kind of caller (a browser client), not anything in the call.
         Call::SendText { to, message, .. } => Ok(Call::SendText {
@@ -243,6 +243,7 @@ mod tests {
             json!({"tool":"get_latest_code","copy":true}),
             json!({"tool":"search_messages","query":"dinner"}),
             json!({"tool":"media_control","action":"next"}),
+            json!({"tool":"list_contacts"}),
         ] {
             let (id, _) = parse_request(&req(call.clone())).unwrap_or_else(|e| panic!("{call}: {e:?}"));
             assert_eq!(id, 3);

@@ -18,7 +18,8 @@ extension ──native messaging──► bin\tug.exe (native host) ──named 
   master switch (Settings › Developer tools › Let AI tools use tug), its per-tool switches, its rate
   limits and its confirmation card all apply. The browser never sees the bridge token.
 - Only these calls get through the host: `status`, `phone_status`, `get_latest_code`,
-  `search_messages`, `media_control` and `send_text` (always through tug's card). File calls are
+  `search_messages`, `media_control`, `list_contacts` (names only, for the To field's picker; needs
+  Send texts) and `send_text`. File calls are
   refused.
 - The installer registers the host for Chrome and Edge (`HKCU\Software\{Google\Chrome,Microsoft\Edge}\NativeMessagingHosts\dev.davejames.tug.browser`
   → `bin\browser-host.json`, from `src-tauri/windows/`). The portable exe doesn't, so the

@@ -32,6 +32,8 @@ pub const MAX_SERVER_LINE: usize = 8 * 1024 * 1024;
 /// Limits callers can ask for, and what they get by default.
 pub const DEFAULT_LIMIT: u32 = 20;
 pub const MAX_LIMIT: u32 = 50;
+/// `list_contacts` answers with up to this many names (all of them, for any real address book).
+pub const MAX_CONTACTS: u32 = 5000;
 pub const MAX_QUERY_CHARS: usize = 200;
 pub const MAX_NAME_CHARS: usize = 100;
 pub const MAX_TEXT_CHARS: usize = 1000;
@@ -365,6 +367,12 @@ pub enum Call {
         name: String,
     },
     PhoneStatus,
+    /// The names in the phone's contacts, for picking who to text: people texted lately first,
+    /// then everyone else A to Z. Names only, never numbers. Guarded by the Send texts switch.
+    ListContacts {
+        #[serde(default)]
+        limit: Option<u32>,
+    },
     MediaControl {
         action: String,
     },
@@ -526,6 +534,9 @@ pub enum Request {
         name: String,
     },
     PhoneStatus,
+    Contacts {
+        limit: u32,
+    },
     Media(MediaAction),
     SendText {
         to: String,
@@ -570,6 +581,7 @@ impl Request {
             Request::ListFiles { .. } => "list_tugboat_files",
             Request::GetFile { .. } => "get_tugboat_file",
             Request::PhoneStatus => "phone_status",
+            Request::Contacts { .. } => "list_contacts",
             Request::Media(_) => "media_control",
             Request::SendText { .. } => "send_text",
             Request::OfferFiles { .. } => "offer_files",
@@ -586,7 +598,8 @@ impl Request {
             Request::ListFiles { .. } | Request::GetFile { .. } => Permission::TugboatFiles,
             Request::PhoneStatus => Permission::PhoneStatus,
             Request::Media(_) => Permission::Media,
-            Request::SendText { .. } => Permission::SendText,
+            // Who to text is part of texting: no names without the switch that sends.
+            Request::SendText { .. } | Request::Contacts { .. } => Permission::SendText,
             Request::OfferFiles { .. } => Permission::TugboatSend,
             Request::Status => return None,
         })
@@ -671,6 +684,13 @@ impl Call {
                 Request::GetFile { name: name.to_string() }
             }
             Call::PhoneStatus => Request::PhoneStatus,
+            Call::ListContacts { limit: l } => Request::Contacts {
+                limit: match l {
+                    None => MAX_CONTACTS,
+                    Some(0) => return Err(BridgeError::invalid("`limit` must be at least 1")),
+                    Some(n) => (*n).min(MAX_CONTACTS),
+                },
+            },
             Call::MediaControl { action } => Request::Media(
                 MediaAction::parse(action)
                     .ok_or_else(|| BridgeError::invalid("`action` must be play, pause, toggle, next or previous"))?,
@@ -838,6 +858,14 @@ pub struct PhoneStatus {
     pub notifications: bool,
     pub texts: bool,
     pub now_playing: Option<NowPlayingInfo>,
+}
+
+/// One name from `list_contacts`. `recent`: texted lately, so listed first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContactName {
+    pub name: String,
+    #[serde(default)]
+    pub recent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

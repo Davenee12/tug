@@ -14,6 +14,7 @@ import {
   heldNowPlaying,
   initial,
   isOldCode,
+  matchContacts,
   nowPlaying,
   phoneLine,
   phoneNotice,
@@ -219,4 +220,24 @@ test("the popup remembers the last text only as long as it helps", () => {
   const failed = lastTextNotice({ state: "error", to: "Maya", at: now - 1000, error: { code: "not_found", message: "" } }, now);
   assert.equal(failed.tone, "error");
   assert.equal(failed.title, "No contact by that name");
+});
+
+test("the To field offers contacts: word starts first, then anything containing it, in tug's order", () => {
+  const list = [
+    { name: "Maya Chen", recent: true },
+    { name: "Isaac Brown", recent: true },
+    { name: "Sam Lee", recent: false },
+    { name: "Sam Rivera", recent: false },
+    { name: "Samantha Hill", recent: false },
+  ];
+  assert.deepEqual(matchContacts(list, ""), list, "nothing typed: everyone, recent first");
+  assert.deepEqual(matchContacts(list, "  "), list);
+  assert.deepEqual(
+    matchContacts(list, "sa").map((c) => c.name),
+    ["Sam Lee", "Sam Rivera", "Samantha Hill", "Isaac Brown"],
+  );
+  assert.deepEqual(matchContacts(list, "sam r").map((c) => c.name), ["Sam Rivera"]);
+  assert.deepEqual(matchContacts(list, "CHEN").map((c) => c.name), ["Maya Chen"]);
+  assert.deepEqual(matchContacts(list, "zz"), []);
+  assert.deepEqual(matchContacts(null, "sa"), []);
 });

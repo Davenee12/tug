@@ -25,6 +25,15 @@ const hits = [
   { kind: "text", from: "Sam Ortiz", app: "Messages", time: minsAgo(4 * 24 * 60), text: "Dinner Sunday at mom's, bring the pie" },
 ];
 
+const contacts = [
+  { name: "Maya Chen", recent: true },
+  { name: "Sam Ortiz", recent: true },
+  { name: "Mom", recent: true },
+  ...["Alex Kim", "Ana Lima", "Arlo Diaz", "Ben Carter", "Chloe Martin", "Dad", "Dev Patel", "Elena Rossi",
+    "Grace Wong", "Hannah Lee", "Isaac Brown", "Jordan Smith", "Leo Garcia", "Nora Quinn", "Priya Shah",
+    "Sam Lee", "Theo Walsh", "Zoe Park"].map((name) => ({ name, recent: false })),
+];
+
 const STATES = {
   connected: {},
   copied: {},
@@ -84,6 +93,9 @@ export function installMock(name) {
         return hits.filter((h) => (h.text + h.from).toLowerCase().includes(call.query.toLowerCase()));
       case "media_control":
         return { ok: true };
+      case "list_contacts":
+        if (s.permissions?.send_text === false) throw new TugError("tool_off", "Send texts is switched off in tug.");
+        return contacts;
       case "send_text": {
         // "nobody" and "sam" show tug's two answers about who it's to; anything else sends
         // once "you" click Send on tug's card.
