@@ -285,6 +285,11 @@ and every release after it arrives automatically.
   beside "tug". Restart now shows Windows' small installer progress, then tug comes back on the same
   screen and About shows the new version. tug's log (`%LOCALAPPDATA%\dev.davejames.tug\logs`) has
   `update:` lines for each step, and the reason if one failed.
+- **The tug command came along:** with an AI tool running `tug mcp` (or the browser extension
+  connected) during the update, `& "$env:LOCALAPPDATA\tug\bin\tug.exe" --version` afterwards says
+  the new version. The installer stops a `tug mcp` running from its own `bin` folder, and fails
+  (exit code 2 under `/S`) rather than leave the old command behind
+  (`src-tauri/windows/hooks.nsh`).
 - **The portable exe** shows "Update available — Download", which opens the release page.
 
 ## Rolling back
