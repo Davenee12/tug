@@ -177,6 +177,9 @@ pub struct DevToolsStatus {
     pub permissions: Vec<PermissionState>,
     /// "Send `tug text` without asking" (`settings::TEXTS_WITHOUT_ASKING`).
     pub texts_without_asking: bool,
+    /// "Send texts from the browser extension without asking"
+    /// (`settings::BROWSER_TEXTS_WITHOUT_ASKING`).
+    pub browser_texts_without_asking: bool,
     pub clients: Vec<ClientRecord>,
     /// `...\tug\bin\tug.exe`, the command and MCP server; `None` if it isn't installed.
     pub cli_path: Option<String>,
@@ -285,12 +288,31 @@ impl DevTools {
         settings::parse_enabled(self.setting(settings::TEXTS_WITHOUT_ASKING).as_deref())
     }
 
-    /// "Send `tug text` without asking" goes off with what it depends on (Send texts, the master
-    /// switch, Revoke access), so switching those back on never quietly brings it back.
+    fn browser_texts_without_asking(&self) -> bool {
+        settings::parse_enabled(self.setting(settings::BROWSER_TEXTS_WITHOUT_ASKING).as_deref())
+    }
+
+    /// Both "without asking" switches, for `settings::skips_card`.
+    pub(crate) fn without_asking(&self) -> settings::WithoutAsking {
+        settings::WithoutAsking {
+            typed: self.texts_without_asking(),
+            browser: self.browser_texts_without_asking(),
+        }
+    }
+
+    /// The "without asking" switches go off with what they depend on (Send texts, the master
+    /// switch, Revoke access), so switching those back on never quietly brings them back.
     fn stop_texting_without_asking(&self) {
         if self.texts_without_asking() {
             let _ = self.shared.store.set_setting(settings::TEXTS_WITHOUT_ASKING, "false");
             log::info!("devtools: tug text without asking off (with what it depends on)");
+        }
+        if self.browser_texts_without_asking() {
+            let _ = self
+                .shared
+                .store
+                .set_setting(settings::BROWSER_TEXTS_WITHOUT_ASKING, "false");
+            log::info!("devtools: browser texts without asking off (with what it depends on)");
         }
     }
 
@@ -331,6 +353,7 @@ impl DevTools {
                 })
                 .collect(),
             texts_without_asking: self.texts_without_asking(),
+            browser_texts_without_asking: self.browser_texts_without_asking(),
             clients: settings::parse_clients(self.setting(settings::CLIENTS).as_deref()),
             cli_path: cli.map(|p| p.to_string_lossy().into_owned()),
             on_path: cli_dir.as_deref().is_some_and(path_env::is_on_path),
@@ -405,6 +428,24 @@ impl DevTools {
             .set_setting(settings::TEXTS_WITHOUT_ASKING, if on { "true" } else { "false" })
             .map_err(|e| e.to_string())?;
         log::info!("devtools: tug text without asking {}", if on { "on" } else { "off" });
+        self.emit_status();
+        Ok(self.status())
+    }
+
+    /// "Send texts from the browser extension without asking": a text the person sends from the
+    /// extension's popup goes with no card (their click there is the confirmation).
+    pub fn set_browser_texts_without_asking(&self, on: bool) -> Result<DevToolsStatus, String> {
+        self.shared
+            .store
+            .set_setting(
+                settings::BROWSER_TEXTS_WITHOUT_ASKING,
+                if on { "true" } else { "false" },
+            )
+            .map_err(|e| e.to_string())?;
+        log::info!(
+            "devtools: browser texts without asking {}",
+            if on { "on" } else { "off" }
+        );
         self.emit_status();
         Ok(self.status())
     }

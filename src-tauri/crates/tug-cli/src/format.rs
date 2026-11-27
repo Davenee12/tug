@@ -389,6 +389,7 @@ mod tests {
             version: "0.5.12".into(),
             permissions: perms.clone(),
             phone: Some(p),
+            sends_without_asking: false,
         });
         assert_eq!(lines[0], "tug 0.5.12 is running.");
         assert!(lines.iter().any(|l| l == "Now playing: Song — Band (paused)."));
@@ -401,6 +402,7 @@ mod tests {
             version: "0.5.12".into(),
             permissions: perms,
             phone: None,
+            sends_without_asking: false,
         });
         assert!(lines[1].starts_with("iPhone: hidden ("), "{lines:?}");
         assert!(!lines.iter().any(|l| l.starts_with("Now playing")));

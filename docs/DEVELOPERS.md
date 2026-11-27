@@ -244,8 +244,8 @@ ones already open don't. Or call it by its full path. The `bin` folder keeps the
 
 ```
 AI tool ──stdio/MCP──► bin\tug.exe mcp ─┐
-terminal ─────────────► bin\tug.exe ────┴─named pipe (tug-bridge)─► tug app: switches, limits,
-                                                                    confirmation card, history
+terminal ─────────────► bin\tug.exe ────┼─named pipe (tug-bridge)─► tug app: switches, limits,
+browser extension ─native messaging─► bin\tug.exe ─┘                confirmation card, history
 ```
 
 - `src-tauri/crates/tug-bridge`: protocol (versioned JSON lines), auth, framing, the pipe server
@@ -253,6 +253,10 @@ terminal ─────────────► bin\tug.exe ────┴�
 - `src-tauri/crates/tug-cli`: the command and the MCP server (official Rust SDK, `rmcp`). A
   separate console program because tug.exe is a windowed app (no terminal output or exit
   codes) behind the single-instance guard, and the small program starts instantly.
+- `extension/`: the Chrome and Edge extension. The browser starts `bin\tug.exe` as its native
+  messaging host (`tug-bridge/src/native.rs`, `tug-cli/src/native_host.rs`), which calls tug as a
+  `browser` client: the same switches, limits and card, a fixed name nothing can spoof, and only
+  the popup's calls (no files). See [extension/README.md](../extension/README.md).
 - `src-tauri/src/devtools`: what each tool does, the switches, rate limits, the confirmation
   state machine, PATH, and Settings' status.
 

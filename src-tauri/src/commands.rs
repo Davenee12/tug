@@ -1527,6 +1527,12 @@ pub fn devtools_set_texts_without_asking(state: State<'_, AppState>, on: bool) -
     state.devtools.set_texts_without_asking(on)
 }
 
+/// Settings › Developer tools › "Send texts from the browser extension without asking".
+#[tauri::command]
+pub fn devtools_set_browser_texts_without_asking(state: State<'_, AppState>, on: bool) -> Result<DevToolsStatus> {
+    state.devtools.set_browser_texts_without_asking(on)
+}
+
 /// "Revoke access": a new token; connected AI tools must be restarted.
 #[tauri::command]
 pub fn devtools_revoke(state: State<'_, AppState>) -> Result<DevToolsStatus> {

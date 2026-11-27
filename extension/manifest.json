@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "tug",
+  "short_name": "tug",
+  "version": "0.1.0",
+  "description": "Your iPhone's verification codes, texts and music in the browser, from the tug app on your Windows PC.",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArrFTyzvA7/Q+tKemFN9o5TE9RHzHCsI/WwzK441l5j7a7q8kaYFZlvS1uO8TpPg3ljVWXLFFgGPJ2+FDioWgQOE5/n4Z1xnyE1yC5ZZz6PbMDZ/i1WAvVZGM0YdaASxLsgE4n93NTRVDQjGeYV6VVpTMNkyE+NCMgvFuTcGB4kU94dADyyU5+Ea83jeWSi5ARo7IvZX4b6nPM5JozB637G/jhUw7o720T2qZ9cl1Xo156XmNqEvwrMOjXGZi9pHRQDaGzuCR9aVUb9QAdNRwyv0WxcnSKViPv68BYLs8i/NWljigUY+MP6E+c9zlcIe0pRTnMpBSvRy42s/tdT6FOQIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "contextMenus",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "tug",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "options_page": "options/options.html",
+  "commands": {
+    "_execute_action": {
+      "description": "Open tug"
+    },
+    "fill-code": {
+      "suggested_key": {
+        "default": "Alt+Shift+C"
+      },
+      "description": "Fill the newest verification code from your iPhone"
+    }
+  }
+}

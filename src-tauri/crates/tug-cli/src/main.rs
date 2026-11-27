@@ -7,6 +7,7 @@ mod args;
 mod format;
 mod lookup;
 mod mcp;
+mod native_host;
 mod send;
 
 use std::io::Write;
@@ -20,6 +21,14 @@ use tug_bridge::protocol::{
 
 fn main() -> ExitCode {
     let argv = args::lossy(std::env::args_os().skip(1));
+    // Started by Chrome or Edge for tug's browser extension: its origin comes first (then, on
+    // Windows, `--parent-window=<n>`). Nothing a person types looks like that.
+    if argv.first().is_some_and(|a| tug_bridge::native::is_extension_origin(a)) {
+        return match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(r) => ExitCode::from(r.block_on(native_host::serve()) as u8),
+            Err(_) => ExitCode::from(format::FAILED as u8),
+        };
+    }
     let command = match args::parse(&argv) {
         Ok(c) => c,
         Err(e) => {
@@ -53,6 +62,7 @@ fn client(kind: ClientKind) -> Result<Client, ClientError> {
     let name = match kind {
         ClientKind::Cli => "tug command",
         ClientKind::Mcp => "",
+        ClientKind::Browser => tug_bridge::protocol::BROWSER_EXTENSION,
     };
     Client::for_current_user(ClientInfo {
         name: name.into(),
