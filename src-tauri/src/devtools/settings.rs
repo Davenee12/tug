@@ -15,17 +15,37 @@ pub const CLIENTS: &str = "devtools.clients";
 pub const MAX_CLIENTS: usize = 8;
 /// "true" when the user has switched on "Send `tug text` without asking". Off unless set.
 pub const TEXTS_WITHOUT_ASKING: &str = "devtools.texts_without_asking";
+/// "true" when the user has switched on "Send texts from the browser extension without asking".
+/// Off unless set.
+pub const BROWSER_TEXTS_WITHOUT_ASKING: &str = "devtools.browser_texts_without_asking";
 
 pub fn parse_enabled(v: Option<&str>) -> bool {
     v == Some("true")
 }
 
-/// Whether a text goes without the card: only with the switch on, only for `tug text` typed in a
-/// terminal, and only to someone named exactly or by the start of their name (or a number). An AI
-/// tool over MCP, a script running `tug text` with no terminal, and a `loose` match ("ann" →
-/// "Joanne") are always asked (the "Send texts" switch and the rate limit apply either way).
-pub fn skips_card(without_asking: bool, client: &ClientInfo, typed: bool, loose: bool) -> bool {
-    without_asking && typed && !loose && client.kind == ClientKind::Cli
+/// Which "without asking" switches are on: `tug text` typed in a terminal, and the browser
+/// extension. Each covers only its own caller.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WithoutAsking {
+    pub typed: bool,
+    pub browser: bool,
+}
+
+/// Whether a text goes without the card. Only to someone named exactly or by the start of their
+/// name (or a number): a `loose` match ("ann" → "Joanne") is always asked. Then `tug text` typed
+/// in a terminal with its switch on, or a text from the browser extension with its own switch on
+/// (the person clicked Send in the extension's popup). An AI tool over MCP and a script running
+/// `tug text` with no terminal are always asked. The "Send texts" switch and the rate limit apply
+/// either way.
+pub fn skips_card(on: WithoutAsking, client: &ClientInfo, typed: bool, loose: bool) -> bool {
+    if loose {
+        return false;
+    }
+    match client.kind {
+        ClientKind::Cli => on.typed && typed,
+        ClientKind::Browser => on.browser,
+        ClientKind::Mcp => false,
+    }
 }
 
 pub fn parse_permissions(v: Option<&str>) -> BTreeMap<String, bool> {
@@ -88,15 +108,56 @@ mod tests {
     fn only_a_typed_tug_text_skips_the_card_and_only_when_switched_on() {
         let cli = info("tug command", ClientKind::Cli);
         let mcp = info("claude-code", ClientKind::Mcp);
-        assert!(skips_card(true, &cli, true, false));
-        assert!(!skips_card(false, &cli, true, false), "off by default: always asked");
+        let typed = WithoutAsking {
+            typed: true,
+            browser: false,
+        };
+        assert!(skips_card(typed, &cli, true, false));
         assert!(
-            !skips_card(true, &cli, false, false),
+            !skips_card(WithoutAsking::default(), &cli, true, false),
+            "off by default: always asked"
+        );
+        assert!(
+            !skips_card(typed, &cli, false, false),
             "a script with no terminal is asked"
         );
-        assert!(!skips_card(true, &mcp, true, false), "an AI tool is always asked");
-        assert!(!skips_card(true, &mcp, false, false));
-        assert!(!skips_card(true, &cli, true, true), "a loose name match is asked");
+        assert!(!skips_card(typed, &mcp, true, false), "an AI tool is always asked");
+        assert!(!skips_card(typed, &mcp, false, false));
+        assert!(!skips_card(typed, &cli, true, true), "a loose name match is asked");
+    }
+
+    #[test]
+    fn the_browser_switch_covers_the_browser_extension_only() {
+        let browser = info(tug_bridge::protocol::BROWSER_EXTENSION, ClientKind::Browser);
+        let cli = info("tug command", ClientKind::Cli);
+        let mcp = info("claude-code", ClientKind::Mcp);
+        let on = WithoutAsking {
+            typed: false,
+            browser: true,
+        };
+        assert!(skips_card(on, &browser, false, false));
+        assert!(
+            !skips_card(WithoutAsking::default(), &browser, false, false),
+            "off by default: always asked"
+        );
+        assert!(
+            !skips_card(
+                WithoutAsking {
+                    typed: true,
+                    browser: false
+                },
+                &browser,
+                true,
+                false
+            ),
+            "the terminal's switch doesn't cover the browser, even if it claims typed"
+        );
+        assert!(!skips_card(on, &browser, false, true), "a loose name match is asked");
+        assert!(
+            !skips_card(on, &cli, true, false),
+            "the browser's switch doesn't cover the terminal"
+        );
+        assert!(!skips_card(on, &mcp, false, false), "an AI tool is always asked");
     }
 
     #[test]

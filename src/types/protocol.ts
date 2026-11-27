@@ -989,7 +989,8 @@ export interface DevToolsPermission {
 /** A tool that has used tug (`ClientRecord`). `name` is what it called itself. */
 export interface DevToolsClient {
   name: string;
-  kind: "mcp" | "cli";
+  /** "browser": tug's browser extension, through its native messaging host. */
+  kind: "mcp" | "cli" | "browser";
   /** Unix ms. */
   lastUsed: number;
 }
@@ -1036,6 +1037,8 @@ export interface DevToolsStatus {
   permissions: DevToolsPermission[];
   /** "Send tug text without asking": `tug text` typed in a terminal sends with no card. */
   textsWithoutAsking: boolean;
+  /** "Send texts from the browser extension without asking": the extension's texts send with no card. */
+  browserTextsWithoutAsking: boolean;
   clients: DevToolsClient[];
   /** Full path of the tug command (`...\bin\tug.exe`), or null if it isn't installed. */
   cliPath: string | null;

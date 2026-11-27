@@ -32,6 +32,8 @@ pub const MAX_SERVER_LINE: usize = 8 * 1024 * 1024;
 /// Limits callers can ask for, and what they get by default.
 pub const DEFAULT_LIMIT: u32 = 20;
 pub const MAX_LIMIT: u32 = 50;
+/// `list_contacts` answers with up to this many names (all of them, for any real address book).
+pub const MAX_CONTACTS: u32 = 5000;
 pub const MAX_QUERY_CHARS: usize = 200;
 pub const MAX_NAME_CHARS: usize = 100;
 pub const MAX_TEXT_CHARS: usize = 1000;
@@ -68,7 +70,13 @@ pub enum ClientKind {
     Mcp,
     /// The `tug` command in a terminal.
     Cli,
+    /// tug's browser extension, through `tug.exe` started by Chrome or Edge as its native
+    /// messaging host (`native.rs`).
+    Browser,
 }
+
+/// What the browser extension is called everywhere, whatever name it sends.
+pub const BROWSER_EXTENSION: &str = "Browser extension";
 
 /// Who's calling. The name is what the MCP client calls itself (`claude-code`, `cursor`), so
 /// it's informational: anything running as the user could claim any name.
@@ -182,6 +190,7 @@ impl ClientInfo {
         self.named().unwrap_or_else(|| match self.kind {
             ClientKind::Mcp => UNNAMED_AI_TOOL.into(),
             ClientKind::Cli => "tug command".into(),
+            ClientKind::Browser => BROWSER_EXTENSION.into(),
         })
     }
 
@@ -192,12 +201,18 @@ impl ClientInfo {
     pub fn asker(&self) -> String {
         match (self.kind, self.named()) {
             (ClientKind::Mcp, Some(name)) => format!("{name} (an AI tool)"),
+            (ClientKind::Browser, _) => "tug's browser extension".into(),
             _ => self.display_name(),
         }
     }
 
     /// The tamed name, or `None` when there's nothing usable to show.
     fn named(&self) -> Option<String> {
+        // Only tug's own native host introduces itself as the extension, but any program running
+        // as the person could claim to be it, so the name it sends is never shown.
+        if self.kind == ClientKind::Browser {
+            return Some(BROWSER_EXTENSION.into());
+        }
         let printable: String = self
             .name
             .chars()
@@ -207,7 +222,7 @@ impl ClientInfo {
         let named = match self.kind {
             ClientKind::Mcp if is_generic_name(&printable) => String::new(),
             ClientKind::Mcp => friendly_client_name(printable.trim()),
-            ClientKind::Cli => printable,
+            ClientKind::Cli | ClientKind::Browser => printable,
         };
         let clean = named.chars().take(40).collect::<String>().trim().to_string();
         if !clean.is_empty() {
@@ -219,7 +234,7 @@ impl ClientInfo {
                 .as_deref()
                 .and_then(crate::launcher::app_name)
                 .map(str::to_string),
-            ClientKind::Cli => None,
+            ClientKind::Cli | ClientKind::Browser => None,
         }
     }
 }
@@ -352,6 +367,12 @@ pub enum Call {
         name: String,
     },
     PhoneStatus,
+    /// The names in the phone's contacts, for picking who to text: people texted lately first,
+    /// then everyone else A to Z. Names only, never numbers. Guarded by the Send texts switch.
+    ListContacts {
+        #[serde(default)]
+        limit: Option<u32>,
+    },
     MediaControl {
         action: String,
     },
@@ -513,6 +534,9 @@ pub enum Request {
         name: String,
     },
     PhoneStatus,
+    Contacts {
+        limit: u32,
+    },
     Media(MediaAction),
     SendText {
         to: String,
@@ -557,6 +581,7 @@ impl Request {
             Request::ListFiles { .. } => "list_tugboat_files",
             Request::GetFile { .. } => "get_tugboat_file",
             Request::PhoneStatus => "phone_status",
+            Request::Contacts { .. } => "list_contacts",
             Request::Media(_) => "media_control",
             Request::SendText { .. } => "send_text",
             Request::OfferFiles { .. } => "offer_files",
@@ -573,7 +598,8 @@ impl Request {
             Request::ListFiles { .. } | Request::GetFile { .. } => Permission::TugboatFiles,
             Request::PhoneStatus => Permission::PhoneStatus,
             Request::Media(_) => Permission::Media,
-            Request::SendText { .. } => Permission::SendText,
+            // Who to text is part of texting: no names without the switch that sends.
+            Request::SendText { .. } | Request::Contacts { .. } => Permission::SendText,
             Request::OfferFiles { .. } => Permission::TugboatSend,
             Request::Status => return None,
         })
@@ -658,6 +684,13 @@ impl Call {
                 Request::GetFile { name: name.to_string() }
             }
             Call::PhoneStatus => Request::PhoneStatus,
+            Call::ListContacts { limit: l } => Request::Contacts {
+                limit: match l {
+                    None => MAX_CONTACTS,
+                    Some(0) => return Err(BridgeError::invalid("`limit` must be at least 1")),
+                    Some(n) => (*n).min(MAX_CONTACTS),
+                },
+            },
             Call::MediaControl { action } => Request::Media(
                 MediaAction::parse(action)
                     .ok_or_else(|| BridgeError::invalid("`action` must be play, pause, toggle, next or previous"))?,
@@ -827,6 +860,14 @@ pub struct PhoneStatus {
     pub now_playing: Option<NowPlayingInfo>,
 }
 
+/// One name from `list_contacts`. `recent`: texted lately, so listed first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContactName {
+    pub name: String,
+    #[serde(default)]
+    pub recent: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatusResult {
     pub version: String,
@@ -835,6 +876,10 @@ pub struct StatusResult {
     /// needs only the master switch, so it mustn't hand out what `phone_status` guards.
     #[serde(default)]
     pub phone: Option<PhoneStatus>,
+    /// For the browser extension only: "Send texts from the browser extension without asking" is
+    /// on (with Send texts), so its texts go without tug's card unless the name is a loose match.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sends_without_asking: bool,
 }
 
 impl StatusResult {
@@ -853,6 +898,7 @@ impl StatusResult {
             version,
             permissions,
             phone,
+            sends_without_asking: false,
         }
     }
 }
@@ -1462,5 +1508,24 @@ mod tests {
             launcher: None,
         };
         assert_eq!(cli.asker(), "tug command");
+    }
+
+    #[test]
+    fn the_browser_extension_is_always_called_the_same() {
+        let b = |name: &str| ClientInfo {
+            name: name.into(),
+            kind: ClientKind::Browser,
+            launcher: Some("Cursor.exe".into()),
+        };
+        // Whatever it claims, it reads as the extension: it can't borrow another app's name.
+        for name in ["", "Windows Security", "claude-code", "evil\nname"] {
+            assert_eq!(b(name).display_name(), BROWSER_EXTENSION);
+            assert_eq!(b(name).asker(), "tug's browser extension");
+        }
+        let hello = r#"{"name":"x","kind":"browser"}"#;
+        assert_eq!(
+            serde_json::from_str::<ClientInfo>(hello).unwrap().kind,
+            ClientKind::Browser
+        );
     }
 }

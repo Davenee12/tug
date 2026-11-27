@@ -45,7 +45,8 @@
       "nsis"
     ],
     "resources": {
-      "binaries/tug-cli.exe": "bin/tug.exe"
+      "binaries/tug-cli.exe": "bin/tug.exe",
+      "windows/browser-host.json": "bin/browser-host.json"
     },
     "icon": [
       "icons/32x32.png",

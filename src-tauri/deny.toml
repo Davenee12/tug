@@ -13,10 +13,16 @@ all-features = true
 # Fail on every vulnerability, unmaintained-crate and unsound advisory in the Windows graph,
 # except the ones listed (each with a reason) below.
 yanked = "warn"
-# Nothing is ignored. (glib's RUSTSEC-2024-0429 was, until v0.5.20: glib only comes in through
-# Tauri's GTK backend for Linux, which the Windows-only graph above never includes, so the entry
-# matched nothing and cargo-deny warned it was unused.) A new entry needs an id and a reason.
-ignore = []
+# A new entry needs an id and a reason. (glib's RUSTSEC-2024-0429 was ignored until v0.5.20: glib
+# only comes in through Tauri's GTK backend for Linux, which the Windows-only graph above never
+# includes, so the entry matched nothing and cargo-deny warned it was unused.)
+ignore = [
+  # chrono is unmaintained: an "unmaintained" notice, not a vulnerability, covering every version,
+  # with no fixed release. It comes in only through rmcp (the MCP SDK behind `tug mcp`), directly
+  # and through schemars 1.x; rmcp 3.11 still needs it. Remove this when rmcp moves to jiff or
+  # time (cargo-deny then warns that the entry matches nothing).
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; only via rmcp/schemars (tug mcp), no fixed version exists" },
+]
 
 [licenses]
 # Exactly the licences tug's Windows build uses today. tug is MIT and mustn't take on copyleft

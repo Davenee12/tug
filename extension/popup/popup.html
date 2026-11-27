@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>tug</title>
+    <link rel="stylesheet" href="../styles/tokens.css" />
+    <link rel="stylesheet" href="popup.css" />
+    <script type="module" src="popup.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <img class="mark" src="../assets/mark.svg" alt="" width="24" height="24" />
+      <span class="wordmark">tug</span>
+      <span class="pill" data-pill data-state="unknown" hidden>
+        <span class="dot" aria-hidden="true"></span>
+        <span class="pill-name" data-pill-name>iPhone</span>
+        <span class="pill-battery" data-pill-battery hidden>
+          <svg class="icon"><use href="../styles/icons.svg#battery-medium" /></svg><span data-pill-pct></span>
+        </span>
+      </span>
+    </header>
+
+    <!-- Everything below the header while tug answers. -->
+    <main data-view="ready" hidden>
+      <!-- The last text sent from here: waiting in tug, or how it went. -->
+      <div class="notice" data-text-notice role="status" hidden>
+        <svg class="icon"><use data-text-notice-icon href="../styles/icons.svg#message-square" /></svg>
+        <div>
+          <p class="notice-title" data-text-notice-title></p>
+          <p class="notice-body" data-text-notice-body></p>
+        </div>
+        <button class="icon-btn notice-x" data-text-notice-dismiss aria-label="Dismiss" title="Dismiss">
+          <svg class="icon"><use href="../styles/icons.svg#x" /></svg>
+        </button>
+      </div>
+
+      <div class="notice" data-notice hidden>
+        <svg class="icon"><use data-notice-icon href="../styles/icons.svg#bluetooth-off" /></svg>
+        <div>
+          <p class="notice-title" data-notice-title></p>
+          <p class="notice-body" data-notice-body></p>
+        </div>
+      </div>
+
+      <section class="code-card" data-code aria-live="polite">
+        <div class="code-head">
+          <span class="caption-upper">Latest code</span>
+          <span class="code-age" data-code-age>
+            <svg class="icon"><use href="../styles/icons.svg#clock" /></svg><span data-code-age-text></span>
+          </span>
+        </div>
+        <output class="code" data-code-value></output>
+        <div class="code-foot">
+          <span class="avatar" data-code-initial aria-hidden="true"></span>
+          <span class="code-from"><strong data-code-from></strong><span data-code-app></span></span>
+          <button class="btn btn-sm btn-primary copy" data-copy>
+            <svg class="icon"><use href="../styles/icons.svg#copy" /></svg><span>Copy</span>
+          </button>
+        </div>
+        <p class="copy-note" data-copy-note role="status" hidden></p>
+      </section>
+
+      <section class="empty" data-code-empty hidden>
+        <span class="empty-icon"><svg class="icon"><use href="../styles/icons.svg#key-round" /></svg></span>
+        <div>
+          <p class="empty-title">No recent codes</p>
+          <p class="empty-body" data-code-empty-body>Sign-in codes texted to your iPhone show up here, ready to copy.</p>
+        </div>
+      </section>
+
+      <section class="search">
+        <label class="search-field">
+          <svg class="icon"><use href="../styles/icons.svg#search" /></svg>
+          <input class="input" type="search" placeholder="Search texts and notifications" data-search autocomplete="off" spellcheck="false" aria-label="Search texts and notifications" />
+          <kbd class="slash" aria-hidden="true">/</kbd>
+        </label>
+        <ul class="hits" data-hits hidden></ul>
+        <p class="hint" data-search-note hidden></p>
+      </section>
+
+      <section class="np" data-np hidden>
+        <span class="np-art" aria-hidden="true"><svg class="icon"><use href="../styles/icons.svg#music" /></svg></span>
+        <div class="np-text">
+          <span class="np-title" data-np-title></span>
+          <span class="np-sub" data-np-sub></span>
+        </div>
+        <div class="np-controls">
+          <button class="np-btn" data-media="previous" aria-label="Previous"><svg class="icon"><use href="../styles/icons.svg#skip-back" /></svg></button>
+          <button class="np-btn play" data-media="toggle" aria-label="Play or pause"><svg class="icon"><use data-np-icon href="../styles/icons.svg#pause" /></svg></button>
+          <button class="np-btn" data-media="next" aria-label="Next"><svg class="icon"><use href="../styles/icons.svg#skip-forward" /></svg></button>
+        </div>
+      </section>
+    </main>
+
+    <!-- A new text, or a reply from search. tug's card has the last word: nothing sends without it. -->
+    <main class="compose" data-view="compose" hidden>
+      <div class="compose-head">
+        <h1 class="headline compose-title" data-compose-title>New text</h1>
+        <button class="icon-btn" data-compose-close aria-label="Close" title="Close">
+          <svg class="icon"><use href="../styles/icons.svg#x" /></svg>
+        </button>
+      </div>
+      <form class="compose-form" data-compose novalidate>
+        <div class="field">
+          <label class="caption-upper" for="compose-to">To</label>
+          <div class="combo">
+            <input
+              class="input"
+              id="compose-to"
+              data-to
+              name="to"
+              maxlength="100"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Pick a contact, or type a name or number"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded="false"
+              aria-controls="compose-contacts"
+            />
+            <button type="button" class="icon-btn combo-toggle" data-contacts-toggle tabindex="-1" aria-label="Show contacts" title="Show contacts" hidden>
+              <svg class="icon"><use href="../styles/icons.svg#chevron-down" /></svg>
+            </button>
+          </div>
+          <ul class="contacts" id="compose-contacts" role="listbox" aria-label="Contacts" data-contacts hidden></ul>
+        </div>
+        <label class="field">
+          <span class="caption-upper">Message</span>
+          <textarea class="input textarea" data-message name="message" rows="4" placeholder="Message"></textarea>
+        </label>
+        <p class="compose-note" data-compose-note>tug asks you to confirm before anything is sent.</p>
+        <p class="compose-error" data-compose-error role="alert" hidden></p>
+        <div class="compose-actions">
+          <span class="count" data-count aria-live="polite"></span>
+          <button type="button" class="btn btn-sm btn-secondary" data-compose-cancel>Cancel</button>
+          <button type="submit" class="btn btn-sm btn-primary" data-send disabled>
+            <svg class="icon"><use href="../styles/icons.svg#send" /></svg><span>Send</span>
+          </button>
+        </div>
+      </form>
+      <div class="waiting" data-compose-waiting role="status" hidden>
+        <div class="screen-art"><svg class="icon"><use href="../styles/icons.svg#message-square" /></svg></div>
+        <h1 class="headline">Check tug</h1>
+        <p data-waiting-body></p>
+      </div>
+    </main>
+
+    <!-- A whole-popup state: tug not installed, not running, or not letting the extension in. -->
+    <main class="screen" data-view="screen" hidden>
+      <div class="screen-art" data-screen-art></div>
+      <h1 class="headline" data-screen-title></h1>
+      <p data-screen-body></p>
+      <div class="screen-actions" data-screen-actions></div>
+    </main>
+
+    <main class="loading" data-view="loading">
+      <div class="skeleton tall"></div>
+      <div class="skeleton"></div>
+      <div class="skeleton short"></div>
+    </main>
+
+    <footer class="foot">
+      <span class="foot-hint" data-foot-hint><kbd>Alt</kbd><kbd>Shift</kbd><kbd>C</kbd> fills a code</span>
+      <span class="foot-actions">
+        <button class="btn btn-sm btn-secondary new-text" data-new-text hidden>
+          <svg class="icon"><use href="../styles/icons.svg#square-pen" /></svg><span>New text</span>
+        </button>
+        <a class="icon-btn" href="../options/options.html" target="_blank" title="Settings" aria-label="Settings">
+          <svg class="icon"><use href="../styles/icons.svg#settings" /></svg>
+        </a>
+      </span>
+    </footer>
+  </body>
+</html>

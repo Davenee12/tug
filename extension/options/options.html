@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>tug for your browser</title>
+    <link rel="stylesheet" href="../styles/tokens.css" />
+    <link rel="stylesheet" href="options.css" />
+    <script type="module" src="options.js"></script>
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <img src="../assets/mark.svg" alt="" width="48" height="48" />
+        <div>
+          <p class="caption-upper">Browser extension</p>
+          <h1 class="headline">Your iPhone, in the browser</h1>
+          <p class="lede">Codes, texts and music from the tug app on this PC, right where you sign in.</p>
+        </div>
+      </header>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>Connection to tug</h2>
+            <p class="muted" data-check-summary>Check that the extension can reach tug on this PC.</p>
+          </div>
+          <button class="btn btn-primary" data-check>
+            <svg class="icon"><use href="../styles/icons.svg#refresh-cw" /></svg><span>Check connection</span>
+          </button>
+        </div>
+        <ul class="checks" data-checks hidden></ul>
+      </section>
+
+      <section class="card">
+        <h2>What it does</h2>
+        <ul class="features">
+          <li>
+            <span class="feature-icon"><svg class="icon"><use href="../styles/icons.svg#clipboard-paste" /></svg></span>
+            <div>
+              <strong>Fill a verification code</strong>
+              <p>On a sign-in page, right-click the code box and choose <em>Fill code from iPhone</em>, <span data-shortcut-or>or press <kbd data-shortcut>Alt+Shift+C</kbd></span>. If there's no box, the code is copied instead.</p>
+            </div>
+          </li>
+          <li>
+            <span class="feature-icon"><svg class="icon"><use href="../styles/icons.svg#search" /></svg></span>
+            <div>
+              <strong>Search texts and notifications</strong>
+              <p>From the toolbar popup, across what tug has on this PC.</p>
+            </div>
+          </li>
+          <li>
+            <span class="feature-icon"><svg class="icon"><use href="../styles/icons.svg#music-2" /></svg></span>
+            <div>
+              <strong>Control what's playing</strong>
+              <p>Play, pause and skip on your iPhone without reaching for it.</p>
+            </div>
+          </li>
+          <li>
+            <span class="feature-icon"><svg class="icon"><use href="../styles/icons.svg#send" /></svg></span>
+            <div>
+              <strong>Send a text</strong>
+              <p>New text in the popup, or reply from a search result. tug asks you to confirm first, unless you turn on <em>Send texts from the browser extension without asking</em> in tug › Settings › Developer tools.</p>
+            </div>
+          </li>
+        </ul>
+        <button class="btn btn-secondary btn-sm" data-shortcuts>
+          <svg class="icon"><use href="../styles/icons.svg#keyboard" /></svg><span>Change shortcuts</span>
+        </button>
+      </section>
+
+      <section class="card privacy">
+        <span class="feature-icon"><svg class="icon"><use href="../styles/icons.svg#shield-check" /></svg></span>
+        <div>
+          <h2>Nothing leaves your PC</h2>
+          <p>The extension only talks to tug on this computer. It doesn't read the pages you visit; it touches a page only when you ask it to fill a code there. tug decides what the extension may do: Settings › Developer tools has a switch for each part, and texts always wait for you to click <strong>Send</strong> in tug.</p>
+        </div>
+      </section>
+
+      <footer class="foot">
+        <a href="https://davenee12.github.io/tug/" target="_blank" rel="noopener">tug's website</a>
+        <span aria-hidden="true">·</span>
+        <a href="https://davenee12.github.io/tug/privacy/" target="_blank" rel="noopener">Privacy</a>
+        <span aria-hidden="true">·</span>
+        <span data-version></span>
+      </footer>
+    </div>
+  </body>
+</html>
