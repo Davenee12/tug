@@ -21,6 +21,15 @@ export interface ReleaseNote {
 /** Newest first. The first entry's version is the one that ships next. */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.5.25",
+    title: "Ready for tug's browser extension",
+    highlights: [
+      "tug is ready for its browser extension for Chrome and Edge: fill a sign-in code with a right-click, copy it, search your texts, play music and send a text, right from the browser.",
+      "Turn it on in Settings › Developer tools. The extension is coming to the Chrome Web Store.",
+      "Updates now always bring the tug command along, even while an AI tool is using it.",
+    ],
+  },
+  {
     version: "0.5.24",
     title: "Desk Derby and emoji shortcuts",
     highlights: [

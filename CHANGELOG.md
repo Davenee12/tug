@@ -1,14 +1,33 @@
 # Changelog
 
-## Unreleased
+## v0.5.25 — 2026-11-26
+
+tug's side of a browser extension for Chrome and Edge, and updates that always bring the tug
+command along. From #186 and #189. It arrives through automatic updates.
 
 ### New
-- **A browser extension for Chrome and Edge** (in `extension/`, not in the store yet). Right-click
-  a sign-in page's code box and choose **Fill code from iPhone**, or press Alt+Shift+C, and the
-  newest verification code goes straight in. The toolbar button shows the code with a Copy button,
-  searches your texts and notifications, and controls your iPhone's music. It talks only to tug on
-  your PC, through the switches in Settings › Developer tools, and shows as "Browser extension" in
-  Connected tools. The installer registers it with Chrome and Edge.
+- **A browser extension for Chrome and Edge** (in `extension/`; coming to the Chrome Web Store, for
+  now Load unpacked from that folder). Right-click a sign-in page's code box and choose **Fill code
+  from iPhone**, or press Alt+Shift+C, and the newest verification code goes straight in. The
+  toolbar button shows the code with a Copy button, searches your texts and notifications, controls
+  your iPhone's music (play and pause flip at once), and sends a text: New text, or reply from a
+  search result, with To picking from your contacts (people you've texted lately first). It talks
+  only to tug on your PC, through the switches in Settings › Developer tools, and shows as "Browser
+  extension" in Connected tools. The installer registers it with Chrome and Edge.
+- **Settings › Developer tools › Send texts from the browser extension without asking** (off by
+  default): the extension's own Send is the confirmation, so tug sends straight away instead of
+  showing its card, unless the name is only a loose match for a contact. AI tools are always asked.
+
+### Fixed
+- Updating tug while an AI tool had `tug mcp` running (or the browser extension was connected)
+  could leave the old tug command in place while the installer said it had worked. The installer
+  now closes a tug command running from its own folder first, and stops with a message (exit code 2
+  under `/S`) rather than keep the old one.
+
+### Under the hood
+- Security: rmcp 3.9.0 for RUSTSEC-2026-0462, and three more RustSec advisories cleared in
+  Cargo.lock. rusqlite 0.41.1.
+- The release build finds whisper.cpp's build in Cargo's new build layout.
 
 ## v0.5.24 — 2026-11-02
 
